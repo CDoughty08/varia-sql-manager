@@ -748,8 +748,8 @@
         },
         "tree.indentGuidesStroke": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Tree indent guides. Not used yet; reserved for the Object Explorer tree. Default $borderSubtle (Dark #1f2228, Light #eceef2).",
-          "markdownDescription": "(VS Code) Tree indent guides. Not used yet; reserved for the Object Explorer tree. Default `$borderSubtle` (Dark `#1f2228`, Light `#eceef2`)."
+          "description": "(VS Code) Tree indent guides in Object Explorer. Default $borderSubtle (Dark #1f2228, Light #eceef2).",
+          "markdownDescription": "(VS Code) Tree indent guides in Object Explorer. Default `$borderSubtle` (Dark `#1f2228`, Light `#eceef2`)."
         },
         "objectExplorer.activeConnectionBackground": {
           "$ref": "#/definitions/value",

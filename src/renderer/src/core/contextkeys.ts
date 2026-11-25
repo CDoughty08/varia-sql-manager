@@ -30,6 +30,7 @@ export interface FocusFacts {
   readonly searchHitsFocus: boolean; readonly planOutlineFocus: boolean
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
   readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean; readonly objectInspectorFocus: boolean
+  readonly agentStepsFocus: boolean
   readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
@@ -47,7 +48,11 @@ export interface RestoreContextState { readonly byDocument: Readonly<Record<stri
 /** An Activity Monitor's state for its commands: ActivityMonitorService publishes one per open monitor. */
 export interface ActivityContextState { readonly byDocument: Readonly<Record<string, { readonly paused: boolean; readonly split: boolean }>> }
 /** An Integration Services Operations document's state for its commands: SsisOperationsService publishes one per document. */
-export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paused: boolean; readonly refreshable: boolean; readonly pausable: boolean }
+export interface SsisOperationsKeys {
+  readonly stoppable: boolean; readonly paused: boolean; readonly refreshable: boolean; readonly pausable: boolean
+  /** The Integration Services document's shown place, and whether Back and Forward have a step. */
+  readonly place: 'list' | 'package' | 'execution'; readonly canGoBack: boolean; readonly canGoForward: boolean
+}
 export interface SsisOperationsContextState { readonly byDocument: Readonly<Record<string, SsisOperationsKeys>> }
 /** A Job History document's state for its commands: JobHistoryService publishes one per document. */
 export interface JobHistoryKeys {
@@ -59,7 +64,7 @@ export interface JobHistoryContextState { readonly byDocument: Readonly<Record<s
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false,
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false, agentStepsFocus: false,
   messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
@@ -87,7 +92,10 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     // picker, which is drawn over the page outside any pane.
     resultsFocus: (pane === 'results' && !element.closest('[data-messages-strip]') && !element.closest('[data-output-view="messages"]')) || !!element.closest('[data-results-picker]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
-    explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]')
+    explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]'),
+    // A job document's Steps section (its list and the selected step's editor), where Alt+Up and Alt+Down move the selected step.
+    // Not in a step's command editor: Monaco's focused element (native-edit-context) is no input, and Alt+Up/Down are its own there.
+    agentStepsFocus: !!element.closest('[data-agent-steps]') && !element.closest('.monaco-editor')
   }
 }
 
@@ -199,7 +207,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     activeDocumentIsAgentAlert: active?.kind === 'agentAlert', activeDocumentIsAgentOperator: active?.kind === 'agentOperator', activeDocumentIsAgentOperators: active?.kind === 'agentOperators',
     activeDocumentIsAgentProxy: active?.kind === 'agentProxy', activeDocumentIsCredential: active?.kind === 'credential',
     activeDocumentIsLogViewer: active?.kind === 'agentLogViewer', activeDocumentIsAgentSchedules: active?.kind === 'agentSchedules',
-    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
+    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisPlace: active?.kind === 'ssisOperations' ? operations?.place ?? 'list' : '', ssisCanGoBack: !!operations?.canGoBack, ssisCanGoForward: !!operations?.canGoForward, ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     activeDocumentIsJobHistory: active?.kind === 'bigQueryJobs', jobHistoryPaused: !!history?.paused, jobHistoryRefreshable: !!history?.refreshable, jobHistoryPausable: !!history?.pausable,
     jobHistoryJobSelected: !!history?.selected, jobHistoryCanOpenResults: !!history?.openResults, jobHistoryCanReattach: !!history?.reattach, jobHistoryCanOpenSql: !!history?.openSql,
     jobHistoryCanRerun: !!history?.rerun, jobHistoryCanCancel: !!history?.cancel,

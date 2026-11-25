@@ -9,7 +9,7 @@ docs/language-services.md its [completion](language-services.md#completion-from-
 Varia runs GoogleSQL only; legacy SQL is refused (`LEGACY_SQL`). SQL Server-only features are hidden for a BigQuery
 connection rather than half-working, through the catalogues' `providers` and the method gate (docs/architecture.md,
 Provider gating): Activity Monitor, Integration Services, SQL Server Agent, Table Designer, object actions other than
-Properties, execution plans, client statistics, Peek and Go To Definition, and Object Explorer's live status chips (their
+Properties, execution plans, client statistics, Go To Definition, and Object Explorer's live status chips (their
 probes are SQL Server's). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
 [docs/mockups/bigquery-ui.html](mockups/bigquery-ui.html) mocks the BigQuery screens on Varia's own renderer; where it and
 this page differ, this page describes what ships.
@@ -654,22 +654,63 @@ Script As serves BigQuery's tables, snapshots, views, materialized views, extern
 
 ### Properties
 
-Properties on a table-like object opens a read-only document tab from one `tables.get` (free, `bigquery.properties`): Table
-(full name, type, location, description, labels, base table of a snapshot or clone), Storage (rows, logical, long-term and
-physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
-expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters
-without splitting surrogate pairs.
+Properties on a BigQuery table-like object (`bqTable`, `bqView`, `bqMaterializedView`, `bqExternalTable`), routine
+(`bqRoutine`), or dataset (`bqDataset`) opens (or focuses, if already open) a read-only unified inspector document
+(`ObjectInspectorFrame`, `BigQueryPropertiesTab.tsx`, `BigQueryPropertiesService.ts`) from one free metadata call
+(`tables.get`, `routines.get`, or `datasets.get` via `bigquery.properties`), with `connection › project › dataset`
+breadcrumbs (`connection › project` for datasets), a `BigQuery` engine tag and semantic status pills (Partitioned, Require
+partition filter, Clustered, Snapshot, Clone, External, Materialized View, Language, Determinism, Location, CMEK, Physical
+billing, Case-insensitive), `Refresh` and (for non-datasets) `Script As…` header actions, a Hero KPI strip (omitting metrics
+that do not apply), and a collapsible, resizable right **Vitals** rail.
+
+BigQuery objects also support the floating **Peek Card** (`Alt+F12`, `Space`, context menu **Peek**, or Ctrl+hover / ⌘+hover
+in Object Explorer) using the same unified `ObjectInspectorFrame` (`surface="peek"`, persistent `1`–`9` tab badges, separate
+`peek` Vitals rail, `Esc` to close, and Back stack for clickable Dataset / Base table links). Opening Peek runs zero billed
+queries: metadata comes solely from free `bigquery.properties`, **Preview Rows** lazy-loads free `tabledata.list` only when
+selected, and native table **Definition** stays on-demand with dry-run estimate and cost prompts. **Open as Tab**
+(`Ctrl+Enter`, button, or `Ctrl+click`) promotes BigQuery Peek directly into the unified `BigQueryPropertiesTab` on the
+matching canonical tab instead of opening a duplicate Peek tab.
+
+Sections appear in canonical order, omitting tabs that do not apply to the object:
+
+- **Overview** (`flow`): Identity & Lifecycle facts (`FactGrid` with click-to-copy, plus clickable Dataset and Base table
+  jump-links in Peek), signal-first Capabilities & Flags (`CapabilityChips` with `Notable (n/m) ↔ All`), and Description.
+  Routines show routine type, language, determinism, return type and signature; datasets show location, friendly name,
+  default table and partition expirations, encryption/KMS key, default collation, case sensitivity, time travel window and
+  storage billing model.
+- **Definition** (`fill`, omitted for datasets): Views, materialized views and routines render their free `tables.get` /
+  `routines.get` SQL immediately in a read-only Monaco GoogleSQL editor with **Copy** and **Open in New Query** (noting
+  truncation if over 1,000,000 characters). Native, external, snapshot and clone tables (and routines with no stored body,
+  such as remote functions) never run billed SQL automatically; instead they show an explicit **Load DDL** prompt that runs
+  a free dry-run estimate of `INFORMATION_SCHEMA.TABLES` / `INFORMATION_SCHEMA.ROUTINES` and applies BigQuery's cost prompts
+  before reading the CREATE statement.
+- **Storage & Layout** (`flow`, when storage, layout or snapshot/clone metadata is present): Active vs. Long-Term logical
+  storage `RatioBar` and storage/layout facts (rows, logical, active, long-term, physical, compression ratio, partitioning,
+  require partition filter, clustering, base table and snapshot time).
+- **Columns** (`fill`, when schema is present): Filterable full-bleed `LocalGrid` from `schema` with `PART`, `CLUST` and
+  `REP` badges, expandable/collapsible nested `STRUCT`/`RECORD` rows (double-click, Enter, or the toolbar controls; matching
+  nested fields auto-expand while filtering), and a truncation note when `schemaTruncated` is set.
+- **Parameters** (`fill`, routines with arguments): Filterable full-bleed `LocalGrid` showing each argument's name, type,
+  mode and kind (up to 256 arguments, with a truncation notice when capped).
+- **Labels** (`flow`, when labels are present on tables or datasets): Key-value label chips with per-label copy and **Copy all**.
+- **Preview Rows** (`fill`, native tables, snapshots and clones only): Lazy-loaded only when the tab is selected (never on
+  open and never while arrowing past tabs), using the free `tabledata.list` preview path in `ResultsStack` with zero billed
+  queries.
 
 Alongside the formatted `groups` and Search Objects' flattened `columns` (`columnsCut`, up to 1,000 path rows),
-`bigquery.properties` returns bounded structured fields from the same `tables.get` response (`src/shared/bigquery/objects.ts`,
+`bigquery.properties` returns bounded structured fields from the single free metadata call (`src/shared/bigquery/objects.ts`,
 `BigQueryService.Properties.cs`): identity and timestamps (`fullName`, `location`, `description`, `baseTable`, `createdUtc`,
 `modifiedUtc`, `expiresUtc`, `snapshotTimeUtc`), `storage` (non-negative safe integers for rows, logical, long-term logical
 and physical bytes), `layout` (`partitioning`, `requirePartitionFilter`, up to 16 `clustering` fields), `schema` (nested
 `STRUCT` fields up to 7 levels deep to stay within protocol v2's 16-container MessagePack depth limit, at most 10,000 total
-fields and a 6 MiB text budget, with `schemaTruncated` when capped), deterministically sorted `labels` (up to 64), and free
-SQL `definition` for views, materialized views and routines (`table.view.query`, `table.materializedView.query`,
-`routine.definitionBody`, up to 1,000,000 characters with `definitionCut`/`definitionTruncated`; omitted for native,
-external, snapshot and clone tables so Properties never runs a billed query).
+fields and a 6 MiB text budget, with `schemaTruncated` when capped), deterministically sorted `labels` (up to 64), `routine`
+(`routineType`, `language`, `determinism`, `returnType`, `signature`, up to 256 `arguments` with `argumentsTruncated`),
+`dataset` (`friendlyName`, `defaultTableExpirationMs`, `defaultPartitionExpirationMs`, `kmsKeyName`, `defaultCollation`,
+`isCaseInsensitive`, `maxTimeTravelHours`, `storageBillingModel`), and free SQL `definition` for views, materialized views
+and routines (`table.view.query`, `table.materializedView.query`, `routine.definitionBody`, up to 1,000,000 characters with
+`definitionCut`/`definitionTruncated`; omitted for native, external, snapshot and clone tables so Properties and Peek never
+run a billed query). Dataset and routine names are validated through `BqNames` in C# and `isBigQueryName` in zod. Empty
+facts are left out and values are clipped at 2,000 characters without splitting surrogate pairs.
 
 Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
 and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
@@ -860,8 +901,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `tabledata.list`'s request, a refused view, `ROW_ACCESS`), Script As › CREATE's dry run, and Properties' facts and
   structured metadata (storage bounds, nested schema depth and field/byte caps, labels, free view/materialized-view SQL,
   and protocol v2 wire round-trip);
-  `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/scripting-service.test.ts` CREATE's cost gate, and
-  `tests/queries.test.ts` Preview Rows' path.
+  `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/bigquery-properties.test.ts` the Properties
+  inspector's formatters, nested schema tree, on-demand DDL cost gate, lazy free Preview Rows, and UI tabs,
+  `tests/scripting-service.test.ts` CREATE's cost gate, and `tests/queries.test.ts` Preview Rows' path.
   `BigQueryJobHistoryChecks` covers Job History: reading `jobs.list` and `jobs.get` JSON (states, previews, hidden details,
   bounds), the source's args, the sampler's first listing, refreshes, finished-job reads and idle state, All users and
   its refusal, pinned and expanded jobs, each refresh error code, `bigquery.jobs.get` and `bigquery.jobs.cancel`, and the

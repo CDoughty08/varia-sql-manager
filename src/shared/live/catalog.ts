@@ -178,7 +178,7 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   },
   'ssis.operations': {
     id: 'ssis.operations', label: 'SSIS Operations', scope: 'ssisdb', testOnly: false, probes: ['ssis.operations.list'],
-    description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again. A catalog that no longer exists ends it (CATALOG_MISSING).'
+    description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again at once, and its first rows under them keep no departed row. A catalog that no longer exists ends it (CATALOG_MISSING).'
   },
   'agent.jobs': {
     id: 'agent.jobs', label: 'SQL Server Agent jobs', scope: 'server', testOnly: false, probes: ['agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched'], hidden: 'statusOnly',
@@ -316,8 +316,8 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'explorer.agentService': {
     id: 'explorer.agentService', source: 'explorer', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
-    description: 'SQL Server Agent\'s state for its Object Explorer node: Agent XPs (sys.configurations value_in_use, by configuration_id, which needs no permission), and, only where HAS_PERMS_BY_NAME says the login may (so the probe declares no permission gate and the XPs read always runs), the service\'s state and startup type from sys.dm_server_services (VIEW SERVER STATE before SQL Server 2022, VIEW SERVER SECURITY or PERFORMANCE STATE from it), or, where that DMV has no Agent row, whether an Agent session (program_name SQLAgent - …) is connected (VIEW SERVER STATE before 2022, VIEW SERVER PERFORMANCE STATE from it). Managed Instance always reads running. A value the login may not read is left out: unknown, so no state chip shows.',
-    status: ['agentXps', 'serviceState', 'startupType']
+    description: 'SQL Server Agent\'s state for its Object Explorer node: Agent XPs (sys.configurations value_in_use, by configuration_id, which needs no permission), and, only where HAS_PERMS_BY_NAME says the login may (so the probe declares no permission gate and the XPs read always runs), the service\'s state and startup type from sys.dm_server_services (VIEW SERVER STATE before SQL Server 2022, VIEW SERVER SECURITY or PERFORMANCE STATE from it), or, where that DMV has no Agent row, whether an Agent session (program_name SQLAgent - …) is connected (VIEW SERVER STATE before 2022, VIEW SERVER PERFORMANCE STATE from it). Managed Instance always reads running. A value the login may not read is left out: unknown, so no state chip shows. Whether the server is a failover cluster instance (SERVERPROPERTY IsClustered, no permission) greys the node\'s Start, Stop and Restart up front.',
+    status: ['agentXps', 'serviceState', 'startupType', 'clustered']
   },
   'agent.jobs.list': {
     id: 'agent.jobs.list', source: 'agent.jobs', label: 'Jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 500, max: 10_000 },
@@ -352,8 +352,8 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'agent.jobs.service': {
     id: 'agent.jobs.service', source: 'agent.jobs', label: 'SQL Server Agent state', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
-    description: 'SQL Server Agent\'s state for the views of its jobs, so they need no Object Explorer open: the same constant text as explorer.agentService (Agent XPs from sys.configurations, which needs no permission; the service\'s state and startup type only where HAS_PERMS_BY_NAME says the login may read them, else left out as unknown).',
-    status: ['agentXps', 'serviceState', 'startupType']
+    description: 'SQL Server Agent\'s state for the views of its jobs, so they need no Object Explorer open: the same constant text as explorer.agentService (Agent XPs from sys.configurations, which needs no permission; the service\'s state and startup type only where HAS_PERMS_BY_NAME says the login may read them, else left out as unknown), and whether the server is a failover cluster instance (SERVERPROPERTY IsClustered), which greys Job Activity Monitor\'s Start Agent.',
+    status: ['agentXps', 'serviceState', 'startupType', 'clustered']
   },
   'agent.jobs.watched': {
     id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },

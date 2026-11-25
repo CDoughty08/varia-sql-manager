@@ -36,7 +36,7 @@ async function mount(answer: () => Promise<ApiResult<DependenciesResult>>) {
   const rollback = () => change(connected)
   return { dependencies, api, select, reveal, lose, disconnect, rollback }
 }
-const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+const settle = () => act(async () => { await new Promise(resolve => setImmediate(resolve)) })
 const key = (target: Element, name: string) => act(() => { target.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })) })
 
 describe('View Dependencies dialog', () => {
@@ -100,5 +100,25 @@ describe('View Dependencies dialog', () => {
     await act(async () => { uses!.click() })
     expect(dependencies.current?.direction).toBe('uses')
     expect(api.explorerDependencies).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders selected object facts in a compact FactGrid with click-to-copy and polite status announcement', async () => {
+    const writeClipboardText = vi.fn(async () => ({ ok: true as const, value: undefined }))
+    const prevVaria = (window as { varia?: unknown }).varia
+    ;(window as { varia?: unknown }).varia = { writeClipboardText }
+    cleanups.push(() => { (window as { varia?: unknown }).varia = prevVaria })
+    const { dependencies } = await mount(() => Promise.resolve({ ok: true, value: { items: [], elapsedMs: 1 } }))
+    await act(async () => { dependencies.open(rootNode) })
+    await settle()
+    const region = document.querySelector('section[aria-label="Selected object"]')!
+    expect(region.querySelector('dl.fact-grid.compact')).not.toBeNull()
+    const copyName = region.querySelector<HTMLButtonElement>('button[aria-label="Copy Name"]')!
+    expect(copyName).not.toBeNull()
+    // Root node has no dependencyType, so its copy button is suppressed while Name and Type remain copyable.
+    expect(region.querySelector('button[aria-label="Copy Dependency type"]')).toBeNull()
+    await act(async () => { copyName.click() })
+    await settle()
+    expect(writeClipboardText).toHaveBeenCalledWith('dbo.Orders')
+    expect(region.querySelector('[role="status"]')?.textContent).toMatch(/^Copied Name/)
   })
 })

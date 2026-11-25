@@ -57,8 +57,8 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   let found: { readonly text: string; readonly hits: ReadonlyMap<string, { readonly connectionId: string; readonly hit: ObjectSearchHit }> } = { text: '', hits: new Map() }
 
   const commandItems = (): QuickPickItem[] => commandIds.filter(id => commandDescriptor(id).palette !== false && commands.has(id)).map(id => {
-      // Titles follow settings ("Select Top 50 Rows").
-      const command = commandDescriptor(id), title = commandTitle(id, workbench.settings?.getSnapshot().values), label = command.category ? `${command.category}: ${title}` : title
+      // Titles follow settings ("Select Top 50 Rows") and the selection a shared verb acts on ("Enable Job" for a job, "Enable Login" for a login).
+      const command = commandDescriptor(id), title = commands.titleFor(id) ?? commandTitle(id, workbench.settings?.getSnapshot().values), label = command.category ? `${command.category}: ${title}` : title
       // The handler's own reason first (a greyed action's, such as an offline database's Rename), then the catalogue's.
       const unavailable = commands.isEnabled(id) ? {} : { disabled: true, disabledHint: commands.unavailableReason(id) ?? command.unavailableHint ?? `“${label}” is not available right now.` }
       // The category ("Query: ") does not count as the start of the name, so a match there ranks no higher than one in the title.

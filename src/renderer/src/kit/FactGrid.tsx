@@ -24,6 +24,7 @@ export interface FactGridProps {
   /** Compact column proportions for the Vitals rail. */
   readonly compact?: boolean
   readonly className?: string
+  readonly ariaLabel?: string
   /** Override clipboard writer for tests; defaults to `window.varia.writeClipboardText`. */
   readonly onCopy?: (text: string) => void | Promise<unknown>
 }
@@ -35,7 +36,7 @@ const copiedResetMs = 1500
  * as editable `PropertyField` rows. Each non-empty row exposes a hover/focus-visible copy button writing through
  * `window.varia.writeClipboardText` and announcing "Copied" in a polite status region.
  */
-export default function FactGrid({ facts, compact = false, className, onCopy }: FactGridProps) {
+export default function FactGrid({ facts, compact = false, className, ariaLabel, onCopy }: FactGridProps) {
   const [copiedId, setCopiedId] = useState<string | undefined>(undefined)
   const [announcement, setAnnouncement] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -78,7 +79,7 @@ export default function FactGrid({ facts, compact = false, className, onCopy }: 
   }
 
   return <>
-    <dl className={['fact-grid', compact && 'compact', className].filter(Boolean).join(' ')}>
+    <dl className={['fact-grid', compact && 'compact', className].filter(Boolean).join(' ')} aria-label={ariaLabel}>
       {facts.map((fact, index) => {
         const rowKey = fact.id ?? `${fact.label}-${index}`
         const raw = fact.value ?? ''

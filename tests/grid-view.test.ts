@@ -62,7 +62,7 @@ function mount(o: { rows: number; columns: number; widths?: readonly number[]; r
     onSelection, onFirstCell, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }, onOpenValue, onSort, onFilter: () => {}
   })
   /** The reads answered and the frame after them painted. */
-  const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
+  const frame = async () => { await new Promise(done => setImmediate(done)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setImmediate(done)) }
   const key = (name: string, init: KeyboardEventInit = {}) => view.key(new KeyboardEvent('keydown', { key: name, ...init }))
   const shown = <T extends Element = HTMLElement>(selector: string) => [...root.querySelectorAll<T>(selector)].filter(element => (element as unknown as HTMLElement).style.display !== 'none')
   const cellAt = (row: number, col: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${col + 2}"]`)
@@ -293,5 +293,108 @@ describe('a disposed grid', () => {
     clear.mockRestore()
     expect(retries.size).toBe(0)
     grid.root.remove()
+  })
+})
+
+describe('natural-height outer-scroll virtualization', () => {
+  function mountOuter(o: { rows: number; columns: number; outerHeight?: number; scrollerTop?: (outer: HTMLElement) => number; withOuter?: boolean }) {
+    const made = source(o.rows, o.columns)
+    const naturalHeight = gridLimits.headerHeight + o.rows * gridLimits.rowHeight
+    const outer = document.createElement('div')
+    if (o.withOuter !== false) outer.style.overflowY = 'auto'
+    const root = document.createElement('div'), scroller = document.createElement('div')
+    root.append(scroller)
+    outer.append(root)
+    document.body.append(outer)
+    const outerHeight = o.outerHeight ?? 300
+    Object.defineProperty(outer, 'clientHeight', { configurable: true, get: () => outerHeight })
+    Object.defineProperty(outer, 'clientTop', { configurable: true, value: 2 })
+    outer.getBoundingClientRect = () => ({ top: 100, bottom: 100 + outerHeight + 4, left: 0, right: 900, width: 900, height: outerHeight + 4, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect
+    Object.defineProperty(scroller, 'clientWidth', { value: 900 })
+    Object.defineProperty(scroller, 'offsetWidth', { value: 900 })
+    Object.defineProperty(scroller, 'clientHeight', { value: naturalHeight })
+    const topOf = o.scrollerTop ?? ((host: HTMLElement) => 102 - host.scrollTop)
+    scroller.getBoundingClientRect = () => {
+      const top = topOf(outer)
+      return { top, bottom: top + naturalHeight, left: 0, right: 900, width: 900, height: naturalHeight, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    }
+    const state: GridViewState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true }
+    let lastViewport: { firstRow: number; lastRow: number; rows: number } | undefined
+    const view = new GridView({
+      root, scroller, handle: made.handle, client: { windowsInFlight: 0 }, descriptor: descriptor(made.handle), state, entry: 'e1',
+      resultNumber: 1, resultCount: 1, platform: 'win32', outerScroll: true,
+      onViewport: vp => { lastViewport = vp },
+      onSelection: () => {}, onCopy: () => {}, onEscape: () => false, onStatus: () => {}, onError: error => { throw error }
+    })
+    const frame = async () => { await new Promise(done => setTimeout(done, 0)); view.invalidate(); await new Promise(done => requestAnimationFrame(() => done(undefined))); await new Promise(done => setTimeout(done, 0)) }
+    const key = (name: string, init: KeyboardEventInit = {}) => view.key(new KeyboardEvent('keydown', { key: name, ...init }))
+    const rowCount = () => root.querySelectorAll('[role="rowgroup"] > [role="row"]').length
+    const cellAt = (row: number, col: number) => root.querySelector<HTMLElement>(`[role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${col + 2}"]`)
+    return { outer, root, scroller, state, view, frame, key, rowCount, cellAt, viewport: () => lastViewport }
+  }
+
+  it('bounds the DOM row pool against the outer scroller, anchors row 0 offscreen, and scrolls the outer container on Ctrl+End, Ctrl+Home and PageDown', async () => {
+    let offset = 102
+    const grid = mountOuter({ rows: 2048, columns: 4, outerHeight: 300, scrollerTop: host => offset - host.scrollTop })
+    await grid.frame()
+    // 2,048 rows at natural height draws only a bounded pool near the 300px outer client box.
+    expect(grid.rowCount()).toBeLessThan(60)
+    expect(grid.cellAt(0, 0)?.textContent).toBe('0:0')
+    expect(grid.viewport()).toMatchObject({ firstRow: 0, rows: 2048 })
+    expect(grid.viewport()!.lastRow).toBeLessThan(30)
+
+    // PageDown steps by the outer client height (~13 rows), not the full 40,982px natural height.
+    grid.key('PageDown')
+    expect(grid.state.selection!.active.row).toBeGreaterThan(5)
+    expect(grid.state.selection!.active.row).toBeLessThan(30)
+
+    // Ctrl+End scrolls the outer container so row 2,047 is in view and paints it.
+    grid.key('End', { ctrlKey: true })
+    expect(grid.state.selection!.active.row).toBe(2047)
+    expect(grid.outer.scrollTop).toBeGreaterThan(40_000)
+    await grid.frame()
+    expect(grid.cellAt(2047, 0)?.textContent).toBe('2047:0')
+    expect(grid.rowCount()).toBeLessThan(60)
+    expect(grid.viewport()!.firstRow).toBeGreaterThan(2000)
+
+    // Ctrl+Home aligns row 0 with the top of the grid header (not clipped under the top edge).
+    grid.key('Home', { ctrlKey: true })
+    expect(grid.outer.scrollTop).toBe(0)
+
+    // When the grid sits completely below the outer viewport, it keeps row 0 anchored with a minimal pool.
+    offset = 2000
+    grid.outer.dispatchEvent(new Event('scroll'))
+    await grid.frame()
+    expect(grid.cellAt(0, 0)?.textContent).toBe('0:0')
+    expect(grid.rowCount()).toBeLessThan(60)
+
+    // Dispose detaches outer scroll listener cleanly.
+    const removeSpy = vi.spyOn(grid.outer, 'removeEventListener')
+    grid.view.dispose()
+    expect(removeSpy).toHaveBeenCalledWith('scroll', expect.any(Function))
+    removeSpy.mockRestore()
+    grid.outer.remove()
+  })
+
+  it('caps the row pool safely when no scrolling ancestor exists or the outer container has zero height', async () => {
+    const noOuter = mountOuter({ rows: 2048, columns: 3, withOuter: false })
+    await noOuter.frame()
+    expect(noOuter.rowCount()).toBeLessThan(100)
+    noOuter.view.dispose()
+    noOuter.outer.remove()
+
+    const collapsed = mountOuter({ rows: 2048, columns: 3, outerHeight: 0 })
+    await collapsed.frame()
+    expect(collapsed.rowCount()).toBeLessThan(20)
+    expect(collapsed.cellAt(0, 0)?.textContent).toBe('0:0')
+    collapsed.view.dispose()
+    collapsed.outer.remove()
+
+    // Small natural-height lists (<= 20 rows) paint all rows directly even while offscreen.
+    const smallOffscreen = mountOuter({ rows: 5, columns: 3, outerHeight: 300, scrollerTop: () => 2000 })
+    await smallOffscreen.frame()
+    expect(smallOffscreen.cellAt(4, 0)?.textContent).toBe('4:0')
+    smallOffscreen.view.dispose()
+    smallOffscreen.outer.remove()
   })
 })

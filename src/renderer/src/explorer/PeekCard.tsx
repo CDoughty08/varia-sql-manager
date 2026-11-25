@@ -1,27 +1,43 @@
-import { Component, createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  Component, createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type CSSProperties, type KeyboardEvent, type ReactNode, type Ref
+} from 'react'
 import { createPortal } from 'react-dom'
 import { kindSpecs } from '../../../shared/explorer/catalog.ts'
-import { isPeekListTab, peekSpecs, peekTabsOf, peekTabTitle, type PeekDependency, type PeekList, type PeekListId, type PeekTab } from '../../../shared/explorer/peek.ts'
-import { displayText, insertTextFor } from '../../../shared/explorer/refs.ts'
+import { isPeekKind, isPeekListTab, peekTabsOf, peekTabTitle, type PeekDependency, type PeekList, type PeekListId, type PeekTab } from '../../../shared/explorer/peek.ts'
+import { displayText, insertTextFor, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { scriptCommandId } from '../../../shared/scripting/catalog.ts'
+import { onUnexpectedError } from '../core/errors'
 import type { CommandArgs } from '../core/types'
+import { useKeybindingsRevision } from '../core/useCommand'
 import { useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { createQueryEditor } from '../editor/create-editor'
-import { onUnexpectedError } from '../core/errors'
+import type { LocalGridPreset } from '../grid/LocalGrid'
 import ResultsStack from '../grid/ResultsStack'
 import Icon from '../Icon'
-import { useKeybindingsRevision } from '../core/useCommand'
-import type { LocalGridPreset } from '../grid/LocalGrid'
-import { useMenuTarget } from '../menus/useMenuTarget'
+import CapabilityChips from '../kit/CapabilityChips'
+import type { Crumb, HeaderVerb, Verb } from '../kit/DocumentFrame'
+import FactGrid from '../kit/FactGrid'
+import ObjectInspectorFrame, { ObjectInspectorFrameView, type InspectorTab } from '../kit/ObjectInspectorFrame'
+import type { InspectorSurface } from '../kit/object-inspector'
+import RatioBar from '../kit/RatioBar'
+import StatusPill from '../kit/StatusPill'
+import { selectedFacts as selectedPaneFacts } from '../menus/selected-facts'
 import type { PeekPropertiesTarget } from '../menus/targets'
+import { useMenuTarget } from '../menus/useMenuTarget'
+import { settingsDocumentOptions } from '../services/documents'
+import { BigQueryInspectorBody, type BigQueryInspectorController } from './BigQueryPropertiesTab'
 import ExplorerIcon from './ExplorerIcon'
 import { selectionContextOf } from './ExplorerService'
 import { inPeekEditorWidgets, PeekEditor, peekEditorUse } from './peek-editor'
-import { selectedFacts as selectedPaneFacts } from '../menus/selected-facts'
 import { formatPeekValue, peekObjectName, peekPropertiesText, placePeek, placePeekAt } from './peek-format'
+import {
+  constraintExpressionText, peekConstraintModel, peekFkRelationModel, peekHeroKpis, peekKeySummaryModel,
+  peekOverviewModel, peekStatePills, peekStorageModel, peekTabCount, peekUsageModel, peekVitalsModel, visiblePeekGroups,
+  type PeekConstraintModel, type PeekFkRelationModel, type PeekKeySummaryModel
+} from './peek-inspector'
 import { PeekListGrid } from './PeekListGrid'
 import { copyableDefinition, peekMessages, tooLongToCopy, type OpenPeek, type PeekAnchor, type PeekDefinition, type PeekDependencies, type PeekPart, type PeekRows, type PeekView } from './PeekService'
-import { settingsDocumentOptions } from '../services/documents'
 
 /** The view the parts below read and act on: the card's (the Peek service) or a promoted tab's. */
 const PeekViewContext = createContext<PeekView | undefined>(undefined)
@@ -35,9 +51,10 @@ export function usePeekView(): PeekView {
  * The definition in Peek's editor: the query editor (`createQueryEditor`), read-only, so Tools › Options, Find and the SQL
  * language features reach it as they reach a query. The view's editor moves into this slot while Definition shows.
  */
-function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; editor: PeekEditor | undefined; open: OpenPeek }) {
+function Definition({ part, editor, open, fallbackText }: { part: PeekPart<PeekDefinition>; editor: PeekEditor | undefined; open: OpenPeek; fallbackText?: string }) {
   const slot = useRef<HTMLDivElement>(null)
-  const text = part.status === 'ready' ? part.value.text : undefined
+  const isFallback = fallbackText !== undefined && (part.status === 'error' || (part.status === 'ready' && part.value.text === undefined))
+  const text = part.status === 'ready' ? (part.value.text ?? fallbackText) : part.status === 'error' ? fallbackText : undefined
   const object = open.node.ref.type === 'object' ? open.node.ref.object : undefined
   useLayoutEffect(() => {
     const here = slot.current
@@ -46,9 +63,11 @@ function Definition({ part, editor, open }: { part: PeekPart<PeekDefinition>; ed
     return () => editor.hide(here)
   }, [editor, text, open.id, open.node.connectionId, object?.database])
   if (part.status === 'loading') return <p className="peek-note" role="status">{definitionLoading(part.progress)}</p>
+  if (text !== undefined) {
+    return isFallback && !editor ? <pre className="peek-expression-fill"><code>{text}</code></pre> : <div ref={slot} className="peek-editor" />
+  }
   if (part.status === 'error') return <p className="peek-note error" role="alert">{part.message}</p>
-  if (text === undefined) return <p className="peek-note">{peekMessages.noDefinition}</p>
-  return <div ref={slot} className="peek-editor" />
+  return <p className="peek-note">{peekMessages.noDefinition}</p>
 }
 
 /** The Definition tab's loading line; a long text's pages say how much has come. */
@@ -60,7 +79,7 @@ export const definitionLoading = (progress?: number): string =>
  * Find widget slides out of view, aria-hidden, yet stays focusable), so the loop never hands focus to them or out of the card.
  */
 export function cardStops(card: Element): HTMLElement[] {
-  return [...card.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), [tabindex="0"]')].filter(shown)
+  return [...card.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), [tabindex="0"]')].filter(shown)
 }
 
 const shown = (element: HTMLElement): boolean => !element.closest('[aria-hidden="true"]') && element.checkVisibility?.({ visibilityProperty: true }) !== false
@@ -92,7 +111,12 @@ export function nextStop(stops: readonly HTMLElement[], at: Element | null, back
   return back ? [...stops].reverse().find(stop => !after(stop)) ?? stops[stops.length - 1] : stops.find(after) ?? stops[0]
 }
 
-const selectedFacts = (pane: HTMLElement) => selectedPaneFacts(pane, '.peek-fact')
+const factRowSelector = '.peek-fact, .fact-grid-row'
+const selectedFacts = (pane: HTMLElement) => selectedPaneFacts(pane, factRowSelector)
+const factRowText = (fact: HTMLElement): readonly [string, string] => [
+  fact.querySelector('dt')?.textContent ?? '',
+  fact.querySelector('.fact-grid-val')?.textContent ?? fact.querySelector('dd')?.textContent ?? ''
+]
 
 /**
  * The Properties menu's target: Copy writes the facts whose text is selected in the pane, else every fact it shows, as
@@ -113,41 +137,50 @@ export function propertiesMenu(crlf: boolean) {
       doc.addEventListener('pointercancel', release, true)
     },
     target(pane: HTMLElement): PeekPropertiesTarget | null {
-      const facts = [...pane.querySelectorAll<HTMLElement>('.peek-fact')]
+      const facts = [...pane.querySelectorAll<HTMLElement>(factRowSelector)]
       if (!facts.length) return null
       const picked = (pressed ?? selectedFacts(pane)).filter(fact => facts.includes(fact))
       pressed = undefined
-      const lines = (picked.length ? picked : facts).map(fact => [fact.querySelector('dt')?.textContent ?? '', fact.querySelector('dd')?.textContent ?? ''] as const)
+      const lines = (picked.length ? picked : facts).map(factRowText)
       return { kind: 'peekProperties', text: peekPropertiesText(lines, crlf) }
     }
   }
 }
 
-/** The Properties pane: its facts (`Properties`), focusable, with a menu whose Copy writes them. */
-export function PropertiesPane({ peek }: { peek: OpenPeek }) {
+/** Wires the Peek Properties context menu (Copy selected facts or all facts as TSV) onto a fact-bearing container. */
+function PeekFactMenuScope({ children, className, label }: { readonly children: ReactNode; readonly className?: string; readonly label?: string }) {
   const { platform } = useWorkbench()
   const [copy] = useState(() => propertiesMenu(platform === 'win32'))
   const menu = useMenuTarget<HTMLDivElement>(pane => copy.target(pane))
-  return <div ref={menu} className="peek-scroll peek-properties-pane" tabIndex={0} role="region" aria-label="Properties"
-    onPointerDownCapture={event => copy.press(event.currentTarget)}><Properties peek={peek} /></div>
+  return <div ref={menu} className={className} tabIndex={label ? 0 : undefined} role={label ? 'region' : undefined} aria-label={label}
+    onPointerDownCapture={event => copy.press(event.currentTarget)}>{children}</div>
 }
 
-/** The kind's groups of facts for the node's subtype, a refused group's words in place of its facts. */
+/** The Properties pane: its facts (`Properties`), focusable, with a menu whose Copy writes them. */
+export function PropertiesPane({ peek }: { peek: OpenPeek }) {
+  return <PeekFactMenuScope className="peek-flow-body peek-properties-pane" label="Properties"><Properties peek={peek} /></PeekFactMenuScope>
+}
+
+/** All subtype-matching fact groups for `peek`, rendered via `FactGrid` with refused-group notices where applicable. */
 export function Properties({ peek }: { peek: OpenPeek }) {
   const { facts } = peek
   if (facts.status === 'loading') return <p className="peek-note" role="status">Loading properties…</p>
   if (facts.status === 'error') return <p className="peek-note error" role="alert">{facts.message}</p>
-  const subtype = peek.node.subtype
-  return <div className="peek-properties">
-    {peekSpecs[peek.kind].groups.filter(group => !group.subtypes || (subtype !== undefined && group.subtypes.includes(subtype))).map(group => {
-      if (group.refused && peek.refused?.includes(group.id)) return <section key={group.id} aria-label={group.title}>
-        <h3 className="peek-group">{group.title}</h3>
+  return <div className="peek-overview">
+    {visiblePeekGroups(peek).map(group => {
+      if (group.refused && peek.refused?.includes(group.id)) return <section key={group.id} className="peek-section" aria-label={group.title}>
+        <h3 className="peek-section-title">{group.title}</h3>
         <p className="peek-note">{group.refused}</p>
       </section>
       const shown = group.facts.filter(fact => Object.hasOwn(facts.value, fact.id))
-      return shown.length > 0 && <section key={group.id} aria-label={group.title}>
-        <h3 className="peek-group">{group.title}</h3>
-        <dl className="peek-facts">{shown.map(fact => <div key={fact.id} className="peek-fact"><dt>{fact.label}</dt><dd title={formatPeekValue(fact, facts.value[fact.id])}>{formatPeekValue(fact, facts.value[fact.id])}</dd></div>)}</dl>
+      if (!shown.length) return null
+      return <section key={group.id} className="peek-section" aria-label={group.title}>
+        <h3 className="peek-section-title">{group.title}</h3>
+        <FactGrid facts={shown.map(fact => ({
+          id: fact.id,
+          label: fact.label,
+          value: facts.value[fact.id] === null ? '' : formatPeekValue(fact, facts.value[fact.id])
+        }))} />
       </section>
     })}
   </div>
@@ -160,23 +193,210 @@ function Pending({ part, loading }: { part: PeekPart<unknown> | undefined; loadi
   if (part.status === 'error') return <div className="peek-note error" role="alert">{part.message}
     <button type="button" className="peek-action" disabled={!view.connected} onClick={event => {
       // The button goes away as the read starts again: focus moves to the shown tab, so it stays in the view and Esc reaches it.
-      event.currentTarget.closest('.peek-view')?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+      event.currentTarget.closest('[data-object-inspector], .peek-view')?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
       const open = view.getSnapshot().open
       if (open) view.selectTab(open.tab)
     }}>Retry</button></div>
   return null
 }
 
+/** Visual Foreign Key Relationship diagram card with clickable table jump-links and referential action/status pills. */
+function FkRelationCard({ model, onFollow }: { readonly model: PeekFkRelationModel; readonly onFollow?: (target: ObjectRef, label: string) => void }) {
+  const renderTable = (table: { readonly label: string; readonly link?: { readonly target: ObjectRef; readonly label: string } }) =>
+    table.link && onFollow
+      ? <button type="button" className="fact-grid-link fk-box-link" aria-label={`Peek ${table.link.label}`} title={`Peek ${table.link.label}`}
+          onClick={() => onFollow(table.link!.target, table.link!.label)}>{table.label}</button>
+      : <span className="fk-box-name">{table.label}</span>
+
+  return <section className="peek-section" aria-label="Foreign Key Relationship" data-fk-relationship="">
+    <div className="fk-section-head">
+      <h3 className="peek-section-title">Foreign Key Relationship</h3>
+      {model.statusPills.length > 0 && <span className="fk-status-pills">
+        {model.statusPills.map(pill => <StatusPill key={pill.id} tone={pill.tone} label={pill.label} size="small" title={pill.title} />)}
+      </span>}
+    </div>
+    <div className="fk-diagram">
+      <div className="fk-box">
+        <div className="fk-box-role">Parent Table (Referencing)</div>
+        <div className="fk-box-tbl"><ExplorerIcon name="table" />{renderTable(model.parentTable)}</div>
+        {model.parentColumns.length > 0 && <div className="fk-col-list" aria-label="Parent columns">
+          {model.parentColumns.map((col, idx) => <span key={`${col}-${idx}`} className="fk-col-pill">{col}</span>)}
+          {model.columnsTruncated && <span className="fk-col-more">…</span>}
+        </div>}
+      </div>
+      <div className="fk-arrow">
+        {model.onDelete && <StatusPill tone={model.onDelete.tone} size="small" icon={null} label={`ON DELETE: ${model.onDelete.label}`} />}
+        <span className="fk-arrow-line" aria-hidden="true"><Icon name="arrow-right" /></span>
+        {model.onUpdate && <StatusPill tone={model.onUpdate.tone} size="small" icon={null} label={`ON UPDATE: ${model.onUpdate.label}`} />}
+      </div>
+      <div className="fk-box">
+        <div className="fk-box-role">Referenced Table (Primary / Unique)</div>
+        <div className="fk-box-tbl"><ExplorerIcon name="table" />{model.referencedTable ? renderTable(model.referencedTable) : <span className="fk-box-name">—</span>}</div>
+        {model.referencedColumns.length > 0 && <div className="fk-col-list" aria-label="Referenced columns">
+          {model.referencedColumns.map((col, idx) => <span key={`${col}-${idx}`} className="fk-col-pill">{col}</span>)}
+          {model.columnsTruncated && <span className="fk-col-more">…</span>}
+        </div>}
+      </div>
+    </div>
+  </section>
+}
+
+/** Key-column summary block for Primary Key and Unique Constraint objects. */
+function KeySummaryCard({ model, onFollow }: { readonly model: PeekKeySummaryModel; readonly onFollow?: (target: ObjectRef, label: string) => void }) {
+  return <section className="peek-section" aria-label="Key Summary" data-key-summary="">
+    <div className="fk-section-head">
+      <h3 className="peek-section-title">Key Summary</h3>
+      {model.statusPills.length > 0 && <span className="fk-status-pills">
+        {model.statusPills.map(pill => <StatusPill key={pill.id} tone={pill.tone} label={pill.label} size="small" title={pill.title} />)}
+      </span>}
+    </div>
+    <div className="key-summary-card">
+      {model.parentTable && <div className="key-summary-parent">
+        <ExplorerIcon name="table" />
+        {model.parentTable.link && onFollow
+          ? <button type="button" className="fact-grid-link fk-box-link" aria-label={`Peek ${model.parentTable.link.label}`} title={`Peek ${model.parentTable.link.label}`}
+              onClick={() => onFollow(model.parentTable!.link!.target, model.parentTable!.link!.label)}>{model.parentTable.label}</button>
+          : <span className="fk-box-name">{model.parentTable.label}</span>}
+      </div>}
+      {model.columns.length > 0
+        ? <div className="fk-col-list" aria-label="Key columns">
+          {model.columns.map((col, idx) => <span key={`${col.name}-${idx}`} className="fk-col-pill">
+            <span>{col.name}</span>
+            {col.descending && <span className="fk-col-dir">DESC</span>}
+            {col.type && <span className="fk-col-type">{col.type}</span>}
+          </span>)}
+          {model.columnsTruncated && <span className="fk-col-more">…</span>}
+        </div>
+        : <p className="peek-note">No key columns listed.</p>}
+    </div>
+  </section>
+}
+
+/** Constraint expression block for CHECK, DEFAULT and EDGE constraints in Overview. */
+function ConstraintExpressionCard({ model }: { readonly model: PeekConstraintModel }) {
+  const [copied, setCopied] = useState(false)
+  const [notice, setNotice] = useState('')
+  const seq = useRef(0)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => { seq.current++; if (timer.current !== undefined) clearTimeout(timer.current) }, [])
+  if (!model.expression) return null
+  const expression = model.expression
+  const copyable = copyableDefinition(expression)
+  const copy = () => {
+    const writer = typeof window !== 'undefined' ? window.varia?.writeClipboardText : undefined
+    if (!writer || !copyable) return
+    const token = ++seq.current
+    void Promise.resolve(writer(expression)).then(result => {
+      if (seq.current !== token || !result?.ok) return
+      setCopied(true)
+      setNotice(token % 2 === 0 ? 'Copied constraint expression' : 'Copied constraint expression\u200B')
+      if (timer.current !== undefined) clearTimeout(timer.current)
+      timer.current = setTimeout(() => { timer.current = undefined; if (seq.current === token) setCopied(false) }, 1500)
+    }, () => {})
+  }
+  return <section className="peek-section" aria-label="Constraint Expression" data-constraint-expression="">
+    <div className="fk-section-head">
+      <h3 className="peek-section-title">Expression</h3>
+      {model.column && <span className="fk-col-pill" title={`Target column: ${model.column}`}>{model.column}</span>}
+      <span className="fk-status-pills">
+        <button type="button" className="peek-action" disabled={!copyable} title={!copyable ? tooLongToCopy : undefined}
+          onClick={copy} aria-label={copied ? 'Copied expression' : 'Copy expression'}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </span>
+    </div>
+    <pre className="peek-expression-code"><code>{expression}</code></pre>
+    <span className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">{notice}</span>
+  </section>
+}
+
+/** Overview tab: FK/Key/Constraint visual blocks + Identity FactGrid sections + signal-first CapabilityChips. */
+function OverviewTab({ open, onFollow }: { readonly open: OpenPeek; readonly onFollow?: (target: ObjectRef, label: string) => void }) {
+  if (open.facts.status !== 'ready') return <Pending part={open.facts} loading="Loading properties…" />
+  const { sections, capabilities } = peekOverviewModel(open, onFollow)
+  const fkRelation = peekFkRelationModel(open, onFollow)
+  const keySummary = peekKeySummaryModel(open, onFollow)
+  const constraintModel = peekConstraintModel(open)
+  return <PeekFactMenuScope className="peek-flow-body peek-properties-pane" label="Properties">
+    <div className="peek-overview">
+      {fkRelation && <FkRelationCard model={fkRelation} onFollow={onFollow} />}
+      {keySummary && <KeySummaryCard model={keySummary} onFollow={onFollow} />}
+      {constraintModel?.expression && <ConstraintExpressionCard model={constraintModel} />}
+      {sections.map(section => <section key={section.id} className="peek-section" aria-label={section.title}>
+        <h3 className="peek-section-title">{section.title}</h3>
+        {section.refused ? <p className="peek-note">{section.refused}</p> : <FactGrid facts={section.facts} />}
+      </section>)}
+      {capabilities.length > 0 && <section className="peek-section" aria-label="Capabilities">
+        <h3 className="peek-section-title">Capabilities</h3>
+        <CapabilityChips items={capabilities} label="Capabilities" />
+      </section>}
+    </div>
+  </PeekFactMenuScope>
+}
+
+/** Storage & Layout tab (`table`): Data vs. Index RatioBar + storage FactGrid. */
+function StorageTab({ open }: { readonly open: OpenPeek }) {
+  if (open.facts.status !== 'ready') return <Pending part={open.facts} loading="Loading storage…" />
+  const { meter, facts } = peekStorageModel(open)
+  return <PeekFactMenuScope className="peek-flow-body">
+    <section className="peek-section" aria-label="Storage">
+      {meter && <RatioBar title={meter.title} totalLabel={meter.totalLabel} segments={meter.segments} />}
+      {facts.length > 0 ? <FactGrid facts={facts} /> : <p className="peek-note">No storage details available.</p>}
+    </section>
+  </PeekFactMenuScope>
+}
+
+/** Usage Telemetry tab (`index`): Seeks/Scans vs. Updates RatioBar + usage FactGrid or permission refusal notice. */
+function UsageTab({ open }: { readonly open: OpenPeek }) {
+  if (open.facts.status !== 'ready') return <Pending part={open.facts} loading="Loading usage…" />
+  const { meter, facts, refused } = peekUsageModel(open)
+  return <PeekFactMenuScope className="peek-flow-body">
+    <section className="peek-section" aria-label="Usage since the server started">
+      {refused ? <p className="peek-note">{refused}</p> : <>
+        {meter && <RatioBar title={meter.title} totalLabel={meter.totalLabel} segments={meter.segments} />}
+        {facts.length > 0 ? <FactGrid facts={facts} /> : <p className="peek-note">No usage recorded since the server started.</p>}
+      </>}
+    </section>
+  </PeekFactMenuScope>
+}
+
+/** Right Vitals rail body: flat RatioBar (where applicable), compact At a Glance FactGrid, and notable capability chips. */
+function PeekVitals({ open, onFollow }: { readonly open: OpenPeek; readonly onFollow?: (target: ObjectRef, label: string) => void }) {
+  if (open.facts.status === 'loading') return <div className="vitals-block"><p className="peek-note">Loading…</p></div>
+  if (open.facts.status === 'error') return <div className="vitals-block"><p className="peek-note error">{open.facts.message}</p></div>
+  const { meter, facts, notableFlags } = peekVitalsModel(open, onFollow)
+  return <PeekFactMenuScope className="peek-vitals-scope">
+    {meter && <div className="vitals-block">
+      <RatioBar flat title={meter.title} totalLabel={meter.totalLabel} segments={meter.segments} />
+    </div>}
+    {facts.length > 0 && <div className="vitals-block">
+      <h4 className="vitals-block-title">At a glance</h4>
+      <FactGrid compact facts={facts} />
+    </div>}
+    {notableFlags.length > 0 && <div className="vitals-block">
+      <h4 className="vitals-block-title">Notable</h4>
+      <ul className="cap-chips" aria-label="Notable capabilities">
+        {notableFlags.map(item => (
+          <li key={item.id} className="cap-chip on" data-tone={item.tone} title={item.title}>
+            <span className="cap-chip-label">{item.label}</span>
+            {item.value !== undefined && <span className="cap-chip-value">{item.value}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>}
+  </PeekFactMenuScope>
+}
+
 const dependencyName = (dependency: PeekDependency) => displayText([dependency.server, dependency.database, dependency.schema, dependency.name].filter(part => part !== undefined).join('.'))
 
 function DependencyList({ title, items, truncated, follow, canFollow }: { title: string; items: readonly PeekDependency[]; truncated: boolean; follow: (dependency: PeekDependency) => void; canFollow: (dependency: PeekDependency) => boolean }) {
-  return <section aria-label={title}>
-    <h3 className="peek-group">{title}</h3>
-    {items.length === 0 ? <p className="peek-note">{peekMessages.noDependencies}</p> : <ul className="peek-list">{items.map((dependency, index) => {
+  return <section className="peek-dep-section" aria-label={title}>
+    <h3 className="peek-section-title">{title}{items.length > 0 && <span className="peek-section-count">{items.length}{truncated ? '+' : ''}</span>}</h3>
+    {items.length === 0 ? <p className="peek-note">{peekMessages.noDependencies}</p> : <ul className="peek-dep-list">{items.map((dependency, index) => {
       const icon = <ExplorerIcon name={dependency.kind ? kindSpecs[dependency.kind].icon : 'references'} />
       const note = dependency.foreignKey ? 'Foreign key' : dependency.kind ? kindSpecs[dependency.kind].title : undefined
       const body = <>{icon}<bdi className="peek-item-name">{dependencyName(dependency)}</bdi>{note && <span className="peek-item-note">{note}</span>}</>
-      return <li key={index} className="peek-item">{canFollow(dependency)
+      return <li key={index} className="peek-dep-item">{canFollow(dependency)
         ? <button type="button" className="peek-follow" aria-label={`Peek ${dependencyName(dependency)}`} title={`Peek ${dependencyName(dependency)}`} onClick={() => follow(dependency)}>{body}</button>
         : body}</li>
     })}</ul>}
@@ -189,7 +409,7 @@ function Dependencies({ part }: { part: PeekPart<PeekDependencies> | undefined }
   if (part?.status !== 'ready') return <Pending part={part} loading="Loading dependencies…" />
   const { uses, usesTruncated, usedBy, usedByTruncated } = part.value
   const follow = (dependency: PeekDependency) => view.follow(dependency), canFollow = (dependency: PeekDependency) => view.canFollow(dependency)
-  return <div className="peek-properties">
+  return <div className="peek-dep-cols">
     <DependencyList title="Uses" items={uses} truncated={usesTruncated} follow={follow} canFollow={canFollow} />
     <DependencyList title="Used by" items={usedBy} truncated={usedByTruncated} follow={follow} canFollow={canFollow} />
   </div>
@@ -219,44 +439,11 @@ export function PeekRowsPart({ part }: { part: PeekPart<PeekRows> | undefined })
  */
 export function PeekListView({ id, part, list, preset, objectName }: { id: PeekListId; part: OpenPeek['facts']; list: PeekList | undefined; preset: LocalGridPreset; objectName: string }) {
   if (part.status !== 'ready') return <Pending part={part} loading="Loading…" />
-  return <>
+  return <div className="peek-list-fill">
     <PeekListGrid id={id} list={list} preset={preset} fill={preset === 'card'} objectName={objectName} />
     {list?.truncated && <p className="peek-note">There are more than the card lists.</p>}
     {list?.unread !== undefined && <p className="peek-note">{list.unread === 1 ? '1 database' : `${list.unread.toLocaleString()} databases`} could not be read.</p>}
-  </>
-}
-
-/**
- * The left pane's tabs: Left and Right (Home, End) move focus between them, and Enter or Space shows the focused one. Tabs
- * are chosen, not shown as focus passes them, since Top rows reads the table or view.
- */
-function Tabs({ peek, idPrefix }: { peek: OpenPeek; idPrefix: string }) {
-  const view = usePeekView()
-  const tabs = peekTabsOf(peek.kind)
-  const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const focused = (event.target as HTMLElement).dataset.peekPart as PeekTab | undefined
-    const at = tabs.indexOf(focused && tabs.includes(focused) ? focused : peek.tab)
-    const next = event.key === 'ArrowRight' ? tabs[(at + 1) % tabs.length] : event.key === 'ArrowLeft' ? tabs[(at - 1 + tabs.length) % tabs.length]
-      : event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1] : undefined
-    if (!next) return
-    event.preventDefault()
-    event.currentTarget.querySelector<HTMLElement>(`[data-peek-part="${next}"]`)?.focus()
-  }
-  return <div className="peek-tabs" role="tablist" aria-label="Peek" onKeyDown={keyDown}>
-    {tabs.map(tab => <button key={tab} type="button" role="tab" className="peek-tab" id={`${idPrefix}-tab-${tab}`} data-peek-part={tab} aria-selected={peek.tab === tab} aria-controls={`${idPrefix}-panel`}
-      tabIndex={peek.tab === tab ? 0 : -1} onClick={() => view.selectTab(tab)}>{peekTabTitle(peek.kind, tab)}</button>)}
   </div>
-}
-
-function PaneTitle({ title, children }: { title: string; children?: ReactNode }) {
-  return <div className="peek-pane-title"><span>{title}</span><span className="peek-spacer" />{children}</div>
-}
-
-function panel(open: OpenPeek, editor: PeekEditor | undefined, preset: LocalGridPreset): ReactNode {
-  const tab: PeekTab = open.tab
-  if (isPeekListTab(tab)) return <PeekListView id={tab} part={open.facts} list={open.lists?.[tab]} preset={preset} objectName={peekName(open)} />
-  return tab === 'definition' ? <Definition part={open.definition} editor={editor} open={open} />
-    : tab === 'dependencies' ? <Dependencies part={open.dependencies} /> : <PeekRowsPart part={open.rows} />
 }
 
 /** An Object Explorer node's display name for Peek's header: its schema and name, a child's (an index, a trigger) below its parent's. */
@@ -264,17 +451,46 @@ export function peekName(open: OpenPeek): string {
   return open.node.ref.type === 'object' ? peekObjectName(open.node.ref.object) : ''
 }
 
+export interface PeekInspectorProps {
+  readonly view: PeekView
+  readonly open: OpenPeek
+  readonly idPrefix: string
+  readonly surface?: InspectorSurface
+  readonly crumbs?: readonly Crumb[]
+  readonly tools?: ReactNode
+  readonly verbs?: readonly Verb[]
+  readonly extraVerbs?: readonly HeaderVerb[]
+  readonly beforeScript?: () => void
+  readonly inEditorPane?: boolean
+  readonly attributes?: Readonly<Record<`data-${string}`, string>>
+  readonly className?: string
+  readonly style?: CSSProperties
+  readonly role?: 'region' | 'dialog'
+  readonly ariaLabel?: string
+  readonly ariaModal?: boolean
+  readonly tabIndex?: number
+  readonly onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void
+  readonly rootRef?: Ref<HTMLDivElement>
+}
+
 /**
- * Peek's body, the card's and a promoted tab's alike: the kind's tabs (Definition, Columns or Parameters, Dependencies, Top rows, its lists) on
- * the left, with Copy, Script to New Query and (for a kind that has it) Modify over the definition, and the properties on the
- * right. `beforeScript` runs before a script opens in a query tab (the card closes itself first). `idPrefix` keeps each body's
- * tab ids its own. The body owns its view's editor (`PeekEditor`), which goes with it.
+ * Unified Peek inspector body shared by both floating Peek Card (`surface="peek"`) and promoted Peek Tab (`surface="full"`).
+ * Renders connected `ObjectInspectorFrame` (falling back to `ObjectInspectorFrameView` in minimal test harnesses without
+ * `workbench.inspector`), owns the single read-only `PeekEditor` instance per view, and maps canonical tabs onto single-scroll
+ * `flow` and `fill` pane archetypes with a resizable right Vitals rail.
  */
-export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = false }: { view: PeekView; open: OpenPeek; idPrefix: string; beforeScript?: () => void; inEditorPane?: boolean }) {
+export function PeekBody({
+  view, open, idPrefix, surface, crumbs, tools, verbs, extraVerbs, beforeScript, inEditorPane = false,
+  attributes, className, style, role, ariaLabel, ariaModal, tabIndex, onKeyDown, rootRef
+}: PeekInspectorProps) {
   const workbench = useWorkbench(), { commands } = workbench
+  const resolvedSurface: InspectorSurface = surface ?? (inEditorPane ? 'full' : 'peek')
   const node = open.node
+  const name = peekName(open)
   const definition = open.definition.status === 'ready' ? open.definition.value : undefined
-  const copyable = copyableDefinition(definition?.text)
+  const constraintExpression = constraintExpressionText(open)
+  const effectiveDefinitionText = definition?.text ?? (open.definition.status !== 'loading' ? constraintExpression : undefined)
+  const copyable = copyableDefinition(effectiveDefinitionText)
   const script = scriptCommandId('create', 'newQuery')
   // The node's own selection keys, as a Peek tab's verbs pass them: the shown object may be a followed dependency, not the tree's selection.
   const target: CommandArgs = { target: { kind: 'explorer', node }, state: selectionContextOf(node, { insertable: insertTextFor(node.ref) !== undefined }) }
@@ -282,6 +498,7 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
   // Made in an effect, not during render, so StrictMode's replayed effects never leave the body with a disposed editor.
   const [editor, setEditor] = useState<PeekEditor | undefined>(undefined)
   useEffect(() => {
+    if (!workbench.monaco?.editor?.create) return
     // A promoted tab lives in the Query editor pane, so its widgets hide with that pane; the card floats outside every pane.
     const made = new PeekEditor({ monaco: workbench.monaco, create: container => createQueryEditor(workbench, container, { ...peekEditorUse, inEditorPane }),
       modelOptions: settingsDocumentOptions(() => workbench.settings.getSnapshot().values).modelOptions })
@@ -289,32 +506,123 @@ export function PeekBody({ view, open, idPrefix, beforeScript, inEditorPane = fa
     return () => made.dispose()
   }, [workbench, inEditorPane])
   // The model of a definition the view has moved on from goes at once, even while another tab shows.
-  const shownKey = definition?.text === undefined ? undefined : String(open.id)
+  const shownKey = effectiveDefinitionText === undefined ? undefined : String(open.id)
   useEffect(() => { editor?.keep(shownKey) }, [editor, shownKey])
-  // Both the card and a promoted tab fill the panel with their list grid so scrollbars sit cleanly at the viewport edge;
-  // promoted tabs additionally use the `page` preset to offer Save Results As.
+
+  // Preserve keyboard focus inside the inspector when in-place navigation (followObject, goBack, refresh) replaces the
+  // keyed active pane or unmounts the Back button while this inspector owned focus.
+  const frameEl = useRef<HTMLDivElement | null>(null)
+  const [frameNode, setFrameNode] = useState<HTMLDivElement | null>(null)
+  const hadFocus = useRef(false)
+  const lastOpenId = useRef(open.id)
+  const assignRoot = useCallback((el: HTMLDivElement | null) => {
+    frameEl.current = el
+    setFrameNode(el)
+    if (typeof rootRef === 'function') rootRef(el)
+    else if (rootRef && 'current' in rootRef) (rootRef as { current: HTMLDivElement | null }).current = el
+  }, [rootRef])
+  useEffect(() => {
+    if (!frameNode) return
+    const onFocusIn = () => { hadFocus.current = true }
+    const isDomNode = (value: unknown): value is Node => typeof value === 'object' && value !== null && 'nodeType' in value
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget
+      if (isDomNode(next) && frameNode.contains(next)) return
+      if (next === null && isDomNode(event.target) && !event.target.isConnected) return
+      hadFocus.current = false
+    }
+    frameNode.addEventListener('focusin', onFocusIn)
+    frameNode.addEventListener('focusout', onFocusOut)
+    const active = frameNode.ownerDocument.activeElement
+    hadFocus.current = !!active && frameNode.contains(active)
+    return () => {
+      frameNode.removeEventListener('focusin', onFocusIn)
+      frameNode.removeEventListener('focusout', onFocusOut)
+    }
+  }, [frameNode])
+  useLayoutEffect(() => {
+    if (lastOpenId.current === open.id) return
+    lastOpenId.current = open.id
+    const el = frameEl.current
+    if (!el || !hadFocus.current) return
+    const active = el.ownerDocument.activeElement
+    if (!active || active === el.ownerDocument.body || !el.contains(active)) {
+      const target = el.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? el
+      target.focus({ preventScroll: true })
+    }
+  }, [open.id])
+
   const preset: LocalGridPreset = inEditorPane ? 'page' : 'card'
-  const fills = open.tab === 'rows' || open.tab === 'definition' || isPeekListTab(open.tab)
-  return <PeekViewContext.Provider value={view}>
-    <div className="peek-body">
-      <div className="peek-pane">
-        <div className="peek-pane-title">
-          <Tabs peek={open} idPrefix={idPrefix} />
-          {open.tab === 'definition' && <div className="peek-actions">
-            <button type="button" className="peek-action" disabled={!copyable} title={definition?.text !== undefined && !copyable ? tooLongToCopy : undefined} onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
-            <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
-              onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
-            {modifiable && <button type="button" className="peek-action" disabled={!commands.isEnabled('explorer.modify', target)}
-              onClick={() => { beforeScript?.(); void commands.execute('explorer.modify', target, 'toolbar') }}>Modify</button>}
-          </div>}
+  const onFollow = view.connected ? (object: ObjectRef, label: string) => view.followObject(object, label) : undefined
+  const pills = peekStatePills(open)
+  const state = pills.length > 0 ? <span className="peek-state-pills">{pills.map(pill => <StatusPill key={pill.id} tone={pill.tone} label={pill.label} size="small" title={pill.title} />)}</span> : undefined
+  const kpis = resolvedSurface === 'full' ? peekHeroKpis(open) : []
+
+  const renderTabContent = (tab: PeekTab): ReactNode => {
+    if (tab === 'overview') return <OverviewTab key={`${open.id}:overview`} open={open} onFollow={onFollow} />
+    if (tab === 'definition') return <div key={`${open.id}:definition`} className="peek-definition-pane">
+      <div className="peek-definition-bar">
+        <span className="peek-definition-label">{open.definition.status !== 'loading' && definition?.text === undefined && constraintExpression !== undefined ? 'Constraint Expression' : 'T-SQL Definition'}</span>
+        <div className="peek-actions">
+          <button type="button" className="peek-action" disabled={!copyable} title={effectiveDefinitionText !== undefined && !copyable ? tooLongToCopy : undefined}
+            onClick={() => { view.copyDefinition().catch(onUnexpectedError) }}>Copy</button>
+          <button type="button" className="peek-action" disabled={!commands.isEnabled(script, target)}
+            onClick={() => { beforeScript?.(); void commands.execute(script, target, 'toolbar') }}>Script to New Query</button>
+          {modifiable && <button type="button" className="peek-action" disabled={!commands.isEnabled('explorer.modify', target)}
+            onClick={() => { beforeScript?.(); void commands.execute('explorer.modify', target, 'toolbar') }}>Modify</button>}
         </div>
-        <div key={`${open.id}:${open.tab}`} className={fills ? 'peek-scroll peek-grid' : 'peek-scroll'} id={`${idPrefix}-panel`} role="tabpanel" aria-labelledby={`${idPrefix}-tab-${open.tab}`}>{panel(open, editor, preset)}</div>
       </div>
-      <div className="peek-pane peek-side">
-        <PaneTitle title="Properties" />
-        <PropertiesPane peek={open} />
-      </div>
+      <Definition part={open.definition} editor={editor} open={open} fallbackText={constraintExpression} />
     </div>
+    if (tab === 'storage') return <StorageTab key={`${open.id}:storage`} open={open} />
+    if (tab === 'usage') return <UsageTab key={`${open.id}:usage`} open={open} />
+    if (isPeekListTab(tab)) return <PeekListView key={`${open.id}:${tab}`} id={tab} part={open.facts} list={open.lists?.[tab]} preset={preset} objectName={name} />
+    if (tab === 'dependencies') return <Dependencies key={`${open.id}:dependencies`} part={open.dependencies} />
+    return <PeekRowsPart key={`${open.id}:rows`} part={open.rows} />
+  }
+
+  const peekKind = isPeekKind(open.kind) ? open.kind : undefined
+  const tabs: InspectorTab[] = peekKind ? peekTabsOf(peekKind).map(tab => {
+    const layout: 'flow' | 'fill' = tab === 'definition' || tab === 'rows' || isPeekListTab(tab) ? 'fill' : 'flow'
+    const count = peekTabCount(open, tab)
+    return {
+      id: tab,
+      title: peekTabTitle(peekKind, tab),
+      layout,
+      ...(count !== undefined ? { count } : {}),
+      content: open.tab === tab ? renderTabContent(tab) : null
+    }
+  }) : []
+
+  const vitals = <PeekVitals open={open} onFollow={onFollow} />
+  const frameProps = {
+    id: idPrefix,
+    title: name,
+    subtitle: kindSpecs[open.kind].title,
+    crumbs,
+    state,
+    tools,
+    surface: resolvedSurface,
+    kpis,
+    tabs,
+    activeTab: open.tab,
+    onSelectTab: (id: string) => view.selectTab(id as PeekTab),
+    vitals,
+    attributes,
+    className: ['peek-view', className].filter(Boolean).join(' '),
+    style,
+    role,
+    ariaLabel,
+    ariaModal,
+    tabIndex,
+    onKeyDown,
+    rootRef: assignRoot
+  }
+
+  return <PeekViewContext.Provider value={view}>
+    {workbench.inspector
+      ? <ObjectInspectorFrame {...frameProps} verbs={verbs} extraVerbs={extraVerbs} />
+      : <ObjectInspectorFrameView {...frameProps} verbs={extraVerbs} />}
   </PeekViewContext.Provider>
 }
 
@@ -367,11 +675,10 @@ export default function PeekCard({ placement = 'explorer' }: { readonly placemen
 }
 
 /**
- * The Peek card: the object's definition on the left, its properties on the right, floating beside Object Explorer in the
- * window the pane is in (docs/popout-windows.md), so it is drawn into that window's body, or below a name in a query editor
- * (its anchor's window). Esc, a click outside it or
- * another peek closes it; a peek from the keyboard or the menu focuses it, a hover does not. Open as Tab (Ctrl+Enter, ⌘↩ on
- * macOS) moves it to a document tab.
+ * The floating Peek Card: renders connected `ObjectInspectorFrame` (`surface="peek"`) beside Object Explorer in the window
+ * the pane is in (docs/popout-windows.md), or below a name in a query editor (its anchor's window). Esc, a click outside it
+ * or another peek closes it; a peek from the keyboard or the menu focuses it, a hover does not. Open as Tab (Ctrl+Enter,
+ * ⌘↩ on macOS) promotes it to a document tab.
  */
 function PeekCardView({ placement }: { readonly placement: PeekPlacement }) {
   const { peek: service, commands, keybindings } = useWorkbench()
@@ -410,7 +717,9 @@ function PeekCardView({ placement }: { readonly placement: PeekPlacement }) {
   useEffect(() => {
     if (!open || open.source === 'hover' || focused.current === open.id || !place) return
     focused.current = open.id
-    card.current?.focus({ preventScroll: true })
+    const el = card.current
+    if (!el || el.contains(el.ownerDocument.activeElement)) return
+    el.focus({ preventScroll: true })
   }, [open?.id, open?.source, place])
 
   // A press outside the card closes it; a press on a row then selects that row as usual. The definition editor's widgets
@@ -444,24 +753,105 @@ function PeekCardView({ placement }: { readonly placement: PeekPlacement }) {
     event.preventDefault()
     next?.focus()
   }
-  const node = open?.node
+
   const name = open ? peekName(open) : ''
+  const back = open && open.back.length > 0
+    ? <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => service.goBack()}><Icon name="arrow-left" /></button>
+    : undefined
+  const extraVerbs: HeaderVerb[] = [
+    { key: 'open-tab', label: 'Open as Tab', title: tabKey ? `Open as Tab (${tabKey.text})` : 'Open as Tab', icon: 'link-external', disabled: false,
+      run: () => { void commands.execute('explorer.openPeekTab', undefined, 'toolbar') } },
+    { key: 'refresh', label: 'Refresh', title: 'Refresh', icon: 'refresh', disabled: !service.connected,
+      run: () => service.refresh() },
+    { key: 'close', label: 'Close', title: 'Close (Esc)', icon: 'close', disabled: false,
+      run: () => close(true) }
+  ]
+
+  const bqController = useMemo<BigQueryInspectorController | undefined>(() => open?.bigQuery ? {
+    view: open.bigQuery,
+    selectTab: tab => service.selectTab(tab),
+    refresh: () => service.refresh(),
+    canLoadDdl: () => service.canLoadBigQueryDdl(),
+    loadDdl: () => { void service.loadBigQueryDdl() },
+    cancelDdl: () => service.cancelBigQueryDdl(),
+    reloadPreview: () => { void service.reloadBigQueryPreview() },
+    cancelPreview: () => service.cancelBigQueryPreview(),
+    onFollow: (object, label) => service.followObject(object, label)
+  } : undefined, [open?.bigQuery, service])
+
+  // Preserve keyboard focus inside BigQuery Peek Card when Back or followObject replaces the open object.
+  const bqHadFocus = useRef(false)
+  const bqLastOpenId = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const el = card.current
+    if (!el || !open?.bigQuery) return
+    const onFocusIn = () => { bqHadFocus.current = true }
+    const isDomNode = (value: unknown): value is Node => typeof value === 'object' && value !== null && 'nodeType' in value
+    const onFocusOut = (event: FocusEvent) => {
+      const next = event.relatedTarget
+      if (isDomNode(next) && el.contains(next)) return
+      if (next === null && isDomNode(event.target) && !event.target.isConnected) return
+      bqHadFocus.current = false
+    }
+    el.addEventListener('focusin', onFocusIn)
+    el.addEventListener('focusout', onFocusOut)
+    const active = el.ownerDocument.activeElement
+    bqHadFocus.current = !!active && el.contains(active)
+    return () => {
+      el.removeEventListener('focusin', onFocusIn)
+      el.removeEventListener('focusout', onFocusOut)
+    }
+  }, [open?.bigQuery !== undefined, place !== undefined])
+  useLayoutEffect(() => {
+    if (!open?.bigQuery) { bqLastOpenId.current = undefined; return }
+    const prev = bqLastOpenId.current
+    bqLastOpenId.current = open.id
+    if (prev === undefined || prev === open.id) return
+    const el = card.current
+    if (!el || !bqHadFocus.current) return
+    const active = el.ownerDocument.activeElement
+    if (!active || active === el.ownerDocument.body || !el.contains(active)) {
+      (el.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? el).focus({ preventScroll: true })
+    }
+  }, [open?.id, open?.bigQuery])
+
   return <span ref={anchor} className="peek-anchor" hidden>
-    {open && node && place && doc && createPortal(
-      <div ref={card} className="peek-card peek-view" role="dialog" aria-modal="false" aria-label={`Peek: ${name}`} tabIndex={-1} onKeyDown={keyDown} data-peek-source={open.source} data-peek-card="" data-peek-placement={placement}
-        style={{ left: place.left, top: place.top, width: place.width, height: place.height }}>
-        <div className="peek-head">
-          {open.back.length > 0 && <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => service.goBack()}><Icon name="arrow-left" /></button>}
-          <ExplorerIcon name={kindSpecs[open.kind].icon} />
-          <bdi className="peek-name" title={name}>{name}</bdi>
-          <span className="peek-kind">{kindSpecs[open.kind].title}</span>
-          <span className="peek-spacer" />
-          <button type="button" className="icon-button" aria-label="Open as Tab" title={tabKey ? `Open as Tab (${tabKey.text})` : 'Open as Tab'}
-            onClick={() => { void commands.execute('explorer.openPeekTab', undefined, 'toolbar') }}><Icon name="link-external" /></button>
-          <button type="button" className="icon-button" aria-label="Refresh" title="Refresh" onClick={() => service.refresh()}><Icon name="refresh" /></button>
-          <button type="button" className="icon-button" aria-label="Close" title="Close (Esc)" onClick={() => close(true)}><Icon name="close" /></button>
-        </div>
-        <PeekBody view={service} open={open} idPrefix="peek" beforeScript={() => close(false)} />
-      </div>, doc.body)}
+    {open && place && doc && createPortal(
+      bqController
+        ? <BigQueryInspectorBody
+            controller={bqController}
+            idPrefix="peek"
+            surface="peek"
+            tools={back}
+            extraVerbs={extraVerbs}
+            beforeScript={() => close(false)}
+            rootRef={card}
+            className="peek-view peek-card"
+            role="dialog"
+            ariaModal={false}
+            ariaLabel={`Peek: ${name}`}
+            tabIndex={-1}
+            onKeyDown={keyDown}
+            attributes={{ 'data-peek-source': open.source, 'data-peek-card': '', 'data-peek-placement': placement }}
+            style={{ left: place.left, top: place.top, width: place.width, height: place.height }}
+          />
+        : <PeekBody
+            view={service}
+            open={open}
+            idPrefix="peek"
+            surface="peek"
+            tools={back}
+            extraVerbs={extraVerbs}
+            beforeScript={() => close(false)}
+            rootRef={card}
+            className="peek-card"
+            role="dialog"
+            ariaModal={false}
+            ariaLabel={`Peek: ${name}`}
+            tabIndex={-1}
+            onKeyDown={keyDown}
+            attributes={{ 'data-peek-source': open.source, 'data-peek-card': '', 'data-peek-placement': placement }}
+            style={{ left: place.left, top: place.top, width: place.width, height: place.height }}
+          />, doc.body)}
   </span>
 }

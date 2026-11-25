@@ -1,4 +1,5 @@
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
+import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind, type PeekTab } from '../../../shared/explorer/peek.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { peekObjectName } from './peek-format'
@@ -7,7 +8,11 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
-import type { PeekService, PeekView } from './PeekService'
+import { tableInspectorTabFromPeek, type TableInspectorTabId } from '../properties/table-fields'
+import type { TablePropertiesService } from '../properties/TablePropertiesService'
+import { isBigQueryPropertiesTabId, type BigQueryPropertiesTabId } from './bigquery-properties-format'
+import type { BigQueryPropertiesService } from './BigQueryPropertiesService'
+import type { AnyPeekTab, PeekService, PeekView } from './PeekService'
 
 export interface PeekTabSnapshot { readonly views: Readonly<Record<string, PeekView>> }
 export interface PeekTabServiceOptions extends CustomDocumentTargetOptions {
@@ -15,6 +20,10 @@ export interface PeekTabServiceOptions extends CustomDocumentTargetOptions {
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'update' | 'get' | 'subscribe'>
   /** Connection metadata for the tab header. */
   readonly connections: { get(id: string): { readonly server: string } | undefined }
+  /** When wired, promoting a SQL Server table opens or focuses its unified Table Properties document on the matching tab. */
+  readonly tableProperties?: Pick<TablePropertiesService, 'open'> & { readonly focus?: (id: string) => void }
+  /** When wired, promoting a BigQuery object opens or focuses its unified BigQuery Properties document on the matching tab. */
+  readonly bigQueryProperties?: Pick<BigQueryPropertiesService, 'open'> & { readonly focus?: (id: string) => void }
   readonly focus?: (id: string) => void
 }
 
@@ -52,19 +61,38 @@ export class PeekTabService extends SnapshotStore<PeekTabSnapshot> implements Cu
     })
   }
 
-  /** Whether `node` can open in a tab: what the card can peek. */
-  canOpen(node: ExplorerMenuNode | undefined): node is ExplorerMenuNode { return this.o.peek.canPeek(node) }
+  /** Whether `node` can open in a tab: what the card can peek (BigQuery requires `bigQueryProperties` to be wired). */
+  canOpen(node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
+    if (!this.o.peek.canPeek(node)) return false
+    return !isBigQueryPropertyKind(node.kind) || !!this.o.bigQueryProperties
+  }
 
-  /** Opens `node` in a new tab, active, on `tab` when its kind has it; resolves to the document's id. */
-  open(node: ExplorerMenuNode | undefined, tab?: PeekTab): string | undefined {
-    if (this.disposed || !this.canOpen(node) || node.ref.type !== 'object' || node.kind === 'folder' || !isPeekKind(node.kind)) return undefined
+  /**
+   * Opens `node` in a tab, active, on `tab` when its kind has it; promotes SQL Server tables to Table Properties
+   * and BigQuery objects to unified BigQuery Properties when wired (never opening a duplicate Peek tab).
+   */
+  open(node: ExplorerMenuNode | undefined, tab?: AnyPeekTab | TableInspectorTabId): string | undefined {
+    if (this.disposed || !this.canOpen(node) || node.ref.type !== 'object' || node.kind === 'folder') return undefined
+    if (isBigQueryPropertyKind(node.kind)) {
+      if (!this.o.bigQueryProperties) return undefined
+      const bqTab: BigQueryPropertiesTabId | undefined = tab !== undefined && isBigQueryPropertiesTabId(tab) ? tab : undefined
+      const id = this.o.bigQueryProperties.open(node, bqTab)
+      if (id) this.o.bigQueryProperties.focus?.(id)
+      return id
+    }
+    if (!isPeekKind(node.kind)) return undefined
+    if (node.kind === 'table' && this.o.tableProperties) {
+      const id = this.o.tableProperties.open(node, tab === undefined ? undefined : tableInspectorTabFromPeek(tab as PeekTab | TableInspectorTabId))
+      this.o.tableProperties.focus?.(id)
+      return id
+    }
     const view = this.o.peek.createView()
     // A database's tab is in that database, as a query opened from it would be.
     const database = node.kind === 'database' ? node.ref.object.name ?? '' : node.ref.object.database ?? ''
     const document = this.o.documents.openCustom('peek', peekTabName(node), node.connectionId, database)
     this.targetBindings.bind(document.id, node.connectionId)
     this.publish({ views: { ...this.getSnapshot().views, [document.id]: view } })
-    view.show(node, tab)
+    view.show(node, tab as PeekTab | undefined)
     // A followed dependency names the tab after the object it shows.
     let name = document.name
     this.watchers.set(document.id, view.subscribe(() => {

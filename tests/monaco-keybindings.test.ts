@@ -37,15 +37,17 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'cmd+e': "Search Options in the Options dialog only (optionsDialogFocus, a modal key); Monaco's find with selection keeps ⌘E in editor text",
   'cmd+i': "Properties in Object Explorer only (activePanel == 'explorer' && !textInputFocus && !searchHitsFocus): Monaco's suggestion trigger keeps ⌘I in editor text",
   'mod+f': "Find in Results in a results grid only (outputGridFocus): the grid is outside the editor, so Monaco's find keeps the key in editor text",
+  'alt+left': "Integration Services Go Back (Windows and Linux) only in its document outside text input (activeDocumentIsSsisOperations && !textInputFocus); Monaco's cursor word moves keep Alt+Left in editor text",
+  'alt+right': "Integration Services Go Forward, likewise; Monaco keeps Alt+Right in editor text",
   'f3': "Find Next in Results in a results grid only (outputGridFocus); Monaco's next match keeps F3 in editor text",
   'shift+f3': "Find Previous in Results in a results grid only (outputGridFocus); Monaco's previous match keeps Shift+F3 in editor text",
   'cmd+g': "Find Next in Results on macOS in a results grid only (outputGridFocus); Monaco's ⌘G keeps it in editor text",
   'shift+cmd+g': "Find Previous in Results on macOS in a results grid only (outputGridFocus); Monaco's ⇧⌘G keeps it in editor text",
-  'alt+down': "Filter Column Values in a results grid only (outputGridFocus), Excel's key for a column's filter list, and Move Down on a server in Object Explorer's tree (explorerFocus && !textInputFocus): both are outside the editor, so Monaco's hover scrolling and input history keep Alt+Down in editor text",
-  'alt+up': "Move Up on a server in Object Explorer's tree only (explorerFocus && !textInputFocus): the tree is outside the editor, so Monaco's hover scrolling and input history keep Alt+Up in editor text",
+  'alt+down': "Filter Column Values in a results grid only (outputGridFocus), Excel's key for a column's filter list, and Move Down on a server in Object Explorer's tree (explorerFocus && !textInputFocus): and Move Step Down in a job's Steps section (agentStepsFocus, false in the step's command editor): all are outside editor text, so Monaco's hover scrolling and input history keep Alt+Down there",
+  'alt+up': "Move Up on a server in Object Explorer's tree (explorerFocus && !textInputFocus) and Move Step Up in a job's Steps section (agentStepsFocus, false in the step's command editor): both are outside editor text, so Monaco's hover scrolling and input history keep Alt+Up in editor text",
   'ctrl+shift+alt+pagedown': "Next Result View outside text (!textInputFocus): Monaco's column selection by page (Windows only) keeps the key in editor text and inputs",
   'ctrl+shift+alt+pageup': "Previous Result View outside text (!textInputFocus), likewise",
-  'enter': "Open Job in Job Activity Monitor's jobs grid only (activeDocumentIsJobActivity && outputGridFocus): the grid is outside the editor, so Monaco's Enter keeps it in editor text and its widgets",
+  'enter': "Open Job in Job Activity Monitor's jobs grid only (activeDocumentIsJobActivity && liveGridFocus): the grid is outside the editor, so Monaco's Enter keeps it in editor text and its widgets",
   'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 

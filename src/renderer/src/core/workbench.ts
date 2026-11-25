@@ -120,6 +120,7 @@ import { TablePropertiesService } from '../properties/TablePropertiesService'
 import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
+import { SsisPlacesService } from '../ssis/SsisPlacesService'
 import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
@@ -298,6 +299,8 @@ export interface Workbench extends Disposable {
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
   readonly operations: SsisOperationsService
+  /** The Integration Services document's package and run pages' reads, kept per history step. */
+  readonly ssisPlaces: SsisPlacesService
   /** BigQuery Job History (BQ-9): each BigQuery connection's document, its filters, details and row actions. */
   readonly jobHistory: JobHistoryService
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
@@ -497,9 +500,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Object Explorer's Peek on Hover modifier arms the peek cursor and a press over a resting row; releasing either one
   // (Object Explorer's or the query editor's, as remapped) forgets a pending hover.
   const peek = new PeekService({ api, connections, scriptingOptions, platform, results, gestures: gesturesFor(platform),
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  // The Agent node's Start, Stop and Restart grey while one of them runs on its server (agentServiceRules' busy).
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -534,8 +540,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const tableProperties = new TablePropertiesService({
-    api, documents, files, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
+    api, documents, files, connections, targetIdOf, scriptingOptions, results,
+    focusEditor: () => focusLater(() => documents.focusActive()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-table-properties="${CSS.escape(id)}"] [role="tablist"][aria-label="Object sections"] [role="tab"][tabindex="0"]`)?.focus())
   })
   const newDatabase = new NewDatabaseService({
     api, documents, files, connections, explorer, longRuns, serverFiles, targetIdOf, focusEditor: () => focusLater(() => documents.focusActive()),
@@ -562,8 +569,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, connections, live, targetIdOf, owner: id => documentOwner(id, documents, panes, editorGroups), settings: () => settings.getSnapshot().values,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
   })
+  const ssisPlaces = new SsisPlacesService({ api })
   const operations = new SsisOperationsService({
-    api, documents, panes, groups: editorGroups, live, connections, settings, targetIdOf,
+    api, documents, panes, groups: editorGroups, live, places: ssisPlaces, connections, settings, targetIdOf,
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const jobHistory = new JobHistoryService({
@@ -575,6 +583,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const jobDocuments = new JobDocumentService({
     api, documents, files, connections, live, targetIdOf,
     openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) },
+    openSsisExecution: (connectionId, executionId) => { operations.openExecution(connectionId, executionId); documents.focusActive() },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
       ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
@@ -601,7 +610,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
   const jobActivity = new JobActivityService({
-    api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
+    api, documents, panes, groups: editorGroups, live, connections, targetIdOf, explorer, longRuns,
     started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-jobs="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
@@ -618,12 +627,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
-  const peekTabs = new PeekTabService({
-    peek, documents, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
-  })
   const bigQueryProperties = new BigQueryPropertiesService({
-    api, documents, focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"] [role="region"]`)?.focus())
+    api, documents, connections, results, scriptingOptions,
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
+    focus: id => focusLater(() => {
+      const root = document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"]`)
+      ;(root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('button'))?.focus()
+    })
+  })
+  const peekTabs = new PeekTabService({
+    peek, documents, connections, targetIdOf, tableProperties, bigQueryProperties,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })
@@ -807,6 +821,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     restore,
     activity,
     operations,
+    ssisPlaces,
     jobHistory,
     jobActivity,
     logViewer,
@@ -860,8 +875,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       compare.dispose()
       pivot.dispose()
       resultsSearch.dispose()
-      // Before the results: each tab's view releases its Top rows there (the card's are released with it below, or by the results).
+      // Before the results: each tab's view and Table Properties' Preview Rows release their Top rows there (the card's are released with it below, or by the results).
       peekTabs.dispose()
+      tableProperties.dispose()
       bigQueryProperties.dispose()
       inspector.dispose()
       results.dispose()
@@ -873,6 +889,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       searchDetails.dispose()
       objectSearch.dispose()
       operations.dispose()
+      ssisPlaces.dispose()
       jobHistory.dispose()
       jobActivity.dispose()
       logViewer.dispose()
@@ -891,6 +908,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       explorerJobs.dispose()
       agentTree.dispose()
       explorerRuntime.dispose()
+      explorerLongRuns.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultVisibility.dispose()
@@ -900,7 +918,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
-      tableProperties.dispose()
       newDatabase.dispose()
       restore.dispose()
       sqlDiagnostics.dispose()

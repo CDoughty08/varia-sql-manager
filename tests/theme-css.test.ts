@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { colorKeys, colorRegistry, cssVariable, type ColorKey } from '../src/shared/theme/registry'
 import { densityVariables, metricVariables, reducedMotionRoot, reducedMotionVariables } from '../src/shared/theme/metrics'
 import { editorFontFamily, monoFontFamily, uiFontFamily } from '../src/renderer/src/fonts'
-import { stylesheetRules } from './fixtures/css-rules'
+import { stylesheetRules, unbalancedBrace } from './fixtures/css-rules'
 import { liveTones } from '../src/shared/live/catalog'
 
 const rendererDir = 'src/renderer/src'
@@ -36,6 +36,13 @@ const variablesIn = (text: string) => [...text.matchAll(/var\((--varia-[A-Za-z0-
 const keyByVariable = new Map(colorKeys.map(key => [cssVariable(key), key]))
 
 describe('theme tokens in the renderer', () => {
+  it('pairs every brace in every renderer stylesheet, so no block left open swallows the rules after it', () => {
+    const sheets = readdirSync(rendererDir, { recursive: true, encoding: 'utf8' }).filter(file => file.endsWith('.css'))
+    expect(sheets).toContain('styles.css')
+    for (const sheet of sheets) expect(unbalancedBrace(readFileSync(join(rendererDir, sheet), 'utf8')), sheet).toBeUndefined()
+    expect(unbalancedBrace('.a { color: red; }\n/* a\ncomment */ @media print {\n  .b { color: blue; }\n.c { color: green; }')).toBe('the block opened on line 3 never closes')
+    expect(unbalancedBrace('.a { color: red; } }')).toBe('an extra } on line 1')
+  })
   it('holds no control characters, which a CSS escape that lost its backslash (a glyph in content) leaves', () => {
     expect(stylesheet).not.toMatch(/[\u0000-\u0008\u000e-\u001f]/)
   })

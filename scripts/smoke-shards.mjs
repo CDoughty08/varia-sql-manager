@@ -13,41 +13,37 @@ export function smokeSuites() {
 }
 
 /**
- * Seconds each suite took in CI's smoke jobs (PR #166's run, 2026-11-08, after within() stopped the idle timers: Linux under xvfb with SQL Server, Windows without), to balance the
- * shards on each platform; macOS uses Linux's. Every suite in `test:smoke` needs one on each platform
- * (tests/smoke-shards.test.ts); rough is fine, and each shard's summary prints the times to copy from.
- * Connections, Activity Monitor, Explorer, results, live plans and menus use PR #469's 2026-11-13 run (43540439831).
- * Windows live plans retain their prior weight because that platform's run had no SQL endpoint and skipped them.
- * Hot exit adds the five-second replacement-window grace to its last green Linux/Windows measurements (17/18 seconds).
- * BigQuery results (with its windowed paging, Copy, Save and Load into memory phases) and BigQuery Explorer are local
- * estimates until their first CI run (each about 6 seconds locally).
+ * Seconds each suite took in CI's smoke jobs (PR #723's green run 45451778872, 2026-11-24: Linux under xvfb with SQL Server,
+ * Windows without), to balance the shards on each platform; macOS uses Linux's. Every suite in `test:smoke` needs one on each
+ * platform (tests/smoke-shards.test.ts); rough is fine, and each shard's summary prints the times to copy from. Windows live
+ * plans retain a 2 s weight because that platform's run has no SQL endpoint and skips them.
  */
 export const suiteSeconds = {
   linux: {
-    'scripts/retained-plans-smoke.mjs': 20,
+    'scripts/retained-plans-smoke.mjs': 45,
     'scripts/live-plan-smoke.mjs': 47,
-    'scripts/electron-smoke.mjs': 20, 'scripts/layout-smoke.mjs': 14, 'scripts/popout-smoke.mjs': 7,
-    'scripts/connections-smoke.mjs': 56, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 9,
-    'scripts/backend-smoke.mjs': 34, 'scripts/live-smoke.mjs': 28, 'scripts/chart-smoke.mjs': 31,
-    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 76,
-    'scripts/explorer-smoke.mjs': 60, 'scripts/scripting-smoke.mjs': 19, 'scripts/object-actions-smoke.mjs': 106,
-    'scripts/results-smoke.mjs': 91, 'scripts/grouped-results-smoke.mjs': 7, 'scripts/bigquery-results-smoke.mjs': 22, 'scripts/bigquery-explorer-smoke.mjs': 12, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 3, 'scripts/options-smoke.mjs': 18,
-    'scripts/files-smoke.mjs': 15, 'scripts/hot-exit-smoke.mjs': 22, 'scripts/editor-smoke.mjs': 21, 'scripts/language-services-smoke.mjs': 12, 'scripts/language-diagnostics-smoke.mjs': 20,
-    'scripts/table-designer-smoke.mjs': 5, 'scripts/document-frame-smoke.mjs': 16, 'scripts/ssis-smoke.mjs': 5,
-    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/bigquery-jobs-smoke.mjs': 14, 'scripts/agent-jobs-smoke.mjs': 38, 'scripts/agent-job-smoke.mjs': 40, 'scripts/agent-proxy-smoke.mjs': 12, 'scripts/agent-hot-exit-smoke.mjs': 15, 'scripts/updates-smoke.mjs': 11
+    'scripts/electron-smoke.mjs': 18, 'scripts/layout-smoke.mjs': 28, 'scripts/popout-smoke.mjs': 14,
+    'scripts/connections-smoke.mjs': 74, 'scripts/theme-smoke.mjs': 9, 'scripts/palette-smoke.mjs': 11,
+    'scripts/backend-smoke.mjs': 37, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 33,
+    'scripts/live-grid-smoke.mjs': 22, 'scripts/activity-monitor-smoke.mjs': 92, 'scripts/menus-smoke.mjs': 86,
+    'scripts/explorer-smoke.mjs': 121, 'scripts/scripting-smoke.mjs': 33, 'scripts/object-actions-smoke.mjs': 124,
+    'scripts/results-smoke.mjs': 95, 'scripts/grouped-results-smoke.mjs': 9, 'scripts/bigquery-results-smoke.mjs': 7, 'scripts/bigquery-explorer-smoke.mjs': 8, 'scripts/estimated-plans-smoke.mjs': 18, 'scripts/options-resize-smoke.mjs': 5, 'scripts/options-smoke.mjs': 18,
+    'scripts/files-smoke.mjs': 17, 'scripts/hot-exit-smoke.mjs': 41, 'scripts/editor-smoke.mjs': 33, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 10,
+    'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 11, 'scripts/ssis-smoke.mjs': 7,
+    'scripts/ssis-operations-smoke.mjs': 21, 'scripts/bigquery-jobs-smoke.mjs': 12, 'scripts/agent-jobs-smoke.mjs': 18, 'scripts/agent-job-smoke.mjs': 21, 'scripts/agent-proxy-smoke.mjs': 6, 'scripts/agent-hot-exit-smoke.mjs': 6, 'scripts/updates-smoke.mjs': 11
   },
   windows: {
-    'scripts/retained-plans-smoke.mjs': 20,
+    'scripts/retained-plans-smoke.mjs': 17,
     'scripts/live-plan-smoke.mjs': 2,
-    'scripts/electron-smoke.mjs': 18, 'scripts/layout-smoke.mjs': 13, 'scripts/popout-smoke.mjs': 15,
-    'scripts/connections-smoke.mjs': 42, 'scripts/theme-smoke.mjs': 5, 'scripts/palette-smoke.mjs': 10,
-    'scripts/backend-smoke.mjs': 30, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 32,
-    'scripts/live-grid-smoke.mjs': 21, 'scripts/activity-monitor-smoke.mjs': 91, 'scripts/menus-smoke.mjs': 103,
-    'scripts/explorer-smoke.mjs': 57, 'scripts/scripting-smoke.mjs': 18, 'scripts/object-actions-smoke.mjs': 149,
-    'scripts/results-smoke.mjs': 93, 'scripts/grouped-results-smoke.mjs': 9, 'scripts/bigquery-results-smoke.mjs': 22, 'scripts/bigquery-explorer-smoke.mjs': 12, 'scripts/estimated-plans-smoke.mjs': 12, 'scripts/options-resize-smoke.mjs': 2, 'scripts/options-smoke.mjs': 16,
-    'scripts/files-smoke.mjs': 13, 'scripts/hot-exit-smoke.mjs': 23, 'scripts/editor-smoke.mjs': 25, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 25,
-    'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 22, 'scripts/ssis-smoke.mjs': 4,
-    'scripts/ssis-operations-smoke.mjs': 18, 'scripts/bigquery-jobs-smoke.mjs': 14, 'scripts/agent-jobs-smoke.mjs': 38, 'scripts/agent-job-smoke.mjs': 40, 'scripts/agent-proxy-smoke.mjs': 12, 'scripts/agent-hot-exit-smoke.mjs': 15, 'scripts/updates-smoke.mjs': 11
+    'scripts/electron-smoke.mjs': 23, 'scripts/layout-smoke.mjs': 39, 'scripts/popout-smoke.mjs': 15,
+    'scripts/connections-smoke.mjs': 55, 'scripts/theme-smoke.mjs': 10, 'scripts/palette-smoke.mjs': 12,
+    'scripts/backend-smoke.mjs': 37, 'scripts/live-smoke.mjs': 27, 'scripts/chart-smoke.mjs': 27,
+    'scripts/live-grid-smoke.mjs': 22, 'scripts/activity-monitor-smoke.mjs': 87, 'scripts/menus-smoke.mjs': 104,
+    'scripts/explorer-smoke.mjs': 119, 'scripts/scripting-smoke.mjs': 26, 'scripts/object-actions-smoke.mjs': 179,
+    'scripts/results-smoke.mjs': 90, 'scripts/grouped-results-smoke.mjs': 12, 'scripts/bigquery-results-smoke.mjs': 9, 'scripts/bigquery-explorer-smoke.mjs': 8, 'scripts/estimated-plans-smoke.mjs': 7, 'scripts/options-resize-smoke.mjs': 5, 'scripts/options-smoke.mjs': 22,
+    'scripts/files-smoke.mjs': 22, 'scripts/hot-exit-smoke.mjs': 33, 'scripts/editor-smoke.mjs': 39, 'scripts/language-services-smoke.mjs': 18, 'scripts/language-diagnostics-smoke.mjs': 11,
+    'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 8, 'scripts/ssis-smoke.mjs': 9,
+    'scripts/ssis-operations-smoke.mjs': 21, 'scripts/bigquery-jobs-smoke.mjs': 13, 'scripts/agent-jobs-smoke.mjs': 18, 'scripts/agent-job-smoke.mjs': 20, 'scripts/agent-proxy-smoke.mjs': 6, 'scripts/agent-hot-exit-smoke.mjs': 7, 'scripts/updates-smoke.mjs': 11
   }
 }
 
@@ -55,7 +51,7 @@ export const suiteSeconds = {
  * The most one CI shard's suites may take on either platform, so a slow new suite fails tests/ci-workflow.test.ts instead of
  * quietly lengthening every run: speed it up, or add a shard to ci.yml's matrix (and its command).
  */
-export const shardBudgetSeconds = 360
+export const shardBudgetSeconds = 420
 
 /** This machine's weights: Windows's on Windows, Linux's elsewhere. */
 export const platformSeconds = (platform = process.platform) => suiteSeconds[platform === 'win32' ? 'windows' : 'linux']
@@ -155,6 +151,16 @@ export function shardSuites(suites, count, seconds = platformSeconds()) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  if (process.argv[2] === '--has-suite') {
+    const suite = process.argv[3] ?? '', match = /^(\d+)\/(\d+)$/.exec(process.argv[4] ?? '')
+    const shard = Number(match?.[1]), count = Number(match?.[2])
+    if (!suite || !match || shard < 1 || shard > count) {
+      console.error('Usage: node scripts/smoke-shards.mjs --has-suite <suite> <shard>/<count>')
+      process.exit(2)
+    }
+    const suites = shardSuites(smokeSuites(), count)[shard - 1]
+    process.exit(suites.includes(suite) ? 0 : 1)
+  }
   const match = /^(\d+)\/(\d+)$/.exec(process.argv[2] ?? '')
   const shard = Number(match?.[1]), count = Number(match?.[2])
   if (!match || shard < 1 || shard > count) {

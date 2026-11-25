@@ -7,7 +7,7 @@ import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, connectDialogWindow, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
-  editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
+  editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, paneMenuButton, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryPlanButton, queryPlanMenu, queryPlanOption, queryServer,
   queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, submitConnect, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
@@ -219,9 +219,9 @@ try {
   await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()
   expect(await page.evaluate(part => {
     const bar = document.querySelector(part.queryBar), box = bar.getBoundingClientRect()
-    return { aboveTabs: box.bottom <= document.querySelector(part.documentTabs).getBoundingClientRect().top + 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
+    return { belowTabs: box.top >= document.querySelector(part.documentTabs).getBoundingClientRect().bottom - 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
       height: box.height, stops: [...bar.querySelectorAll('button, select')].filter(control => control.tabIndex === 0).length, primary: [...bar.querySelectorAll(part.primaryAction)].map(button => button.getAttribute('aria-label')) }
-  }, part)).toEqual({ aboveTabs: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
+  }, part)).toEqual({ belowTabs: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
   // One tab stop: the arrow keys move between the enabled controls (Cancel waits for a running query) and leave the
   // server list's value alone.
   await queryServer(page).focus()
@@ -235,25 +235,33 @@ try {
   await page.keyboard.press('Space')
   await expect(clientStatistics).toHaveAttribute('aria-pressed', 'false')
   await page.keyboard.press('ArrowLeft')
-  const livePlan = queryBarButton(page, 'Include Live Execution Plan')
-  await expect(livePlan).toBeFocused()
+  const planTrigger = queryPlanButton(page)
+  await expect(planTrigger).toBeFocused()
+  await expect(planTrigger).toHaveText('Plan')
+  await page.keyboard.press('ArrowDown')
+  await expect(queryPlanMenu(page)).toBeVisible()
+  await expect(queryPlanOption(page, 'Include Actual Plan')).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(planTrigger).toBeFocused()
+  await expect(planTrigger).toHaveText('Actual Plan')
+  await page.keyboard.press('ArrowDown')
+  await expect(queryPlanOption(page, 'Include Actual Plan')).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Enter')
+  await expect(planTrigger).toHaveText('Plan')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(queryPlanOption(page, 'Include Live Plan')).toBeFocused()
   await page.keyboard.press('Space')
-  await expect(livePlan).toHaveAttribute('aria-pressed', 'true')
+  await expect(planTrigger).toBeFocused()
+  await expect(planTrigger).toHaveText('Live Plan')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Space')
-  await expect(livePlan).toHaveAttribute('aria-pressed', 'false')
-  await page.keyboard.press('ArrowLeft')
-  const actualPlan = queryBarButton(page, 'Include Actual Execution Plan')
-  await expect(actualPlan).toBeFocused()
-  await page.keyboard.press('Space')
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'true')
-  await page.keyboard.press('Space')
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'false')
+  await expect(planTrigger).toHaveText('Plan')
   await page.keyboard.press('ArrowLeft')
   await expect(queryBarButton(page, 'Execute')).toBeFocused()
   await page.keyboard.press('ArrowRight')
-  await expect(actualPlan).toBeFocused()
-  await page.keyboard.press('ArrowRight')
-  await expect(livePlan).toBeFocused()
+  await expect(planTrigger).toBeFocused()
   await page.keyboard.press('ArrowRight')
   await expect(clientStatistics).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -271,7 +279,7 @@ try {
     return [server.left - edge.left, server.top - edge.top, edge.bottom - server.bottom, edge.right - database.right]
   })).toEqual([0, 0, 0, 0])
   await expect(queryServer(page)).toHaveValue('')
-  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, -1, -1, -1, 0, -1])
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
@@ -610,7 +618,7 @@ try {
   }, part)
   const beforeSidRegression = await page.evaluate(() => [innerWidth, innerHeight])
   await resizeContent(application, page, 1440, 900)
-  await expect.poll(tabGeometry).toMatchObject({ rowHeight: 44, nameVisible: true, nameUnclipped: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
+  await expect.poll(tabGeometry).toMatchObject({ rowHeight: 40, nameVisible: true, nameUnclipped: true, sidVisible: true, chipsCentered: true, actionsVisible: true })
   await documentTabs(page).screenshot({ path: artifact('query-tabs-two-line.png') })
   await page.screenshot({ path: artifact('query-tabs-workbench.png') })
   await resizeContent(application, page, 1024, 720)
@@ -634,7 +642,7 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).length).toBe(executed.length + 1)
   expect((await executions()).at(-1).params).toMatchObject({ connectionId: idA, database: 'AppData', sql: 'SELECT 1;' })
-  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
   // Preset environments yield too: a read-only, running query still fits its name, five-digit SID and actions.
   await selectOpenDocument(page, tabB)
   await writeFile(crowdedQuery, 'WAIT_FOR_CANCEL')
@@ -688,7 +696,7 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
   expect((await executions()).at(-1).params.startLine).toBe(3)
-  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Control+Enter')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql.replaceAll('\r\n', '\n')).toBe('-- heading\nSELECT 10;\nSELECT 20;')
@@ -999,10 +1007,11 @@ try {
   await activeDocument(page).focus()
   await page.keyboard.press('Space')
   await page.screenshot({ path: artifact('workbench.png') })
-  // The toolbar's Disconnect acts on the selected node's server, retaining its root and query target after Keep Tabs.
+  // The panel menu's Disconnect acts on the selected node's server, retaining its root and query target after Keep Tabs.
   await (await explorerRow(page, 'server-b', 'Security')).click()
   const tabsBeforeDisconnect = await documentTabs(page).getByRole('tab').count()
-  await explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true }).click()
+  await paneMenuButton(page, 'explorer').click()
+  await page.getByRole('menu', { name: 'Object Explorer menu', exact: true }).getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
   const disconnectPrompt = page.getByRole('dialog', { name: 'Disconnect server-b?', exact: true })
   await expect(disconnectPrompt).toBeVisible()
   await disconnectPrompt.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
@@ -1017,7 +1026,7 @@ try {
   await expect(queryServer(page).getByRole('option', { selected: true })).toHaveText('server-b Disconnected')
   await expect(queryServer(page).getByRole('option', { selected: true })).toBeDisabled()
   // A disconnected query's Execute connects it first.
-  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(part => {
@@ -1025,7 +1034,12 @@ try {
     // The header's controls (search box, buttons, server and database lists) sit on its middle line.
     const header = document.querySelector(part.titleBarContent), controls = [...header.querySelectorAll('button, select')].filter(element => element.getBoundingClientRect().width > 0)
     const headings = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].filter(element => element.getBoundingClientRect().height > 0)
-    const distances = headings.flatMap(element => [element.querySelector(part.explorerLabel), element.querySelector(part.explorerSublabel), element.querySelector(part.explorerTwistie)].filter(Boolean).map(item => Math.abs(center(element.querySelector(part.explorerIcon)) - center(item))))
+    const distances = headings.flatMap(element => {
+      const icon = element.querySelector(part.explorerIcon)
+      // Server rows are 2-line bands whose sublabel sits on Line 2 below the icon's line.
+      const sublabel = element.querySelector(part.explorerServerTop) ? null : element.querySelector(part.explorerSublabel)
+      return [element.querySelector(part.explorerLabel), sublabel, element.querySelector(part.explorerTwistie)].filter(Boolean).map(item => Math.abs(center(icon) - center(item)))
+    })
     const safe = navigator.windowControlsOverlay.getTitlebarAreaRect()
     return { field: Math.max(...controls.map(control => Math.abs(center(control) - center(header)))), tree: Math.max(...distances), headingCount: headings.length, titleBarFits: document.querySelector(part.titleBarContent).getBoundingClientRect().right <= safe.x + safe.width + 1, overflow: document.documentElement.scrollWidth > window.innerWidth }
   }, part)

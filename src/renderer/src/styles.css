@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-move: 180ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 44px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-move: 180ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-progressThin: 2px; --varia-resultTab: 240px; --varia-optionsLabel: 240px; --varia-optionsControl: 220px; --varia-header: 40px; --varia-bar: 36px; --varia-documentTab: 40px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 :root.varia-reduced-motion { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; --varia-motion-move: 0ms; }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -216,18 +216,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .docking-guide-cell svg { width: 100%; height: 100%; }
 .docking-preview { position: fixed; background: var(--varia-dock-previewBackground); border: 2px solid var(--varia-dock-previewBorder); box-shadow: inset 0 0 0 1px var(--varia-dock-previewInnerBorder); }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; container: explorer / inline-size; }
-/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. */
-.explorer-header { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. Height matches Document Tabs so Row 1 aligns flush across the splitter. */
+.explorer-header { height: var(--varia-documentTab); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .pane-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-sideBarTitle-foreground); }
-.explorer-header .icon-button { width: var(--varia-space-5); }
+.explorer-header .icon-button, .explorer-inline-toolbar .icon-button { width: var(--varia-space-5); }
 .explorer-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 1px; }
-/* Give the title and panel menu their own row when the title no longer fits beside the tools. */
-@container explorer (width < 328px) {
-  .explorer-header { display: grid; grid-template: 'title menu' 1fr 'tools tools' auto / minmax(0, 1fr) auto; gap: 0; min-block-size: calc(var(--varia-bar) + var(--varia-control)); padding: 0 var(--varia-space-1) var(--varia-space-1); }
-  .explorer-header .pane-title { grid-area: title; padding-inline-start: var(--varia-space-2); }
-  .explorer-header .pane-menu { grid-area: menu; }
-  .explorer-header .explorer-toolbar { grid-area: tools; }
-  .explorer-toolbar .icon-button { flex: 0 1 var(--varia-space-5); min-width: 0; padding-inline: var(--varia-space-0); }
+/* Keep the header on a single row even down to minimum dock widths (200 px), tightening button chrome without wrapping. */
+@container explorer (width < 224px) {
+  .explorer-header { padding: 0 var(--varia-space-0) 0 var(--varia-space-2); }
+  .explorer-header .icon-button { width: 22px; padding-inline: var(--varia-space-0); }
 }
 .pane-menu { flex-shrink: 0; }
 .pane-menu:focus-visible { outline-offset: -2px; }
@@ -240,49 +237,68 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-toolbar .icon-button[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
 }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
-.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Object Explorer's search row (SearchPanel's pane layout) and disconnected fallback bar: locked to --varia-bar so Row 2 aligns flush with QueryBar across the splitter. */
+.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 0; }
+.object-search.object-search-pane[data-hits] { border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 /* Sized by its splitter, the band keeps its share of the pane (an inline height) and the tree below takes the rest; in a
    pane too short for the header, the band and the footer, the band gives way so the footer stays. */
 .object-search.object-search-pane[data-sized] { flex: 0 1 auto; max-height: none; }
 .object-search-splitter { flex: none; height: 4px; margin-bottom: -1px; cursor: row-resize; touch-action: none; }
 .object-search-splitter:hover, .object-search-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
-.object-search-pane .object-search-query { gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); }
-.object-search-pane .object-search-field { max-width: none; }
+.object-search-pane .object-search-query { gap: 0; padding: 0; }
+.object-search-pane .object-search-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-tools-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.object-search-pane .object-search-field { flex: 1 1 0; min-width: 0; max-width: none; }
 .object-search-pane .object-search-field .icon-button { width: 20px; height: 20px; }
+.object-search-pane .object-search-pane-filters, .object-search-pane .object-search-pane-status, .object-search-pane > .object-search-query > .object-search-index { padding: var(--varia-space-1) var(--varia-space-2) 0; }
+.object-search-pane .object-search-pane-status { padding-bottom: var(--varia-space-1); }
 .object-search-pane .object-search-options { gap: var(--varia-space-2); }
 .object-search-pane .object-search-hit { padding: 0 var(--varia-space-1); }
 .object-search-pane .object-search-open { grid-template-columns: auto minmax(0, 1fr); }
 .object-search-pane .object-search-path { grid-column: 2; max-width: none; text-align: start; }
 .object-search-pane .empty-state { flex: none; padding: var(--varia-space-2) var(--varia-space-3); }
 /*
- * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
- * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
- * count shows whole or not at all: when it does not fit beside the freshness it wraps to a second line, which the
- * footer's height clips (each server row has its dot).
+ * The footer: how fresh the selection's listing is, then the connected servers pinned right so the server count never
+ * disappears on long listing names while the freshness scope ellipsizes. Height stays fixed to the stale badge's 20 px
+ * pill so a failed refresh never moves the tree's bottom edge.
  */
-.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
-.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; height: 20px; min-width: 0; }
-.explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: nowrap; align-items: center; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 1 1 0; height: 20px; min-width: 0; overflow: hidden; }
+.explorer-freshness-scope { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-freshness .stale-badge { flex-shrink: 0; }
+.explorer-servers { flex: 0 0 auto; margin-left: auto; line-height: 20px; }
 /* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
-.explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
+.explorer-servers:only-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .explorer-tree-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
 .explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
-/* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
-.explorer-row.server { height: 30px; }
+/* A server leads its tree as a flush 44 px 2-line band (explorerLimits.serverRowHeight) for 1:1 jump-free sticky handoff. */
+.explorer-row.server { height: 44px; flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 3px var(--varia-space-2) 3px var(--varia-space-1); border-radius: 0; box-shadow: inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); isolation: isolate; }
+/* Unified connection-color hairline and soft directional wash: driven strictly by --server-accent, neutral when unset. */
+.explorer-row.server[data-accent]::before { content: ''; position: absolute; inset: 0; z-index: 0; background: linear-gradient(90deg, var(--server-accent) 0%, transparent 72%); opacity: 0.1; pointer-events: none; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]::before { opacity: 0.08; }
+.explorer-row.server[data-accent]:hover::before { opacity: 0.14; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]:hover::before { opacity: 0.11; }
+.explorer-row.server[data-accent]::after { content: ''; position: absolute; inset: 0; z-index: 0; border-top: 1px solid var(--server-accent); border-bottom: 1px solid var(--server-accent); opacity: 0.36; pointer-events: none; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]::after { opacity: 0.32; }
+.oe-server-top { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-md); min-width: 0; }
+.oe-server-sub { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-xs); padding-left: 44px; min-width: 0; }
+.oe-server-sub .oe-sublabel { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.oe-server-sub-end { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; margin-left: auto; }
+.oe-server-sub-end:empty { display: none; }
 /* The active query's server (untinted by default; its glyph, .oe-active, marks it): hover and selection still show on it. */
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 /* Pinned shortcuts overlay a fixed scroll window, stopping before its native scrollbars. */
-.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-sideBar-background); }
 .explorer-pin-band[data-edge="top"] { top: 0; anchor-name: --explorer-pins-top; }
 .explorer-pin-band[data-edge="bottom"] { bottom: var(--explorer-scrollbar-height); anchor-name: --explorer-pins-bottom; }
-.explorer-pinned-server.explorer-row, .explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pinned-server.explorer-row { position: relative; width: 100%; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
 .explorer-pin-band > .explorer-pinned-server { position: absolute; }
 .explorer-pin-overflow { position: absolute; left: 0; right: 0; z-index: 1; overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
 .explorer-pin-band[data-edge="top"] > .explorer-pin-overflow { top: 0; }
@@ -290,15 +306,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .explorer-pin-band[data-edge="bottom"] > .explorer-pin-overflow > .explorer-pin-more { position: absolute; bottom: 0; }
 .explorer-pin-band > .explorer-pinned-server, .explorer-pin-more { box-shadow: inset 0 -1px var(--varia-sideBarSectionHeader-border); }
 .explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
-.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); border-inline-start: 2px solid var(--varia-focusBorder); padding-inline-end: 6px; }
+.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); box-shadow: inset 0 1px 0 var(--varia-sideBarSectionHeader-border), inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); transition: none; }
 .explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
 .explorer-pinned-server:focus-visible, .explorer-pin-more:focus-visible { outline-offset: -2px; }
 .explorer-pin-menu { position: fixed; inset: auto; margin: 0; width: anchor-size(width); max-height: var(--explorer-tree-height); padding: 2px 0; overflow: auto; overscroll-behavior: contain; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .explorer-pin-band[data-edge="top"] .explorer-pin-menu { position-anchor: --explorer-pins-top; position-area: bottom; }
 .explorer-pin-band[data-edge="bottom"] .explorer-pin-menu { position-anchor: --explorer-pins-bottom; position-area: top; }
-.oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
-.oe-indent { flex: none; }
+/* 1 px vertical tree indent guides aligned beneath each ancestor chevron (16 px indent steps). */
+.oe-indent { flex: none; align-self: stretch; background-image: repeating-linear-gradient(to right, transparent 0, transparent 15px, var(--varia-tree-indentGuidesStroke) 15px, var(--varia-tree-indentGuidesStroke) 16px); }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
 .oe-icon { position: relative; flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--varia-objectExplorer-objectIconForeground); }
 .oe-icon.folder { color: var(--varia-objectExplorer-folderIconForeground); }
@@ -323,8 +339,14 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
  */
 .oe-label { flex: 1000 1 0; width: min(35cqw, 10em); max-width: max-content; overflow: clip; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
+.explorer-row.system-folder .oe-label { color: var(--varia-objectExplorer-sublabelForeground); }
+.explorer-row.system-folder .oe-icon.folder { opacity: 0.72; }
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
+/* Column rows prioritize column names ahead of SQL type sublabels so names stay legible before types truncate. */
+.explorer-row.column .oe-label { flex: 0 1 auto; width: auto; max-width: max-content; min-width: 0; }
+.explorer-row.column .oe-sublabel { flex: 1 1000 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.oe-pk-badge { display: inline-flex; align-items: center; flex: none; height: 15px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); font-size: var(--varia-size-xs); line-height: 1; font-weight: 600; }
 /* A login's static chips (M5): its name stays whole up to 65 % of the row, and the chips give way first (the end's shrink
    factor dwarfs the label's), each ending in an ellipsis; only a name longer than the room left after them shrinks. */
 .explorer-row.static-chips .oe-label { flex: 0 1 auto; width: auto; max-width: 65cqw; min-width: 0; }
@@ -384,6 +406,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .dependencies-twisty { display: grid; place-items: center; flex: none; width: 16px; height: 16px; }
 .dependencies-status { display: flex; align-items: center; gap: var(--varia-space-1); min-height: var(--varia-row); padding-inline-end: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .dependencies-status.error { color: var(--varia-errorForeground); }
+.dependencies-selected .peek-group { margin: 0 0 var(--varia-space-1); }
 .connection-modal.about-dialog { width: min(520px, calc(100vw - 40px)); font-size: var(--varia-size-md); }
 .about-dialog .connection-scroll { display: flex; flex-direction: column; gap: var(--varia-space-4); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
 .about-identity { display: flex; align-items: center; gap: var(--varia-space-3); }
@@ -732,10 +755,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .peek-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-md); font-weight: 600; }
 .peek-kind { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-spacer { flex: 1; }
-.peek-body { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); }
-.peek-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.peek-side { border-left: 1px solid var(--varia-editorWidget-border); }
-.peek-pane-title { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) var(--varia-space-2) var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
 .peek-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
 .peek-action { padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); text-transform: none; letter-spacing: 0; white-space: nowrap; color: var(--varia-button-secondaryForeground); }
 .peek-action:disabled { opacity: 0.5; }
@@ -744,40 +763,19 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .peek-definition:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-note { margin: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); overflow-wrap: anywhere; }
 .peek-note.error { color: var(--varia-errorForeground); }
-.peek-properties { padding-bottom: var(--varia-space-3); }
 .peek-group { margin: var(--varia-space-2) var(--varia-space-3) var(--varia-space-0); font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-descriptionForeground); }
-.peek-facts { margin: 0; user-select: text; }
 .peek-properties-pane:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.peek-fact { display: grid; grid-template-columns: minmax(96px, 46%) minmax(0, 1fr); gap: var(--varia-space-2); padding: 1px var(--varia-space-3); }
-.peek-fact dt { color: var(--varia-descriptionForeground); }
-.peek-tabs { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
-.peek-tab { padding: 0 var(--varia-space-1); border-bottom: 2px solid transparent; font-size: var(--varia-size-xs); white-space: nowrap; color: var(--varia-descriptionForeground); }
-.peek-tab[aria-selected="true"] { border-bottom-color: var(--varia-tab-activeBorderTop); color: var(--varia-editorWidget-foreground); }
-.peek-tab:focus-visible, .peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.peek-list { margin: 0; padding: var(--varia-space-0) 0 var(--varia-space-2); list-style: none; }
+.peek-follow:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .peek-item { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 1px var(--varia-space-3); white-space: nowrap; }
 .peek-item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; user-select: text; }
 .peek-item-note { flex-shrink: 0; color: var(--varia-descriptionForeground); }
 .peek-follow { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: 0; color: var(--varia-list-highlightForeground); }
 .peek-follow:hover .peek-item-name { text-decoration: underline; }
-/* Top rows: the results grid fills the panel, which does not scroll itself. */
-.peek-grid { display: flex; flex-direction: column; overflow: hidden; }
 /* Peek's definition: the query editor (peek-editor.ts) fills the panel and scrolls itself. */
 .peek-editor { position: relative; flex: 1; min-height: 0; }
 .peek-editor-host { position: absolute; inset: 0; }
-.peek-grid > .peek-note { flex-shrink: 0; }
 .peek-rows { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-/* A promoted tab: the card's body with the room of a document. */
-.peek-tab-body { display: flex; flex: 1; flex-direction: column; min-height: 0; border-top: 1px solid var(--varia-editorWidget-border); }
-.document-frame[data-peek-tab] .document-content { display: flex; flex-direction: column; overflow: hidden; }
-.peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
-/* A narrow card or tab (a slim popped-out Object Explorer) stacks Properties under the definition rather than squeezing it to nothing. */
-.peek-card, .peek-tab-body { container-type: inline-size; }
-@container (max-width: 560px) {
-  .peek-body, .peek-tab-body .peek-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
-  .peek-side { border-left: 0; border-top: 1px solid var(--varia-editorWidget-border); }
-}
-.peek-fact dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; user-select: text; }
+.peek-card { container-type: inline-size; }
 .explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
@@ -793,6 +791,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .oe-indent { background-image: none; }
+  .explorer-row.server[data-accent]::before { display: none; }
+  .explorer-row.server[data-accent]::after { border-color: CanvasText; opacity: 1; }
+  .oe-pk-badge { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+  .explorer-row[aria-selected="true"] .oe-pk-badge { border-color: HighlightText; background: Highlight; color: HighlightText; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* Editor groups (docs/editor-groups.md): a Dockview inside the editor panel, each group's header its tab strip. A
@@ -819,17 +822,16 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .query-tab .tab-select { gap: 4px; padding-inline: 4px; }
 }
 /* Decoration yields in narrow splits; the environment and SID still have their own row. */
-@container (width < 200px) {
+@container (width < 176px) {
   .query-tab .tab-select { gap: 0; padding-inline: 0; }
   .query-tab .tab-select > .tab-icon { display: none; }
 }
 /* Tiny floating groups reserve the second line for the complete SID; the environment remains in the tab's description. */
 @container (width < 140px) {
   .query-tab .environment-tag[data-place="tab"] { display: none; }
-  .query-tab .tab-sid { padding-inline: var(--varia-space-0); }
   /* Keep both action targets intact; their outer gutter gives wider platform fonts room for the whole SID. */
   .query-tab .tab-close { margin-right: 0; }
-  .query-tab[data-dirty] .dirty-dot { right: 9px; }
+  .query-tab[data-dirty] .dirty-dot { right: 7px; }
 }
 /* A document tab's keyboard ring is a 1px inset outline, as the single strip drew it: the strip would clip the default ring,
    and forced colours drop box shadows. */
@@ -839,16 +841,20 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .editor-group-actions { display: flex; align-items: center; height: 100%; padding: 0 var(--varia-space-1); }
 .editor-groups .editor-container, .editor-host, .document-view { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .document-view { display: flex; flex-direction: column; overflow: hidden; }
+.editor-groups .document-view > .editor-container { flex: 1; height: auto; }
 .editor-empty { position: relative; height: 100%; }
 .editor-empty > .editor-group-actions { position: absolute; top: 0; right: 0; height: var(--varia-bar); }
 .query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; height: 100%; container-type: inline-size; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
+.query-tab.active .tab-name { font-weight: 600; }
 /* The selected tab of a group that is not the active one keeps its fill but not its top border. */
 .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active:not([style*="border-top-color"]) { border-top-color: transparent; }
 /* Forced colours: the active group's shown tab is marked with Highlight, another group's with GrayText. */
 @media (forced-colors: active) {
   .query-tab.active { border-top-color: Highlight; forced-color-adjust: none; }
   .editor-groups .dv-groupview:not(.dv-active-group) .query-tab.active { border-top-color: GrayText; }
+  .query-tab:not([data-pinned]) .tab-pin { opacity: 1; }
+  .query-tab[data-pinned] .tab-pin { color: Highlight; }
 }
 .tab-select { display: flex; flex: 1; min-width: 0; overflow: hidden; align-items: flex-start; gap: var(--varia-space-1); height: 100%; border: 0; border-radius: 0; padding: var(--varia-space-0) var(--varia-space-2) 0; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
@@ -861,23 +867,27 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .tab-remembered-server { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-renaming { padding-right: 6px; }
-.tab-rename { flex: 1; min-width: 0; width: 180px; height: 20px; padding: 0 4px; border-color: var(--varia-focusBorder); }
+.tab-rename { flex: 1; min-width: 0; width: 180px; height: var(--varia-line-sm); padding: 0 4px; border-color: var(--varia-focusBorder); }
 .tab-select .tab-readonly { font-size: var(--varia-glyph-sm); }
-/* A query's live SQL session, below its name beside the environment (a dash without a session). */
-.tab-sid { flex: none; padding: 1px 4px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; color: var(--varia-documentTabs-closeForeground); }
+/* A query's live SQL session (or Disconnected), below its name beside the environment; omitted when idle without one. */
+.tab-sid { flex: none; color: var(--varia-documentTabs-inactiveForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Fixed 20 px action slots prevent Pin and Close from shifting horizontally on hover. */
+.tab-pin, .tab-close { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; color: var(--varia-documentTabs-closeForeground); }
 .tab-close { margin-right: 6px; }
 .tab-pin .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
 .tab-pin:focus-visible, .tab-close:focus-visible { outline-offset: -2px; }
+.query-tab:not([data-pinned]) .tab-pin { opacity: 0.52; }
+.query-tab:not([data-pinned]):hover .tab-pin { opacity: 1; transition: opacity var(--varia-motion-fast) var(--varia-motion-ease); }
+.query-tab:not([data-pinned]) .tab-pin:focus-visible { opacity: 1; transition: none; }
 /* Pinned tabs come first in their group, filled as the pinned shelf was. */
 .query-tab[data-pinned]:not(.active) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.query-tab[data-pinned] .tab-pin { color: var(--varia-documentTabs-activeForeground); }
+.query-tab[data-pinned] .tab-pin { opacity: 1; color: var(--varia-tab-activeBorderTop); }
 .tab-icon { color: var(--varia-documentTabs-iconForeground); }
 /* Running turns a spinner after the name; unsaved changes are a dot in the close button's place, which the pointer or
    keyboard focus on Close turns back into the X. */
 .tab-select .tab-running { font-size: var(--varia-glyph-sm); }
-.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 15px; pointer-events: none; }
+.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 13px; pointer-events: none; }
 .query-tab[data-dirty] .tab-close .codicon { visibility: hidden; }
 /* Transparent rather than hidden, so screen readers still hear that the query has unsaved changes. */
 .query-tab[data-dirty]:hover .dirty-dot, .query-tab[data-dirty]:has(.tab-close:focus-visible) .dirty-dot { opacity: 0; }
@@ -899,16 +909,45 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .query-status-server { flex-shrink: 1000000; }
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
-/* A query's own bar: Execute, Cancel, Actual Plan, Live Plan, Estimated Plan and Client Statistics, then the connection pill. A narrow
-   editor drops button words and key hints, then the lists give up width, then a long environment label is cut
-   short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
-.query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
-/* Activating a sibling editor group must leave its controls under the pointer. */
-.query-bar-spacer { flex: 0 0 var(--varia-bar); }
+/* A query's own bar: Execute (morphing to Cancel with live elapsed time while running), anchored Execution Scope pill,
+   unified Plan ▾ menu, Client Statistics and the connection pill. A narrow editor drops button words and key hints,
+   then the lists give up width, then a long environment label is cut short, and the pill never wraps. */
+.query-bar { position: relative; isolation: isolate; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
+.query-bar > * { position: relative; z-index: 1; }
+/* Connection-color hairline + soft leading wash for any preset or custom accent; neutral when unset. */
+.query-bar[data-connection-accent]::before { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, var(--query-bar-accent) 0%, transparent 48%); opacity: 0.08; }
+:root[data-theme-type="light"] .query-bar[data-connection-accent]::before { opacity: 0.065; }
+.query-bar[data-connection-accent]::after { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px; pointer-events: none; background: var(--query-bar-accent); opacity: 0.38; }
+:root[data-theme-type="light"] .query-bar[data-connection-accent]::after { opacity: 0.32; }
 .query-bar-actions { display: flex; align-items: center; flex-shrink: 0; gap: var(--varia-space-1); }
 .query-bar-action { flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
+.query-bar-action.cancel { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); border-color: var(--varia-errorForeground); font-weight: 600; transition: none; }
+.query-bar-action.cancel:hover:not(:disabled) { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); border-color: var(--varia-banner-errorForeground); }
+.query-elapsed { display: inline-flex; align-items: center; padding: 0 var(--varia-space-1); border: 1px solid currentColor; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; opacity: 0.9; }
 .query-scope { flex-shrink: 0; max-width: 15em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.query-bar .query-scope { --ui-control-height: var(--varia-control); display: inline-flex; align-items: center; height: var(--ui-control-height); padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); border: 1px solid transparent; line-height: var(--varia-line-xs); background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
+.query-bar .query-scope[data-selection] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); border-color: var(--varia-warningForeground); font-weight: 600; }
+.query-bar-sep { width: 1px; height: 16px; flex-shrink: 0; background: var(--varia-toolbar-separatorBackground); margin: 0 var(--varia-space-0); }
+.query-bar-action.plan-menu-trigger { border-color: var(--varia-button-border); }
+.query-bar-action.plan-menu-trigger:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); }
+.query-bar-action.plan-menu-trigger[aria-expanded="true"]:not([data-active]) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); border-color: var(--varia-descriptionForeground); transition: none; }
+.query-bar-action.plan-menu-trigger[data-active] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); font-weight: 500; transition: none; }
+.query-bar-action.plan-menu-trigger[data-active]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); }
+.plan-menu-chevron { opacity: 0.8; }
+.plan-menu-popover { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 240px; max-width: calc(100vw - 16px); padding: var(--varia-space-1); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); user-select: none; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.plan-menu-header { padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--varia-descriptionForeground); }
+.plan-menu-item { width: 100%; display: flex; align-items: center; gap: var(--varia-space-2); padding: 6px var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-menu-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); text-align: left; }
+.plan-menu-item:hover:not(:disabled) { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.plan-menu-item:focus-visible { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.plan-menu-item[aria-checked="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); font-weight: 500; transition: none; }
+.plan-menu-item:disabled { color: var(--varia-disabledForeground); opacity: 0.6; cursor: default; }
+.plan-menu-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.plan-menu-title { white-space: nowrap; }
+.plan-menu-sub { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); font-weight: 400; white-space: nowrap; }
+.plan-menu-item:hover:not(:disabled) .plan-menu-sub, .plan-menu-item:focus-visible .plan-menu-sub, .plan-menu-item[aria-checked="true"] .plan-menu-sub { color: inherit; }
+.plan-menu-check { margin-left: auto; flex-shrink: 0; }
+.plan-menu-sep { height: 1px; background: var(--varia-menu-separatorBackground); margin: var(--varia-space-1) var(--varia-space-0); }
 .editor-group-new-query { color: var(--varia-descriptionForeground); }
 .oe-recovery-action { margin-left: auto; flex-shrink: 0; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: var(--varia-line-sm); color: var(--varia-objectExplorer-actionForeground); }
 .object-search-database-scope { display: flex; align-items: center; gap: var(--varia-space-1); margin: var(--varia-space-1) 0; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
@@ -920,6 +959,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .query-connection { --query-connection-start: calc(var(--varia-space-2) + 1px); position: relative; isolation: isolate; display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); margin-left: auto; padding-inline-start: var(--query-connection-start); background: var(--varia-input-background); border-radius: var(--varia-radius-sm); }
 /* Draw the shared border over the unfocused controls so their boxes can reach the pill edges. */
 .query-connection::after { content: ''; position: absolute; inset: 0; pointer-events: none; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.query-connection[data-connection-accent]::before { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; border: 1px solid var(--query-bar-accent); border-radius: var(--varia-radius-sm); opacity: 0.42; }
+.query-connection:hover:not(:has(select:disabled))::before { opacity: 0; }
 .query-connection:hover:not(:has(select:disabled))::after { border-color: var(--varia-descriptionForeground); }
 .query-connection:has(> select:first-child) { padding-inline-start: 0; }
 /* The connection colour as the history list draws it, a short bar at the pill's start. */
@@ -940,6 +981,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container (max-width: 500px) {
   .query-bar-label { display: none; }
   .query-bar-action { padding: 0 2px; }
+  .query-bar-action.cancel { padding: 0 var(--varia-space-1); }
   .query-connection { --query-connection-start: calc(var(--varia-space-1) + 1px); gap: var(--varia-space-0); }
   /* Reserve compact space for the environment label and both selectors. */
   .query-connection-icon { display: none; }
@@ -948,6 +990,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .query-bar-actions { gap: 0; }
   .query-bar-action { padding: 0; min-width: var(--varia-space-4); }
   .query-bar-action .codicon { font-size: var(--varia-glyph-sm); }
+  .query-bar-sep, .query-elapsed { display: none; }
   .query-connection { --query-connection-start: 0px; gap: 0; }
   .query-bar-environment .status-pill.small { padding: 0 var(--varia-space-0); }
   .query-connection-divider, .query-connection .connection-swatch { display: none; }
@@ -955,7 +998,13 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container (min-width: 300px) {
   .query-bar-environment:has(.environment-tag:not([data-custom])) { flex-shrink: 0; }
 }
-@media (forced-colors: active) { .query-connection .connection-swatch { forced-color-adjust: none; } .query-connection::after { border-color: CanvasText; } }
+@media (forced-colors: active) {
+  .query-bar[data-connection-accent]::before, .query-bar[data-connection-accent]::after, .query-connection[data-connection-accent]::before { display: none; }
+  .query-connection .connection-swatch { forced-color-adjust: none; }
+  .query-connection::after, .query-bar-action.cancel, .query-bar .query-scope[data-selection], .query-bar-action.plan-menu-trigger[data-active], .plan-menu-popover { border-color: CanvasText; }
+  .plan-menu-item:hover:not(:disabled), .plan-menu-item:focus-visible { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .plan-menu-item:disabled { color: GrayText; opacity: 1; }
+}
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
@@ -2611,12 +2660,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to the
-   count and dot and to the share the server's name keeps (.oe-label) in a narrow row; a custom label stops at 40% of the row
-   (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
+/* In a server row's end (.oe-end on Line 1): the tag keeps its word whole while a custom label (up to 32 characters) stops
+   at 40% of the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
 .environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
-/* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
-.explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
 /* Metadata has its own row: a long environment yields only to the live session badge, never to the filename. */
 .query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; margin-left: 0; }
@@ -2908,12 +2954,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .document-script-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .document-script-empty, .document-script-note { margin: 0; padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-script-note { flex: none; border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
-/* SSIS properties documents (src/renderer/src/ssis): General as label and value pairs, and read-only lists. */
-.ssis-properties { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: var(--varia-space-1) var(--varia-space-4); margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
-.ssis-properties > div { display: contents; }
-.ssis-properties dt { color: var(--varia-descriptionForeground); }
-.ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-/* A list is a fitted page LocalGrid (properties-view.tsx): as tall as its rows, since the section column scrolls. */
+/* SSIS properties documents (src/renderer/src/ssis): natural-height LocalGrid lists and status notes (General uses FactGrid). */
 .ssis-properties-grid { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--varia-panel-border); }
 .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-properties-none { color: var(--varia-descriptionForeground); }
@@ -2968,6 +3009,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container document-sections (max-width: 540px) {
   .property-field, .property-facts { grid-template-columns: minmax(0, 1fr); }
   .property-field-note, .property-field-error { grid-column: 1; }
+  .document-sections .fact-grid:not(.compact) { grid-template-columns: minmax(0, 1fr); }
+  .document-sections .fact-grid:not(.compact) .fact-grid-row > dt { border-bottom: 0; padding-bottom: 0; padding-top: var(--varia-space-2); }
+  .document-sections .fact-grid:not(.compact) .fact-grid-row > dd { padding-top: var(--varia-space-0); padding-bottom: var(--varia-space-2); }
 }
 /* The hint strip, pinned to the bottom of the sections column over its rows: it takes no room, so showing it never moves
    a row under the pointer (a click that moves focus would otherwise land on a row that just moved), and while it is empty
@@ -3301,6 +3345,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* Search Objects: the query (field, toggles, scope) above a list of hits, each a name, its path and a definition's line. */
 .object-search { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .object-search-query { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-2); }
+.object-search-bar { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.object-search-bar > .object-search-field { flex: 1 1 0; min-width: 0; }
 .object-search-field { display: flex; align-items: center; gap: var(--varia-space-1); max-width: 720px; height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
 .object-search-field:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .object-search-field input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-sm); }
@@ -3429,10 +3475,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .search-details { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .search-details-empty { align-self: center; margin-top: var(--varia-space-4); }
 .search-details-properties { flex-shrink: 0; max-height: 40%; overflow: auto; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-2); border-bottom: 1px solid var(--varia-editorGroup-border); }
-.search-details-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(10em, 1fr)); gap: var(--varia-space-1) var(--varia-space-3); }
-.search-details-fact { min-width: 0; }
-.search-details-fact dt { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.search-details-fact dd { margin: 0; font-size: var(--varia-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-details-views { flex-shrink: 0; padding: var(--varia-space-2) var(--varia-space-3) 0; }
 /* The matched line's band sits behind the text: the definition is its own stacking context, and the band below its content. */
 .search-details-definition { position: relative; isolation: isolate; }
@@ -3773,11 +3815,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }
 .agent-history-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
 .agent-history-head > :last-child { margin-left: auto; }
-.agent-history-spark { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 40px; max-width: 360px; padding-bottom: 1px; border-bottom: 1px solid var(--varia-panel-border); }
-.agent-history-spark > i { flex: 1 1 0; min-width: 4px; max-width: 16px; border-top-left-radius: var(--varia-radius-sm); border-top-right-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); opacity: 0.55; }
-.agent-history-spark > i:last-of-type { opacity: 1; }
-.agent-history-spark > i[data-failed] { background: var(--varia-errorForeground); opacity: 1; }
-.agent-history-spark > b { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--varia-descriptionForeground); }
+.agent-history-spark { height: 40px; max-width: 360px; }
 .agent-history-filter { display: inline-flex; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
 .agent-history-filter > button { padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: none; font-size: var(--varia-size-xs); }
 .agent-history-filter > button[aria-checked="true"] { transition: none; background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
@@ -3802,8 +3840,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-history-progress { height: 6px; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); overflow: hidden; }
 .agent-history-progress > i { display: block; height: 100%; background: var(--varia-list-highlightForeground); }
 @media (forced-colors: active) {
-  .agent-history-spark > i, .agent-history-progress > i { background: Highlight; forced-color-adjust: none; }
-  .agent-history-spark > i[data-failed] { background: Mark; }
+  .agent-history-progress > i { background: Highlight; forced-color-adjust: none; }
   .agent-history .link-button { color: LinkText; }
 }
 @media (max-width: 720px) { .agent-history-body { grid-template-columns: 1fr; } }
@@ -4028,4 +4065,218 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) {
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
+}
+
+/* The Integration Services document: the history bar over the shown place's frame. */
+.ssis-document { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ssis-navbar { flex: none; display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-nav-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; border: none; background: none; color: var(--varia-foreground); }
+.ssis-nav-button:hover:not(:disabled) { background: var(--varia-toolbar-hoverBackground); }
+.ssis-nav-button:disabled { opacity: .4; }
+.ssis-crumbs { display: flex; flex: 1; align-items: center; gap: var(--varia-space-1); min-width: 0; margin: 0 0 0 var(--varia-space-2); padding: 0; list-style: none; overflow: hidden; white-space: nowrap; }
+.ssis-crumbs > li { display: inline-flex; min-width: 0; color: var(--varia-descriptionForeground); }
+.ssis-crumbs > li:last-child { flex: none; }
+.ssis-crumb { overflow: hidden; text-overflow: ellipsis; }
+.ssis-crumb[aria-current="page"] { color: var(--varia-foreground); font-weight: 600; }
+.ssis-crumbs .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; cursor: pointer; }
+.ssis-crumbs .link-button:hover { text-decoration: underline; }
+.ssis-crumb-separator > .codicon { font-size: var(--varia-glyph-sm); }
+.ssis-nav-position { flex: none; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ssis-tool { display: inline-flex; align-items: center; gap: var(--varia-space-1); border-color: var(--varia-button-border); }
+/* A package's and a run's page: one screen, never a scroll around a grid. The summary sits above, and the grid takes the rest
+   of the height as the page's only vertical scroll. */
+.ssis-page { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4); }
+.ssis-page > * { flex: none; }
+.ssis-page > .ssis-fill-grid, .ssis-run-messages, .ssis-run-details { flex: 1 1 0; min-height: 160px; }
+.ssis-fill-grid { position: relative; display: flex; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); }
+/* The run's summary: the strip beside the tasks. A long task list (Show all) scrolls here, beside the grid, never around it. */
+.ssis-run-summary { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--varia-space-2) var(--varia-space-5); max-height: 38%; overflow-y: auto; }
+.ssis-run-summary > .ssis-run-strip { flex: 0 1 300px; }
+.ssis-run-tasks { flex: 1 1 520px; min-width: 0; }
+.ssis-timeline-more { margin-top: var(--varia-space-1); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; font-size: var(--varia-size-sm); cursor: pointer; }
+.ssis-timeline-more:hover { text-decoration: underline; }
+.ssis-callout-first { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssis-run-bar { align-items: center; }
+.ssis-view-switch { display: inline-flex; flex: none; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.ssis-view-switch > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-3); height: var(--varia-control); border: 0; border-radius: 0; background: none; color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.ssis-view-switch > button + button { border-left: 1px solid var(--varia-button-border); }
+.ssis-view-switch > button[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); font-weight: 600; transition: none; }
+.ssis-view-switch > button:hover:not([aria-selected="true"]) { background: var(--varia-toolbar-hoverBackground); }
+/* Messages: the grid and, beside it, the selected message whole (below it in a narrow document). */
+.ssis-run { container-type: inline-size; }
+.ssis-run-messages { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%); gap: var(--varia-space-2); min-width: 0; }
+@container (max-width: 900px) { .ssis-run-messages { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 1fr) minmax(160px, 45%); } }
+.ssis-message-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-message-head { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.ssis-message-head > .codicon { flex: none; color: var(--varia-errorForeground); }
+.ssis-message-head > .ssis-tool { margin-left: auto; }
+.ssis-message-time { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ssis-message-meta { flex: none; margin: 0; padding: var(--varia-space-1) var(--varia-space-2) 0; color: var(--varia-descriptionForeground); overflow-wrap: anywhere; user-select: text; }
+.ssis-message-text { flex: 1; min-height: 0; margin: 0; padding: var(--varia-space-2); overflow: auto; font-family: var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.ssis-message-empty { margin: var(--varia-space-3); color: var(--varia-descriptionForeground); }
+.ssis-message-more { flex: none; align-self: flex-start; margin: 0 var(--varia-space-2) var(--varia-space-2); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; cursor: pointer; }
+.ssis-message-more:hover { text-decoration: underline; }
+/* Details: the run's facts beside the parameters it used, which fill the rest. */
+.ssis-run-details { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--varia-space-3) var(--varia-space-5); min-width: 0; overflow: hidden; }
+.ssis-run-details > .ssis-execution-overview { flex: 0 1 380px; align-content: start; max-height: 100%; margin: 0; overflow-y: auto; }
+.ssis-run-parameters { flex: 1 1 420px; align-self: stretch; display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; }
+.ssis-run-parameters > .ssis-subsection-title { margin-top: 0; }
+.ssis-run-parameters > .ssis-fill-grid { flex: 1; }
+.ssis-section-title { margin: var(--varia-space-2) 0 0; color: var(--varia-foreground); font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.ssis-subsection-title { margin: var(--varia-space-3) 0 var(--varia-space-1); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.ssis-callout { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-left: 3px solid var(--varia-errorForeground); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
+.ssis-callout > .codicon { flex: none; color: var(--varia-errorForeground); }
+.ssis-callout-text { flex: 1; min-width: 0; user-select: text; white-space: pre-wrap; }
+.ssis-callout-where { color: var(--varia-descriptionForeground); }
+.ssis-run-strip { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-strip-label { flex-basis: 100%; color: var(--varia-descriptionForeground); }
+.ssis-strip-note { color: var(--varia-descriptionForeground); }
+.ssis-spark { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 40px; min-width: 120px; max-width: 420px; padding-bottom: 1px; border-bottom: 1px solid var(--varia-panel-border); }
+.ssis-spark-bar { flex: 1 1 0; min-width: 6px; max-width: 18px; padding: 0; border: none; border-top-left-radius: var(--varia-radius-sm); border-top-right-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); opacity: .5; cursor: pointer; }
+.ssis-spark-bar:hover:not(:disabled) { opacity: .8; }
+.ssis-spark-bar[data-failed] { background: var(--varia-errorForeground); opacity: .8; }
+.ssis-spark-bar[data-running] { background: var(--varia-warningForeground); }
+/* This run: full strength and outlined, so it is told apart without colour alone (aria-current for assistive technology). */
+.ssis-spark-bar[aria-current="true"] { opacity: 1; outline: 1px solid var(--varia-foreground); outline-offset: 1px; cursor: default; }
+.ssis-spark-usual { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--varia-descriptionForeground); pointer-events: none; }
+.ssis-timeline { display: grid; grid-template-columns: minmax(140px, max-content) minmax(160px, 1fr) max-content max-content; column-gap: var(--varia-space-3); row-gap: 1px; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-timeline-head, .ssis-timeline-row { display: contents; }
+.ssis-timeline-head > span { color: var(--varia-descriptionForeground); padding-bottom: var(--varia-space-1); }
+.ssis-timeline-head > span:nth-child(n+3), .ssis-task-duration, .ssis-task-delta { text-align: right; font-variant-numeric: tabular-nums; }
+.ssis-task-cell { min-width: 0; }
+.ssis-task { max-width: 100%; padding: 0 var(--varia-space-1); border: none; background: none; color: var(--varia-foreground); font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssis-task:hover { text-decoration: underline; }
+.ssis-task[aria-pressed="true"] { color: var(--varia-list-highlightForeground); font-weight: 600; }
+.ssis-task-runs { margin-left: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.ssis-track { position: relative; align-self: center; height: 10px; border-radius: var(--varia-radius-sm); background: var(--varia-panel-border); }
+.ssis-track > i { position: absolute; top: 0; bottom: 0; border-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); }
+.ssis-timeline-row[data-failed] .ssis-track > i { background: var(--varia-errorForeground); }
+.ssis-track > b { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px dashed var(--varia-foreground); }
+.ssis-task-duration { color: var(--varia-foreground); }
+.ssis-task-delta { color: var(--varia-descriptionForeground); }
+.ssis-task-delta[data-tone="error"] { color: var(--varia-errorForeground); }
+.ssis-task-delta[data-tone="warning"] { color: var(--varia-warningForeground); }
+@media (forced-colors: active) {
+  .ssis-spark-bar, .ssis-track > i { background: Highlight; forced-color-adjust: none; }
+  .ssis-spark-bar[data-failed], .ssis-timeline-row[data-failed] .ssis-track > i { background: Mark; }
+  .ssis-crumbs .link-button { color: LinkText; }
+}
+/* BigQuery Properties inspector (OP-2b): surface-specific pills, flow section headers, fill toolbars and label chips. */
+.bq-props-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.bq-props-flow { display: flex; flex-direction: column; gap: var(--varia-space-4); }
+.bq-props-subhead { margin: 0 0 var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.bq-props-description { margin: 0; color: var(--varia-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-md); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.bq-props-muted { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-props-fill-toolbar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.bq-props-toolbar-title { color: var(--varia-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.bq-props-toolbar-meta { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bq-props-toolbar-spacer { flex: 1 1 0; min-width: var(--varia-space-1); }
+.bq-props-tool-btn { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; }
+.bq-props-tool-btn.outline { border-color: var(--varia-button-border); }
+.bq-props-tool-btn:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), color var(--varia-motion-fast) var(--varia-motion-ease); }
+.bq-props-tool-btn:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.bq-props-search { display: inline-flex; align-items: center; gap: var(--varia-space-1); width: min(260px, 100%); height: 24px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-placeholderForeground); }
+.bq-props-search:focus-within { border-color: var(--varia-focusBorder); }
+.bq-props-search input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-props-search input:focus-visible { outline: none; }
+.bq-props-notice { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-props-center { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: var(--varia-space-3); padding: var(--varia-space-5) var(--varia-space-4); }
+.bq-props-loading-row { display: inline-flex; align-items: center; gap: var(--varia-space-2); margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.bq-props-empty-note { flex: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-4); border-top: 1px solid var(--varia-panel-border); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-props-labels-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); }
+.bq-props-labels-head > .bq-props-subhead { margin: 0; }
+.bq-label-chips { display: flex; flex-wrap: wrap; gap: var(--varia-space-2); margin: 0; padding: 0; list-style: none; }
+.bq-label-chip { display: inline-flex; align-items: stretch; max-width: 100%; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.bq-label-key { padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); border-right: 1px solid var(--varia-panel-border); overflow-wrap: anywhere; user-select: text; }
+.bq-label-val { padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-editor-background); color: var(--varia-foreground); overflow-wrap: anywhere; user-select: text; }
+.bq-label-copy { display: inline-flex; align-items: center; justify-content: center; width: 22px; padding: 0; border: 0; border-left: 1px solid var(--varia-sideBarSectionHeader-border); border-radius: 0; background: var(--varia-editor-background); color: var(--varia-descriptionForeground); }
+.bq-label-copy:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.bq-label-copy:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.bq-label-copy.copied { color: var(--varia-successForeground); transition: none; }
+@media (forced-colors: active) {
+  .bq-label-chip, .bq-props-search { border-color: CanvasText; }
+  .bq-props-tool-btn.outline { border-color: ButtonText; }
+}
+/* Peek inspector unification (OP-3a): floating Peek Card and promoted Peek Tab on ObjectInspectorFrame. */
+.inspector-frame.peek-card { position: fixed; z-index: 13000; overflow: hidden; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-ui); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.inspector-frame.peek-card:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.inspector-frame[data-inspector-surface="peek"] .document-title { font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+.inspector-frame[data-inspector-surface="peek"] .document-verb { position: relative; justify-content: center; width: var(--varia-control); padding: 0; }
+.inspector-frame[data-inspector-surface="peek"] .document-verb-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.peek-state-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); align-self: center; }
+.peek-flow-body { display: flex; flex-direction: column; gap: var(--varia-space-4); min-width: 0; }
+.peek-overview { display: flex; flex-direction: column; gap: var(--varia-space-4); min-width: 0; }
+.peek-section { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.peek-section-title { display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.peek-section-count { color: var(--varia-descriptionForeground); font-weight: 400; font-variant-numeric: tabular-nums; }
+.peek-definition-pane { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.peek-definition-bar { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.inspector-frame[data-inspector-surface="peek"] .peek-definition-bar { background: var(--varia-editorWidget-background); }
+.peek-definition-label { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; }
+.peek-list-fill { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.peek-list-fill > .peek-note { flex: none; }
+.peek-dep-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--varia-space-4); min-width: 0; }
+.peek-dep-section { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.peek-dep-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.peek-dep-item { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); white-space: nowrap; }
+.peek-dep-item:last-child { border-bottom: 0; }
+.peek-dep-item:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.peek-dep-item .peek-item-note { margin-left: auto; }
+.peek-dep-item .peek-follow { flex: 1; min-width: 0; width: 100%; }
+.peek-vitals-scope { display: flex; flex-direction: column; min-width: 0; }
+.peek-flow-body .fact-grid, .peek-vitals-scope .fact-grid { user-select: text; }
+.inspector-pane-flow .peek-note, .inspector-vitals-body .peek-note { margin: 0; }
+@media (forced-colors: active) {
+  .peek-dep-item .peek-follow { color: LinkText; }
+}
+/* Table Properties unified inspector (OP-3b): consumes OP-0 .inspector-*, .fact-grid, .cap-chip and .ratio-bar rules. */
+.table-inspector-badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.table-inspector-heading { margin: var(--varia-space-4) 0 var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.table-inspector-heading:first-child { margin-top: 0; }
+.table-inspector-toolbar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); }
+.table-inspector-toolbar-btn { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.table-inspector-editor-fill { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.table-inspector-editor-fill > .peek-editor { flex: 1; min-height: 0; }
+.table-inspector-grid-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.table-inspector-grid-fill > .local-grid { flex: 1; min-height: 0; border: 0; border-radius: 0; }
+.table-inspector-preview { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.table-inspector-note { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; padding: var(--varia-space-3) var(--varia-space-4); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.table-inspector-note.error { color: var(--varia-errorForeground); }
+.table-inspector-deps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--varia-space-4); }
+.table-inspector-deps > section { min-width: 0; }
+.table-inspector-dep-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.table-inspector-dep-item { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.table-inspector-dep-item:last-child { border-bottom: 0; }
+.table-inspector-dep-item:hover { background: var(--varia-list-hoverBackground); }
+.table-inspector-dep-link { display: flex; align-items: center; gap: var(--varia-space-2); width: 100%; padding: 0; border: 0; background: transparent; color: var(--varia-resultsGrid-linkForeground); font: inherit; text-align: left; }
+.table-inspector-dep-link:hover:not(:disabled) { background: transparent; color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; }
+.table-inspector-dep-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-inspector-dep-kind { margin-left: auto; flex: none; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.table-inspector-vitals-caps { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; }
+@media (forced-colors: active) {
+  .table-inspector-dep-link { color: LinkText; }
+}
+/* OP-4b: Foreign Key relationship diagram, Key Summary, and Constraint expression visuals. */
+.fk-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.fk-section-head > .peek-section-title { margin: 0; }
+.fk-status-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
+.fk-diagram { display: flex; flex-wrap: wrap; align-items: stretch; gap: var(--varia-space-3); padding: var(--varia-space-3) var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); background: var(--varia-panel-background); min-width: 0; }
+.fk-box { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); }
+.fk-box-role { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); text-transform: uppercase; letter-spacing: 0.04em; }
+.fk-box-tbl { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; color: var(--varia-foreground); }
+.fk-box-name, .fk-box-link { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.fk-arrow { flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-1); }
+.fk-arrow-line { color: var(--varia-descriptionForeground); font-size: var(--varia-size-md); line-height: var(--varia-line-sm); font-weight: 600; }
+.fk-col-list { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.fk-col-pill { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; padding: var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); overflow-wrap: anywhere; }
+.fk-col-dir { color: var(--varia-descriptionForeground); font-weight: 600; }
+.fk-col-type { color: var(--varia-descriptionForeground); }
+.fk-col-more { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.key-summary-card { display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); min-width: 0; }
+.key-summary-parent { display: flex; align-items: center; gap: var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); color: var(--varia-foreground); }
+.peek-expression-code { margin: 0; padding: var(--varia-space-3) var(--varia-space-4); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-md); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.peek-expression-fill { flex: 1; min-height: 0; margin: 0; padding: var(--varia-space-3) var(--varia-space-4); overflow: auto; background: var(--varia-input-background); color: var(--varia-input-foreground); font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); line-height: var(--varia-line-md); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+@media (forced-colors: active) {
+  .fk-diagram, .fk-box, .fk-col-pill, .key-summary-card, .peek-expression-code { border-color: CanvasText; }
+  .fk-box-link { color: LinkText; }
 }

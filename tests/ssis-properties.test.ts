@@ -9,7 +9,7 @@ import { ssisDefaultVerb, ssisDocumentSpecs, ssisVerbs, ssisVerbSpecs } from '..
 import type { SsisDescribeRequest, SsisDescribeResult, SsisEnvironmentModel, SsisFolderModel, SsisPackageModel, SsisProjectModel } from '../src/shared/ssis/schema'
 import { isCustomKind, isTextDocument, kindInfo } from '../src/renderer/src/documents'
 
-import { listRows, noneLabel, parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, SsisList, truncatedNote, validationLabel, type SsisListProps } from '../src/renderer/src/ssis/properties-view'
+import { noneLabel, parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, SsisList, truncatedNote, validationLabel, type SsisListProps } from '../src/renderer/src/ssis/properties-view'
 import type { SsisPropertiesState } from '../src/renderer/src/ssis/SsisPropertiesService'
 import { SsisNotice } from '../src/renderer/src/ssis/SsisProperties'
 import { ssisFocuser, type SsisFocusHost } from '../src/renderer/src/ssis/focus'
@@ -45,7 +45,7 @@ const models = { folder, project, package: pkg, environment } as const
 const html = (element: ReactElement) => renderToStaticMarkup(element)
 /** A list section's grid, as its element gives it: the table it shows (and copies and saves), its name and its empty note. */
 const list = (section: { readonly content?: unknown } | undefined) => (section?.content as ReactElement<SsisListProps>).props
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -389,12 +389,13 @@ describe('SSIS properties view', () => {
     expect(sections.map(section => section.count)).toEqual([undefined, { text: '2', label: '2 packages' }, { text: '4', label: '4 parameters' }, { text: '2', label: '2 references' }])
     expect(sections.every(section => section.aside === undefined)).toBe(true)
     expect(ssisSectionViews(viewState({ ...environment, variables: environment.variables.slice(0, 1) }))[1].count).toEqual({ text: '1', label: '1 variable' })
-    expect(markup('general')).toContain('<dt>Last deployed</dt><dd title="2026-10-21 14:05:06 +02:00"><bdi>2026-10-21 14:05:06 +02:00</bdi></dd>')
+    expect(markup('general')).toContain('<dl class="fact-grid">')
+    expect(markup('general')).toContain('<dt>Last deployed</dt><dd title="2026-10-21 14:05:06 +02:00"><span class="fact-grid-val"><bdi>2026-10-21 14:05:06 +02:00</bdi></span><button type="button" class="fact-grid-copy" aria-label="Copy Last deployed"')
     expect(markup('general')).toContain('<dt>Validation status</dt><dd title="Not validated">')
-    // An empty value in General shows a muted dash, not a blank, read as None; in a list it is an empty cell, as it copies.
-    const none = `<bdi><span class="ssis-properties-none"><span aria-hidden="true">—</span><span class="visually-hidden">${noneLabel}</span></span></bdi>`
-    expect(markup('general')).toContain(`<dt>Description</dt><dd title="">${none}</dd>`)
-    expect(markup('general')).toContain(`<dt>Last validated</dt><dd title="">${none}</dd>`)
+    // An empty value in General shows a muted dash, not a blank, read as None, with no copy button; in a list it is an empty cell, as it copies.
+    const none = `<span class="fact-grid-val"><span class="ssis-properties-none"><span aria-hidden="true">—</span><span class="visually-hidden">${noneLabel}</span></span></span>`
+    expect(markup('general')).toContain(`<dt>Description</dt><dd>${none}</dd>`)
+    expect(markup('general')).toContain(`<dt>Last validated</dt><dd>${none}</dd>`)
     // Each list is a page grid named for its section, whose Save suggests a file named for the object and the list.
     const packages = list(sections.find(section => section.id === 'packages'))
     expect(packages).toMatchObject({ label: 'Packages', suggestedName: 'Loads-Packages', empty: 'This project has no packages.' })
@@ -441,9 +442,9 @@ describe('SSIS properties view', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
     const parameters = list(ssisSectionViews(viewState(many))[2])
     expect(parameters.table.rows).toHaveLength(2048)
-    // A page as tall as its rows up to listRows (the section column scrolls), as LocalGrid's fitted page draws it.
+    // A page at natural height (`maxRows: Infinity`, zero nested vertical scroll), virtualized against the outer section column.
     const grid = (SsisList(parameters) as ReactElement<{ children: ReactElement<{ preset: string; fit: boolean; maxRows: number }> }>).props.children
-    expect(grid.props).toMatchObject({ preset: 'page', fit: true, maxRows: listRows })
+    expect(grid.props).toMatchObject({ preset: 'page', fit: true, maxRows: Infinity })
     // The list's view state is the document's (its lists): kept across Refresh's new models, never another document's.
     const lists = new Map(), mine = list(ssisSectionViews(viewState({ ...many }, { lists }))[2]).state
     expect(list(ssisSectionViews(viewState({ ...many }, { lists }))[2]).state).toBe(mine)

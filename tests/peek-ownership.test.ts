@@ -16,7 +16,7 @@ import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 
 const connectionId = '11111111-1111-4111-8111-111111111111'
 const ok = <T>(value: T): ApiResult<T> => ({ ok: true, value })
-const flush = () => new Promise(resolve => setTimeout(resolve, 0))
+const flush = () => new Promise(resolve => setImmediate(resolve))
 const node = (kind: 'table' | 'view' | 'procedure', id = 1, name = 'Customer'): ExplorerMenuNode => ({
   id, connectionId, kind, label: name, lost: false, ref: { type: 'object', object: { kind, database: 'Sales', schema: 'dbo', name } }
 })
@@ -352,5 +352,42 @@ describe('Peek tabs (PeekTabService)', () => {
     const element = (marks: string[]) => ({ matches: () => false, closest: (selector: string) => marks.includes(selector) ? { getAttribute: () => null } : null })
     expect(focusFacts(element(['[data-peek-card]']), undefined)).toMatchObject({ peekFocus: true, peekTabFocus: false })
     expect(focusFacts(element(['[data-peek-tab]']), undefined)).toMatchObject({ peekFocus: false, peekTabFocus: true })
+  })
+
+  it('promotes SQL Server tables to Table Properties on the matching canonical tab when wired, while other kinds still open Peek tabs', () => {
+    const base = setup({ columns: ok({ columns: [], truncated: false }) })
+    const opened: { id: string; kind: string; name: string; connectionId?: string; database: string }[] = []
+    const documents = {
+      openCustom: vi.fn((kind: string, name: string, connectionId: string | undefined, database: string) => { const document = { id: `doc-${opened.length + 1}`, kind, name, connectionId, database }; opened.push(document); return document as never }),
+      registerProvider: vi.fn(() => ({ dispose: () => {} })),
+      update: vi.fn(),
+      get: vi.fn((id: string) => opened.find(document => document.id === id) as never),
+      subscribe: () => () => {}
+    }
+    const tableProperties = { open: vi.fn((_node: unknown, tab?: string) => `tp-${tab ?? 'preserve'}`), focus: vi.fn() }
+    const peekTabs = new PeekTabService({
+      peek: base.service, documents, targetIdOf: () => 'target-one',
+      connections: { get: () => ({ server: 'Prod\\SQL01' }) }, tableProperties
+    })
+    const tbl = node('table', 2, 'Orders')
+    expect(peekTabs.open(tbl, 'definition')).toBe('tp-definition')
+    expect(peekTabs.open(tbl, 'columns')).toBe('tp-columns')
+    expect(peekTabs.open(tbl, 'tableObjects')).toBe('tp-indexes')
+    expect(peekTabs.open(tbl, 'dependencies')).toBe('tp-dependencies')
+    expect(peekTabs.open(tbl, 'rows')).toBe('tp-preview')
+    expect(peekTabs.open(tbl, 'storage')).toBe('tp-storage')
+    expect(peekTabs.open(tbl, 'overview')).toBe('tp-overview')
+    // Omitting `tab` passes undefined so an already-open Table Properties document preserves its active tab.
+    expect(peekTabs.open(tbl)).toBe('tp-preserve')
+    expect(tableProperties.open.mock.calls.map(([, tab]) => tab)).toEqual(['definition', 'columns', 'indexes', 'dependencies', 'preview', 'storage', 'overview', undefined])
+    expect(tableProperties.focus).toHaveBeenCalledTimes(8)
+    expect(tableProperties.focus).toHaveBeenLastCalledWith('tp-preserve')
+    // Zero competing Peek tabs were created for the table.
+    expect(documents.openCustom).not.toHaveBeenCalled()
+    expect(Object.keys(peekTabs.getSnapshot().views)).toEqual([])
+    // Non-table kinds still open a normal Peek tab.
+    expect(peekTabs.open(node('view', 3, 'vOrders'), 'columns')).toBe('doc-1')
+    expect(documents.openCustom).toHaveBeenCalledWith('peek', 'dbo.vOrders', connectionId, 'Sales')
+    peekTabs.dispose()
   })
 })

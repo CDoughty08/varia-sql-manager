@@ -44,7 +44,7 @@ function setup() {
   const databaseState = vi.fn<(connectionId: string, database: string, offline: boolean) => void>()
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, notify, databaseState, newId: () => `id-${++ids}` })
   cleanups.push(() => dialogs.dispose())
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   return { dialogs, api, connections, explorer, documents, execute, settle, notify, databaseState, hold: (promise: Promise<ApiResult<ActionDescribeResult>>) => { held = promise } }
 }
 

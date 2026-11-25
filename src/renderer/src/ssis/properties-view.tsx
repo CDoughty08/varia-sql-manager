@@ -9,6 +9,7 @@ import type { StatusTone } from '../../../shared/theme/tones'
 import { formatCount } from '../results/status'
 import type { GridViewState } from '../results/ResultsService'
 import type { Crumb, Fact, FrameSection } from '../kit/DocumentFrame'
+import FactGrid, { type FactItem } from '../kit/FactGrid'
 import { LocalGrid } from '../grid/LocalGrid'
 import type { SsisPropertiesModel, SsisPropertiesState } from './SsisPropertiesService'
 
@@ -86,18 +87,33 @@ export function truncatedNote(state: SsisPropertiesState): string | undefined {
   return `This ${noun} has more ${model.view === 'package' ? 'parameters' : 'variables'} than one read returns: the list shows its first ${first}.`
 }
 
-/** A value the catalog left empty: a muted dash (None to a screen reader). */
-function valueText(value: string): ReactNode {
-  if (value === '') return <span className="ssis-properties-none"><span aria-hidden="true">—</span><span className="visually-hidden">{noneLabel}</span></span>
-  return displayText(value)
-}
+const monoGeneral = new Set(['Name', 'Identifier', 'Folder', 'Project', 'Version LSN', 'Version', 'Created by', 'Deployed by'])
 
 type Row = readonly [label: string, value: string]
-/** The General section: label and value pairs, as SSMS's General page lists them (facts as text, not input boxes). */
+/** The General section: label and value pairs as click-to-copy FactGrid rows (facts as text, not input boxes). */
 function General({ rows }: { readonly rows: readonly Row[] }) {
-  return <dl className="ssis-properties">
-    {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd title={value}><bdi>{valueText(value)}</bdi></dd></div>)}
-  </dl>
+  const facts: FactItem[] = rows.map(([label, value]) => {
+    if (value === '') {
+      return {
+        id: label,
+        label,
+        value: '',
+        content: <span className="ssis-properties-none"><span aria-hidden="true">—</span><span className="visually-hidden">{noneLabel}</span></span>,
+        copyable: false
+      }
+    }
+    const text = displayText(value)
+    return {
+      id: label,
+      label,
+      value: text,
+      content: <bdi>{text}</bdi>,
+      copyValue: text,
+      title: value,
+      ...(monoGeneral.has(label) ? { mono: true } : {})
+    }
+  })
+  return <FactGrid facts={facts} />
 }
 
 /** A list's column: its title and a row's value as the page shows it (a sensitive value already masked). */
@@ -111,9 +127,6 @@ export function listTable<T>(rows: readonly T[], columns: readonly ListColumn<T>
   return { columns: columns.map(column => ({ name: column.title })), rows: rows.map(row => columns.map(column => displayText(column.value(row)))) }
 }
 
-/** The most rows a list shows before it scrolls inside its section. */
-export const listRows = 20
-
 export interface SsisListProps {
   readonly label: string
   readonly table: LocalTableData
@@ -123,12 +136,13 @@ export interface SsisListProps {
   readonly state: GridViewState
 }
 /**
- * A read-only list of at most ssisLimits.rows rows in the results grid (LocalGrid): a page, with Save, as tall as its rows
- * up to listRows (the section column scrolls, so there is no area to fill), or what an empty one says.
+ * A read-only list of at most ssisLimits.rows rows in the results grid (LocalGrid): a page, with Save, rendered at
+ * natural height (`maxRows={Infinity}`) so the section column is the sole vertical scroller (zero scroll-within-a-scroll),
+ * while `GridView` virtualizes painted rows against the outer scroller.
  */
 export function SsisList({ label, table, empty, suggestedName, state }: SsisListProps) {
   return <div className="ssis-properties-grid">
-    <LocalGrid table={table} label={label} preset="page" fit maxRows={listRows} empty={empty} suggestedName={suggestedName} state={state} />
+    <LocalGrid table={table} label={label} preset="page" fit maxRows={Infinity} empty={empty} suggestedName={suggestedName} state={state} />
   </div>
 }
 
