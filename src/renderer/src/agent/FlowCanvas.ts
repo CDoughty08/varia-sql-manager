@@ -186,13 +186,18 @@ export class FlowCanvas {
   update(model: FlowCanvasModel, selected: number, focused: boolean, editable: boolean): void {
     const grew = model.layout.width !== this.options.model.layout.width
     Object.assign(this.options, { model, selected, focused, editable })
-    if (grew && this.placed && this.camera.scale === 1) this.moveCamera(this.home())
+    if (grew && this.placed && this.camera.scale === 1) this.rehome()
     this.invalidate()
   }
   colors(colors: FlowCanvasColors): void { this.options.colors = colors; this.invalidate() }
   fit(): void { const { width, height } = this.options.model.layout; this.moveCamera(fit({ x: 0, y: 0, width, height }, this.width, this.height)) }
   /** Back to where the graph first showed (100 %, centred, or Fit when wider than the view), once the view has its new size: the docked editor opening or closing. */
-  recenter(): void { this.owner.requestAnimationFrame(() => { if (!this.disposed && this.ready) { this.resize(); this.moveCamera(this.home()) } }) }
+  recenter(): void { this.owner.requestAnimationFrame(() => { if (!this.disposed && this.ready) { this.resize(); this.rehome() } }) }
+  /** For a new width: x and the scale as placed first, the scroll kept, and the selected step (the one being edited) still in view. */
+  private rehome(): void {
+    this.moveCamera({ ...this.home(), y: this.camera.y })
+    if (this.options.selected >= 0) this.reveal(this.options.selected)
+  }
   zoom(factor: number): void { this.moveCamera(zoomAt(this.camera, this.width / 2, this.height / 2, factor)) }
   /** Scrolls a step into view (the keyboard's selection). */
   reveal(index: number): void {

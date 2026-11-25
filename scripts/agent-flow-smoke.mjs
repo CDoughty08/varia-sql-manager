@@ -45,6 +45,13 @@ try {
   // Every document opens on List; the switch leads the list's header, then the graph's toolbar.
   const views = job.getByRole('radiogroup', { name: 'Steps view', exact: true })
   await expect(views.getByRole('radio', { name: 'List' })).toHaveAttribute('aria-checked', 'true')
+  // A radio group's keys: one tab stop, and the arrow chooses Flow.
+  await views.getByRole('radio', { name: 'List' }).focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(views.getByRole('radio', { name: 'Flow' })).toBeFocused()
+  await expect(views.getByRole('radio', { name: 'Flow' })).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('ArrowLeft')
+  await expect(views.getByRole('radio', { name: 'List' })).toBeFocused()
   await views.getByRole('radio', { name: 'Flow' }).click()
   await expect(tree.getByRole('treeitem')).toHaveCount(3)
   await expect(job.locator('canvas')).toBeVisible()

@@ -48,6 +48,15 @@ describe('the steps flow', () => {
     const dangling: AgentStepsDraft = { ...job([['A', 2, 'qf'], ['B', 1, 1]]), steps: job([['A', 2, 'qf'], ['B', 1, 1]]).steps.map((step, at) => at === 1 ? { ...step, onFail: 4, onFailTarget: 's9' } : step) }
     expect(stepsFlow(dangling).loops).toMatchObject([{ closed: false }])
   })
+  it('knows no Start step when the job\'s is not among the steps read, and then says no step never runs', () => {
+    // A job with more steps than Varia reads can start past them; step 1 is not its Start step.
+    const past = job([['A', 'next', 'qf'], ['B', 'qs', 'qf']], 9)
+    const flow = stepsFlow(past)
+    expect(flow.start).toBe(-1)
+    expect(flow.reachable).toEqual([false, false])
+    expect(flowLayout(flow, metrics).start).toBeUndefined()
+    expect(flowChecks(past, flow).filter(check => check.kind === 'neverRuns')).toEqual([])
+  })
   it('reads a long chain without overflowing', () => {
     const many = job(Array.from({ length: 5000 }, (_, at) => [`S${at}`, 'next', 'qf'] as [string, Go, Go]))
     expect(stepsFlow(many).reachable.every(Boolean)).toBe(true)

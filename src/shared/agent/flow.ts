@@ -62,7 +62,7 @@ export function stepsFlow(draft: AgentStepsDraft): StepsFlow {
     const action = which === 'success' ? step.onSuccess : step.onFail, target = targetOf(draft, step, at, which)
     return { from: at, which, action, target, marked: action === 4 && target.kind === 'step' && target.index === at + 1 }
   }))
-  const start = count ? Math.max(0, draft.steps.findIndex(step => step.key === draft.startKey)) : -1
+  const start = draft.steps.findIndex(step => step.key === draft.startKey)
   const reachable = reach(count, raw, start)
   const components = strongComponents(count, raw)
   const inLoop = new Map<number, number>()
@@ -162,7 +162,7 @@ export function flowChecks(draft: AgentStepsDraft, flow: StepsFlow = stepsFlow(d
   const start = flow.start
   const startReach = flow.reachable
   draft.steps.forEach((step, at) => {
-    if (flow.reachable[at]) return
+    if (flow.start < 0 || flow.reachable[at]) return
     const into = flow.edges.filter(edge => stepTarget(edge) === at && edge.from !== at)
     // Make Start step fixes it only when the steps that run now still run from this step.
     const fromHere = reach(flow.count, flow.edges, at)

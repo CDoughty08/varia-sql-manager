@@ -118,7 +118,9 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
 
   const flow = useMemo(() => stepsFlow(draft.steps), [draft.steps])
   const layout = useMemo(() => flowLayout(flow, flowMetrics), [flow])
-  const checks = useMemo(() => flowChecks(draft.steps, flow), [draft.steps, flow])
+  // A job with more steps than Varia reads has go-tos past them that are not problems Varia can fix, so it checks nothing (as List).
+  const truncated = !!model.stepsTruncated
+  const checks = useMemo(() => truncated ? [] : flowChecks(draft.steps, flow), [draft.steps, flow, truncated])
   const canvasModel: FlowCanvasModel = useMemo(() => {
     const accent = changedEdges(draft.steps, model)
     const nodes = steps.map((step, at): FlowCanvasNode => ({
@@ -195,7 +197,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   }, () => root.current ?? undefined)
   const treeRef = (element: HTMLDivElement | null) => { root.current = element; menuTarget(element) }
 
-  const missing = flow.edges.filter(edge => edge.target.kind === 'missing')
+  const missing = truncated ? [] : flow.edges.filter(edge => edge.target.kind === 'missing')
   const problemCount = checks.length + missing.length
   const editing = !!state.stepEditor && !!selectedStep
   const fact = selectedStep ? flowStepFact(selectedStep, model) : undefined
@@ -250,8 +252,8 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
             <h4 id={`agent-flow-${state.id}-selected`}>Selected step<span className="agent-flow-sec-right"><Icon name={stepIcon(selectedStep.subsystem)} />{stepTypeShort(selectedStep.subsystem)}</span></h4>
             <p className="agent-flow-name"><span className="agent-flow-no">{selected + 1}</span>{selectedStep.name || 'Unnamed step'}</p>
             <dl className="agent-flow-facts">
-              <dt>{fact.label}</dt><dd>{fact.value}</dd>
-              {fact.label !== 'Retries' && <><dt>Retries</dt><dd>{retriesText(selectedStep)}</dd></>}
+              <div className="agent-flow-fact"><dt>{fact.label}</dt><dd>{fact.value}</dd></div>
+              {fact.label !== 'Retries' && <div className="agent-flow-fact"><dt>Retries</dt><dd>{retriesText(selectedStep)}</dd></div>}
               {(['success', 'fail'] as const).map(which => {
                 const edge = edgeOf(which)!
                 return <div key={which} className="agent-flow-fact">
@@ -260,7 +262,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
                     {loopOf(edge) && <span className="agent-step-tag" data-tone="warning">Loop</span>}</dd>
                 </div>
               })}
-              <dt>Reached from</dt><dd>{reachedFrom(flow, selected)}</dd>
+              <div className="agent-flow-fact"><dt>Reached from</dt><dd>{reachedFrom(flow, selected)}</dd></div>
             </dl>
             <span className="agent-step-inline">
               <button type="button" onClick={() => service.openStepEditor(state.id, selectedStep.key)}><Icon name="edit" />Edit step</button>
@@ -269,8 +271,8 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
             <p className="field-note">Double-click a step, or press Enter, to edit it here. Right-click it, or press Shift+F10, for its actions. Drag a step’s success or failure port onto a step to go to it.</p>
           </section>}
           <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-checks`}>
-            <h4 id={`agent-flow-${state.id}-checks`}>Flow checks<span className="agent-flow-sec-right">{problemCount === 0 ? 'No problems' : `${problemCount} ${problemCount === 1 ? 'problem' : 'problems'}`}</span></h4>
-            <div role="list" aria-labelledby={`agent-flow-${state.id}-checks`}>
+            <h4 id={`agent-flow-${state.id}-checks`}>Flow checks<span className="agent-flow-sec-right">{truncated ? 'Not checked' : problemCount === 0 ? 'No problems' : `${problemCount} ${problemCount === 1 ? 'problem' : 'problems'}`}</span></h4>
+            {truncated ? <p className="field-note" role="note">{stepText.stepsTruncated}</p> : <div role="list" aria-labelledby={`agent-flow-${state.id}-checks`}>
               {checks.map(check => <Check key={`${check.kind}:${check.key}:${check.field}`} check={check} editable={editable} service={service} id={state.id} />)}
               {missing.map(edge => <div key={`${edge.from}:${edge.which}`} className="agent-flow-check" role="listitem">
                 <Icon name="error" /><span className="agent-flow-check-title">{`Step ${edge.from + 1} goes to a step that no longer exists`}</span>
@@ -280,7 +282,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
                 <Icon name="pass" /><span className="agent-flow-check-title">Every go-to target exists</span>
                 <span className="agent-flow-check-detail">No step goes to a step that no longer exists.</span>
               </div>}
-            </div>
+            </div>}
           </section>
           <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-key`}>
             <h4 id={`agent-flow-${state.id}-key`}>Key</h4>

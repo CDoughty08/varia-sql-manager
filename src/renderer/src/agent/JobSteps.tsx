@@ -2,7 +2,7 @@
 // rx-step-delete): the steps list (drag to reorder, ✓ and ✗ targets, the Start step) beside the selected step's editor, edited in place.
 // T-SQL commands are edited in the query editor with the step's database (completion, Parse, Open in query window); an SSIS step is one
 // scroll with an inline SSISDB picker; SSMS's Advanced page is the More options fold. JobDocumentService keeps every state.
-import { useEffect, useRef, useState, type DragEvent, type RefObject } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
 import type { editor } from 'monaco-editor'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
@@ -21,6 +21,7 @@ import { withKey } from '../query-context'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import { registerSqlModel } from '../explorer/peek-editor'
 import Icon from '../Icon'
+import { segmentKey } from '../kit/Segmented'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
 import JobStepsFlow, { useForcedColors } from './JobStepsFlow'
 
@@ -450,11 +451,30 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
 
 /** List | Flow: the same draft as a list beside the step's editor, or as a graph (Flow, Later in docs/agent-ui-rethink.md). Every document
  *  opens on List. Forced colours replace the graph's colours, so Flow is then unavailable and says why. */
+// List draws the switch in its header and Flow in its toolbar, so the arrow keys' switch unmounts: the document whose switch the keyboard
+// moved, for the new one to take focus as it mounts.
+let switchFocus: string | undefined
 function ViewSwitch({ state, service, forced }: { readonly state: JobDocumentState; readonly service: JobDocumentService; readonly forced: boolean }) {
   const flow = state.stepsView === 'flow' && !forced
-  return <span className="segmented agent-steps-view" role="radiogroup" aria-label="Steps view">
-    <button type="button" role="radio" className="segmented-option" aria-checked={!flow} onClick={() => service.setStepsView(state.id, 'list')}><Icon name="list-flat" />List</button>
-    <button type="button" role="radio" className="segmented-option" aria-checked={flow} disabled={forced} title={forced ? 'Flow draws in colours that forced colours replace; List shows the same steps.' : undefined}
+  const group = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (switchFocus !== state.id) return
+    switchFocus = undefined
+    group.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus()
+  }, [state.id])
+  const keyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    if (forced || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    const next = segmentKey(event.key, 2, flow ? 1 : 0)
+    if (next === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (next === (flow ? 1 : 0)) return
+    switchFocus = state.id
+    service.setStepsView(state.id, next === 1 ? 'flow' : 'list')
+  }
+  return <span ref={group} className="segmented agent-steps-view" role="radiogroup" aria-label="Steps view" onKeyDown={keyDown}>
+    <button type="button" role="radio" className="segmented-option" aria-checked={!flow} tabIndex={flow ? -1 : 0} onClick={() => service.setStepsView(state.id, 'list')}><Icon name="list-flat" />List</button>
+    <button type="button" role="radio" className="segmented-option" aria-checked={flow} tabIndex={flow ? 0 : -1} disabled={forced} title={forced ? 'Flow draws in colours that forced colours replace; List shows the same steps.' : undefined}
       onClick={() => service.setStepsView(state.id, 'flow')}><Icon name="type-hierarchy" />Flow</button>
   </span>
 }
