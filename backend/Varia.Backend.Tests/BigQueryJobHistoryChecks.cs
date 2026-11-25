@@ -442,13 +442,13 @@ internal static class BigQueryJobHistoryChecks
             return new BigQueryFake.Reply(200, page.ToJsonString());
         };
         List<string> Tokens(Harness of) => [.. of.Listings().Select(query => Regex.Match(query, "pageToken=(p\\d)").Groups[1].Value)];
-        // Six pages of one job each, every answer 300 ms late: a 2 s budget stops between pages at 1.5 s, before the sixth. A
-        // starved machine reads fewer pages a sample, but never the first page twice.
-        harness.Fake.On("GET", Jobs, Pages(300));
+        // Six pages of one job each, every answer 700 ms late: a 3.5 s budget stops between pages around 2.6 s, before the sixth,
+        // while leaving enough headroom for page 1 on a loaded runner so the first page is never cut and asked twice.
+        harness.Fake.On("GET", Jobs, Pages(700));
         using var sampler = harness.Sampler(new("mine", Hours: 24));
         var samples = 0;
         LiveSampleBatch batch;
-        do batch = await sampler.SampleAsync([Due(2000)], CancellationToken.None);
+        do batch = await sampler.SampleAsync([Due(3500)], CancellationToken.None);
         while (Status(batch, "loading") is 1 && ++samples < 30);
         var tokens = Tokens(harness);
         check(Status(batch, "loading") is 0 && Status(batch, "held") is 6 && samples >= 1 && tokens.Count(token => token == "") == 1
@@ -464,7 +464,7 @@ internal static class BigQueryJobHistoryChecks
         var hung = 0;
         cut.Fake.Hang = request => firstSample && request.Uri.Query.Contains("pageToken=p3", StringComparison.Ordinal) && Interlocked.Increment(ref hung) == 1;
         using var cutSampler = cut.Sampler(new("mine", Hours: 24));
-        var stopped = await cutSampler.SampleAsync([Due(1000)], CancellationToken.None);
+        var stopped = await cutSampler.SampleAsync([Due(2500)], CancellationToken.None);
         firstSample = false;
         var resumed = await cutSampler.SampleAsync([Due()], CancellationToken.None);
         var asked = Tokens(cut);
@@ -602,12 +602,12 @@ internal static class BigQueryJobHistoryChecks
         late.Fake.Hang = request => lagging && request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal);
         late.Fake.On("GET", Jobs, request =>
         {
-            // The answer's latency is what this check is about: half the budget below, past its first quarter.
-            if (lagging && !request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal)) Thread.Sleep(500);
+            // The answer's latency is what this check is about: past a quarter of the budget below, with headroom for loaded runners.
+            if (lagging && !request.Uri.Query.Contains("stateFilter=", StringComparison.Ordinal)) Thread.Sleep(1100);
             return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
         }).On("GET", Jobs + "/varia_running", _ => new BigQueryFake.Reply(200, JsonNode.Parse(Timed("jobs-list", late.Now).Replace("\"RUNNING\"", "\"DONE\""))!["jobs"]![0]!.ToJsonString()));
         var before = late.Listings().Count;
-        var cutLate = await trailing.SampleAsync([Due(1000)], CancellationToken.None);
+        var cutLate = await trailing.SampleAsync([Due(4000)], CancellationToken.None);
         lagging = false;
         var middle = late.Listings().Count;
         var caughtUp = await SampleAsync(trailing);

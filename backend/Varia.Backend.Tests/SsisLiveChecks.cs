@@ -110,6 +110,8 @@ internal static class SsisLiveChecks
         await SsisTreeLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
         // S3: the ssis.operations live source (the Operations document), against the same fake catalog.
         await SsisOperationsLiveChecks.RunAsync(check, service, info, json, scratch.Ssis, Sql, live, scratch);
+        // AG-13: ssis.execution (the execution messages document), against the same fake catalog.
+        await SsisExecutionLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql);
     }
 
     private static void Write(ManifestFile? manifest, CatalogShape? shape, string path)

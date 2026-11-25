@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (444)
+## Commands (449)
 
 ### File
 
@@ -134,21 +134,21 @@ keys it uses are listed below.
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
 | Focus Notifications | `notifications.focus` | — | — | — | `hasNotifications` | — |
 | Clear All Notifications | `notifications.clearAll` | — | — | — | `hasNotifications` | — |
-| Dock Left (not in the palette) | `pane.dockLeft` | — | — | — | Always | Panel tab context menu › Dock Left |
-| Dock Right (not in the palette) | `pane.dockRight` | — | — | — | Always | Panel tab context menu › Dock Right |
-| Dock Top (not in the palette) | `pane.dockTop` | — | — | — | Always | Panel tab context menu › Dock Top |
-| Dock Bottom (not in the palette) | `pane.dockBottom` | — | — | — | Always | Panel tab context menu › Dock Bottom |
+| Dock Left (not in the palette) | `pane.dockLeft` | — | — | — | Always | Panel tab context menu › Dock Left; Object Explorer header › More actions › Dock Left |
+| Dock Right (not in the palette) | `pane.dockRight` | — | — | — | Always | Panel tab context menu › Dock Right; Object Explorer header › More actions › Dock Right |
+| Dock Top (not in the palette) | `pane.dockTop` | — | — | — | Always | Panel tab context menu › Dock Top; Object Explorer header › More actions › Dock Top |
+| Dock Bottom (not in the palette) | `pane.dockBottom` | — | — | — | Always | Panel tab context menu › Dock Bottom; Object Explorer header › More actions › Dock Bottom |
 | Tab with Object Explorer (not in the palette) | `pane.tabWithExplorer` | — | — | — | Always | Panel tab context menu › Tab with Object Explorer |
-| Tab with Query Editor (not in the palette) | `pane.tabWithEditor` | — | — | — | Always | Panel tab context menu › Tab with Query Editor |
-| Tab with Results (not in the palette) | `pane.tabWithResults` | — | — | — | Always | Panel tab context menu › Tab with Results |
-| Tab with Messages (not in the palette) | `pane.tabWithMessages` | — | — | — | Always | Panel tab context menu › Tab with Messages |
-| Tab with Execution Plan (not in the palette) | `pane.tabWithPlan` | — | — | — | Always | Panel tab context menu › Tab with Execution Plan |
-| Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
-| Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
-| Move into New Window (not in the palette) | `pane.moveToNewWindow` | — | — | — | Always | Panel tab context menu › Move into New Window |
-| Move Back into Main Window (not in the palette) | `pane.moveToMainWindow` | — | — | — | Always | Panel tab context menu › Move Back into Main Window |
-| Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
-| Toggle Panel Tabs | `window.togglePanelTabs` | — | — | — | Always; checked when `panelTabsVisible` | Window › Panel Tabs; Panel tab context menu › Show Panel Tabs |
+| Tab with Query Editor (not in the palette) | `pane.tabWithEditor` | — | — | — | Always | Panel tab context menu › Tab with Query Editor; Object Explorer header › More actions › Tab with Query Editor |
+| Tab with Results (not in the palette) | `pane.tabWithResults` | — | — | — | Always | Panel tab context menu › Tab with Results; Object Explorer header › More actions › Tab with Results |
+| Tab with Messages (not in the palette) | `pane.tabWithMessages` | — | — | — | Always | Panel tab context menu › Tab with Messages; Object Explorer header › More actions › Tab with Messages |
+| Tab with Execution Plan (not in the palette) | `pane.tabWithPlan` | — | — | — | Always | Panel tab context menu › Tab with Execution Plan; Object Explorer header › More actions › Tab with Execution Plan |
+| Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float; Object Explorer header › More actions › Float |
+| Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock; Object Explorer header › More actions › Dock |
+| Move into New Window (not in the palette) | `pane.moveToNewWindow` | — | — | — | Always | Panel tab context menu › Move into New Window; Object Explorer header › More actions › Move into New Window |
+| Move Back into Main Window (not in the palette) | `pane.moveToMainWindow` | — | — | — | Always | Panel tab context menu › Move Back into Main Window; Object Explorer header › More actions › Move Back into Main Window |
+| Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close; Object Explorer header › More actions › Close |
+| Toggle Panel Tabs | `window.togglePanelTabs` | — | — | — | Always; checked when `panelTabsVisible` | Window › Panel Tabs; Panel tab context menu › Show Panel Tabs; Object Explorer header › More actions › Show Panel Tabs |
 | Search… | `workbench.search` | Ctrl+Q | — | — | Always | View › Search… |
 
 ### Query
@@ -253,12 +253,12 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
-| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
-| Disconnect and Remove from Explorer | `connection.disconnectAndRemove` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect and Remove from Explorer |
+| Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect…; Object Explorer header › More actions › Connect… |
+| Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect; Object Explorer header › More actions › Disconnect |
+| Disconnect and Remove from Explorer | `connection.disconnectAndRemove` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect and Remove from Explorer; Object Explorer header › More actions › Disconnect and Remove from Explorer |
 | Set Connection Environment… | `connection.environment` | — | — | — | `hasConnection && !documentBusy` | Query › Connection › Environment…; Object Explorer context menu › Environment… |
-| Reconnect… | `connection.reconnect` | — | — | — | `(hasLostConnection \|\| activeConnectionLost) && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
-| Remove from Explorer | `connection.removeFromExplorer` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove from Explorer |
+| Reconnect… | `connection.reconnect` | — | — | — | `(hasLostConnection \|\| activeConnectionLost) && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect…; Object Explorer header › More actions › Reconnect… |
+| Remove from Explorer | `connection.removeFromExplorer` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove from Explorer; Object Explorer header › More actions › Remove from Explorer |
 | Remove Lost Connection… (not in the palette) | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | — |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
 
@@ -266,18 +266,18 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
-| Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings… |
+| Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh; Object Explorer header › More actions › Refresh |
+| Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings…; Object Explorer header › More actions › Filter Settings… |
 | Search in Object Explorer | `explorer.focusSearch` | Ctrl+Shift+F, Ctrl+F (`activePanel == 'explorer' && !inputFocus`) | Ctrl+Shift+F, Ctrl+F (`activePanel == 'explorer' && !inputFocus`) | ⇧⌘F, ⌘F (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
 | Create Catalog… | `explorer.createCatalog` | — | — | — | `backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'` | Object Explorer context menu › Create Catalog… |
 | New Login… | `explorer.newLogin` | — | — | — | `backendReady && (explorerSelectionFolder == 'logins' \|\| explorerSelectionFolder == 'serverSecurity' \|\| explorerSelectionKind == 'login') && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New Login… |
 | Login… (not in the palette) | `explorer.newLoginOnSecurity` | — | — | — | `backendReady && explorerSelectionFolder == 'serverSecurity' && (explorerSelectionServerEngine == 'box' \|\| explorerSelectionServerEngine == 'managedInstance')` | Object Explorer context menu › New › Login… |
-| Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
+| Stop | `explorer.stop` | — | — | — | `explorerLoading` | Object Explorer header › More actions › Stop |
 | Move Up | `explorer.moveServerUp` | Alt+Up (`explorerFocus && !textInputFocus`) | Alt+Up (`explorerFocus && !textInputFocus`) | ⌥↑ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Up |
 | Move Down | `explorer.moveServerDown` | Alt+Down (`explorerFocus && !textInputFocus`) | Alt+Down (`explorerFocus && !textInputFocus`) | ⌥↓ (`explorerFocus && !textInputFocus`) | Always | Object Explorer context menu › Move Down |
-| Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
-| Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | — |
+| Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | Object Explorer header › More actions › Collapse All |
+| Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | Object Explorer header › More actions › Group by Schema |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query; Search Objects result context menu › New Query |
 | Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows; Search Objects result context menu › Select Top 1000 Rows |
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
@@ -414,6 +414,11 @@ keys it uses are listed below.
 | Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
+| Open Execution | `ssis.openExecution` | — | — | — | `backendReady && activeDocumentIsSsisOperations` | Integration Services Operations context menu › Open |
+| Go Back | `ssis.goBack` | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Left (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘[ (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoBack` | — |
+| Go Forward | `ssis.goForward` | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | Alt+Right (`activeDocumentIsSsisOperations && !textInputFocus`) | ⌘] (`activeDocumentIsSsisOperations && !textInputFocus`) | `activeDocumentIsSsisOperations && ssisCanGoForward` | — |
+| Package Executions | `ssis.packageExecutions` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Executions |
+| Package Last Execution | `ssis.lastRun` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Last Execution |
 | Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -818,7 +823,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_monitor` | View A**g**ent Log | `agent.viewAgentLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost` |
 | `1_monitor` | Rec**y**cle | `agent.recycleErrorLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | E**x**ecutions | `ssis.packageExecutions` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | Last Exec**u**tion | `ssis.lastRun` | `explorerNode == 'ssisPackage' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
@@ -1131,6 +1138,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `1_operation` | **O**pen | `ssis.openExecution` | Always |
 | `1_operation` | **S**top Operation | `ssis.stopOperation` | Always |
 | `5_copy` | **C**opy | `ssis.copyOperations` | Always |
 | `5_copy` | Copy with **H**eaders | `ssis.copyOperationsWithHeaders` | Always |
@@ -1176,6 +1184,37 @@ Right-click a Search Objects result (in the Search Objects tab or Object Explore
 | `1_names` | **S**chema-Qualified Name | `search.copySchemaName` | `searchHitSchema` |
 | `1_names` | **F**ully Qualified Name | `search.copyQualifiedName` | `searchHitSchema \|\| searchHitBigQuery` |
 | `2_brackets` | **B**racketed Name | `search.copyBracketedName` | `!searchHitBigQuery` |
+
+#### Object Explorer header › More actions (`explorer.tools`)
+
+Click the ⋯ button at the end of the Object Explorer header, or press Enter or Space on it. It holds connection actions for the selected server (Disconnect, Remove, Reconnect), Object Explorer tools (Stop, Filter Settings, Refresh, Group by Schema, Collapse All), and the panel docking actions.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `0_connect` | C**o**nnect… | `connection.connect` | Always |
+| `0_connect` | **D**isconnect | `connection.disconnect` | `!explorerToolsLost` |
+| `0_connect` | Reco**n**nect… | `connection.reconnect` | `explorerToolsLost` |
+| `0_connect` | Disconnect and Remo**v**e from Explorer | `connection.disconnectAndRemove` | `!explorerToolsLost` |
+| `0_connect` | Remo**v**e from Explorer | `connection.removeFromExplorer` | `explorerToolsLost` |
+| `1_tools` | Sto**p** | `explorer.stop` | Always |
+| `1_tools` | F**i**lter Settings… | `explorer.filter` | Always |
+| `1_tools` | Refres**h** | `explorer.refresh` | Always |
+| `1_tools` | **G**roup by Schema | `explorer.groupBySchema` | Always |
+| `1_tools` | Collapse **A**ll | `explorer.collapseAll` | Always |
+| `2_move` | Dock **L**eft | `pane.dockLeft` | Always |
+| `2_move` | Dock **R**ight | `pane.dockRight` | Always |
+| `2_move` | Dock **T**op | `pane.dockTop` | Always |
+| `2_move` | Dock **B**ottom | `pane.dockBottom` | Always |
+| `3_tab` | Tab with Query **E**ditor | `pane.tabWithEditor` | Always |
+| `3_tab` | Tab with Res**u**lts | `pane.tabWithResults` | Always |
+| `3_tab` | Tab with **M**essages | `pane.tabWithMessages` | Always |
+| `3_tab` | Tab with E**x**ecution Plan | `pane.tabWithPlan` | Always |
+| `4_dock` | **F**loat | `pane.float` | `!explorerToolsFloating` |
+| `4_dock` | Doc**k** | `pane.dock` | `explorerToolsFloating` |
+| `4_dock` | Move into New **W**indow | `pane.moveToNewWindow` | `!explorerToolsPopout` |
+| `4_dock` | Move Back into Main **W**indow | `pane.moveToMainWindow` | `explorerToolsPopout` |
+| `5_close` | **C**lose | `pane.close` | Always |
+| `6_tabs` | **S**how Panel Tabs | `window.togglePanelTabs` | Always |
 
 #### Results toolbar › More results tools (`output.tools`)
 
@@ -1251,7 +1290,7 @@ Right-click a job in Job Activity Monitor's list (a right-click outside the sele
 | `5_history` | View **H**istory | `agent.viewHistory` | Always |
 | `9_view` | Re**f**resh | `agent.refreshJobs` | Always |
 
-## Context keys (203)
+## Context keys (209)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1294,7 +1333,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
-| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
+| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services: the catalog's operations, a package's runs or a run's page. |
+| `ssisPlace` | `'list'`, `'package'`, `'execution'`, `''` | state | What the active Integration Services document shows: list, package or execution (empty outside it). |
+| `ssisCanGoBack` | boolean | state | The active Integration Services document has a place to go Back to. |
+| `ssisCanGoForward` | boolean | state | The active Integration Services document has a place to go Forward to. |
 | `activeDocumentIsJobActivity` | boolean | state | The active document is SQL Server Agent's Job Activity Monitor. |
 | `activeDocumentIsAgentJob` | boolean | state | The active document is a SQL Server Agent job (Job Properties, or New Job). |
 | `activeDocumentIsAgentAlert` | boolean | state | The active document is a SQL Server Agent alert (Alert Properties, or New Alert). |
@@ -1453,6 +1495,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `pane` | `'explorer'`, `'editor'`, `'results'`, `'messages'`, `'plan'`, `'statistics'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, Results, Messages, Execution plan, or Client Statistics. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |
 | `panePopout` | boolean | target | The panel the menu is for is in a window of its own (Move into New Window). |
+| `explorerToolsLost` | boolean | target | The selected Object Explorer server in the ⋯ menu is disconnected or lost. |
+| `explorerToolsFloating` | boolean | target | Object Explorer is floating when its ⋯ menu opens. |
+| `explorerToolsPopout` | boolean | target | Object Explorer is in a window of its own when its ⋯ menu opens. |
 | `documentTabFloating` | boolean | target | The document tab the menu is for is in a floating editor group. |
 | `searchHitSchema` | boolean | target | The Search Objects result the menu is for is in a schema (itself, or its parent for a column, key or trigger), so it has schema-qualified and fully qualified names. |
 | `searchHitBigQuery` | boolean | target | The Search Objects result the menu is for is a BigQuery object, whose full name is its backtick-quoted path rather than a bracketed one. |

@@ -19,6 +19,7 @@ export const part = {
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
   explorerToolbar: '[role="toolbar"][aria-label="Object Explorer toolbar"]',
+  explorerFilterToolbar: '[role="toolbar"][aria-label="Object Explorer filter and view toolbar"]',
   /** The tree by role and name: it waits for nothing, so page code can look for a tree that is not there yet. */
   explorerTree: '[role="tree"][aria-label="Object Explorer"]',
   // Shell
@@ -126,7 +127,11 @@ export const part = {
   explorerTwistie: '.oe-twistie',
   explorerIcon: '.oe-icon',
   explorerBadge: '.oe-badge',
-  explorerAccent: '.oe-accent',
+  explorerServerTop: '.oe-server-top',
+  explorerServerSub: '.oe-server-sub',
+  explorerServerSubEnd: '.oe-server-sub-end',
+  explorerPkBadge: '.oe-pk-badge',
+  explorerHeader: '.explorer-header',
   /** The tree's own box and rows, for page code that builds a probe tree to read the row styles. */
   explorerTreeView: '.explorer-tree',
   explorerRow: '.explorer-row',
@@ -148,6 +153,8 @@ export const part = {
   /** A Search Objects tab's document. */
   objectSearchTab: '[data-object-search]',
   explorerSearchField: '.object-search-pane .object-search-field',
+  explorerSearchBar: '.object-search-pane .object-search-bar',
+  explorerSearchFilters: '.object-search-pane .object-search-pane-filters',
   /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
   explorerFooter: '.explorer-footer',
   explorerFreshness: '.explorer-freshness',
@@ -633,10 +640,14 @@ export const closePaneButton = (page, id) => page.getByRole('button', { name: 'C
 export const paneMenuButton = (page, id) => page.getByRole('button', { name: paneTitles[id] + ' panel menu', exact: true })
 /** Moves a pane through its ⋯ menu: left, right, top, bottom, float, dock, close, or tab:<pane>. */
 export const movePane = async (page, id, where) => {
-  await paneMenuButton(page, id).click()
+  const button = paneMenuButton(page, id)
+  await expect(button).toBeVisible()
+  await button.click()
   const name = where.startsWith('tab:') ? 'Tab with ' + paneMenuTitles[where.slice(4)] : paneMoves[where]
   if (!name) throw new Error('No panel move ' + where)
-  await page.getByRole('menu').getByRole('menuitem', { name, exact: true }).click()
+  const item = page.getByRole('menu').getByRole('menuitem', { name, exact: true })
+  await expect(item).toBeVisible()
+  await item.click()
 }
 
 // Popout windows: a popout's page holds its panels' tabs, the button that docks them all back, and the panels themselves.
@@ -861,6 +872,7 @@ export const localGridFrame = (scope, name) => scope.locator(part.localGrid).fil
 // Object Explorer
 
 export const explorerToolbar = page => page.getByRole('toolbar', { name: 'Object Explorer toolbar', exact: true })
+export const explorerFilterToolbar = page => page.getByRole('toolbar', { name: 'Object Explorer filter and view toolbar', exact: true })
 export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
 /** The servers: the tree's first level. */
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')

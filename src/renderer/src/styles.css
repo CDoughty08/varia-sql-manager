@@ -216,18 +216,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .docking-guide-cell svg { width: 100%; height: 100%; }
 .docking-preview { position: fixed; background: var(--varia-dock-previewBackground); border: 2px solid var(--varia-dock-previewBorder); box-shadow: inset 0 0 0 1px var(--varia-dock-previewInnerBorder); }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; container: explorer / inline-size; }
-/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. */
-.explorer-header { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. Height matches Document Tabs so Row 1 aligns flush across the splitter. */
+.explorer-header { height: var(--varia-documentTab); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .pane-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-sideBarTitle-foreground); }
-.explorer-header .icon-button { width: var(--varia-space-5); }
+.explorer-header .icon-button, .explorer-inline-toolbar .icon-button { width: var(--varia-space-5); }
 .explorer-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 1px; }
-/* Give the title and panel menu their own row when the title no longer fits beside the tools. */
-@container explorer (width < 328px) {
-  .explorer-header { display: grid; grid-template: 'title menu' 1fr 'tools tools' auto / minmax(0, 1fr) auto; gap: 0; min-block-size: calc(var(--varia-bar) + var(--varia-control)); padding: 0 var(--varia-space-1) var(--varia-space-1); }
-  .explorer-header .pane-title { grid-area: title; padding-inline-start: var(--varia-space-2); }
-  .explorer-header .pane-menu { grid-area: menu; }
-  .explorer-header .explorer-toolbar { grid-area: tools; }
-  .explorer-toolbar .icon-button { flex: 0 1 var(--varia-space-5); min-width: 0; padding-inline: var(--varia-space-0); }
+/* Keep the header on a single row even down to minimum dock widths (200 px), tightening button chrome without wrapping. */
+@container explorer (width < 224px) {
+  .explorer-header { padding: 0 var(--varia-space-0) 0 var(--varia-space-2); }
+  .explorer-header .icon-button { width: 22px; padding-inline: var(--varia-space-0); }
 }
 .pane-menu { flex-shrink: 0; }
 .pane-menu:focus-visible { outline-offset: -2px; }
@@ -240,49 +237,68 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-toolbar .icon-button[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
 }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* Object Explorer's search box (SearchPanel's pane layout): the tab's search, compact, its hits in a band above the tree. */
-.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Object Explorer's search row (SearchPanel's pane layout) and disconnected fallback bar: locked to --varia-bar so Row 2 aligns flush with QueryBar across the splitter. */
+.object-search.object-search-pane { flex: 0 1 auto; height: auto; max-height: 50%; border-bottom: 0; }
+.object-search.object-search-pane[data-hits] { border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 /* Sized by its splitter, the band keeps its share of the pane (an inline height) and the tree below takes the rest; in a
    pane too short for the header, the band and the footer, the band gives way so the footer stays. */
 .object-search.object-search-pane[data-sized] { flex: 0 1 auto; max-height: none; }
 .object-search-splitter { flex: none; height: 4px; margin-bottom: -1px; cursor: row-resize; touch-action: none; }
 .object-search-splitter:hover, .object-search-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
-.object-search-pane .object-search-query { gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); }
-.object-search-pane .object-search-field { max-width: none; }
+.object-search-pane .object-search-query { gap: 0; padding: 0; }
+.object-search-pane .object-search-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-tools-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.object-search-pane .object-search-field { flex: 1 1 0; min-width: 0; max-width: none; }
 .object-search-pane .object-search-field .icon-button { width: 20px; height: 20px; }
+.object-search-pane .object-search-pane-filters, .object-search-pane .object-search-pane-status, .object-search-pane > .object-search-query > .object-search-index { padding: var(--varia-space-1) var(--varia-space-2) 0; }
+.object-search-pane .object-search-pane-status { padding-bottom: var(--varia-space-1); }
 .object-search-pane .object-search-options { gap: var(--varia-space-2); }
 .object-search-pane .object-search-hit { padding: 0 var(--varia-space-1); }
 .object-search-pane .object-search-open { grid-template-columns: auto minmax(0, 1fr); }
 .object-search-pane .object-search-path { grid-column: 2; max-width: none; text-align: start; }
 .object-search-pane .empty-state { flex: none; padding: var(--varia-space-2) var(--varia-space-3); }
 /*
- * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
- * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
- * count shows whole or not at all: when it does not fit beside the freshness it wraps to a second line, which the
- * footer's height clips (each server row has its dot).
+ * The footer: how fresh the selection's listing is, then the connected servers pinned right so the server count never
+ * disappears on long listing names while the freshness scope ellipsizes. Height stays fixed to the stale badge's 20 px
+ * pill so a failed refresh never moves the tree's bottom edge.
  */
-.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
-.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; height: 20px; min-width: 0; }
-.explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: nowrap; align-items: center; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 1 1 0; height: 20px; min-width: 0; overflow: hidden; }
+.explorer-freshness-scope { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.explorer-freshness .stale-badge { flex-shrink: 0; }
+.explorer-servers { flex: 0 0 auto; margin-left: auto; line-height: 20px; }
 /* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
-.explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
+.explorer-servers:only-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .explorer-tree-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; overflow-anchor: none; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
 .explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
-/* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
-.explorer-row.server { height: 30px; }
+/* A server leads its tree as a flush 44 px 2-line band (explorerLimits.serverRowHeight) for 1:1 jump-free sticky handoff. */
+.explorer-row.server { height: 44px; flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 3px var(--varia-space-2) 3px var(--varia-space-1); border-radius: 0; box-shadow: inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); isolation: isolate; }
+/* Unified connection-color hairline and soft directional wash: driven strictly by --server-accent, neutral when unset. */
+.explorer-row.server[data-accent]::before { content: ''; position: absolute; inset: 0; z-index: 0; background: linear-gradient(90deg, var(--server-accent) 0%, transparent 72%); opacity: 0.1; pointer-events: none; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]::before { opacity: 0.08; }
+.explorer-row.server[data-accent]:hover::before { opacity: 0.14; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]:hover::before { opacity: 0.11; }
+.explorer-row.server[data-accent]::after { content: ''; position: absolute; inset: 0; z-index: 0; border-top: 1px solid var(--server-accent); border-bottom: 1px solid var(--server-accent); opacity: 0.36; pointer-events: none; }
+:root[data-theme-type="light"] .explorer-row.server[data-accent]::after { opacity: 0.32; }
+.oe-server-top { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-md); min-width: 0; }
+.oe-server-sub { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-xs); padding-left: 44px; min-width: 0; }
+.oe-server-sub .oe-sublabel { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.oe-server-sub-end { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; margin-left: auto; }
+.oe-server-sub-end:empty { display: none; }
 /* The active query's server (untinted by default; its glyph, .oe-active, marks it): hover and selection still show on it. */
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 /* Pinned shortcuts overlay a fixed scroll window, stopping before its native scrollbars. */
-.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
+.explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-sideBar-background); }
 .explorer-pin-band[data-edge="top"] { top: 0; anchor-name: --explorer-pins-top; }
 .explorer-pin-band[data-edge="bottom"] { bottom: var(--explorer-scrollbar-height); anchor-name: --explorer-pins-bottom; }
-.explorer-pinned-server.explorer-row, .explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pinned-server.explorer-row { position: relative; width: 100%; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
+.explorer-pin-more { position: relative; width: 100%; padding: 0 var(--varia-space-2) 0 0; border: 0; border-radius: 0; color: inherit; text-align: start; cursor: pointer; }
 .explorer-pin-band > .explorer-pinned-server { position: absolute; }
 .explorer-pin-overflow { position: absolute; left: 0; right: 0; z-index: 1; overflow: clip; background: var(--varia-editorGroupHeader-tabsBackground); }
 .explorer-pin-band[data-edge="top"] > .explorer-pin-overflow { top: 0; }
@@ -290,15 +306,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .explorer-pin-band[data-edge="bottom"] > .explorer-pin-overflow > .explorer-pin-more { position: absolute; bottom: 0; }
 .explorer-pin-band > .explorer-pinned-server, .explorer-pin-more { box-shadow: inset 0 -1px var(--varia-sideBarSectionHeader-border); }
 .explorer-pin-band[data-edge="bottom"] > .explorer-pinned-server, .explorer-pin-band[data-edge="bottom"] .explorer-pin-more { box-shadow: inset 0 1px var(--varia-sideBarSectionHeader-border); }
-.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); border-inline-start: 2px solid var(--varia-focusBorder); padding-inline-end: 6px; }
+.explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); box-shadow: inset 0 1px 0 var(--varia-sideBarSectionHeader-border), inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); transition: none; }
 .explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
 .explorer-pinned-server:focus-visible, .explorer-pin-more:focus-visible { outline-offset: -2px; }
 .explorer-pin-menu { position: fixed; inset: auto; margin: 0; width: anchor-size(width); max-height: var(--explorer-tree-height); padding: 2px 0; overflow: auto; overscroll-behavior: contain; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .explorer-pin-band[data-edge="top"] .explorer-pin-menu { position-anchor: --explorer-pins-top; position-area: bottom; }
 .explorer-pin-band[data-edge="bottom"] .explorer-pin-menu { position-anchor: --explorer-pins-bottom; position-area: top; }
-.oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
-.oe-indent { flex: none; }
+/* 1 px vertical tree indent guides aligned beneath each ancestor chevron (16 px indent steps). */
+.oe-indent { flex: none; align-self: stretch; background-image: repeating-linear-gradient(to right, transparent 0, transparent 15px, var(--varia-tree-indentGuidesStroke) 15px, var(--varia-tree-indentGuidesStroke) 16px); }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
 .oe-icon { position: relative; flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--varia-objectExplorer-objectIconForeground); }
 .oe-icon.folder { color: var(--varia-objectExplorer-folderIconForeground); }
@@ -323,8 +339,14 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
  */
 .oe-label { flex: 1000 1 0; width: min(35cqw, 10em); max-width: max-content; overflow: clip; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
+.explorer-row.system-folder .oe-label { color: var(--varia-objectExplorer-sublabelForeground); }
+.explorer-row.system-folder .oe-icon.folder { opacity: 0.72; }
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
+/* Column rows prioritize column names ahead of SQL type sublabels so names stay legible before types truncate. */
+.explorer-row.column .oe-label { flex: 0 1 auto; width: auto; max-width: max-content; min-width: 0; }
+.explorer-row.column .oe-sublabel { flex: 1 1000 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.oe-pk-badge { display: inline-flex; align-items: center; flex: none; height: 15px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); font-size: var(--varia-size-xs); line-height: 1; font-weight: 600; }
 /* A login's static chips (M5): its name stays whole up to 65 % of the row, and the chips give way first (the end's shrink
    factor dwarfs the label's), each ending in an ellipsis; only a name longer than the room left after them shrinks. */
 .explorer-row.static-chips .oe-label { flex: 0 1 auto; width: auto; max-width: 65cqw; min-width: 0; }
@@ -793,6 +815,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .oe-indent { background-image: none; }
+  .explorer-row.server[data-accent]::before { display: none; }
+  .explorer-row.server[data-accent]::after { border-color: CanvasText; opacity: 1; }
+  .oe-pk-badge { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+  .explorer-row[aria-selected="true"] .oe-pk-badge { border-color: HighlightText; background: Highlight; color: HighlightText; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* Editor groups (docs/editor-groups.md): a Dockview inside the editor panel, each group's header its tab strip. A
@@ -2592,12 +2619,9 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to the
-   count and dot and to the share the server's name keeps (.oe-label) in a narrow row; a custom label stops at 40% of the row
-   (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
+/* In a server row's end (.oe-end on Line 1): the tag keeps its word whole while a custom label (up to 32 characters) stops
+   at 40% of the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
 .environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
-/* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
-.explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
 /* Metadata has its own row: a long environment yields only to the live session badge, never to the filename. */
 .query-tab .environment-tag[data-place="tab"] { flex: 0 1 auto; margin-left: 0; }
@@ -3282,6 +3306,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* Search Objects: the query (field, toggles, scope) above a list of hits, each a name, its path and a definition's line. */
 .object-search { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .object-search-query { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-2); }
+.object-search-bar { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.object-search-bar > .object-search-field { flex: 1 1 0; min-width: 0; }
 .object-search-field { display: flex; align-items: center; gap: var(--varia-space-1); max-width: 720px; height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
 .object-search-field:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .object-search-field input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--varia-input-foreground); font-size: var(--varia-size-sm); }
@@ -4004,6 +4030,101 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) {
   .agent-several-cell[data-changed] { border-left-color: Highlight; }
   .agent-several-details .link-button, .agent-several-results .link-button, .agent-several-table .link-button { color: LinkText; }
+}
+
+/* The Integration Services document: the history bar over the shown place's frame. */
+.ssis-document { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ssis-navbar { flex: none; display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-1) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-nav-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; border: none; background: none; color: var(--varia-foreground); }
+.ssis-nav-button:hover:not(:disabled) { background: var(--varia-toolbar-hoverBackground); }
+.ssis-nav-button:disabled { opacity: .4; }
+.ssis-crumbs { display: flex; flex: 1; align-items: center; gap: var(--varia-space-1); min-width: 0; margin: 0 0 0 var(--varia-space-2); padding: 0; list-style: none; overflow: hidden; white-space: nowrap; }
+.ssis-crumbs > li { display: inline-flex; min-width: 0; color: var(--varia-descriptionForeground); }
+.ssis-crumbs > li:last-child { flex: none; }
+.ssis-crumb { overflow: hidden; text-overflow: ellipsis; }
+.ssis-crumb[aria-current="page"] { color: var(--varia-foreground); font-weight: 600; }
+.ssis-crumbs .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; cursor: pointer; }
+.ssis-crumbs .link-button:hover { text-decoration: underline; }
+.ssis-crumb-separator > .codicon { font-size: var(--varia-glyph-sm); }
+.ssis-nav-position { flex: none; color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ssis-tool { display: inline-flex; align-items: center; gap: var(--varia-space-1); border-color: var(--varia-button-border); }
+/* A package's and a run's page: one screen, never a scroll around a grid. The summary sits above, and the grid takes the rest
+   of the height as the page's only vertical scroll. */
+.ssis-page { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3) var(--varia-space-4); }
+.ssis-page > * { flex: none; }
+.ssis-page > .ssis-fill-grid, .ssis-run-messages, .ssis-run-details { flex: 1 1 0; min-height: 160px; }
+.ssis-fill-grid { position: relative; display: flex; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); }
+/* The run's summary: the strip beside the tasks. A long task list (Show all) scrolls here, beside the grid, never around it. */
+.ssis-run-summary { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--varia-space-2) var(--varia-space-5); max-height: 38%; overflow-y: auto; }
+.ssis-run-summary > .ssis-run-strip { flex: 0 1 300px; }
+.ssis-run-tasks { flex: 1 1 520px; min-width: 0; }
+.ssis-timeline-more { margin-top: var(--varia-space-1); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; font-size: var(--varia-size-sm); cursor: pointer; }
+.ssis-timeline-more:hover { text-decoration: underline; }
+.ssis-callout-first { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssis-run-bar { align-items: center; }
+.ssis-view-switch { display: inline-flex; flex: none; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.ssis-view-switch > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-3); height: var(--varia-control); border: 0; border-radius: 0; background: none; color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.ssis-view-switch > button + button { border-left: 1px solid var(--varia-button-border); }
+.ssis-view-switch > button[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); font-weight: 600; transition: none; }
+.ssis-view-switch > button:hover:not([aria-selected="true"]) { background: var(--varia-toolbar-hoverBackground); }
+/* Messages: the grid and, beside it, the selected message whole (below it in a narrow document). */
+.ssis-run { container-type: inline-size; }
+.ssis-run-messages { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 34%); gap: var(--varia-space-2); min-width: 0; }
+@container (max-width: 900px) { .ssis-run-messages { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 1fr) minmax(160px, 45%); } }
+.ssis-message-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-message-head { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.ssis-message-head > .codicon { flex: none; color: var(--varia-errorForeground); }
+.ssis-message-head > .ssis-tool { margin-left: auto; }
+.ssis-message-time { color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ssis-message-meta { flex: none; margin: 0; padding: var(--varia-space-1) var(--varia-space-2) 0; color: var(--varia-descriptionForeground); overflow-wrap: anywhere; user-select: text; }
+.ssis-message-text { flex: 1; min-height: 0; margin: 0; padding: var(--varia-space-2); overflow: auto; font-family: var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.ssis-message-empty { margin: var(--varia-space-3); color: var(--varia-descriptionForeground); }
+.ssis-message-more { flex: none; align-self: flex-start; margin: 0 var(--varia-space-2) var(--varia-space-2); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; cursor: pointer; }
+.ssis-message-more:hover { text-decoration: underline; }
+/* Details: the run's facts beside the parameters it used, which fill the rest. */
+.ssis-run-details { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--varia-space-3) var(--varia-space-5); min-width: 0; overflow: hidden; }
+.ssis-run-details > .ssis-execution-overview { flex: 0 1 380px; align-content: start; max-height: 100%; margin: 0; overflow-y: auto; }
+.ssis-run-parameters { flex: 1 1 420px; align-self: stretch; display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; }
+.ssis-run-parameters > .ssis-subsection-title { margin-top: 0; }
+.ssis-run-parameters > .ssis-fill-grid { flex: 1; }
+.ssis-section-title { margin: var(--varia-space-2) 0 0; color: var(--varia-foreground); font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.ssis-subsection-title { margin: var(--varia-space-3) 0 var(--varia-space-1); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.ssis-callout { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-left: 3px solid var(--varia-errorForeground); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
+.ssis-callout > .codicon { flex: none; color: var(--varia-errorForeground); }
+.ssis-callout-text { flex: 1; min-width: 0; user-select: text; white-space: pre-wrap; }
+.ssis-callout-where { color: var(--varia-descriptionForeground); }
+.ssis-run-strip { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--varia-space-1) var(--varia-space-3); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-strip-label { flex-basis: 100%; color: var(--varia-descriptionForeground); }
+.ssis-strip-note { color: var(--varia-descriptionForeground); }
+.ssis-spark { position: relative; display: flex; align-items: flex-end; gap: 3px; height: 40px; min-width: 120px; max-width: 420px; padding-bottom: 1px; border-bottom: 1px solid var(--varia-panel-border); }
+.ssis-spark-bar { flex: 1 1 0; min-width: 6px; max-width: 18px; padding: 0; border: none; border-top-left-radius: var(--varia-radius-sm); border-top-right-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); opacity: .5; cursor: pointer; }
+.ssis-spark-bar:hover:not(:disabled) { opacity: .8; }
+.ssis-spark-bar[data-failed] { background: var(--varia-errorForeground); opacity: .8; }
+.ssis-spark-bar[data-running] { background: var(--varia-warningForeground); }
+/* This run: full strength and outlined, so it is told apart without colour alone (aria-current for assistive technology). */
+.ssis-spark-bar[aria-current="true"] { opacity: 1; outline: 1px solid var(--varia-foreground); outline-offset: 1px; cursor: default; }
+.ssis-spark-usual { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed var(--varia-descriptionForeground); pointer-events: none; }
+.ssis-timeline { display: grid; grid-template-columns: minmax(140px, max-content) minmax(160px, 1fr) max-content max-content; column-gap: var(--varia-space-3); row-gap: 1px; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-timeline-head, .ssis-timeline-row { display: contents; }
+.ssis-timeline-head > span { color: var(--varia-descriptionForeground); padding-bottom: var(--varia-space-1); }
+.ssis-timeline-head > span:nth-child(n+3), .ssis-task-duration, .ssis-task-delta { text-align: right; font-variant-numeric: tabular-nums; }
+.ssis-task-cell { min-width: 0; }
+.ssis-task { max-width: 100%; padding: 0 var(--varia-space-1); border: none; background: none; color: var(--varia-foreground); font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ssis-task:hover { text-decoration: underline; }
+.ssis-task[aria-pressed="true"] { color: var(--varia-list-highlightForeground); font-weight: 600; }
+.ssis-task-runs { margin-left: var(--varia-space-1); color: var(--varia-descriptionForeground); }
+.ssis-track { position: relative; align-self: center; height: 10px; border-radius: var(--varia-radius-sm); background: var(--varia-panel-border); }
+.ssis-track > i { position: absolute; top: 0; bottom: 0; border-radius: var(--varia-radius-sm); background: var(--varia-list-highlightForeground); }
+.ssis-timeline-row[data-failed] .ssis-track > i { background: var(--varia-errorForeground); }
+.ssis-track > b { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 1px dashed var(--varia-foreground); }
+.ssis-task-duration { color: var(--varia-foreground); }
+.ssis-task-delta { color: var(--varia-descriptionForeground); }
+.ssis-task-delta[data-tone="error"] { color: var(--varia-errorForeground); }
+.ssis-task-delta[data-tone="warning"] { color: var(--varia-warningForeground); }
+@media (forced-colors: active) {
+  .ssis-spark-bar, .ssis-track > i { background: Highlight; forced-color-adjust: none; }
+  .ssis-spark-bar[data-failed], .ssis-timeline-row[data-failed] .ssis-track > i { background: Mark; }
+  .ssis-crumbs .link-button { color: LinkText; }
 }
 /* BigQuery Properties inspector (OP-2b): surface-specific pills, flow section headers, fill toolbars and label chips. */
 .bq-props-pills { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }

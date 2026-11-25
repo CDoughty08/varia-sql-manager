@@ -33,6 +33,18 @@ const explorerSelections: Partial<ContextKeys>[] = [
   ...serverEngines.map((engine): Partial<ContextKeys> => ({ ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder', explorerServerEngine: engine, explorerSelectionServerEngine: engine })),
   { ...noExplorerContext, explorerNode: 'background' }
 ]
+const explorerSelectionRecords = explorerSelections.map(selection => ({ selection, record: contextRecord('win32', selection) }))
+const defaultSelectionRecords = [{ selection: {} as Partial<ContextKeys>, record: contextRecord('win32') }]
+const parsedWhenCache = new Map<string, { ast: ReturnType<typeof parseWhen>; keys: readonly string[] }>()
+function cachedWhen(clause: string) {
+  let entry = parsedWhenCache.get(clause)
+  if (!entry) {
+    const ast = parseWhen(clause)
+    entry = { ast, keys: referencedKeys(ast) }
+    parsedWhenCache.set(clause, entry)
+  }
+  return entry
+}
 /**
  * Menu items left without an access key. The result grid's menu shows more items than its titles have letters (none has
  * k, q or x), so Update Pivot takes 'u' and Pivot Results… goes without; every other item keeps the key users know.
@@ -40,15 +52,33 @@ const explorerSelections: Partial<ContextKeys>[] = [
 const keylessItems: Partial<Record<MenuId, readonly string[]>> = { 'output.context': ['Pivot Results…', 'Go to Previous Difference', 'Go to Possible Match'], 'output.tools': ['Go to Next Difference', 'Go to Previous Difference'] }
 /** Whether two placements' `when` clauses can both hold: for Object Explorer's menu, on some node, with any other keys. */
 function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean {
-  const asts = clauses.flatMap(clause => clause === undefined ? [] : [parseWhen(clause)])
+  const entries = clauses.flatMap(clause => clause === undefined ? [] : [cachedWhen(clause)])
+  if (entries.length === 0) return true
+  const asts = entries.map(entry => entry.ast)
+  const allKeys = [...new Set(entries.flatMap(entry => entry.keys))] as ContextKey[]
   // Object Explorer's submenus (New, Tasks, Script … as) open on the same node as its menu.
-  for (const selection of menuRoots(menu).includes('explorer.context') ? explorerSelections : [{}]) {
-    const free = [...new Set(asts.flatMap(referencedKeys))].filter(key => !Object.hasOwn(selection, key)) as ContextKey[]
+  const selections = menuRoots(menu).includes('explorer.context') ? explorerSelectionRecords : defaultSelectionRecords
+  let scratch: Record<string, boolean | string> | undefined
+  for (const { selection, record } of selections) {
+    const free = allKeys.filter(key => !Object.hasOwn(selection, key))
     if (free.length > 12) throw new Error(`${menu}: too many keys to enumerate (${free.join(', ')})`)
-    const search = (index: number, values: Record<string, boolean | string>): boolean => index === free.length
-      ? asts.every(ast => evaluateWhen(ast, contextRecord('win32', { ...selection, ...values } as Partial<ContextKeys>)))
-      : contextKeyValues(free[index]).some(value => search(index + 1, { ...values, [free[index]]: value }))
-    if (search(0, {})) return true
+    if (free.length === 0) {
+      if (asts.every(ast => evaluateWhen(ast, record))) return true
+      continue
+    }
+    const domain = free.map(key => contextKeyValues(key))
+    scratch ??= Object.create(null) as Record<string, boolean | string>
+    Object.assign(scratch, record)
+    const search = (index: number): boolean => {
+      if (index === free.length) return asts.every(ast => evaluateWhen(ast, scratch!))
+      const key = free[index]
+      for (const value of domain[index]) {
+        scratch![key] = value
+        if (search(index + 1)) return true
+      }
+      return false
+    }
+    if (search(0)) return true
   }
   return false
 }
@@ -62,7 +92,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(444)
+    expect(commandIds).toHaveLength(449)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -224,6 +254,10 @@ describe('command catalogue', () => {
     }
   })
   it.each(platforms)('has no keybinding conflicts or reserved keys on %s', platform => {
+    const first = findConflicts(defaultRules(platform), platform)
+    expect(first).toEqual([])
+    // Memoized default-rule checks must return a fresh array so callers cannot poison the cache.
+    first.push({ kind: 'reserved', chord: 'ctrl+c', commands: ['file.new'], message: 'mutated' })
     expect(findConflicts(defaultRules(platform), platform)).toEqual([])
   })
   it('stays a plain data object', () => {
@@ -240,9 +274,12 @@ describe('context keys', () => {
     expect(record).toMatchObject({ isMac: true, isWindows: false, isLinux: false, queryRunning: true, activePanel: 'explorer', editorFocus: false })
     expect(contextRecord('win32')).toMatchObject({ isWindows: true, activePanel: '', hasActiveDocument: false, explorerNode: '', outputView: '', paneFloating: false })
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
+    expect(Object.hasOwn(contextRecord('linux', { notARealKey: true } as Partial<ContextKeys>), 'notARealKey')).toBe(false)
+    expect(contextRecord('darwin', { isMac: false })).toMatchObject({ isMac: false, isWindows: false, isLinux: false })
+    expect(contextRecord('darwin')).toMatchObject({ isMac: true, isWindows: false, isLinux: false })
     expect(keysOfScope('target')).toEqual([
       'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeNameless', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux', 'explorerProvider', 'agentRole',
-      'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'
+      'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'explorerToolsLost', 'explorerToolsFloating', 'explorerToolsPopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'
     ])
     expect(isContextKey('__proto__')).toBe(false)
     expect(isContextKey('constructor')).toBe(false)

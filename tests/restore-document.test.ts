@@ -12,7 +12,7 @@ import { connectionInfo, connectionOptions, manualTimers, readyBackend, workbenc
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 
 const uuid = (n: number) => `0000000${n}-0000-4000-8000-000000000000`
 const conn = '00000000-0000-4000-8000-0000000000c1'

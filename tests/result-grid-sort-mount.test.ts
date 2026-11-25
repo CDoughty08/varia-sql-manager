@@ -55,7 +55,7 @@ describe('a results grid mounting just after a sort no grid drew', () => {
     const root = createRoot(container)
     mounted.add(() => act(() => root.unmount()))
     await act(async () => root.render(createElement(WorkbenchProvider, { workbench: f as unknown as Workbench, children: createElement(ResultGrid, { tabId: tab.id, entry, count: 1, focused: true, sort: stale, onFocus: () => {} }) })))
-    await act(async () => { await new Promise(done => setTimeout(done, 0)) })
+    await act(async () => { await new Promise(done => setImmediate(done)) })
     expect(shown).toHaveBeenCalledWith(tab.id, entry.key, second)
     expect(shown).not.toHaveBeenCalledWith(tab.id, entry.key, first)
     expect(second.close).not.toHaveBeenCalled()

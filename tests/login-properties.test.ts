@@ -311,7 +311,7 @@ function setup(describe: Parameters<typeof loginPropertiesDescribe>[0] = {}, oth
   const notify = vi.fn()
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents: { newQuery: vi.fn() }, files: { saveCopy: vi.fn() }, newId: () => `id-${++count}`, notify })
   cleanups.push(() => dialogs.dispose())
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   const node: ExplorerMenuNode = { id: 7, connectionId: 'server-a', ref: { type: 'object', object: appLogin }, kind: 'login', subtype: 'sql', label: 'app_login', lost: false, engine: 'box' }
   const open = async () => { dialogs.open('loginProperties', node); await settle() }
   return { dialogs, api, explorer, execute, reads, settle, open, notify }

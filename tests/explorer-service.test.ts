@@ -18,7 +18,7 @@ import { connectionInfo, connectionOptions } from './fixtures/workbench'
 import { explorerNodeProvider } from '../src/shared/providers'
 import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 /** Connection ids are uuids, as main's schema requires; servers are named `<name>.example`. */
 const cid = (name: string) => `10000000-0000-4000-8000-${Buffer.from(name.slice(-1)).toString('hex').padStart(12, '0')}`
@@ -2268,6 +2268,8 @@ describe('ExplorerService: server rows and freshness', () => {
     expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'MACHINE\\user' })).toBe('17.0 · user')
     expect(serverSublabel({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'MACHINE\\user' })).toBe('(SQL Server 17.0.1000.7 - MACHINE\\user)')
     expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'dba@contoso.com' })).toBe('17.0 · dba@contoso.com')
+    expect(serverBrief({ displayName: 'Production ERP', server: 'prod-sql-01', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa' })).toBe('prod-sql-01 · 16.0 · sa')
+    expect(serverBrief({ displayName: 'prod-sql-01', server: 'prod-sql-01', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa' })).toBe('16.0 · sa')
   })
   it('stamps each listing when its first page arrives, and marks the rows a failed refresh kept stale until a load succeeds', async () => {
     const f = fixture()

@@ -94,7 +94,7 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   sm: [
     '.tab-close .codicon', '.tab-pin .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connect-header-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.query-bar-action .codicon', '.memory-indicator .codicon', '.discard-status-button .codicon', '.memory-nerd-toggle > .codicon', '.memory-group-aside > .codicon', '.update-status .codicon', '.oe-active > .codicon',
     '.editor-status .codicon', '.index-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.shortcuts-source > .codicon', '.agent-job-status .codicon, .agent-stopped-status .codicon',
-    '.tile-caption > .codicon', '.inspector-tab-nav > .codicon, .inspector-tab-more > .codicon', '.fact-grid-copy > .codicon'
+    '.tile-caption > .codicon', '.inspector-tab-nav > .codicon, .inspector-tab-more > .codicon', '.fact-grid-copy > .codicon', '.ssis-crumb-separator > .codicon'
   ],
   md: ['.icon'],
   lg: ['.about-brand > .icon']
@@ -134,7 +134,7 @@ export interface DensityMetrics {
   readonly status: number
 }
 export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
-  header: 'The title bar.', bar: 'Tab strips, the query bar, side-bar headers.', documentTab: 'Two-line document tabs and their shelf overflow buttons.', control: 'Buttons, inputs, selects.', row: 'Tree, grid and list rows.', status: 'The status bars.'
+  header: 'The title bar.', bar: 'Tab strips, the query bar, Object Explorer search row, side-bar headers.', documentTab: 'Two-line document tabs, their shelf overflow buttons, and the Object Explorer header.', control: 'Buttons, inputs, selects.', row: 'Tree, grid and list rows.', status: 'The status bars.'
 }
 /**
  * The styles.css rules whose height is each token today; tests/theme-metrics.test.ts checks the list both ways. The title
@@ -143,9 +143,9 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar', '.dialog-titlebar:not([data-platform="darwin"])'],
-  bar: ['.editor-empty > .editor-group-actions', '.explorer-header', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]', '.inspector-vitals-head'],
-  documentTab: ['.query-shelf-more'],
-  control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side', '.compare-match-search input', '.agent-proxy-chip', '.inspector-pane-flow .property-field-control > select, .inspector-pane-flow select.property-input'],
+  bar: ['.editor-empty > .editor-group-actions', '.object-search-pane .object-search-bar', '.explorer-tools-bar', '.peek-head', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]', '.inspector-vitals-head'],
+  documentTab: ['.explorer-header', '.query-shelf-more'],
+  control: ['.icon-button', '.object-search-field', '.object-search-filter-button', '.query-connection', '.document-verb', '.property-input', '.property-field-control > .property-input-action > .property-input', '.property-value.restore-to', '.activity-select', '.activity-tile-toggle', '.activity-tool', '.activity-filter-box input', '.compare-side', '.compare-match-search input', '.agent-proxy-chip', '.inspector-pane-flow .property-field-control > select, .inspector-pane-flow select.property-input', '.ssis-nav-button', '.ssis-view-switch > button'],
   row: ['.explorer-row', '.column-filter-action', '.dependencies-row', '.explorer-pin-more', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell', '.user-mapping-head', '.new-login-credentials-grid th', '.new-login-credentials-grid td', '.shortcuts-table td', '.shortcuts-group th', '.compare-target', '.rt-picker-row', '.compare-match-item'],
   status: ['.status-bar', '.query-status-bar', '.activity-pane-status']
 }

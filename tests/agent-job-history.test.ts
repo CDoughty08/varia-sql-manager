@@ -5,7 +5,7 @@ import { agentLimits } from '../src/shared/agent/catalog'
 import { agentHistoryArgsSchema } from '../src/shared/agent/history'
 import {
   durationSeconds, durationText, durationWords, elapsedSeconds, failedStep, invokedBy, jobHistoryArgs, lastStepOf, runningSteps, runProgress, runSummary, sparkSamples, sparkStepMs, ssisExecutionId,
-  ssisExecutionQuery, type JobHistoryRun, type JobHistoryStep
+  type JobHistoryRun, type JobHistoryStep
 } from '../src/shared/agent/job-history'
 import { liveProbes } from '../src/shared/live/catalog'
 import { jobLive } from '../src/renderer/src/agent/JobDocumentService'
@@ -14,7 +14,7 @@ import type { LiveTable } from '../src/renderer/src/live/LiveService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { fakeLive, type FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -55,10 +55,6 @@ describe("the job document's History rules", () => {
     expect(ssisExecutionId(ssis)).toBe(48213)
     expect(ssisExecutionId('Execution ID: 0')).toBeUndefined()
     expect(ssisExecutionId('The step succeeded.')).toBeUndefined()
-    const query = ssisExecutionQuery(48213)
-    expect(query).toContain('FROM SSISDB.catalog.event_messages')
-    expect(query).toContain('WHERE operation_id = 48213')
-    expect(() => ssisExecutionQuery(1.5)).toThrow()
   })
   it('samples the newest finished runs oldest first for ChartView, evenly spaced, with the usual time as a second series (AG-10)', () => {
     const runs = [run(5, { tone: 'running', outcome: 'In progress', seconds: undefined, duration: '' }), run(4, { seconds: 120, tone: 'error' }), run(3, { seconds: 60 }), run(2, { seconds: undefined })]
@@ -192,7 +188,7 @@ describe("the job document's History section", () => {
     expect(jobDocuments.history.messageText(id)).toBe('ok')
   })
   it('keeps a picked run, sends the Failed filter, and opens an SSIS execution in a query window', async () => {
-    const { jobDocuments, history, deliver, documents } = opened()
+    const { jobDocuments, history, deliver, documents, operations } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     jobDocuments.history.attach(id, job)
@@ -215,8 +211,10 @@ describe("the job document's History section", () => {
     await deliver({ 0: table(0, [runRow(18, { runOutcome: 'Failed', runTone: 'error' })]) })
     expect(jobDocuments.history.get(id)).toMatchObject({ selected: { instance: 18 }, pinned: false })
     expect(jobDocuments.history.get(id)?.spark.map(item => item.key.instance)).toEqual([21, 20, 19])
+    // The step's SSIS execution link opens its run page in the connection's Integration Services document, not a query window.
     jobDocuments.history.openSsisExecution(id, 48213)
-    expect(documents.active).toMatchObject({ connectionId: 'c1', name: 'SSIS execution 48213.sql', database: 'SSISDB' })
+    expect(documents.active).toMatchObject({ connectionId: 'c1', kind: 'ssisOperations', database: 'SSISDB' })
+    expect(operations.place(documents.active!.id)).toMatchObject({ kind: 'execution', executionId: 48213 })
   })
   it('says why the history cannot be read, and closes its view with the document', async () => {
     const { jobDocuments, history, documents } = opened()
