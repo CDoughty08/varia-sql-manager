@@ -242,18 +242,25 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
      step's message.
    - **Live run** turns on when the job starts and goes back to the previous view when it ends. It shows the current step with
      a ring and a bar against its usual time, each finished step's outcome, the two ways the run can go next, and Stop.
-5. **Data**: no new backend method is expected. The view is drawn in the renderer from what the job document already holds:
-   - the step fields from its describe (`start_step_id`, `on_success_action`, `on_success_step_id`, `on_fail_action`,
-     `on_fail_step_id`);
-   - the History section's `agent.history` read, whose step rows are kept per history row. A pass is a step's rows up to and
+5. **Data**: no new backend method is expected, but the History section's read has to change how it runs. The graph is drawn
+   in the renderer from:
+   - the step fields from the job document's describe (`start_step_id`, `on_success_action`, `on_success_step_id`,
+     `on_fail_action`, `on_fail_step_id`);
+   - the History section's `agent.history` view, for both overlays. Today that view opens only when History first shows and
+     pauses whenever History is not the open section, so it must also run while Flow shows Last run or Live run. It returns
+     step rows for **one selected run only**, up to 200 rows, and says when it cut them. So the Last run box and History's
+     selected run are one shared selection: picking a run in either picks it in both. A pass is a step's rows up to and
      including its first row that is not a Retry. Earlier Retry rows count as that pass's retries, so ×N counts passes, not
-     rows;
-   - the live run state the header and History's live run already receive, with no polling.
+     rows. A run with more rows than the cap says so in the panel;
+   - the header's live run state, which gives only the current step (and whether it is retrying). Live run's finished steps
+     come from History's rows of the in-progress run, so that run is selected while Live run shows. If it cannot be, the other
+     steps show as Unknown, as History's live run already does.
 
-   Confirm all three when the view is built. Two rules need work there:
-   - **The failed step**: the header and the Last run panel's outcome name the step that failed (step 5 in the mock), not the
-     last step to run; Agent's own message is shown under it. History's run summary takes the step from the outcome message's "last step to run", which for a job with a
-     notify step is the notify step (step 6). Both should use the failed step, so they agree.
+   Confirm these when the view is built. Two rules need work there:
+   - **The failed step**: the Last run panel's outcome names the step that failed (step 5 in the mock), not the last step to
+     run, and shows Agent's own message under it. History's run summary takes the step from the message's "last step to run",
+     which for a job with a notify step is the notify step (step 6). Both should use the failed step, so they agree. The job
+     header names no step, because its outcome comes from Agent's job status, which carries none.
    - **Usual time per pass**: the usual time adds up all of a step's rows in a run, so a step that a loop ran twice gets a
      doubled usual time. Live run's bar needs the usual time of one pass.
 6. **Flow checks** (principle 6: they warn, they never block Save):

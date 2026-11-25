@@ -1456,7 +1456,7 @@ function rxFlowDraw(o) {
   return `<div class="fl-canvas" role="tree" aria-label="Steps flow, in step order"><div class="fl-draw" style="${o.zoom ? `zoom:${o.zoom}` : ''}"><svg width="700" height="640" aria-hidden="true"><defs>${defs}</defs>${svg}</svg>${nodes}${html}</div></div>`
 }
 const rxFinTabs = dirty => rxDoc([rxJam, { i: 'job', n: 'Finance nightly load', s: 'sql-prod-01 · Jobs', on: 1, dirty }])
-const rxFinHead = o => rxJobHead('Finance nightly load', { fail: 'today 02:30 · step 5 failed', next: 'tomorrow 02:30', probs: '1 problem', ...o })
+const rxFinHead = o => rxJobHead('Finance nightly load', { fail: 'today 02:30', next: 'tomorrow 02:30', probs: '1 problem', ...o })
 const rxFinCounts = { Steps: '!7', Schedules: 1, Alerts: 1 }
 const rxFlowBar = (show, extra = '', zoom = '100%') => `<div class="toolbar"><span class="rx-seg" role="radiogroup" aria-label="Steps view"><span>${ic('list', 12)}&nbsp;List</span><span class="on">${ic('flow', 12)}&nbsp;Flow</span></span><span class="vsep"></span><span style="color:var(--text3);margin:0 4px">Show</span><span class="rx-seg" role="radiogroup" aria-label="Overlay"><span class="${show === 'none' ? 'on' : ''}">Targets only</span><span class="${show === 'last' ? 'on' : ''}">Last run</span><span class="${show === 'run' ? 'on' : 'dis'}" ${show === 'run' ? '' : 'title="Only while the job runs"'}>${show === 'run' ? '<i style="width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px;display:inline-block"></i>' : ''}Live run</span></span>${extra}<span class="vsep"></span><span class="tb">${ic('plus', 14)}Add step ▾</span><span style="margin-left:auto"></span><span class="tb" aria-label="Zoom out">${ic('minus', 14)}</span><span class="mono" style="font-size:11px;color:var(--text3);min-width:34px;text-align:center">${zoom}</span><span class="tb" aria-label="Zoom in">${ic('plus', 14)}</span><span class="tb">${ic('fit', 14)}Fit</span></div>`
 const rxFlowLegend = () => `<div class="rx-sec"><div class="h">Key</div><div class="fl-legend">
@@ -1504,7 +1504,7 @@ Object.assign(RX, {
       <table class="dtable" style="margin-top:0"><thead><tr><th class="c" style="width:28px">#</th><th>Step</th><th>Outcome</th><th>Duration</th></tr></thead><tbody>
         ${[['2 · Wait for source files', 'ok:Succeeded, 1 retry', '00:04:10'], ['3 · Load staging package', 'ok:Succeeded', '00:16:31'], ['4 · Validate row counts', 'bad:Failed', '00:00:41'], ['3 · Load staging package', 'ok:Succeeded', '00:15:58'], ['4 · Validate row counts', 'ok:Succeeded', '00:00:39'], ['5 · Merge facts', 'bad:Failed', '00:02:09'], ['6 · Notify on failure', 'ok:Succeeded', '00:00:03']].map((r, i) => { const [k, t] = r[1].split(':'); return `<tr class="${i === 5 ? 'sel' : ''}"><td class="c">${i + 1}</td><td>${r[0]}</td><td class="rx-${k}">${t}</td><td class="mono">${r[2]}</td></tr>` }).join('')}</tbody></table>
       <div class="rx-sec"><div class="h">Step 5 message<span class="r"><span class="tb">${ic('copy', 12)}Copy</span></span></div><div class="mono" style="font-size:12px;line-height:18px;white-space:pre-wrap;color:var(--text)">Executed as user: NT SERVICE\\SQLSERVERAGENT. Violation of PRIMARY KEY constraint 'PK_FactLedger'. Cannot insert duplicate key in object 'dbo.FactLedger'. [SQLSTATE 23000] (Error 2627). The step failed.</div></div>
-      <div class="rx-hint" style="padding:0">Numbers on the edges are the order the run took them; a step that ran twice shows ×2 and each pass. Pick another run from History's list in the box above the graph.</div>
+      <div class="rx-hint" style="padding:0">Numbers on the edges are the order the run took them; a step that ran twice shows ×2 and each pass. The box above the graph and History's list share one selected run.</div>
     </div></div>`
   },
   'rx-flow-running': () => {
@@ -1514,7 +1514,7 @@ Object.assign(RX, {
       <div class="rx-sec"><div class="h">Current step</div><div class="fl-sname"><span class="no">3</span>Load staging package</div>
         <dl class="rx-kv"><dt>State</dt><dd class="rx-run">Executing · 00:09:54 of usual 00:16:20</dd><dt>Next</dt><dd><span class="rx-ok">✓</span> step 4 on success · <span class="rx-bad">✗</span> step 6 on failure</dd></dl></div>
       <div class="hstack"><span class="btn">${ic('stop', 14)}Stop job</span><span class="rx-hint">Stop sends sp_stop_job; the run is recorded as Canceled.</span></div>
-      <div class="rx-hint" style="padding:0">Live run turns on by itself when the job starts and goes back to the view you had when it ends. It comes from the same probe as the job header and History's live run; the graph only reads it.</div>
+      <div class="rx-hint" style="padding:0">Live run turns on by itself when the job starts and goes back to the view you had when it ends. The current step comes from the job header's live state; finished steps from History's rows of this run, so this run is History's selected run while Live run shows.</div>
     </div></div>`
   }
 })
@@ -1522,8 +1522,8 @@ Object.assign(RXN, {
   'rx-flow': 'Aid (later tier): Steps › Flow, the same steps as a graph. Steps stay in step order; ✓ success edges are solid and run left, ✗ failure edges are dashed and run right, Quit ends are pills. The Start step has an entry arrow, a step nothing reaches is dashed and tagged Never runs (a Problem), a cycle is tagged Loop. Select a step to see it beside the graph; the side panel lists the flow checks.',
   'rx-flow-menu': 'Aid (later tier): right-click (or Shift+F10) on a step gives its actions. On success and On failure list SSMS\'s four actions with every step by number and name, the current one checked; picking one edits the draft, as the List editor does. The menu is MenuService\'s (native on macOS).',
   'rx-flow-edit': 'Aid (later tier): double-click (or Enter) opens the same step editor as List, docked beside the graph, which zooms to fit. The changed edge is drawn in the accent with a changed tag; the dirty dot, Save · 1 change and Undo are the document\'s own.',
-  'rx-flow-lastrun': 'Aid (later tier): Last run draws a run from History over the graph: the path it took in bold with the order on each edge, each step\'s outcome and duration (×2 for a step a loop ran twice), steps it never reached faded. The run box picks any run History holds. Read from the History section\'s own history read; no new query.',
-  'rx-flow-running': 'Aid (later tier): while the job runs, Live run marks the current step with a ring and a bar against its usual time, done steps with their outcome, and the two ways it can go next. Same live probe as the header; the graph never polls.'
+  'rx-flow-lastrun': 'Aid (later tier): Last run draws a run from History over the graph: the path it took in bold with the order on each edge, each step\'s outcome and duration (×2 for a step a loop ran twice), steps it never reached faded. The run box and History share one selected run. Drawn from the History section\'s own read, which runs while an overlay shows; no new backend method.',
+  'rx-flow-running': 'Aid (later tier): while the job runs, Live run marks the current step with a ring and a bar against its usual time, done steps with their outcome, and the two ways it can go next. Current step from the header\'s live state, finished steps from History\'s rows of this run; the graph never polls.'
 })
 function searchOverlay() {
   return `<div class="menu" style="left:560px;top:44px;width:480px;padding:6px 0"><div style="padding:2px 10px 6px;font-size:11px;color:var(--text3)">Objects</div>
