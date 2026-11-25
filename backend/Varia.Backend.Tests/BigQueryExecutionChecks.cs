@@ -39,6 +39,10 @@ internal static partial class BigQueryExecutionChecks
         public string StatementType = "SELECT";
         /// <summary>A script (statementType SCRIPT) whose one SELECT child, child_1, answers these rows: jobs.list names it.</summary>
         public bool ScriptChild;
+        /// <summary>With <see cref="ScriptChild"/>, how many SELECT children the script has (child_1, child_2, …), each answering
+        /// these rows.</summary>
+        public int ScriptChildren = 1;
+        bool IsChild(string id) => id == ChildId || ScriptChild && id.StartsWith("child_", StringComparison.Ordinal) && int.TryParse(id[6..], out var n) && n >= 1 && n <= ScriptChildren;
         /// <summary>The script child's own statement, as jobs.get answers it (configuration.query.query); set, the child is
         /// known to jobs.get even once ScriptChild is off.</summary>
         public string? ChildQuery;
@@ -110,11 +114,11 @@ internal static partial class BigQueryExecutionChecks
                 : new(200, new JsonObject
                 {
                     ["kind"] = "bigquery#jobList",
-                    ["jobs"] = new JsonArray(new JsonObject
+                    ["jobs"] = new JsonArray([.. Enumerable.Range(1, ScriptChildren).Select(n => (JsonNode)new JsonObject
                     {
-                        ["jobReference"] = Reference(ChildId), ["state"] = "DONE", ["status"] = new JsonObject { ["state"] = "DONE" },
-                        ["statistics"] = new JsonObject { ["creationTime"] = "1", ["parentJobId"] = parent, ["query"] = new JsonObject { ["statementType"] = "SELECT" } },
-                    }),
+                        ["jobReference"] = Reference("child_" + n), ["state"] = "DONE", ["status"] = new JsonObject { ["state"] = "DONE" },
+                        ["statistics"] = new JsonObject { ["creationTime"] = n.ToString(System.Globalization.CultureInfo.InvariantCulture), ["parentJobId"] = parent, ["query"] = new JsonObject { ["statementType"] = "SELECT" } },
+                    })]),
                 }.ToJsonString()));
             // Stop's jobs.cancel, best-effort.
             fake.On("POST", Base + "/jobs/[^/]+/cancel", request =>
@@ -213,9 +217,9 @@ internal static partial class BigQueryExecutionChecks
         {
             var id = Id(request);
             bool known;
-            lock (Created) known = Created.Contains(id) || (ScriptChild || ChildQuery is not null) && id == ChildId;
+            lock (Created) known = Created.Contains(id) || (ScriptChild || ChildQuery is not null) && IsChild(id);
             if (!known) return BigQueryFake.Fixture("error-not-found", 404);
-            var query = new JsonObject { ["statementType"] = ScriptChild && id == ChildId ? "SELECT" : StatementType };
+            var query = new JsonObject { ["statementType"] = ScriptChild && IsChild(id) ? "SELECT" : StatementType };
             if (DmlAffected is { } dml) query["numDmlAffectedRows"] = dml.ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (DdlOperation is not null) query["ddlOperationPerformed"] = DdlOperation;
             var statistics = Statistics?.DeepClone().AsObject() ?? new JsonObject();
@@ -738,6 +742,31 @@ internal static partial class BigQueryExecutionChecks
                 $"the row limit stops storing and reading pages, and the rows past it are counted from BigQuery's total: {set?.RowsRead} {set?.RowsStored} {set?.Truncated} {jobs.Reads.Count}");
         }
 
+        // Rows kept per execution counts over a script's result sets, as SQL Server's reader does: the second SELECT keeps what
+        // the first left, and the third, with nothing left, keeps none (in memory, cut by the row limit, its rows counted).
+        foreach (var residence in new[] { "memory", "windowed" })
+        {
+            jobs = new Jobs { Schema = jobs.Schema, Rows = jobs.Rows, PageCap = 400, StatementType = "SCRIPT", ScriptChild = true, ScriptChildren = 3, Destination = Destination };
+            using var harness = new Harness(jobs);
+            await harness.ConnectAsync();
+            var (code, result, message) = await harness.Execute("SELECT n, s FROM t; SELECT n, s FROM t; SELECT n, s FROM t", args => { args["maxRows"] = 1500; args["residence"] = residence; });
+            var shown = result?.ResultSets.Select(set => (set.Residence, Rows: set.Residence == "remote" ? set.RowsAvailable : set.RowsStored, set.Truncated, set.RowsRead)).ToList() ?? [];
+            var remote = residence == "windowed" ? "remote" : "memory";
+            check(code == "ok" && shown is [var first, var second, var third]
+                && first == (remote, 1203, null, 1203) && second == (remote, 297, "rowLimit", 1203) && third == ("memory", 0, "rowLimit", 1203),
+                $"{residence}: Rows kept per execution counts over every result set of a script: {code} {message} {string.Join(" | ", shown)}");
+            if (residence != "windowed" || result?.ResultSets is not [_, var windowedChild, _]) continue;
+            // A new query from that second result (a BigQuery-side sort here, a rerun alike) runs with Maximum rows, not the share
+            // the script left that result.
+            jobs.StatementType = "SELECT";
+            jobs.ScriptChild = false;
+            var (viewCode, view, _, viewMessage) = await Run(harness, "results.remoteQuery", View(windowedChild.ResultId, sort: [Key(0, descending: true)]));
+            var viewSet = view?.ResultSets.SingleOrDefault();
+            var viewRows = viewSet?.Residence == "remote" ? viewSet.RowsAvailable : viewSet?.RowsStored;
+            check(viewCode == "ok" && viewRows == 1203 && viewSet?.Truncated is null,
+                $"a script child's BigQuery-side view keeps Maximum rows, not the child's share: {viewCode} {viewMessage} {viewSet?.Residence} {viewRows} {viewSet?.Truncated}");
+        }
+
         // A limit that lands on a page's last row reads no further page.
         jobs = new Jobs { Schema = jobs.Schema, Rows = jobs.Rows, PageCap = 400 };
         using (var harness = new Harness(jobs))
@@ -757,10 +786,13 @@ internal static partial class BigQueryExecutionChecks
             var (code, result, message) = await harness.Execute("SELECT n, s FROM t");
             var set = result?.ResultSets.Single();
             check(code == "ok" && result?.Status == "completed" && set is { RowsRead: 1203, Truncated: "queryBudget" } && set.RowsStored is > 0 and < 1203
-                && Says(result, "Results were truncated because the result memory budget (0 MB) is full."),
+                && Says(result, "Results were truncated because the result memory budget (<1 MB) is full."),
                 $"the result budget stops storing, the query completes, and the rows are counted: {code} {message} {set?.RowsStored} {set?.Truncated} {Texts(result?.Messages ?? [])}");
             check(harness.Service.Results.UsedBytes <= 256 * 1024, "the pages being decoded stay within the budget: " + harness.Service.Results.UsedBytes);
         }
+        // The note's figure (SQL Server's too) is written as the results strip writes it: never "(0 MB)".
+        var figures = new[] { 0L, 256 * 1024, 1L << 20, 3L << 19, 8L << 30, 10L << 30 }.Select(SqlService.MemoryFigure).ToList();
+        check(figures.SequenceEqual(["<1 MB", "<1 MB", "1 MB", "2 MB", "8,192 MB", "10.0 GB"]), "the budget note's figure matches the strip's: " + string.Join(", ", figures));
 
         // A cell past its cap and a read error, through query.execute.
         jobs = new Jobs { Schema = Schema(Field("n", "INTEGER"), Field("s", "STRING")), Rows = [Row("x1", new string('a', ColumnPlan.TextCap + 1)), Row("x2", "b")] };

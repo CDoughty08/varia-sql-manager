@@ -16,7 +16,7 @@ internal sealed partial class BigQueryService
 {
     /// <summary>One jobs.list page of the connection's billing project, read under <paramref name="limit"/> bytes: a larger page
     /// throws <see cref="BigQueryOverLimit"/>, so the caller asks for fewer jobs or stops for now.</summary>
-    internal Task<HistoryPage> ListHistoryAsync(BigQueryConnection connection, HistoryListing listing, string? pageToken, int maxResults, int limit, CancellationToken token) =>
+    internal Task<HistoryPage> ListHistoryAsync(BigQueryConnection connection, HistoryListing listing, string? pageToken, int maxResults, int limit, CancellationToken token, Action<Exception>? throttled = null) =>
         MetadataAsync(connection, async t =>
         {
             var service = connection.Client.Service;
@@ -37,11 +37,11 @@ internal sealed partial class BigQueryService
                 }).Distinct().ToList());
             using var page = await SendRawAsync(service, request, t, limit);
             return BigQueryJobHistory.Page(page.Root, page.Bytes);
-        }, token);
+        }, token, throttled);
 
     /// <summary>jobs.get read from its JSON (a job's whole query text is up to 1 MB): the job, or null when BigQuery answered
     /// something that names no job.</summary>
-    internal Task<(HistoryJob? Job, BigQueryJobDetail? Detail, long Bytes)> ReadHistoryJobAsync(BigQueryConnection connection, string jobId, string? location, int limit, bool detail, CancellationToken token) =>
+    internal Task<(HistoryJob? Job, BigQueryJobDetail? Detail, long Bytes)> ReadHistoryJobAsync(BigQueryConnection connection, string jobId, string? location, int limit, bool detail, CancellationToken token, Action<Exception>? throttled = null) =>
         MetadataAsync(connection, async t =>
         {
             var service = connection.Client.Service;
@@ -49,7 +49,7 @@ internal sealed partial class BigQueryService
             request.Location = location;
             using var page = await SendRawAsync(service, request, t, limit);
             return (BigQueryJobHistory.Job(page.Root), detail ? BigQueryJobHistory.Detail(page.Root, connection.Options.Project) : null, page.Bytes);
-        }, token);
+        }, token, throttled);
 
     /// <summary>bigquery.jobs.get: one job's details and full SQL, and a script's children in statement order (at most
     /// <see cref="BigQueryJobHistory.Children"/>, within the response budget; ChildrenMore says more exist). A refusal or failure
@@ -94,7 +94,7 @@ internal sealed partial class BigQueryService
     /// ties by job id. At most <see cref="BigQueryJobHistory.Children"/>, read within <paramref name="budget"/> bytes; More says
     /// the listing was cut, and Bytes is what the answers took. <paramref name="stop"/>, asked before each later page, cuts it
     /// there (Job History's time budget).</summary>
-    internal async Task<(List<HistoryJob> Children, bool More, long Bytes)> ChildJobsAsync(BigQueryConnection connection, string parentId, bool allUsers, int budget, CancellationToken token, Func<bool>? stop = null)
+    internal async Task<(List<HistoryJob> Children, bool More, long Bytes)> ChildJobsAsync(BigQueryConnection connection, string parentId, bool allUsers, int budget, CancellationToken token, Func<bool>? stop = null, Action<Exception>? throttled = null)
     {
         var children = new Dictionary<string, HistoryJob>(StringComparer.Ordinal);
         string? pageToken = null;
@@ -104,7 +104,7 @@ internal sealed partial class BigQueryService
         while (true)
         {
             HistoryPage page;
-            try { page = await ListHistoryAsync(connection, new(allUsers, ParentJobId: parentId), pageToken, size, budget, token); }
+            try { page = await ListHistoryAsync(connection, new(allUsers, ParentJobId: parentId), pageToken, size, budget, token, throttled); }
             catch (BigQueryOverLimit)
             {
                 // A page of whole query texts larger than what is left: fewer jobs a page, or stop here once a job alone is too large.

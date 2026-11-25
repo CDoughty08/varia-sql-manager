@@ -166,6 +166,9 @@ internal sealed partial class SqlService
         var readChildren = new HashSet<string>(StringComparer.Ordinal);
         var succeededChildren = 0;
         long childRowsAffected = -1;
+        // The rows the script's result sets have kept so far: Maximum rows counts over every result set of the execution, as
+        // SQL Server's reader does, so a later SELECT keeps only what is left.
+        long keptRows = 0;
         // Stop (or the timeout) cancels the job in BigQuery too, best-effort; the session's next job waits for its DONE. Asked
         // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
         // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
@@ -201,13 +204,18 @@ internal sealed partial class SqlService
                     messages.Add("The result has " + childPlan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
                 var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths);
                 if (set is null) { first.Dispose(); discarded++; return; }
+                // What Maximum rows leaves this result set. With nothing left it stays in memory and keeps no rows (counted from
+                // BigQuery's total, marked as cut by the row limit), since a window's MaxRows of 0 would show every row.
+                var left = args.MaxRows > 0 ? args.MaxRows - keptRows : long.MaxValue;
+                var childArgs = args.MaxRows <= 0 ? args : left > 0 ? args with { MaxRows = (int)left } : args with { Residence = "memory" };
+                var keptBefore = left > 0 ? 0 : keptRows;
                 sets.Add(set);
                 currentSet = set;
                 BigQueryWindow? window = null;
                 RemoteResult? windowed;
                 // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
                 // the set is still announced, so the run's end closes a set the grid heard open.
-                try { windowed = await DecideResidenceAsync(args, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token); }
+                try { windowed = await DecideResidenceAsync(childArgs, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token, args.MaxRows); }
                 catch
                 {
                     first.Dispose();
@@ -215,9 +223,10 @@ internal sealed partial class SqlService
                     throw;
                 }
                 events.Opened(set);
-                if (windowed is null) await ReadBigQueryRowsAsync(args, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages);
+                if (windowed is null) await ReadBigQueryRowsAsync(childArgs, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages, keptBefore);
                 else first.Dispose();
                 set.Complete();
+                keptRows += set.RowsAvailable;
                 events.Closed(set);
                 currentSet = null;
                 messages.Add(rows == 1 ? "(1 row affected)" : "(" + rows.ToString(CultureInfo.InvariantCulture) + " rows affected)");
@@ -648,8 +657,7 @@ internal sealed partial class SqlService
         if (budget?.Stopped is { } stopped and not TruncationReason.None) reasons.Add(ResultSetBuffer.Name(stopped));
         if (reasons.Contains("rowLimit") || descriptors.Any(set => set.TruncatedCells > 0)) Note("Results were truncated by display limits. Display limits do not stop script execution.");
         if (reasons.Contains("queryBudget") || reasons.Contains("globalBudget"))
-            Note("Results were truncated because the result memory budget (" + (budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)) / (1024 * 1024)
-                + " MB) is full. Execution continued; close other query results to free memory.");
+            Note(BudgetFullNote(budget?.StoppedBytes ?? (reasons.Contains("queryBudget") ? (budget is null ? store.QueryBytes : store.QueryLimit(budget)) : store.GlobalBytes)));
         if (reasons.Contains("systemMemory")) Note("Results were truncated because the computer is low on memory. Execution continued.");
         if (discarded > 0 && args.DiscardResults && attach?.Detached != true) Note("Results were discarded after execution, as Query Options ask.");
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
@@ -700,11 +708,12 @@ internal sealed partial class SqlService
     /// it reads past. Each page's bytes are charged to the query's budget while its rows are decoded (one page at a time).</summary>
     private async Task ReadBigQueryRowsAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, BigQueryColumnPlan plan,
         BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn, CancellationToken token,
-        BigQueryWindow? window = null, QueryMessages? messages = null)
+        BigQueryWindow? window = null, QueryMessages? messages = null, long keptBefore = 0)
     {
         var page = first;
         long counted = 0;
-        long storedRows = 0;
+        // Maximum rows counts over the execution: a script's earlier result sets kept keptBefore of them.
+        long storedRows = keptBefore;
         var storing = true;
         try
         {

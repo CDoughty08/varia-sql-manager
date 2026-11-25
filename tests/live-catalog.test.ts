@@ -88,7 +88,7 @@ describe('live catalogue', () => {
     let toned = 0
     for (const id of liveProbeIds) {
       for (const table of liveProbes[id].tables ?? []) {
-        const tones = table.columns.filter(column => column.role !== undefined)
+        const tones = table.columns.filter(column => column.role !== undefined && column.role !== 'hidden')
         expect(tones.every(column => column.role === 'tone' && column.dataType === 'nvarchar'), id).toBe(true)
         expect(tones.length, id).toBeLessThanOrEqual(1)
         if (tones.length === 0) continue
@@ -102,6 +102,28 @@ describe('live catalogue', () => {
     // The synthetic grid and log carry one, so the renderer and smoke tests see tones in both table modes.
     expect(toned).toBeGreaterThanOrEqual(2)
     expect(liveTones).toEqual(['error', 'warning', 'running', 'muted'])
+  })
+  it('keeps hidden columns after the shown ones and before the tone, and out of facets', () => {
+    // GridView hides only a suffix (visibleColumnCount): a hidden column before a shown one would show, shifting the rest.
+    let hidden = 0
+    for (const id of liveProbeIds) {
+      for (const table of liveProbes[id].tables ?? []) {
+        const roles = table.columns.map(column => column.role ?? 'data')
+        const firstHidden = roles.findIndex(role => role !== 'data')
+        if (firstHidden < 0) continue
+        expect(firstHidden, `${id} ${table.id}`).toBeGreaterThan(0)
+        expect(roles.slice(firstHidden).every(role => role === 'hidden' || role === 'tone'), `${id} ${table.id}`).toBe(true)
+        hidden += roles.filter(role => role === 'hidden').length
+        // Facets are value filters the header offers, so they name shown columns only.
+        for (const facet of table.facets ?? []) expect(table.columns.find(column => column.id === facet)?.role, `${id} ${facet}`).toBeUndefined()
+      }
+    }
+    expect(hidden).toBeGreaterThan(0)
+    // Job History's identity columns stay in the row for its actions and never show.
+    const jobs = liveProbes['bigquery.jobs.list'].tables![0].columns
+    expect(jobs.filter(column => column.role === 'hidden').map(column => column.id)).toEqual(['job', 'parent', 'mine', 'hidden', 'children'])
+    // The Activity Monitor's wait categories key their rows and series by a catalogue id nobody needs to read.
+    expect(liveProbes['activity.resources'].tables![0].columns.filter(column => column.role === 'hidden').map(column => column.id)).toEqual(['categoryId'])
   })
   it('keeps a statusOnly source\'s hidden sampling to probes without tables', () => {
     for (const id of liveSourceIds) {
@@ -171,7 +193,7 @@ describe('live catalogue', () => {
         // A table that tones its rows ends with the tone column (prefixed like the others, so ids stay unique in the probe).
         const tone = source.tones?.length ? [[liveColumnId(table.id as ActivityTable, 'tone'), 'tone', 'nvarchar', 'tone']] : []
         expect(table.columns.map(column => [column.id, column.name, column.dataType, ...column.role ? [column.role] : []]), table.id)
-          .toEqual([...source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type]]), ...tone])
+          .toEqual([...source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type], ...column.hidden ? ['hidden'] : []]), ...tone])
         expect(table.key, table.id).toEqual(source.key.map(column => liveColumnId(table.id as ActivityTable, column)))
         expect(table.facets ?? [], table.id).toEqual((source.facetColumns ?? []).map(column => liveColumnId(table.id as ActivityTable, column)))
         expect(table.departed ?? false, table.id).toBe(source.departedLinger ?? false)

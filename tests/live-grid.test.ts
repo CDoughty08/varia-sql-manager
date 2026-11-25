@@ -158,10 +158,10 @@ describe('LiveGrid helpers', () => {
 const keySpec: LiveTableSpec = { id: 'items', mode: 'snapshot', key: ['id'], columns: [{ id: 'id', name: 'id', dataType: 'int' }, { id: 'name', name: 'name', dataType: 'nvarchar' }, { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }] }
 const logSpec: LiveTableSpec = { id: 'log', mode: 'append', key: ['id'], columns: [{ id: 'id', name: 'id', dataType: 'bigint' }, { id: 'text', name: 'text', dataType: 'nvarchar' }] }
 let nextId = 1
-function table(o: { ids?: string[]; mode?: 'snapshot' | 'append'; rows?: number; resultId?: number; tracked?: LiveTable['tracked']; departed?: number[]; rolledFrom?: number; restarted?: boolean } = {}): LiveTable & { reads: number[]; lose(): void; release(): void; listeners: Set<() => void> } {
+function table(o: { ids?: string[]; spec?: LiveTableSpec; mode?: 'snapshot' | 'append'; rows?: number; resultId?: number; tracked?: LiveTable['tracked']; departed?: number[]; rolledFrom?: number; restarted?: boolean } = {}): LiveTable & { reads: number[]; lose(): void; release(): void; listeners: Set<() => void> } {
   const ids = o.ids ?? [], reads: number[] = [], listeners = new Set<() => void>()
   let state = 'complete'
-  const descriptor = { generation: 1, resultId: o.resultId ?? nextId++, columns: o.mode === 'append' ? logSpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true })) : keySpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...column.role ? { role: column.role } : {} })) } as unknown as ResultDescriptor
+  const descriptor = { generation: 1, resultId: o.resultId ?? nextId++, columns: o.mode === 'append' ? logSpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true })) : (o.spec ?? keySpec).columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...column.role ? { role: column.role } : {} })) } as unknown as ResultDescriptor
   const handle = {
     key: { generation: 1, resultId: descriptor.resultId },
     getSnapshot: () => ({ rowsAvailable: o.rows ?? ids.length, state }),
@@ -524,6 +524,23 @@ describe('LiveGrid', () => {
     expect(copies).toEqual([{ jobId: 'job', generation: 1, resultId: shown.descriptor.resultId, headers: true, parts: [{ rows: [[0, 1]], columns: [[0, 1]] }] }])
     await grid.save('Processes.csv', 'csv')
     expect(api.saveResults).toHaveBeenCalledWith({ jobId: 'job', generation: 1, resultId: shown.descriptor.resultId, suggestedName: 'Processes.csv', format: 'csv' })
+  })
+
+  it('never shows, copies or sorts a hidden identity column', async () => {
+    // A Job History row: the job's full reference stays in the row for the owner's actions, after the shown columns.
+    const hiddenSpec: LiveTableSpec = { ...keySpec, columns: [keySpec.columns[0], keySpec.columns[1], { id: 'ref', name: 'Ref', dataType: 'nvarchar', role: 'hidden' }, keySpec.columns[2]] }
+    const { grid, view, emit, copies, live } = harness(hiddenSpec)
+    const shown = table({ ids: ['1', '2'], spec: hiddenSpec })
+    emit(shown)
+    view.selection = { entry: 'a', active: cell(0), blocks: [{ kind: 'all', anchor: cell(0), focus: cell(0) }] }
+    await grid.copy(false)
+    expect(copies).toEqual([{ jobId: 'job', generation: 1, resultId: shown.descriptor.resultId, headers: false, parts: [{ rows: [[0, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }] }])
+    grid.sortBy(2)
+    grid.sortBy('ref')
+    grid.cycleSort(2)
+    expect(live.setProbe).not.toHaveBeenCalled()
+    expect(grid.canSort(1)).toBe(true)
+    expect(grid.canSort(2)).toBe(false)
   })
 
   it('sorts only its own table of a probe, keeps the other tables\' keys, and shows a sort the probe already had', () => {

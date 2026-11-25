@@ -638,6 +638,19 @@ internal static class BigQueryJobHistoryChecks
             if (batch.Samples.Count != 0 || batch.Errors is not [var error] || error.Code != code) wrong.Add(fixture + " → " + string.Join(",", batch.Errors.Select(item => item.Code)));
         }
         check(wrong.Count == 0, "a refused listing is the probe's AUTH_EXPIRED, PERMISSION_DENIED, QUOTA or API_DISABLED error: " + string.Join("; ", wrong));
+
+        // A 429 the client's retries absorb until the budget runs out is QUOTA at once, not "still loading" and later TIMEOUT,
+        // and it keeps the page size (a refusal says nothing about how large a page may be).
+        using var limited = new Harness();
+        await limited.ConnectAsync(key);
+        limited.Fake.On("GET", Jobs, _ => new BigQueryFake.Reply(429, """{"error":{"code":429,"message":"Exceeded rate limits: too many api requests per user per method","errors":[{"reason":"rateLimitExceeded"}]}}"""));
+        using var throttled = limited.Sampler(new("mine", Hours: 24));
+        var first = await throttled.SampleAsync([Due(1000)], CancellationToken.None);
+        var second = await throttled.SampleAsync([Due(1000)], CancellationToken.None);
+        var sizes = limited.Listings().Select(query => Regex.Match(query, "maxResults=(\\d+)").Groups[1].Value).Distinct().ToList();
+        check(first.Samples.Count == 0 && first.Errors is [{ Code: "QUOTA" } quota] && quota.Message.Contains("rate limit", StringComparison.Ordinal)
+            && second.Errors is [{ Code: "QUOTA" }] && limited.Listings().Count > 2 && sizes is ["100"],
+            $"a rate limit retried until the budget ran out is the probe's QUOTA error from the first sample, at the same page size: {string.Join(",", first.Errors.Select(item => item.Code))} {string.Join(",", sizes)}");
     }
 
     /// <summary>bigquery.jobs.get: the job's details and a script's children in statement order; a refused children listing

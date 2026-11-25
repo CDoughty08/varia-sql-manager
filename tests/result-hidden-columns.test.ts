@@ -17,7 +17,7 @@ const walk = (root: string, pattern: RegExp): string[] => readdirSync(root).flat
   return statSync(path).isDirectory() ? walk(path, pattern) : pattern.test(name) ? [path] : []
 })
 const toneTest = /\brole\s*[!=]==\s*['"]tone['"]|\bRole\s*[!=]=\s*"tone"/
-// The grid's tone reader (toneColumnOf) and the live readers, whose tables have only the tone hidden.
+// The grid's tone reader (toneColumnOf) and the live readers, which keep the tone (and hidden identity columns) out of sight.
 const allowed = ['src/renderer/src/grid/GridView.ts', 'src/renderer/src/live/LiveGrid.ts', 'src/shared/live/docs.ts', 'src/shared/live/schema.ts', 'backend/Varia.Backend/Live/LiveCatalog.cs']
 const column = (name: string, role?: ResultColumn['role']): ResultColumn => ({ name, dataType: 'nvarchar', wire: 'text', nullable: true, ...role ? { role } : {} })
 const diffColumns = [column('Id'), column('Name'), column('Change', 'mark'), column('Old row', 'leftRow'), column('New row', 'rightRow'), column('', 'tone')]
@@ -35,8 +35,8 @@ describe('hidden result columns', () => {
     expect(offenders).toEqual([])
   })
   it('hides exactly the tone and a comparison\'s suffix roles; documents, UDTs and vectors are data', () => {
-    expect([...hiddenRoles].sort()).toEqual(['leftRow', 'mark', 'old', 'rightRow', 'tone'])
-    for (const role of ['old', 'mark', 'leftRow', 'rightRow', 'tone'] as const) expect(isHiddenColumn(column('c', role)), role).toBe(true)
+    expect([...hiddenRoles].sort()).toEqual(['hidden', 'leftRow', 'mark', 'old', 'rightRow', 'tone'])
+    for (const role of ['old', 'mark', 'leftRow', 'rightRow', 'tone', 'hidden'] as const) expect(isHiddenColumn(column('c', role)), role).toBe(true)
     for (const role of ['xml', 'json', 'plan', 'udt', 'vector', undefined] as const) expect(isHiddenColumn(column('c', role)), String(role)).toBe(false)
     expect(isHiddenColumn(undefined)).toBe(false)
   })

@@ -49,8 +49,9 @@ export type JobHistoryType = typeof jobHistoryTypes[number]
 export const jobHistoryTypeLabels: { readonly [T in JobHistoryType]: string } = { query: 'Query', load: 'Load', extract: 'Extract', copy: 'Copy' }
 
 /** The probe's one table, in column order. Cells are display text; bytes, durations and cost sort by their values. The last
- *  columns identify the row for the renderer's actions: the job's location, its parent script, whether it is the connection
- *  principal's own (a My jobs listing has it, never an email comparison), whether BigQuery hid its details, and the tone. */
+ *  columns are hidden (the live catalogue's role `hidden`): they identify the row for the renderer's actions and the grid
+ *  never shows them: the job's full reference, its parent script, whether it is the connection principal's own (a My jobs
+ *  listing has it, never an email comparison), whether BigQuery hid its details, its children's count, and the tone. */
 export const jobHistoryColumns = [
   { id: 'state', name: 'State', dataType: 'nvarchar' },
   { id: 'jobId', name: 'Job ID', dataType: 'nvarchar' },
@@ -69,11 +70,11 @@ export const jobHistoryColumns = [
   { id: 'destination', name: 'Destination', dataType: 'nvarchar' },
   { id: 'error', name: 'Error', dataType: 'nvarchar' },
   { id: 'sql', name: 'SQL', dataType: 'nvarchar' },
-  { id: 'job', name: 'Job', dataType: 'nvarchar' },
-  { id: 'parent', name: 'Parent job', dataType: 'nvarchar' },
-  { id: 'mine', name: 'Mine', dataType: 'bit' },
-  { id: 'hidden', name: 'Details hidden', dataType: 'bit' },
-  { id: 'children', name: 'Children', dataType: 'int' },
+  { id: 'job', name: 'Job', dataType: 'nvarchar', role: 'hidden' },
+  { id: 'parent', name: 'Parent job', dataType: 'nvarchar', role: 'hidden' },
+  { id: 'mine', name: 'Mine', dataType: 'bit', role: 'hidden' },
+  { id: 'hidden', name: 'Details hidden', dataType: 'bit', role: 'hidden' },
+  { id: 'children', name: 'Children', dataType: 'int', role: 'hidden' },
   { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }
 ] as const
 export type JobHistoryColumn = typeof jobHistoryColumns[number]['id']

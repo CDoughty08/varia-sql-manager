@@ -46,9 +46,11 @@ internal sealed partial class SqlService
 
     private static RequestException NotWindowed() => new("INVALID_PARAMS", "Only a windowed BigQuery result is sorted or filtered in BigQuery.");
 
-    /// <summary>Checks a view, distinct, sample or rerun request against its source result and writes its query.</summary>
+    /// <summary>Checks a view, distinct, sample or rerun request against its source result and writes its query. A dry run
+    /// (<paramref name="estimate"/>) reads a checklist's ticks without freezing them, so a declined prompt leaves the checklist
+    /// as it was; the query itself freezes them.</summary>
     private RemotePlan PlanRemote(uint resultId, string kind, RemoteSortArgs[]? sort, RemoteFilterArgs[]? filters, int? column, RemoteFilterArgs[]? kept, bool fallback,
-        int? rows = null, string? method = null)
+        int? rows = null, string? method = null, bool estimate = false)
     {
         if (kind is "sample" or "rerun") return PlanAuxiliary(resultId, kind, sort, filters, column, kept, fallback, rows, method);
         if (rows is not null || method is not null) throw new RequestException("INVALID_PARAMS", "Only a sample takes rows and a method.");
@@ -78,8 +80,8 @@ internal sealed partial class SqlService
             if (sort.Length > 0 || column is not { } listed) throw new RequestException("INVALID_PARAMS", "A value list takes a column and no sort keys.");
             Orderable(fields, listed, "listed");
         }
-        var resolved = filters.Select(filter => ResolveRemote(filter, set, fields)).ToList();
-        var keptRows = kept?.Select(filter => ResolveRemote(filter, set, fields)).ToList();
+        var resolved = filters.Select(filter => ResolveRemote(filter, set, fields, estimate)).ToList();
+        var keptRows = kept?.Select(filter => ResolveRemote(filter, set, fields, estimate)).ToList();
         string source;
         if (!fallback) source = BigQueryViewSql.Source(window.Table);
         else if (CanFallBack(window)) source = BigQueryViewSql.Source(window.Args.Sql);
@@ -102,8 +104,8 @@ internal sealed partial class SqlService
     }
 
     /// <summary>One filter against its value list: the list must be this result's, for this column, and its rows its own; a
-    /// <c>groups</c> filter freezes its snapshot of the list, as results.view does.</summary>
-    private RemoteFilter ResolveRemote(RemoteFilterArgs? filter, ResultSetBuffer source, IReadOnlyList<BigQueryField> fields)
+    /// <c>groups</c> filter freezes its snapshot of the list, as results.view does, except for an estimate, which only reads it.</summary>
+    private RemoteFilter ResolveRemote(RemoteFilterArgs? filter, ResultSetBuffer source, IReadOnlyList<BigQueryField> fields, bool estimate)
     {
         if (filter is null || filter.Column < 0 || filter.Column >= fields.Count) throw new RequestException("INVALID_PARAMS", "A filter needs a column of the result.");
         RemoteValueList List()
@@ -136,7 +138,7 @@ internal sealed partial class SqlService
             {
                 var list = List();
                 var snapshot = store.FindSnapshot(filter.List!.Value, snapshotId) ?? throw SnapshotClosed();
-                var (op, rows, nulls) = snapshot.Freeze();
+                var (op, rows, nulls) = estimate ? snapshot.Peek() : snapshot.Freeze();
                 return new RemoteFilter(op == FilterOp.In ? RemoteFilterKind.In : RemoteFilterKind.NotIn, filter.Column, rows.Length > 0 ? list : null, rows, nulls);
             }
             default:
@@ -179,7 +181,7 @@ internal sealed partial class SqlService
         if (set.Remote is not { Source: BigQueryWindow window }) throw NotWindowed();
         if (window.Connection != connection) throw new RequestException("INVALID_PARAMS", "The result is not this connection's.");
         // The request is checked whole before anything is asked of BigQuery.
-        var plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, false, remote.Rows, remote.Method);
+        var plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, false, remote.Rows, remote.Method, estimate: true);
         // The first rows are free (tabledata.list, no job): nothing to estimate.
         if (plan.FirstRows) return new(0, StatementType: "SELECT");
         var sql = plan.Sql;
@@ -193,7 +195,7 @@ internal sealed partial class SqlService
         else if (plan.Kind == "sample") await SampleTableAsync(connection, window.Table, token);
         else if (await TableGoneAsync(connection, window.Table, token))
         {
-            plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true);
+            plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true, estimate: true);
             sql = plan.Sql;
             dataset = window.Args.Dataset ?? connection.Options.Dataset;
         }
@@ -242,7 +244,7 @@ internal sealed partial class SqlService
             Sql = plan.Sql, QueryId = args.QueryId,
             // A value list is read whole, never capped by Maximum rows, so its rows are its values' ranks; a sample is capped by
             // its own LIMIT and is always read into memory.
-            MaxRows = distinct || sample ? 0 : window.Args.MaxRows, Residence = distinct || sample ? "memory" : window.Args.Residence
+            MaxRows = distinct || sample ? 0 : window.QueryMaxRows ?? window.Args.MaxRows, Residence = distinct || sample ? "memory" : window.Args.Residence
         };
         // The query's timeout bounds a job; a first-rows sample runs none, and Stop ends its free reads.
         var timeout = plan.FirstRows ? 0 : window.Args.TimeoutSeconds;

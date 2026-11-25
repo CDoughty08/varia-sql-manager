@@ -470,6 +470,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, Search
   skips it, and the Highlight commands are greyed. A result kept short by Rows kept per execution says where that limit
   is set (Query Results › SQL Server › Results to Grid, which BigQuery results follow too) and that the query ran in full.
+  The limit counts over every result set of an execution, as SQL Server's does: a script's later SELECT keeps (or windows)
+  only what its earlier ones left, and one with nothing left keeps no rows, in memory, its rows counted. A new query from
+  such a result (Re-run, a BigQuery-side sort or filter) runs with the whole limit.
 
 ### Sort and filter in BigQuery
 
@@ -481,7 +484,7 @@ BigQuery" in their tooltips.
 
 - **Estimate first.** Before each one, `bigquery.dryRun` estimates it (free) and the cost prompts of Cost › Before Execute
   apply as they do to Execute: above the threshold, or an incomplete estimate. A declined prompt runs nothing and the
-  grid keeps what it showed; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
+  grid keeps what it showed; the estimate reads a checklist's ticks without fixing them, and only the query fixes them; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
   go to Messages.
 - **Sort.** Up to 16 keys, ascending with NULLs first and descending with NULLs last, as the in-memory sort orders them.
   BigQuery cannot order ARRAY, STRUCT, GEOGRAPHY, JSON, RANGE or INTERVAL columns: their sort button says so and refuses,
@@ -746,10 +749,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   window for other users' jobs when `jobs.get` on them is refused); an open job in a location the answer could not read
   stays open until it can. A DONE job never changes and is never read again; new scope or filters list from scratch, at
   once, even when the sample under way then finds nothing open. Three samples in a row that the time budget cuts before
-  any answer lands (a stalled network, rate limits retried until the budget runs out) fail with `TIMEOUT`, as does each one
+  any answer lands (a stalled network) fail with `TIMEOUT`, as does each one
   after until an answer lands, so the retries back off; each such sample asks for a quarter of the jobs a page (down to one,
   doubling back once samples finish), so a page too slow for the budget still lands, as does a sample in which another
-  listing answered but one sent in the budget's first quarter was cut before its first page; a failure retries from the asked interval, never the idle one. The
+  listing answered but one sent in the budget's first quarter was cut before its first page. A sample whose time went to BigQuery's rate limit (429 or `rateLimitExceeded`, retried with backoff until the budget ran out) before any answer landed fails at once with `QUOTA`, keeping its page size; a failure retries from the asked interval, never the idle one. The
   open jobs' listing goes on from its page as the others do, ahead of the refresh listing while it is under way, and a job missing from it counts as finished once it is whole. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
   pending and every 60 s otherwise (its `idleIntervalMs`, [docs/live.md](live.md)), and the load guard leaves it alone: its
   cost is network and quota waits, which a longer interval would not ease. Pinned jobs (a link, the dialog) are read by id
@@ -760,8 +763,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 - **Columns.** State (Running, Pending, Done, Failed, Cancelled, with row tones: failed and cancelled are DONE jobs with an
   error, cancelled when its reason is `stopped` and it did not time out), Job ID, Type, Statement, User, Created, Duration,
   Processed, Billed, Cost (on demand, from bytes billed; empty with Show cost as Bytes only), Slot time, Cache, Location,
-  Varia (jobs with the `varia_client` label), Destination, Error and SQL; then the identity columns the actions read (Job,
-  Parent job, Mine, Details hidden, Children). A script shows ▸; "Show statements in grid" in the details pane lists up to
+  Varia (jobs with the `varia_client` label), Destination, Error and SQL. Each row also carries the identity columns the
+  actions read (the job's full reference, its parent script, whether it is the principal's, whether BigQuery hid its details
+  and its children's count): hidden columns ([docs/live.md](live.md)), never shown, copied or saved, though Search still
+  matches the job reference. A script shows ▸; "Show statements in grid" in the details pane lists up to
   1,000 of its statements (the newest, when it has more) under it in statement order (at most 4 scripts at once), read again only while it runs.
 - **Filters.** State and Type chips (every chip on is no filter), Range (last hour, 24 hours, 7 days, 30 days, or Custom…
   with From and To, at most 180 days and no older than BigQuery's 180-day retention), Statements (statement types such as
