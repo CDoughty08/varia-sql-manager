@@ -207,6 +207,8 @@ describe('referencedBigQueryProjects', () => {
       'CREATE TABLE options-prod.sales.copy LIKE options-like-src.sales.orders;',
       'CREATE TABLE options LIKE opt-like-src.sales.orders;',
       'SELECT * FROM my_table options, opt-comma-proj.sales.orders;',
+      "SELECT * FROM t1 PIVOT (SUM(sales) FOR quarter IN ('Q1', 'Q2')) AS p, comma-pivot-proj.sales.orders;",
+      'SELECT * FROM t1 UNPIVOT (val FOR col IN (q1, q2)) AS u, comma-unpivot-proj.sales.orders;',
       "EXECUTE IMMEDIATE 'SELECT ?' USING payload.customer.email;",
       'MERGE merge-dst-proj.sales.t USING merge-src-proj.sales.s ON true WHEN MATCHED THEN DELETE;',
       'DELETE del-direct-proj.sales.orders WHERE id = 1;'
@@ -226,6 +228,8 @@ describe('referencedBigQueryProjects', () => {
       'options-like-src',
       'opt-like-src',
       'opt-comma-proj',
+      'comma-pivot-proj',
+      'comma-unpivot-proj',
       'merge-dst-proj',
       'merge-src-proj',
       'del-direct-proj'

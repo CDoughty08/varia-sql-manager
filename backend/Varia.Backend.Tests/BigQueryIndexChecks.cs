@@ -709,6 +709,7 @@ internal static partial class BigQueryIndexChecks
             await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), AllProjects: false), source, CancellationToken.None);
             await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("session-only-proj")), source, CancellationToken.None);
             search.MarkStale(id, "session-only-proj", "adhoc");
+            search.MarkStale(id, "session-only-proj", "sibling");
             var hadMark = search.StaleMarkOf(id) is not null && search.StaleOf(id).Contains(("session-only-proj", "adhoc"));
             source.CustomDatasets["session-only-proj"] = [];
             var refreshed = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("session-only-proj", "adhoc")), source, CancellationToken.None);
@@ -717,7 +718,7 @@ internal static partial class BigQueryIndexChecks
                 && search.StaleOf(id).Count == 0
                 && search.StaleMarkOf(id) is null
                 && refreshed.Status.StaleMark is null,
-                "dataset-scoped refresh of a dropped stale dataset clears its stale mark even for session-only projects");
+                "dataset-scoped refresh dropping the last dataset of a session-only project clears its stale mark and orphaned sibling marks");
         }
 
         // 8. Full rebuild with priorNamesOnly retains failed projects, clears clean ones, and drops newly noise-filtered projects + stale marks.

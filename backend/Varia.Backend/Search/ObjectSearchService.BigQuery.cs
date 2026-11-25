@@ -340,6 +340,27 @@ internal sealed partial class ObjectSearchService
                 return held;
             }
 
+            // Caller must hold state.Gate and verify Current(): when a project loses its last held dataset, drop NamesOnly
+            // and, if the project is no longer tracked anywhere else, drop any orphaned stale marks for sibling datasets.
+            void PruneEmptyProjectLocked(string project)
+            {
+                if (state.Index.Databases.Any(read => read.Dataset is not null && read.Database == project)) return;
+                if (state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(project, StringComparer.Ordinal))
+                {
+                    var remaining = currentNamesOnly.Where(item => item != project).ToList();
+                    state.NamesOnly = remaining.Count > 0 ? remaining : null;
+                }
+                if (project != billing && !state.StarredProjects.Contains(project, StringComparer.Ordinal) && !state.DiscoveredProjects.Contains(project, StringComparer.Ordinal))
+                {
+                    foreach (var gone in state.Stale.Keys.Where(key => key.Project == project).ToList())
+                    {
+                        state.Stale.Remove(gone);
+                        stale.Remove(gone);
+                    }
+                    state.StaleProjects.Remove(project);
+                }
+            }
+
             async Task ReadPass1Async((string Project, string Dataset) target, ConcurrentDictionary<(string, string), (List<BigQueryEntry> Listed, int[] Read, bool Cut)> pending,
                 Func<int> tickDone, int total, CancellationToken loop, Action? onTooLarge = null, Action<string>? onChildrenLeftOut = null, Action<string>? onIncomplete = null, Action<(string, string)>? onDone = null, Action<(string, string)>? onAttempted = null)
             {
@@ -353,7 +374,14 @@ internal sealed partial class ObjectSearchService
                     // A dataset that is gone (dropped since the listing, or by the DDL that marked it) leaves the index without a skip.
                     if (skip.Code == "NOT_FOUND")
                     {
-                        lock (state.Gate) if (Current()) Forget(state, project, dataset);
+                        lock (state.Gate)
+                        {
+                            if (Current())
+                            {
+                                Forget(state, project, dataset);
+                                PruneEmptyProjectLocked(project);
+                            }
+                        }
                         onDone?.Invoke(target);
                     }
                     else
@@ -421,6 +449,7 @@ internal sealed partial class ObjectSearchService
                     if (!Current()) throw new OperationCanceledException(stop);
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || cut
                         || onlyDataset is { } kept && kept != dataset);
+                    PruneEmptyProjectLocked(project);
                 }
                 if (!cut)
                 {

@@ -134,7 +134,7 @@ interface ScanTok extends GoogleSqlToken { readonly text: string; readonly upper
 
 /** Keywords immediately preceding a BigQuery table, view, routine or model reference. */
 const objectLeadWords = new Set(['FROM', 'JOIN', 'INTO', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'TABLE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'MODEL', 'CALL', 'CLONE', 'COPY', 'EXISTS'])
-/** Keywords that end a FROM clause's comma-separated table list (ON and USING stay inside FROM so `JOIN t2 USING (id), proj.ds.tbl` still parses; non-reserved OPTIONS/PIVOT/UNPIVOT require `(`). */
+/** Keywords that end a FROM clause's comma-separated table list (ON, USING, PIVOT and UNPIVOT stay inside FROM; non-reserved OPTIONS requires `(`). */
 const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'UNION', 'INTERSECT', 'EXCEPT'])
 /** Optional modifiers between CREATE and TABLE in GoogleSQL DDL. */
 const createTableModifiers = new Set(['OR', 'REPLACE', 'TEMP', 'TEMPORARY', 'EXTERNAL', 'SNAPSHOT'])
@@ -260,7 +260,7 @@ export function referencedBigQueryProjects(sql: string): string[] {
       }
       if (token.upper === 'FROM' && !parenExtract.at(-1) && !(prev?.kind === 'word' && prev.upper === 'DISTINCT')) { inFrom = true; continue }
       if (token.upper === 'JOIN') { inFrom = true; continue }
-      if (fromEndWords.has(token.upper) || ((token.upper === 'OPTIONS' || token.upper === 'PIVOT' || token.upper === 'UNPIVOT') && parenClause)) { inFrom = false; continue }
+      if (fromEndWords.has(token.upper) || (token.upper === 'OPTIONS' && parenClause)) { inFrom = false; continue }
     }
 
     if (!isNameTok(token)) continue
