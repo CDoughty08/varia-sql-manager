@@ -445,6 +445,21 @@ describe('the hot exit session store', () => {
     // A tampered seal still fails closed and strips expectedPrincipal!
     const tampered = await sealer.trusted(taken!.workspace!, { ...taken!.seal!, mac: '0'.repeat(64) }, legacyExtra)
     expect(tampered.targets[0]?.expectedPrincipal).toBeUndefined()
+    // Oversized legacy extraProjects (> 16) quarantines instead of bypassing the pre-upgrade cap.
+    const freshFolder = join(directory, 'SessionOversized')
+    await mkdir(freshFolder, { recursive: true })
+    await writeFile(join(freshFolder, 'session.json'), JSON.stringify({
+      version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: -1, documents: [],
+      workspace: {
+        targets: [{
+          id: unpinnedId,
+          options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: Array.from({ length: 17 }, (_, i) => `varia-extra-${String(i).padStart(2, '0')}`) },
+          inExplorer: true, resumeOnStartup: true
+        }]
+      }
+    }))
+    expect(await new SessionStore(freshFolder).take(true)).toBeUndefined()
+    expect((await readdir(freshFolder)).some(name => name.startsWith('session.json.invalid-'))).toBe(true)
   })
 })
 

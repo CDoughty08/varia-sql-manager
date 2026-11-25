@@ -681,36 +681,18 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
     fixes: createAgentOverviewFixes({ jobActivity, jobDocuments, dialogs, operatorsDocuments, schedules, explorer, commands: () => commands })
   })
-  const indexedStarredByConnection = new Map<string, Set<string>>()
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events,
     starredProjects: connectionId => {
       const connection = connections.get(connectionId)
       const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
-      const starred = principal ? bigQueryStarred.starredFor(principal) : []
-      indexedStarredByConnection.set(connectionId, new Set(starred))
-      return starred
+      return principal ? bigQueryStarred.starredFor(principal) : []
     },
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
   onBigQueryStarredLoaded = () => {
-    const indexes = objectSearch.getSnapshot().indexes
-    const liveIds = new Set<string>()
-    for (const connection of connections.liveBigQuery()) {
-      liveIds.add(connection.id)
-      if (!indexes[connection.id]) continue
-      const principal = connection.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection.principalId
-      if (!principal) continue
-      const known = indexedStarredByConnection.get(connection.id) ?? new Set<string>()
-      indexedStarredByConnection.set(connection.id, known)
-      for (const project of bigQueryStarred.starredFor(principal)) {
-        if (known.has(project)) continue
-        known.add(project)
-        objectSearch.refreshBigQuery(connection.id, { scope: { project } })
-      }
-    }
-    for (const id of indexedStarredByConnection.keys()) if (!liveIds.has(id)) indexedStarredByConnection.delete(id)
+    for (const connection of connections.liveBigQuery()) objectSearch.syncBigQueryStarred(connection.id)
   }
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })

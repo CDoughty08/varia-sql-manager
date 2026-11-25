@@ -98,6 +98,53 @@ describe('BigQueryStarredService', () => {
     expect(service.starredFor(ada)).toEqual([])
     service.dispose()
   })
+
+  it('prevents out-of-order setStarred resolutions from overwriting newer authoritative state', async () => {
+    const first = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    const second = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    let call = 0
+    const api: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
+      loadBigQueryStarredProjects: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: {} } })),
+      setBigQueryProjectStar: vi.fn(() => (++call === 1 ? first.promise : second.promise))
+    }
+    const service = new BigQueryStarredService({ api })
+    await service.load()
+    const p1 = service.setStarred(ada, 'proj-alpha', true)
+    const p2 = service.setStarred(ada, 'proj-beta', true)
+    // Newer request settles first with both projects; older response arrives late with only proj-alpha.
+    second.resolve({ ok: true, value: { byPrincipal: { [ada]: ['proj-alpha', 'proj-beta'] } } })
+    await p2
+    expect(service.starredFor(ada)).toEqual(['proj-alpha', 'proj-beta'])
+    first.resolve({ ok: true, value: { byPrincipal: { [ada]: ['proj-alpha'] } } })
+    await p1
+    expect(service.starredFor(ada)).toEqual(['proj-alpha', 'proj-beta'])
+    service.dispose()
+  })
+
+  it('notifies subscribers when load flips loaded on error and holds loaded until the latest load settles', async () => {
+    const first = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    const second = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    let call = 0
+    const api: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
+      loadBigQueryStarredProjects: vi.fn(() => (++call === 1 ? first.promise : second.promise)),
+      setBigQueryProjectStar: vi.fn()
+    }
+    const service = new BigQueryStarredService({ api })
+    const listener = vi.fn()
+    service.subscribe(listener)
+    const l1 = service.load()
+    const l2 = service.load()
+    // First load resolves while second is still in flight: loaded must remain false until l2 settles.
+    first.resolve({ ok: true, value: { byPrincipal: { [ada]: ['proj-old'] } } })
+    await l1
+    expect(service.loaded).toBe(false)
+    // Second load fails: loaded transitions to true and subscribers are notified so deferred Explorer restores release.
+    second.resolve({ ok: false, error: 'Failed to read' })
+    await l2
+    expect(service.loaded).toBe(true)
+    expect(listener).toHaveBeenCalledTimes(2)
+    service.dispose()
+  })
 })
 
 describe('referencedBigQueryProjects', () => {
@@ -135,7 +182,7 @@ describe('referencedBigQueryProjects', () => {
     ])
   })
 
-  it('skips comments, string literals, struct field access and EXTRACT(… FROM …)', () => {
+  it('skips comments, string literals, struct field access, LIKE patterns, array literals in JOIN ON and EXTRACT(… FROM …)', () => {
     const sql = [
       '-- FROM `comment-dash-proj.ds.tbl`',
       '# FROM `comment-hash-proj.ds.tbl`',
@@ -145,9 +192,20 @@ describe('referencedBigQueryProjects', () => {
       "  r'''FROM `triple-str-proj.ds.tbl`''',",
       '  customer.address.city,',
       '  EXTRACT(YEAR FROM orders.placed.ts)',
-      'FROM `real-project-1.sales.orders`;'
+      'FROM `real-project-1.sales.orders` t1',
+      'JOIN t2 ON t1.arr = [t2.first, array-false-pos.profile.val]',
+      'WHERE t1.email LIKE like-false-pos.profile.pattern;',
+      'SELECT * FROM t1 JOIN t2 USING (id), using-comma-proj.sales.orders;',
+      'CREATE OR REPLACE TEMP TABLE dst-create-proj.sales.copy LIKE like-src-proj.sales.orders;',
+      'DELETE del-direct-proj.sales.orders WHERE id = 1;'
     ].join('\n')
-    expect(referencedBigQueryProjects(sql)).toEqual(['real-project-1'])
+    expect(referencedBigQueryProjects(sql)).toEqual([
+      'real-project-1',
+      'using-comma-proj',
+      'dst-create-proj',
+      'like-src-proj',
+      'del-direct-proj'
+    ])
   })
 
   it('bounds scanning to 256 KiB and at most 20 unique valid projects', () => {

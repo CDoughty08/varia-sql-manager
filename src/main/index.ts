@@ -1539,12 +1539,14 @@ app.whenReady().then(async () => {
     connectionOpen?.retainTargets(record?.workspace?.targets.map(target => target.id) ?? [])
     if (record?.workspace) {
       // A disk file is pinned only as far as its seal proves main wrote it; an unsealed silent target waits for Reconnect.
+      const originalTargets = record.workspace.targets
       let workspace = record.workspace
       if (checkpoint.kind === 'disk') {
         const legacyExtra = legacyBigQueryExtraProjects(record)
         workspace = workspaceSealer ? await workspaceSealer.trusted(workspace, record.seal, legacyExtra) : workspace
         if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
         if (legacyExtra?.size && bigQueryStore) {
+          const originalById = new Map(originalTargets.map(target => [target.id, target]))
           const unclaimed: string[] = []
           for (const target of workspace.targets) {
             const extra = legacyExtra.get(target.id)
@@ -1552,14 +1554,20 @@ app.whenReady().then(async () => {
             const billing = target.options.provider === 'bigquery' ? target.options.project : ''
             const projects = extra.filter((project, index) => project !== billing && extra.indexOf(project) === index)
             if (!projects.length) continue
+            const hadPrincipal = originalById.get(target.id)?.expectedPrincipal !== undefined
             const principal = target.expectedPrincipal?.provider === 'bigquery' ? target.expectedPrincipal.principal : undefined
-            if (principal && !principal.startsWith('bigquery:anonymous:')) {
-              await bigQueryStore.addStarredProjects(principal, projects).catch(() => {})
-            } else {
+            if (principal) {
+              // Emulator anonymous principals never star projects and must not leak into unclaimed migratedProjects.
+              if (!principal.startsWith('bigquery:anonymous:')) {
+                await bigQueryStore.addStarredProjects(principal, projects).catch(() => {})
+              }
+            } else if (!hadPrincipal) {
+              // Only migrate as unclaimed when the target genuinely had no principal — never when seal verification stripped it.
               for (const project of projects) if (!unclaimed.includes(project)) unclaimed.push(project)
             }
           }
           if (unclaimed.length) await bigQueryStore.addMigratedProjects(unclaimed).catch(() => {})
+          if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
         }
         connectionAuthentication.restore(workspace)
       }

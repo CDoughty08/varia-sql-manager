@@ -661,6 +661,27 @@ internal static partial class BigQueryIndexChecks
                 && result.Status.NamesOnly is ["disc-01", "disc-02", "disc-03"]
                 && search.HeldOf(id).Count(read => read.Database.StartsWith("disc-", StringComparison.Ordinal)) == 3,
                 $"wave 3 reserve floor stops before issuing discovered detail calls ({source.DiscoveredDetailCalls}) and marks all 3 discovered projects NamesOnly while keeping Wave 2 names");
+
+            // 4. Cancelled rebuild preserves prior NamesOnly instead of eagerly wiping it at build start.
+            using var cancel = new CancellationTokenSource();
+            cancel.Cancel();
+            var cancelled = false;
+            try { await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, cancel.Token); }
+            catch (RequestException error) when (error.Code == "CANCELLED") { cancelled = true; }
+            var afterCancel = search.LookupBigQuery(id, "varia-alpha");
+            check(cancelled && afterCancel.NamesOnly("disc-01") && afterCancel.NamesOnly("disc-02") && afterCancel.NamesOnly("disc-03"),
+                "cancelled full rebuild preserves prior NamesOnly list");
+
+            // 5. Whole-project scoped refresh that hits a detail failure keeps the project in NamesOnly; a clean scoped refresh clears only that project.
+            source.FailTableForProject = "disc-01";
+            var failedScope = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("disc-01")), source, CancellationToken.None);
+            check(failedScope.Status.NamesOnly is ["disc-01", "disc-02", "disc-03"],
+                "whole-project scoped refresh with detail failure keeps the project in NamesOnly");
+
+            source.FailTableForProject = null;
+            var cleanScope = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("disc-01")), source, CancellationToken.None);
+            check(cleanScope.Status.NamesOnly is ["disc-02", "disc-03"],
+                "clean whole-project scoped refresh clears only that project from NamesOnly");
         }
     }
 
@@ -676,6 +697,7 @@ internal static partial class BigQueryIndexChecks
         private int discoveredObjectCalls, discoveredDetailCalls;
         public int DiscoveredObjectCalls => Volatile.Read(ref discoveredObjectCalls);
         public int DiscoveredDetailCalls => Volatile.Read(ref discoveredDetailCalls);
+        public string? FailTableForProject { get; set; }
 
         public string BillingProject(string connectionId) => "varia-alpha";
         public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token) =>
@@ -699,6 +721,7 @@ internal static partial class BigQueryIndexChecks
         }
         public async Task<Google.Apis.Bigquery.v2.Data.Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token)
         {
+            if (project == FailTableForProject) throw new RequestException("TIMEOUT", "Simulated detail timeout.");
             if (project != "varia-alpha")
             {
                 Interlocked.Increment(ref discoveredDetailCalls);

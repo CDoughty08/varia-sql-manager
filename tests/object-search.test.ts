@@ -1234,6 +1234,39 @@ describe('ObjectSearchService', () => {
     service.dispose()
   })
 
+  it('syncBigQueryStarred only refreshes missing starred projects and retries if an earlier build failed', async () => {
+    let starred: string[] = []
+    const { service, calls, pendingIndex, connections } = harness({ starredProjects: () => starred })
+    connections.set([bigQueryConnection('bq')])
+    // Initial build started with no starred projects (e.g. before bigQueryStarred.load() resolved).
+    expect(calls.index).toHaveLength(1)
+    expect(calls.index[0]).not.toHaveProperty('starredProjects')
+    // Suppose the initial build fails.
+    pendingIndex[0]({ ok: false, error: 'Auth failed.' })
+    await settle()
+    // Starred projects arrive while the index is in a failed state: refreshBigQuery refuses, so syncBigQueryStarred must NOT mark them known.
+    starred = ['varia-beta']
+    service.syncBigQueryStarred('bq')
+    expect(calls.index).toHaveLength(1)
+    // User rebuilds now with varia-beta starred: build() records varia-beta in indexedStarred.
+    service.build('bq')
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ starredProjects: ['varia-beta'] })
+    pendingIndex[1]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    // syncBigQueryStarred skips varia-beta (already built) and refreshes only newly added varia-gamma.
+    starred = ['varia-beta', 'varia-gamma']
+    service.syncBigQueryStarred('bq')
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-gamma' } })
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    // Subsequent syncBigQueryStarred is a no-op since both varia-beta and varia-gamma are already tracked.
+    service.syncBigQueryStarred('bq')
+    expect(calls.index).toHaveLength(3)
+    service.dispose()
+  })
+
   it('reveals a BigQuery hit below its project and dataset, a column below its table and the record columns above it', () => {
     const project = { type: 'object', object: { kind: 'bqProject', name: 'varia-alpha' } }
     const dataset = { kind: 'bqDataset', project: 'varia-alpha', name: 'sales' } as const

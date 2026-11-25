@@ -120,7 +120,8 @@ function migrateLegacySession(raw: unknown): { value: unknown; extraByTarget?: R
     const opts = options as Record<string, unknown>
     if (opts.provider !== 'bigquery' || !Object.hasOwn(opts, 'extraProjects')) return target
     const extra = opts.extraProjects
-    if (extra !== undefined && (!Array.isArray(extra) || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return target
+    // Pre-upgrade bigQueryLimits.extraProjects was 16; oversized or malformed arrays still quarantine.
+    if (extra !== undefined && (!Array.isArray(extra) || extra.length > 16 || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return target
     migrated = true
     if (Array.isArray(extra) && typeof entry.id === 'string') extraByTarget.set(entry.id, [...extra])
     const { extraProjects: _extraProjects, ...rest } = opts

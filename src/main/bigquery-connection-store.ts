@@ -35,7 +35,8 @@ function migrateLegacyLibrary(raw: unknown): { value: unknown; migrated: boolean
     const opts = options as Record<string, unknown>
     if (opts.provider !== 'bigquery' || !Object.hasOwn(opts, 'extraProjects')) return profile
     const extra = opts.extraProjects
-    if (extra !== undefined && (!Array.isArray(extra) || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return profile
+    // Pre-upgrade bigQueryLimits.extraProjects was 16; oversized or malformed arrays still quarantine.
+    if (extra !== undefined && (!Array.isArray(extra) || extra.length > 16 || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return profile
     migrated = true
     const billing = typeof opts.project === 'string' ? opts.project : ''
     if (Array.isArray(extra)) {

@@ -366,6 +366,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const maxProjects = bigQuery && allProjects !== false ? this.o.settings.get('objectExplorer.search.bigQueryMaxProjects') : undefined
     const rawStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
     const starredProjects = rawStarred?.length ? [...rawStarred] : undefined
+    if (bigQuery && !partial) this.indexedStarred.set(connectionId, new Set(starredProjects ?? []))
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
     const bulk = bigQuery && !partial && this.o.settings.get('textEditor.googleSql.bulkIndex') && !!this.o.billedGate && !!this.o.api.bigQueryIndexEstimate
     // A newer build closes an older one's prompt. An older build already sent the backend supersedes when the new one is sent, which
@@ -442,6 +443,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     } finally { this.estimating.delete(requestId) }
   }
 
+  /** The starred projects already requested for each live BigQuery connection (by build or scoped refresh), so delayed starred loads only refresh missing ones. */
+  private readonly indexedStarred = new Map<string, Set<string>>()
+
   /**
    * Re-reads part of a BigQuery connection's index: a project or dataset whole (Object Explorer's Refresh on it), or the datasets
    * DDL from a query tab marked (`stale`). A connection with no index yet builds nothing (its first build reads everything); one
@@ -452,16 +456,35 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const connection = this.o.connections.get(connectionId)
     if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
     const entry = this.getSnapshot().indexes[connectionId]
+    const recordScope = () => {
+      if ('scope' in refresh && !refresh.scope.dataset) {
+        const known = this.indexedStarred.get(connectionId) ?? new Set<string>()
+        known.add(refresh.scope.project)
+        this.indexedStarred.set(connectionId, known)
+      }
+    }
     if (entry?.requestId) {
       const queued = this.refreshes.get(connectionId) ?? []
       if (!queued.some(item => JSON.stringify(item) === JSON.stringify(refresh))) this.refreshes.set(connectionId, [...queued, refresh])
+      recordScope()
       return true
     }
     // After a whole build failed, only another whole build clears its error: a partial one would hide it.
     if (entry?.error && !('full' in refresh)) return false
     if (!entry?.status || entry.status.state === 'none') return false
     this.build(connectionId, refresh)
+    recordScope()
     return true
+  }
+
+  /** Refreshes any starred project for `connectionId` that was not yet included when its index started (e.g. after startup/migration starred load). */
+  syncBigQueryStarred(connectionId: string): void {
+    if (this.disposed || !this.getSnapshot().indexes[connectionId]) return
+    const starred = this.o.starredProjects?.(connectionId) ?? []
+    for (const project of starred) {
+      if (this.indexedStarred.get(connectionId)?.has(project)) continue
+      this.refreshBigQuery(connectionId, { scope: { project } })
+    }
   }
 
 
@@ -730,6 +753,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.indexedStarred.clear()
     for (const controller of this.estimating.values()) controller.abort()
     this.estimating.clear()
     this.targetBindings.clear()
@@ -968,6 +992,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const gone = Object.keys(indexes).filter(id => !ids.has(id))
     for (const id of [...this.refreshes.keys()]) if (!ids.has(id)) this.refreshes.delete(id)
     for (const id of [...this.staleAsked.keys()]) if (!ids.has(id)) this.staleAsked.delete(id)
+    for (const id of [...this.indexedStarred.keys()]) if (!ids.has(id)) this.indexedStarred.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
       // A disconnect closes a bulk build's estimate or cost prompt.

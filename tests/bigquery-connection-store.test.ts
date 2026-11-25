@@ -225,6 +225,13 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     }))
     const corruptMigrated = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
     expect(corruptMigrated.warning).toContain('invalid')
+    // Oversized legacy extraProjects (> 16) also quarantines instead of bypassing the pre-upgrade cap.
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      profiles: [{ id: legacyId, options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: Array.from({ length: 17 }, (_, i) => `varia-extra-${String(i).padStart(2, '0')}`) }, favorite: false }]
+    }))
+    const oversized = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
+    expect(oversized.warning).toContain('invalid')
   })
 })
 

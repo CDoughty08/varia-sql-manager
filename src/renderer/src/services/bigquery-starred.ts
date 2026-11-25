@@ -29,7 +29,10 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
   private disposed = false
   private _loaded = false
   private authoritative: Record<string, string[]> = Object.create(null)
-  private authoritativeSeq = 0
+  /** Monotonic dispatch sequence shared across `load()` and `setStarred()`, compared against `appliedSeq` so out-of-order responses never overwrite newer authoritative state. */
+  private requestSeq = 0
+  private appliedSeq = 0
+  private latestLoadSeq = 0
   private mutationSeq = 0
   private readonly pending = new Map<string, { readonly principal: string; readonly project: string; readonly starred: boolean; readonly seq: number }>()
 
@@ -38,7 +41,7 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     this.api = options.api
   }
 
-  /** Whether the initial load from main has settled (used to hold startup tree restore until starred projects arrive). */
+  /** Whether the latest initial load from main has settled (used to hold startup tree restore until starred projects arrive). */
   get loaded(): boolean { return this._loaded }
 
   private compose(): BigQueryStarredProjectsView {
@@ -60,19 +63,25 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
   /** Loads starred projects from main, updating the authoritative base while preserving any in-flight optimistic edits. */
   async load(): Promise<void> {
     if (this.disposed) return
-    const started = ++this.authoritativeSeq
-    let result: ApiResult<BigQueryStarredProjectsView>
+    const seq = ++this.requestSeq
+    this.latestLoadSeq = seq
+    let result: ApiResult<BigQueryStarredProjectsView> | undefined
     try {
       result = await this.api.loadBigQueryStarredProjects()
     } catch {
-      this._loaded = true
-      return
+      result = undefined
     }
     if (this.disposed) return
-    this._loaded = true
-    if (!result.ok || started < this.authoritativeSeq) return
-    this.authoritative = copyByPrincipal(result.value.byPrincipal)
-    this.publish(this.compose())
+    const becameLoaded = !this._loaded && seq === this.latestLoadSeq
+    if (becameLoaded) this._loaded = true
+    if (result?.ok && seq > this.appliedSeq) {
+      this.appliedSeq = seq
+      this.authoritative = copyByPrincipal(result.value.byPrincipal)
+      this.publish(this.compose())
+      return
+    }
+    // Always notify subscribers when `loaded` transitions to true (even on error/stale load) so deferred Explorer restores release.
+    if (becameLoaded) this.publish(this.compose())
   }
 
   /** Starred project IDs for `principalId`, in saved order. */
@@ -93,8 +102,9 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
   async setStarred(principalId: string, project: string, starred: boolean): Promise<ApiResult<BigQueryStarredProjectsView>> {
     if (this.disposed) return { ok: false, error: 'Service is disposed.' }
     const key = `${principalId}\u0000${project}`
-    const seq = ++this.mutationSeq
-    this.pending.set(key, { principal: principalId, project, starred, seq })
+    const seq = ++this.requestSeq
+    const opSeq = ++this.mutationSeq
+    this.pending.set(key, { principal: principalId, project, starred, seq: opSeq })
     this.publish(this.compose())
     let result: ApiResult<BigQueryStarredProjectsView>
     try {
@@ -103,10 +113,10 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
       result = { ok: false, error: error instanceof Error ? error.message : 'Could not update starred projects.' }
     }
     if (this.disposed) return result
-    if (this.pending.get(key)?.seq === seq) this.pending.delete(key)
-    if (result.ok) {
-      const auth = ++this.authoritativeSeq
-      if (auth === this.authoritativeSeq) this.authoritative = copyByPrincipal(result.value.byPrincipal)
+    if (this.pending.get(key)?.seq === opSeq) this.pending.delete(key)
+    if (result.ok && seq > this.appliedSeq) {
+      this.appliedSeq = seq
+      this.authoritative = copyByPrincipal(result.value.byPrincipal)
     }
     this.publish(this.compose())
     return result
@@ -123,9 +133,13 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
 interface ScanTok extends GoogleSqlToken { readonly text: string; readonly upper: string }
 
 /** Keywords immediately preceding a BigQuery table, view, routine or model reference. */
-const objectLeadWords = new Set(['FROM', 'JOIN', 'INTO', 'INSERT', 'UPDATE', 'MERGE', 'USING', 'TABLE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'MODEL', 'CALL', 'CLONE', 'COPY', 'LIKE', 'EXISTS'])
-/** Keywords that end a FROM clause's comma-separated table list (ON stays inside FROM so `JOIN t2 ON ... , proj.ds.tbl` still parses). */
-const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'UNION', 'INTERSECT', 'EXCEPT', 'USING', 'PIVOT', 'UNPIVOT'])
+const objectLeadWords = new Set(['FROM', 'JOIN', 'INTO', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'USING', 'TABLE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'MODEL', 'CALL', 'CLONE', 'COPY', 'EXISTS'])
+/** Keywords that end a FROM clause's comma-separated table list (ON and USING stay inside FROM so `JOIN t2 USING (id), proj.ds.tbl` still parses). */
+const fromEndWords = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'UNION', 'INTERSECT', 'EXCEPT', 'PIVOT', 'UNPIVOT'])
+/** Optional modifiers between CREATE and TABLE in GoogleSQL DDL. */
+const createTableModifiers = new Set(['OR', 'REPLACE', 'TEMP', 'TEMPORARY', 'EXTERNAL', 'SNAPSHOT'])
+/** Keywords that end a CREATE TABLE header before any subsequent query clauses. */
+const createTableEndWords = new Set(['AS', 'SELECT', 'WHERE', 'OPTIONS', 'PARTITION', 'CLUSTER'])
 
 /** Splits a backtick-quoted identifier into dotted parts while keeping domain-scoped projects (`example.com:proj`) intact. */
 function splitQuotedParts(token: ScanTok): string[] {
@@ -191,7 +205,9 @@ export function referencedBigQueryProjects(sql: string): string[] {
   }
 
   let inFrom = false
-  // Per-paren-depth stack for `inFrom` and whether `(` belongs to EXTRACT(...), so `FROM UNNEST(a) x, proj.ds.tbl` and `FROM (SELECT 1) a, proj.ds.tbl` work.
+  let createHeader: 'none' | 'create' | 'table' = 'none'
+  // Per-delimiter-depth stack for `inFrom` and whether `(` belongs to EXTRACT(...), so `FROM UNNEST(a) x, proj.ds.tbl`,
+  // `FROM (SELECT 1) a, proj.ds.tbl`, and array literals `[a, b.c.d]` inside JOIN ... ON work without false positives.
   const fromStack: boolean[] = []
   const parenExtract: boolean[] = []
 
@@ -199,25 +215,31 @@ export function referencedBigQueryProjects(sql: string): string[] {
     const token = toks[index]
     const prev = toks[index - 1]
 
-    if (isPunct(token, '(')) {
+    if (isPunct(token, '(') || isPunct(token, '[')) {
       fromStack.push(inFrom)
-      parenExtract.push(prev?.kind === 'word' && prev.upper === 'EXTRACT')
+      parenExtract.push(isPunct(token, '(') && prev?.kind === 'word' && prev.upper === 'EXTRACT')
       inFrom = false
       continue
     }
-    if (isPunct(token, ')')) {
+    if (isPunct(token, ')') || isPunct(token, ']')) {
       parenExtract.pop()
       inFrom = fromStack.pop() ?? false
       continue
     }
     if (isPunct(token, ';')) {
       inFrom = false
+      createHeader = 'none'
       fromStack.length = 0
       parenExtract.length = 0
       continue
     }
 
     if (token.kind === 'word') {
+      if (fromStack.length === 0) {
+        if (token.upper === 'CREATE') createHeader = 'create'
+        else if (createHeader === 'create') createHeader = token.upper === 'TABLE' ? 'table' : createTableModifiers.has(token.upper) ? 'create' : 'none'
+        else if (createHeader === 'table' && createTableEndWords.has(token.upper)) createHeader = 'none'
+      }
       if (token.upper === 'FROM' && !parenExtract.at(-1)) { inFrom = true; continue }
       if (token.upper === 'JOIN') { inFrom = true; continue }
       if (fromEndWords.has(token.upper)) { inFrom = false; continue }
@@ -227,8 +249,11 @@ export function referencedBigQueryProjects(sql: string): string[] {
     // Do not start mid-chain after a dot (already consumed as part of the preceding chain).
     if (isPunct(prev, '.')) continue
 
+    const isCreateTableLike = createHeader === 'table' && fromStack.length === 0 && prev?.kind === 'word' && prev.upper === 'LIKE'
     const isObjectPos = (prev?.kind === 'word' && objectLeadWords.has(prev.upper) && !(prev.upper === 'FROM' && parenExtract.at(-1)))
+      || isCreateTableLike
       || (inFrom && isPunct(prev, ','))
+    if (isCreateTableLike) createHeader = 'none'
 
     // Read a possibly dashed segment (`my-proj-2`, `region-us`), digit-leading segment (`2026_sales`), or backtick-quoted token.
     const readSegment = (at: number): { parts: string[]; next: number; singleMultiPart: boolean } => {
