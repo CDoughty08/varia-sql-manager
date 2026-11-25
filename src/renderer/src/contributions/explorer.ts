@@ -1,14 +1,25 @@
-import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, BigQueryProject, VariaApi } from '../../../shared/contracts'
+import { bigQueryProjectSchema } from '../../../shared/connections'
 import { insertTextFor } from '../../../shared/explorer/refs.ts'
 import { bigQueryPath } from '../../../shared/bigquery/names.ts'
 import { bigQueryPreviewRows } from '../../../shared/bigquery/objects'
+import { mergeProjects } from '../bigquery-connect-form'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, filterable, objectNodeOf, peekPropertiesOf, type ExplorerMenuNode } from '../menus/targets'
+import type { QuickPickItem } from '../quickinput/QuickInputService'
+import type { LiveConnection } from '../services/connections'
 import { windows } from '../core/windows'
+import { serverItems } from './query'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const frame = (callback: () => void) => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(callback); else callback() }
+const maxProjectPages = 10
+const bigQueryPrincipalOf = (connection: LiveConnection | undefined): string | undefined => {
+  if (!connection || connection.options.provider !== 'bigquery') return undefined
+  if (connection.authentication?.principal.provider === 'bigquery') return connection.authentication.principal.principal
+  return connection.principalId?.startsWith('bigquery:') ? connection.principalId : undefined
+}
 
 /**
  * Object Explorer's commands (Script As's are in contributions/scripting.ts, Select Top, Rename and Delete in contributions/actions.ts). Each acts on the node its context menu was opened for (`CommandArgs.target`; none for the
@@ -16,12 +27,13 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch, quickInput, bigQueryStarred }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
   & { queries?: Pick<Workbench['queries'], 'execute'>; bigQueryProperties?: Pick<Workbench['bigQueryProperties'], 'canOpen' | 'open'> }
   & { objectSearch?: Pick<Workbench['objectSearch'], 'refreshNode'> }
+  & { quickInput?: Pick<Workbench['quickInput'], 'show' | 'setAnswer'>; bigQueryStarred?: Pick<Workbench['bigQueryStarred'], 'starredFor' | 'isStarred' | 'setStarred'> }
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
-  api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+  api: Pick<VariaApi, 'writeClipboardText'> & Partial<Pick<VariaApi, 'bigQueryConnectionProjects'>>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target && args.target.kind !== 'explorerTools' ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
   const queryNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && (node.kind === 'server' || node.kind === 'database') ? node : undefined }
@@ -125,6 +137,126 @@ export function explorerContribution({ commands, documents, connections, explore
     commands.register('explorer.bigQueryProperties', {
       when: args => !!bigQueryProperties?.canOpen(nodeOf(args)) && live(nodeOf(args)),
       run: args => { bigQueryProperties?.open(nodeOf(args)) }
+    }),
+    // Star a Project…: lists accessible projects on the BigQuery handle AND accepts typing any valid project ID (e.g. bigquery-public-data).
+    commands.register('bigquery.starProjectPrompt', {
+      when: args => {
+        if (!quickInput || !bigQueryStarred) return false
+        if (args?.target && args.target.kind !== 'explorerTools') {
+          const node = explorerNodeOf(args)
+          return live(node) && connections.isLiveBigQuery(node.connectionId)
+        }
+        return connections.liveBigQuery().length > 0
+      },
+      run: args => {
+        if (!quickInput || !bigQueryStarred) return
+        const openPicker = (connection: LiveConnection) => {
+          const principal = bigQueryPrincipalOf(connection)
+          const billing = connection.options.provider === 'bigquery' ? connection.options.project : connection.server
+          if (!principal) { commands.reportError('The BigQuery account could not be verified.'); return }
+          const loadedIds = new Set<string>()
+          let currentValue = ''
+          let loadNote: string | undefined
+          const updateAnswer = (value: string) => {
+            currentValue = value
+            const trimmed = value.trim()
+            if (trimmed && bigQueryProjectSchema.safeParse(trimmed).success
+              && trimmed !== billing && !bigQueryStarred.isStarred(principal, trimmed) && !loadedIds.has(trimmed)) {
+              quickInput.setAnswer({
+                items: [{ id: trimmed, label: trimmed, description: 'Star project by ID', icon: 'star-empty', group: 'By project ID' }]
+              })
+              return
+            }
+            quickInput.setAnswer({ items: [], ...loadNote && !trimmed ? { message: { text: loadNote, severity: 'info' } } : {} })
+          }
+          quickInput.show<QuickPickItem>({
+            ariaLabel: 'Star a BigQuery project',
+            title: `Star a Project — ${connection.displayName || connection.server}`,
+            placeholder: 'Select a project or type a project ID (e.g., bigquery-public-data)',
+            noun: 'projects',
+            matchOnDescription: true,
+            items: async signal => {
+              if (!api.bigQueryConnectionProjects) return []
+              let listed: BigQueryProject[] = [], pageToken: string | undefined, pages = 0
+              do {
+                if (signal.aborted) return []
+                const result = await api.bigQueryConnectionProjects({ connectionId: connection.id, ...pageToken ? { pageToken } : {} })
+                if (signal.aborted) return []
+                if (!result.ok) {
+                  loadNote = `Could not list projects: ${result.error} Type a project ID to star it.`
+                  updateAnswer(currentValue)
+                  return []
+                }
+                listed = mergeProjects(listed, result.value.projects)
+                pageToken = result.value.nextPageToken
+              } while (pageToken && ++pages < maxProjectPages)
+              for (const project of listed) loadedIds.add(project.id)
+              if (pageToken) loadNote = `Showing the first ${listed.length.toLocaleString('en-US')} projects. Type a project ID to star another.`
+              updateAnswer(currentValue)
+              return listed.map((project): QuickPickItem => {
+                if (project.id === billing) {
+                  return {
+                    id: project.id, label: project.id, icon: 'project', disabled: true,
+                    description: project.friendlyName ? `${project.friendlyName} · Billing project` : 'Billing project',
+                    disabledHint: 'The billing project is always shown in Object Explorer.'
+                  }
+                }
+                if (bigQueryStarred.isStarred(principal, project.id)) {
+                  return {
+                    id: project.id, label: project.id, icon: 'star-full', disabled: true,
+                    description: project.friendlyName ? `${project.friendlyName} · Already starred` : 'Already starred',
+                    disabledHint: 'This project is already starred.'
+                  }
+                }
+                return { id: project.id, label: project.id, icon: 'star-empty', ...project.friendlyName ? { description: project.friendlyName } : {} }
+              })
+            },
+            onDidChangeValue: value => updateAnswer(value),
+            onDidAccept: async item => {
+              const result = await bigQueryStarred.setStarred(principal, item.id, true)
+              if (!result.ok) commands.reportError(result.error)
+            }
+          })
+        }
+        const targetNode = nodeOf(args)
+        const targetConnection = live(targetNode) && connections.isLiveBigQuery(targetNode.connectionId) ? connections.get(targetNode.connectionId) : undefined
+        if (targetConnection) { openPicker(targetConnection); return }
+        const choices = connections.liveBigQuery()
+        if (choices.length === 1) { openPicker(choices[0]); return }
+        if (!choices.length) { commands.reportError('Connect to BigQuery first.'); return }
+        quickInput.show({
+          ariaLabel: 'Star a Project', placeholder: 'Select a BigQuery connection', noun: 'connections', items: serverItems(choices),
+          onDidAccept: item => { const chosen = connections.get(item.id); if (chosen) openPicker(chosen) }
+        })
+      }
+    }),
+    commands.register('bigquery.toggleStarProject', {
+      when: args => {
+        const node = nodeOf(args)
+        return live(node) && node.kind === 'bqProject' && (node.bigQueryProjectRole === 'starred' || node.bigQueryProjectRole === 'session') && !!bigQueryStarred
+      },
+      title: args => nodeOf(args)?.bigQueryProjectRole === 'starred' ? 'Unstar Project' : 'Star Project',
+      run: async args => {
+        const node = nodeOf(args)
+        if (!live(node) || node.kind !== 'bqProject' || node.ref.type !== 'object' || !node.ref.object.name || !bigQueryStarred) return
+        const connection = connections.get(node.connectionId), principal = bigQueryPrincipalOf(connection), project = node.ref.object.name
+        if (!principal || explorer.isBigQueryProjectBilling(node.connectionId, project)) return
+        const starred = bigQueryStarred.isStarred(principal, project)
+        if (starred) explorer.removeBigQuerySessionProject(node.connectionId, project)
+        const result = await bigQueryStarred.setStarred(principal, project, !starred)
+        if (!result.ok) commands.reportError(result.error)
+      }
+    }),
+    commands.register('bigquery.removeSessionProject', {
+      when: args => {
+        const node = nodeOf(args)
+        return live(node) && node.kind === 'bqProject' && node.bigQueryProjectRole === 'session'
+      },
+      run: args => {
+        const node = nodeOf(args)
+        if (!live(node) || node.kind !== 'bqProject' || node.ref.type !== 'object' || !node.ref.object.name) return
+        explorer.removeBigQuerySessionProject(node.connectionId, node.ref.object.name)
+      }
     }),
     // A server's name as connected to, or the quoted object name.
     commands.register('explorer.copyName', {

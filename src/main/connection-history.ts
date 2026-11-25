@@ -15,6 +15,8 @@ export interface ConnectionHistory {
   load(): Promise<{ library: ConnectionLibrary; warning?: string; trusted: boolean }>
   /** Saves a BigQuery connection's cost-prompt choice (docs/bigquery.md, Cost); resolves whether it holds. */
   setBigQueryCostPrompt?(options: BigQueryConnectionOptions, costPrompt: boolean): Promise<boolean>
+  /** Claims legacy migrated `extraProjects` into `principal`'s starred projects on BigQuery connect. */
+  claimBigQueryMigratedProjects?(principal: string): Promise<void>
 }
 
 export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQueryConnectionStore): ConnectionHistory {
@@ -30,6 +32,9 @@ export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQuery
       const { costPrompt: _costPrompt, ...rest } = options, key = connectionKey(rest)
       const library = await bigQuery.setCostPrompt({ options: rest, costPrompt })
       return library.profiles.some(profile => connectionKey(profile.options) === key && (profile.options.costPrompt !== false) === costPrompt)
+    },
+    async claimBigQueryMigratedProjects(principal) {
+      await bigQuery.claimMigratedProjects(principal)
     }
   }
 }

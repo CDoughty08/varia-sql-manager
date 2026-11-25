@@ -281,6 +281,7 @@ async function settleBigQuery(prepared: PreparedRequest, outcome: Settled, deps:
     catch (error) { return refuse(error) }
     info.targetId = context.targetId
   }
+  await deps.connections.claimBigQueryMigratedProjects?.(verified.principal.principal).catch(() => {})
   if (context?.mode === 'background') return outcome
   try {
     const entry = await deps.connections.rememberEntry(validated, !context?.setsEnvironment, context?.autoReconnect, context?.selectedProfileId)

@@ -102,4 +102,22 @@ describe('BigQuery connections through the connection owner (BQ-2)', () => {
     expect(result).toMatchObject({ ok: true, value: [{ name: 'sales', location: 'EU' }] })
     expect(load.mock.calls[0]![0]).toMatchObject(options)
   })
+
+  it('deduplicates equivalent live BigQuery connections and auto-claims migrated projects on verified connect', async () => {
+    const { service, open, close, bigQuery, request } = await fixture()
+    await bigQuery.addMigratedProjects(['varia-beta', 'bigquery-public-data'])
+    const first = request()
+    const firstResult = await service.connect(options, first)
+    expect(firstResult).toMatchObject({ ok: true })
+    await service.accept(first.requestId)
+    // Migrated projects were claimed into starredProjects for the verified principal on connect.
+    expect(await bigQuery.loadStarredProjects()).toEqual({ byPrincipal: { [ada]: ['varia-beta', 'bigquery-public-data'] } })
+    expect((await bigQuery.load()).library.migratedProjects).toBeUndefined()
+    // Connecting again with identical BigQuery settings and principal reuses the live handle and disposes the duplicate.
+    const second = request()
+    const secondResult = await service.connect(options, second)
+    expect(secondResult).toMatchObject({ ok: true, value: { id: (firstResult as { ok: true; value: ConnectionInfo }).value.id, targetId: first.targetId } })
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
 })

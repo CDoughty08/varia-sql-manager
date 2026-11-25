@@ -54,6 +54,8 @@ export interface ExplorerTarget {
   readonly linux?: boolean
   /** The server's engine; absent for SQL Server. */
   readonly provider?: 'bigquery'
+  /** A BigQuery project node's role in Object Explorer: billing project, persisted starred project, or session-only. */
+  readonly bigQueryProjectRole?: 'billing' | 'starred' | 'session'
   /** The creation date shown for this row. */
   readonly created?: string
   /** The immutable msdb job_id from the listing, checked by every SQL Server Agent job action. */
