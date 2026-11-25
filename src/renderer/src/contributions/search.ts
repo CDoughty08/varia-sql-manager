@@ -11,7 +11,7 @@ const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error
 
 /**
  * Search Objects' commands. Search Objects opens a tab on the server whose Object Explorer menu runs it, narrowed to the
- * database when opened from its menu; from anywhere else it searches all servers when several are
+ * database, BigQuery project or dataset when opened from its menu; from anywhere else it searches all servers when several are
  * connected, else the one. Rebuild Search Index rebuilds the index of the server its menu or tab is on (every server, from an
  * All servers tab), else the active document's or the selected node's, else the one picked; Stop Indexing stops every running build. A result's Reveal and Copy commands act on the result its menu was opened for, else the
  * selected result of the list that has focus, on a live server.
@@ -65,8 +65,12 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
       run: args => {
         const node = explorerNodeOf(args), choices = connections.live()
         if (node || choices.length < 2) {
-          const database = node?.ref.type === 'object' && node.ref.object.kind === 'database' ? node.ref.object.name : undefined
-          withServer('Select a server to search', id => { objectSearch.open(id, undefined, false, database) })(args)
+          const object = node?.ref.type === 'object' ? node.ref.object : undefined
+          const scope = object?.kind === 'database' ? object.name
+            : object?.kind === 'bqProject' && object.name !== undefined ? { project: object.name }
+            : object?.kind === 'bqDataset' && object.project !== undefined && object.name !== undefined ? { project: object.project, dataset: object.name }
+            : undefined
+          withServer('Select a server to search', id => { objectSearch.open(id, undefined, false, scope) })(args)
           return
         }
         try { objectSearch.open(undefined, undefined, true) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Search Objects could not open.') }

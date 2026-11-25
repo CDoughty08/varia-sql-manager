@@ -132,10 +132,11 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
 
-/** A BigQuery index's summary: datasets in place of databases, the pass a build is in (names, then details), and the projects
- *  read by name only. */
+/** A BigQuery index's summary: datasets in place of databases, the pass a build is in (projects, names, then details), how
+ *  many projects it covers, and the projects read by name only. */
 export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
   if (entry?.requestId && entry.phase === 'estimate') return 'Estimating the billed INFORMATION_SCHEMA read of the index’s details…'
+  if (entry?.requestId && entry.phase === 'projects') return 'Discovering accessible BigQuery projects…'
   if (entry?.requestId) return entry.phase === 'details'
     ? `Reading details of ${numbers.format(entry.done)} of ${count(entry.total, 'object')}…`
     : `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`
@@ -154,7 +155,8 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const billed = bulk ? (bulk.locations ? ` · details read with INFORMATION_SCHEMA in ${count(bulk.locations, 'location')}` : '')
     + (bulk.failed ? ` · the billed read failed in ${count(bulk.failed, 'location')}${bulk.code ? ` (${bulk.code})` : ''}, read with free calls instead` : '') : ''
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
-  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${skipped}${billed}`
+  const across = status.projects && status.projects > 1 ? ` across ${count(status.projects, 'project')}` : ''
+  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${across}${skipped}${billed}`
 }
 
 /**
@@ -253,6 +255,18 @@ export function DatabaseScope({ database, onClear }: { readonly database: string
   return <div className="object-search-database-scope" role="group" aria-label="Database scope">
     <span>Database</span><button type="button" className="chip" title="Search all databases" aria-label={`Clear database scope: ${displayText(database)}`} onClick={onClear}>
       <Icon name="database" /><bdi>{displayText(database)}</bdi><Icon name="close" />
+    </button>
+  </div>
+}
+
+/** A visible, removable BigQuery project or dataset scope so a project- or dataset-menu search never silently narrows the connection's results. */
+export function BigQueryScope({ project, dataset, onClear }: { readonly project: string; readonly dataset?: string; readonly onClear: () => void }) {
+  const hasDataset = dataset !== undefined
+  const label = hasDataset ? displayText(`${project}.${dataset}`) : displayText(project)
+  return <div className="object-search-database-scope" role="group" aria-label={hasDataset ? 'Dataset scope' : 'Project scope'}>
+    <span>{hasDataset ? 'Dataset' : 'Project'}</span>
+    <button type="button" className="chip" title={hasDataset ? 'Search all datasets and projects' : 'Search all projects'} aria-label={`Clear ${hasDataset ? 'dataset' : 'project'} scope: ${label}`} onClick={onClear}>
+      <Icon name={hasDataset ? 'database' : 'project'} /><bdi>{label}</bdi><Icon name="close" />
     </button>
   </div>
 }
@@ -625,7 +639,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         </div>
         {pane && inlineTools}
       </div>
-      {!pane && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
+      {!pane && !spanning && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
+      {!pane && !spanning && state.project !== undefined && <BigQueryScope project={state.project} dataset={state.dataset} onClear={() => { focusInput(); set({ project: undefined, dataset: undefined }) }} />}
       {showHits && <>
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} providers={providers} />
           : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} providers={providers} />}

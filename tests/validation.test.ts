@@ -411,6 +411,9 @@ describe('IPC validation', () => {
     expect(methodAllows('connections.connect', 'bigquery')).toBe(true)
     expect(methodAllows('connections.preview', 'bigquery')).toBe(false)
     expect(methodAllows('bigquery.projects', 'sqlserver')).toBe(false)
+    expect(methodAllows('bigquery.connectionProjects', 'bigquery')).toBe(true)
+    expect(methodAllows('bigquery.connectionProjects', 'sqlserver')).toBe(false)
+    expect(requestProvider('bigquery.connectionProjects', { connectionId: 'bq-handle' }, lookup)).toBe('bigquery')
     expect(requestProvider('bigquery.account', { authentication: 'gcloud' }, lookup)).toBeUndefined()
     // Load datasets and the query tab's dataset box use the database methods for BigQuery too.
     expect(methodAllows('databases.list', 'bigquery')).toBe(true)
@@ -452,6 +455,31 @@ describe('IPC validation', () => {
     expect(connectionPruneSchema.safeParse({ targetIds: [id] }).success).toBe(true)
     expect(connectionPruneSchema.safeParse({ targetIds: Array.from({ length: 200 }, () => crypto.randomUUID()) }).success).toBe(true)
     for (const value of [{ targetIds: [] }, { targetIds: ['server'] }, { targetIds: [id], force: true }, { targetIds: Array.from({ length: 201 }, () => id) }]) expect(connectionPruneSchema.safeParse(value).success).toBe(false)
+  })
+  it('validates explorer.index, bigquery.indexEstimate and bigquery.connectionProjects schemas strictly', () => {
+    const connectionId = crypto.randomUUID(), requestId = crypto.randomUUID()
+    expect(validateRequest('explorer.index', { connectionId, requestId, definitions: true, allProjects: true, starredProjects: ['varia-alpha', 'varia-beta'] }))
+      .toEqual({ connectionId, requestId, definitions: true, allProjects: true, starredProjects: ['varia-alpha', 'varia-beta'] })
+    for (const bad of [
+      { connectionId, requestId, extraDetails: true }, { connectionId, requestId, allProjects: 'true' },
+      { connectionId, requestId, starredProjects: ['Bad Project'] },
+      { connectionId, requestId, starredProjects: Array.from({ length: 201 }, (_, i) => `varia-proj-${i}`) }
+    ]) expect(() => validateRequest('explorer.index', bad), JSON.stringify(bad).slice(0, 80)).toThrow('Invalid request')
+
+    expect(validateRequest('bigquery.indexEstimate', { connectionId, definitions: false, starredProjects: ['varia-alpha'] }))
+      .toEqual({ connectionId, definitions: false, starredProjects: ['varia-alpha'] })
+    for (const bad of [
+      { connectionId, extraDetails: true }, { connectionId, starredProjects: ['Bad Project'] },
+      { connectionId, starredProjects: Array.from({ length: 201 }, (_, i) => `varia-proj-${i}`) }
+    ]) expect(() => validateRequest('bigquery.indexEstimate', bad), JSON.stringify(bad).slice(0, 80)).toThrow('Invalid request')
+
+    expect(validateRequest('bigquery.connectionProjects', { connectionId })).toEqual({ connectionId })
+    expect(validateRequest('bigquery.connectionProjects', { connectionId, pageToken: 'next-page-1' })).toEqual({ connectionId, pageToken: 'next-page-1' })
+    expect(methodPolicies['bigquery.connectionProjects']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 30_000, providers: ['bigquery'] })
+    for (const bad of [{}, { connectionId: 'not-a-uuid' }, { connectionId, pageToken: '' }, { connectionId, authentication: 'gcloud' }, { connectionId, extra: 1 }])
+      expect(() => validateRequest('bigquery.connectionProjects', bad), JSON.stringify(bad).slice(0, 80)).toThrow('Invalid request')
+    expect(validateResult('bigquery.connectionProjects', { projects: [{ id: 'varia-alpha', friendlyName: 'Alpha' }], nextPageToken: 'tok' }))
+      .toEqual({ projects: [{ id: 'varia-alpha', friendlyName: 'Alpha' }], nextPageToken: 'tok' })
   })
   it('rejects an oversized array at its bound without one issue per element (GHSA-mrhx-c7xc-m3w5)', () => {
     const oversized = connectionCancelSchema.safeParse({ requestIds: Array.from({ length: 2000 }, () => null) })

@@ -24,8 +24,8 @@ export interface IndexEntry {
   readonly done: number
   readonly total: number
   readonly objects: number
-  /** A BigQuery build's pass: names, then details; `estimate` while the billed bulk path's estimate and cost prompts come first. */
-  readonly phase?: 'estimate' | 'names' | 'details'
+  /** A BigQuery build's pass: projects (discovering accessible projects), names, then details; `estimate` while the billed bulk path's estimate and cost prompts come first. */
+  readonly phase?: 'estimate' | 'projects' | 'names' | 'details'
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -42,9 +42,14 @@ export interface SearchQueryState {
   readonly types: readonly SearchType[]
   /** A database-menu search is scoped until its chip is cleared or its server changes. */
   readonly database?: string
+  /** A BigQuery project- or dataset-menu search is scoped until its chip is cleared or its server changes. */
+  readonly project?: string
+  readonly dataset?: string
   /** The most hits each server answers, when fewer than the backend's default will do. */
   readonly limit?: number
 }
+/** A scope passed to `open`: a SQL Server database name (string for backwards compatibility), or an object naming one engine's scope. */
+export type SearchScopeTarget = string | { readonly database?: string; readonly project?: string; readonly dataset?: string }
 /** One server's part of an All servers search: its answer, or why it has none. */
 export interface ServerAnswer {
   readonly connectionId: string
@@ -91,9 +96,10 @@ export interface ObjectSearchSnapshot {
   /** Object Explorer's search band's share of the pane, once its splitter was moved (pane-band.ts); until then it sizes by content. */
   readonly paneSize?: number
 }
-/** Object Explorer as Reveal uses it: its seek, and whether it groups objects by schema (the paths differ). */
+/** Object Explorer as Reveal uses it: its seek, whether it groups objects by schema (the paths differ), and ensuring a BigQuery session project before seeking. */
 export interface RevealHost {
   seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome>
+  ensureBigQueryProject?(connectionId: string, project: string): void
   readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
@@ -108,6 +114,8 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly events?: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
   /** BigQuery's cost prompts before a full build's billed bulk path runs (BigQueryCostService.beforeScript); without it the bulk path never runs. */
   readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult, signal: AbortSignal) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
+  /** Per-connection BigQuery starred projects to include in Search Objects index builds and bulk estimates. */
+  readonly starredProjects?: (connectionId: string) => readonly string[]
 }
 /** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), the datasets DDL marked, or everything
  *  (Refresh on the server's node). */
@@ -340,7 +348,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Builds (or rebuilds) a connection's index; a build already running is superseded and answers CANCELLED. A BigQuery index
-   * also reads the extra projects' details when Options says to; `refresh` re-reads part of it instead (refreshBigQuery).
+   * discovers every accessible project when Options says to and always includes the connection's starred projects; `refresh`
+   * re-reads part of it instead (refreshBigQuery).
    */
   build(connectionId: string, refresh?: BigQueryRefresh): void {
     const connection = this.o.connections.get(connectionId)
@@ -351,7 +360,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const requestId = this.newId()
     const previous = this.getSnapshot().indexes[connectionId]
     const definitions = this.o.settings.get('objectExplorer.search.definitions')
-    const extraDetails = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryExtraProjects') : undefined
+    const allProjects = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryAccessibleProjects') : undefined
+    const rawStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
+    const starredProjects = rawStarred?.length ? [...rawStarred] : undefined
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
     const bulk = bigQuery && !partial && this.o.settings.get('textEditor.googleSql.bulkIndex') && !!this.o.billedGate && !!this.o.api.bigQueryIndexEstimate
     // A newer build closes an older one's prompt. An older build already sent the backend supersedes when the new one is sent, which
@@ -363,7 +374,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const send = (billed: BigQueryBulkIndex | undefined) => {
       void this.o.api.explorerIndex({
         connectionId, requestId, definitions,
-        ...extraDetails !== undefined ? { extraDetails } : {}, ...bigQuery && partial ? partial : {}, ...billed ? { bulk: billed } : {}
+        ...allProjects !== undefined ? { allProjects } : {}, ...starredProjects ? { starredProjects } : {},
+        ...bigQuery && partial ? partial : {}, ...billed ? { bulk: billed } : {}
       }).then(result => {
         const entry = this.getSnapshot().indexes[connectionId]
         if (this.disposed || entry?.requestId !== requestId) return
@@ -382,7 +394,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       }, onUnexpectedError)
     }
     if (!bulk) { send(undefined); return }
-    void this.bulkPath(connectionId, requestId, definitions, extraDetails === true).then(answer => {
+    void this.bulkPath(connectionId, requestId, definitions, starredProjects).then(answer => {
       const entry = this.getSnapshot().indexes[connectionId]
       if (this.disposed || entry?.requestId !== requestId) return
       if (answer === 'stopped') {
@@ -401,12 +413,12 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    * or undefined for a build with the free calls only (the estimate failed or found nothing to read, or the prompt was declined),
    * or `stopped` when Stop, a newer build or a disconnect ended it first.
    */
-  private async bulkPath(connectionId: string, requestId: string, definitions: boolean, extraDetails: boolean): Promise<BigQueryBulkIndex | undefined | 'stopped'> {
+  private async bulkPath(connectionId: string, requestId: string, definitions: boolean, starredProjects: readonly string[] | undefined): Promise<BigQueryBulkIndex | undefined | 'stopped'> {
     const controller = new AbortController()
     this.estimating.set(requestId, controller)
     const ended = () => controller.signal.aborted || this.disposed || this.getSnapshot().indexes[connectionId]?.requestId !== requestId || !live(this.o.connections.get(connectionId))
     try {
-      const estimated = await this.o.api.bigQueryIndexEstimate!({ connectionId, definitions, ...extraDetails ? { extraDetails } : {} }).catch(() => undefined)
+      const estimated = await this.o.api.bigQueryIndexEstimate!({ connectionId, definitions, ...starredProjects ? { starredProjects } : {} }).catch(() => undefined)
       if (ended()) return 'stopped'
       // The estimate is the build's budget: the backend runs a location's jobs one at a time, each capped so that together they
       // never bill more than what the prompts showed (a location the rest cannot cover is read with the free calls).
@@ -467,14 +479,20 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Opens a Search Objects tab on the server (the first connected one when none is named), with `text` if given; `allServers`
-   * searches every connected server instead, and the tab belongs to none of them. `fuzzy` opens it with Fuzzy Match on.
+   * searches every connected server instead, and the tab belongs to none of them. `scope` narrows a single-server tab to a SQL
+   * Server database or a BigQuery project (and optional dataset). `fuzzy` opens it with Fuzzy Match on.
    */
-  open(connectionId?: string, text?: string, allServers = false, database?: string, fuzzy = false): string | undefined {
+  open(connectionId?: string, text?: string, allServers = false, scope?: SearchScopeTarget, fuzzy = false): string | undefined {
     const connection = connectionId ? this.o.connections.get(connectionId) : this.o.connections.getSnapshot().find(live)
     if (!live(connection)) throw new Error('Connect to a server to search its objects.')
     const document = this.o.documents.openCustom('objectSearch', searchTitle, allServers ? undefined : connection.id, 'master')
     if (!allServers) this.targetBindings.bind(document.id, connection.id)
-    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...fuzzy ? { fuzzy } : {}, ...text ? { text } : {}, ...allServers ? { allServers: true } : database !== undefined ? { database } : {} })
+    const scoped = allServers || scope === undefined ? {}
+      : typeof scope === 'string' ? { database: scope }
+      : scope.database !== undefined ? { database: scope.database }
+      : scope.project !== undefined ? { project: scope.project, ...scope.dataset !== undefined ? { dataset: scope.dataset } : {} }
+      : {}
+    this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...fuzzy ? { fuzzy } : {}, ...text ? { text } : {}, ...allServers ? { allServers: true } : scoped })
     for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
     if (text) void this.search(document.id)
     this.o.focus?.(document.id)
@@ -551,7 +569,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (!document || (document.connectionId === connectionId && !document.allServers) || !live(this.o.connections.get(connectionId))) return
     this.cancelSearch(document)
-    const { database: _database, ...query } = this.query(document)
+    const { database: _database, project: _project, dataset: _dataset, ...query } = this.query(document)
     this.putDocument({ id, connectionId, ...query })
     if (this.o.documents.get(id)) {
       this.targetBindings.bind(id, connectionId)
@@ -566,7 +584,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const document = this.getSnapshot().documents[id]
     if (!document || document.allServers || id === explorerSearchId) return
     this.cancelSearch(document)
-    const { database: _database, ...query } = this.query(document)
+    const { database: _database, project: _project, dataset: _dataset, ...query } = this.query(document)
     this.putDocument({ id, connectionId: document.connectionId, ...query, allServers: true })
     this.targetBindings.forget(id)
     if (this.o.documents.get(id)) this.o.documents.update?.(id, { connectionId: undefined, targetId: undefined })
@@ -669,6 +687,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): Promise<SeekOutcome> {
     const paths = revealPaths(hit, !!host.groupBySchema)
     if (!paths.length) return Promise.resolve({ ok: false, message: unknownKindReveal })
+    if (hit.object.project !== undefined) host.ensureBigQueryProject?.(connectionId, hit.object.project)
     return host.seek(connectionId, paths)
   }
 
@@ -708,11 +727,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   private query(document: SearchDocumentState): SearchQueryState {
     return { text: document.text, caseSensitive: document.caseSensitive, wholeWord: document.wholeWord, regex: document.regex, fuzzy: document.fuzzy, scope: document.scope, types: document.types,
-      ...document.database !== undefined ? { database: document.database } : {}, ...document.limit !== undefined ? { limit: document.limit } : {} }
+      ...document.database !== undefined ? { database: document.database } : {},
+      ...document.project !== undefined ? { project: document.project, ...document.dataset !== undefined ? { dataset: document.dataset } : {} } : {},
+      ...document.limit !== undefined ? { limit: document.limit } : {} }
   }
 
-  /** Sends one server's search: only the kinds its engine holds (none chosen for it answers no hits without asking), and a
-   *  database scope only to SQL Server. */
+  /** Sends one server's search: only the kinds its engine holds (none chosen for it answers no hits without asking), and only
+   *  that engine's scope (database for SQL Server; project and optional dataset for BigQuery). */
   private ask(connectionId: string, requestId: string, asked: SearchQueryState) {
     const connection = this.o.connections.get(connectionId)
     const bigQuery = !!connection && isBigQueryConnection(connection)
@@ -721,7 +742,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     if (own && !own.length) return Promise.resolve({ ok: true as const, value: noHits(this.getSnapshot().indexes[connectionId]?.status) })
     return this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...own ? { kinds: own } : {},
-      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {}, ...asked.database !== undefined && !bigQuery ? { database: asked.database } : {},
+      ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {},
+      ...!bigQuery && asked.database !== undefined ? { database: asked.database } : {},
+      ...bigQuery && asked.project !== undefined ? { project: asked.project, ...asked.dataset !== undefined ? { dataset: asked.dataset } : {} } : {},
       ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
   }
