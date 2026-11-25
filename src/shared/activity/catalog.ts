@@ -134,7 +134,21 @@ export const activityLimits = {
   /** The largest file latency threshold, in ms (activityMonitor.fileLatency*). */
   fileLatencyMs: 10_000,
   /** Milliseconds of samples Resource Waits' 1-Minute Average spans. */
-  waitAverageMs: 60_000
+  waitAverageMs: 60_000,
+  /** SQL Server Agent job links (AG-16): job ids (and job and step pairs) one name read asks for, how long a read name (or a job
+   *  msdb did not name) is kept before it is read again, and the most jobs and steps kept per monitor. */
+  agentJobSlots: 16, agentJobNamesMs: 60_000, agentJobCache: 512
+} as const
+
+/**
+ * SQL Server Agent's sessions (AG-16). Agent's own threads run under `SQLAgent - <task>` (Generic Refresher, Job invocation
+ * engine, Email Logger, Alert Engine, …); a T-SQL job step runs under `SQLAgent - TSQL JobStep (Job 0x<job id> : Step <n>)`,
+ * where the job id is the job_id's 16 bytes as SQL Server stores a uniqueidentifier, in hex. `step` matches a job step's name
+ * whatever its task words; the backend embeds the same pattern, so the two parsers never disagree.
+ */
+export const agentProgram = {
+  prefix: 'SQLAgent - ',
+  step: '^SQLAgent - (?<task>[A-Za-z][A-Za-z0-9 ]{0,63}) \\(Job 0x(?<job>[0-9A-Fa-f]{32}) : Step (?<step>[0-9]{1,9})\\)$'
 } as const
 
 /** The session actions (activity.details and activity.kill): Details' sections, the texts it returns in full on request,
@@ -185,6 +199,8 @@ export interface ColumnSpec {
   readonly hidden?: true
   /** Only when the server has the capability (spills from SQL Server 2016 SP2 and 2017 CU3). */
   readonly capability?: Capability
+  /** A link (AG-16's Agent Job): its non-empty cells open what they name on a click or Enter. */
+  readonly link?: true
 }
 export interface TableSpec {
   readonly probe: ActivityProbe
@@ -208,6 +224,12 @@ export interface TableSpec {
 const number = (value: number) => value.toLocaleString('en-US')
 const c = (id: string, caption: string, type: ColumnType, unit: ColumnUnit, visible: boolean, parity: Parity, note: string, capability?: Capability): ColumnSpec =>
   capability ? { id, caption, type, unit, visible, parity, note, capability } : { id, caption, type, unit, visible, parity, note }
+/** AG-16's columns on a session's row: the SQL Server Agent job step it runs, as a link, and the job's name, which Open Job
+ *  and Stop Job read. */
+const agentJobNote = 'The SQL Server Agent job step the session runs (program_name "SQLAgent - TSQL JobStep (Job 0x… : Step n)"): the job\'s name, the step and the step\'s name, read from msdb (sysjobs_view, and sysjobsteps for sysadmin) and kept a minute; "Job <id>, step n" when msdb names no job to this login. A link that opens the job at its History.'
+const agentJobColumn = (visible: boolean): ColumnSpec => ({ ...c('job', 'Agent Job', 'text', '', visible, 'new', agentJobNote), link: true })
+/** Hidden, so with the other hidden columns at the end of a table. */
+const agentJobNameColumn = c('jobName', 'Agent Job Name', 'text', '', false, 'new', 'The Agent job\'s name alone, when msdb gave it; Open Job and Stop Job act on it.')
 
 /** Row tones and the generic grid tone each uses (L5's `resultsGrid.row*` keys). */
 export const rowTones = {
@@ -239,7 +261,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
     probe: 'activity.sessions', title: 'Sessions', key: ['sessionId'], identity: ['loginTime'], rowCap: 10_000, departedLinger: true,
     tones: ['blocked', 'blocking', 'rollback', 'departed', 'system'],
     defaultSort: [{ column: 'sessionId', descending: false }],
-    textColumns: ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status'],
+    textColumns: ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status'],
     facetColumns: ['login', 'database', 'application', 'hostName', 'waitType', 'command', 'status'],
     columns: [
       c('sessionId', 'Session ID', 'int', 'id', true, 'ssms', 'session_id; one row per session. Of its MARS requests a blocked one, else the lowest, fills the request columns, and CPU and reads add them all.'),
@@ -248,6 +270,7 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('database', 'Database', 'text', '', true, 'ssms', 'The request\'s database, else the session\'s.'),
       c('command', 'Command', 'text', '', true, 'ssms', 'The request\'s command.'),
       c('application', 'Application', 'text', '', true, 'ssms', 'program_name.'),
+      agentJobColumn(true),
       c('waitType', 'Wait Type', 'text', '', true, 'ssms', 'The request\'s wait type; for a parallel request, the longest blocking wait of its tasks.'),
       c('waitTimeMs', 'Wait Time (ms)', 'bigint', 'ms', true, 'ssms', 'The request\'s current wait.'),
       c('waitResource', 'Wait Resource', 'text', '', true, 'ssms', `wait_resource, else the blocking task's resource description (${number(activityLimits.resourceChars)} characters).`),
@@ -275,13 +298,14 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('authScheme', 'Auth Scheme', 'text', '', false, 'new', 'SQL, NTLM or KERBEROS.'),
       c('hostProcessId', 'Host PID', 'int', 'id', false, 'new', 'host_process_id.'),
       c('queryHash', 'Query Hash', 'text', '', false, 'new', 'The current request\'s query_hash.'),
-      c('varia', 'Varia', 'text', '', false, 'new', 'What a Varia session is: this window\'s query tab, or one of its pools.')
+      c('varia', 'Varia', 'text', '', false, 'new', 'What a Varia session is: this window\'s query tab, or one of its pools.'),
+      agentJobNameColumn
     ]
   },
   blocking: {
     probe: 'activity.sessions', title: 'Blocking', key: ['sessionId'], rowCap: 2_000, departedLinger: true, tones: ['blocked', 'blocking', 'departed'],
     defaultSort: [],
-    textColumns: ['login', 'database', 'application', 'hostName', 'waitType', 'status'],
+    textColumns: ['login', 'database', 'application', 'job', 'hostName', 'waitType', 'status'],
     columns: [
       c('session', 'Session', 'text', '', true, 'new', 'The session id indented by its depth in the chain; lead blockers at depth 0.'),
       c('sessionId', 'Session ID', 'int', 'id', false, 'new', 'session_id.'),
@@ -294,11 +318,13 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('login', 'Login', 'text', '', true, 'new', 'login_name.'),
       c('hostName', 'Host', 'text', '', true, 'new', 'host_name.'),
       c('application', 'Application', 'text', '', true, 'new', 'program_name.'),
+      agentJobColumn(true),
       c('database', 'Database', 'text', '', true, 'new', 'The request\'s database, else the session\'s.'),
       c('openTransactions', 'Open Transactions', 'int', 'count', true, 'new', 'The session\'s open transactions.'),
       c('cycle', 'Cycle', 'bool', '', true, 'new', 'Part of a cycle (a deadlock SQL Server has not resolved yet); the chain is cut at its lowest session id.'),
       c('lastBatch', 'Last Batch', 'text', '', true, 'new', 'Lead blockers only: the start of the last batch it sent (sys.dm_exec_input_buffer).'),
-      ...sessionIdentityColumns
+      ...sessionIdentityColumns,
+      agentJobNameColumn
     ]
   },
   activeQueries: {
@@ -334,6 +360,9 @@ export const tableSpecs: { readonly [T in ActivityTable]: TableSpec } = {
       c('login', 'Login', 'text', '', false, 'new', 'The session\'s login_name, which Kill Process names.'),
       c('hostName', 'Host Name', 'text', '', false, 'new', 'The session\'s host_name, which Kill Process names.'),
       c('openTransactions', 'Open Transactions', 'int', 'count', false, 'new', 'The session\'s open transactions, which Kill Process warns about.'),
+      c('application', 'Application', 'text', '', false, 'new', 'The session\'s program_name, from its Sessions row.'),
+      agentJobColumn(false),
+      agentJobNameColumn,
       ...sessionIdentityColumns
     ]
   },
@@ -798,6 +827,7 @@ const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + 
 export function activityCatalogJson(): string {
   return [
     '{',
+    `  "agentProgram": ${line(agentProgram)},`,
     `  "bands": ${line(activityBands)},`,
     `  "benign": ${line(benignWaits.map(wait => wait.name))},`,
     `  "benignCategories": ${line(benignCategories)},`,

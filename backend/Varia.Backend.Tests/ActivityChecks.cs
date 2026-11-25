@@ -19,6 +19,7 @@ internal static class ActivityChecks
         Bands(check);
         Blocking(check);
         Filters(check);
+        AgentJobs(check);
     }
 
     private static void CatalogChecks(Action<bool, string> check)
@@ -117,8 +118,8 @@ internal static class ActivityChecks
         var failing = results.Where(result => result.Problems.Count > 0).Select(result => result.Name + ": " + string.Join("; ", result.Problems)).ToList();
         var renders = ActivitySql.Renders().ToList();
         // Without server state the sessions probe reads one statement (the caller's own session); Details' eight statements and
-        // Kill's one are linted with every render; the capability probe is linted once.
-        check(failing.Count == 0 && renders.Count == 5 * 2 * 2 * 2 && results.Count == renders.Count / 2 * (7 + 5 + 4 + 3 + 8 + 1) + renders.Count / 2 * (7 + 1 + 4 + 3 + 8 + 1) + 1,
+        // Kill's one are linted with every render, the two Agent name reads with every render that reads server state; the capability probe is linted once.
+        check(failing.Count == 0 && renders.Count == 5 * 2 * 2 * 2 && results.Count == renders.Count / 2 * (7 + 5 + 4 + 3 + 8 + 1) + renders.Count / 2 * (7 + 1 + 4 + 3 + 8 + 1) + renders.Count / 2 * 2 + 1,
             "every Activity Monitor statement, Details' and Kill's included, passes its lint for every band, kind of server, capability and permission, with the capability probe: " + string.Join(" | ", failing.Take(3)));
         var render = new ActivityRender(17, "box");
         var sessions = ActivitySql.Statements("activity.sessions", render).Single(statement => statement.Id == "sessions");
@@ -327,5 +328,59 @@ internal static class ActivityChecks
         var files = ActivityFilter.Compile(Catalog, new("files", Text: "tempdb"));
         check(files.Matches(column => column == "database" ? "tempdb" : null) && !files.Matches(column => column == "type" ? "tempdb" : null) && files.Table == "files",
             "other tables filter by their own text columns only");
+    }
+
+    /// <summary>AG-16: Agent's program names (the same forms as tests/activity-agent-program.test.ts) and the per-connection
+    /// name cache: what it asks msdb for, how long it keeps an answer, and a refusal that leaves the decoded id and step.</summary>
+    private static void AgentJobs(Action<bool, string> check)
+    {
+        const string stored = "3D2C1B8A5F4E7160" + "8293A4B5C6D7E8F9";
+        var jobId = Guid.Parse("8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9");
+        var program = "SQLAgent - TSQL JobStep (Job 0x" + stored + " : Step 2)";
+        check(AgentPrograms.Parse(program, Catalog) == new AgentJobRef(jobId, 2) && AgentPrograms.Parse(program.Replace(stored, stored.ToLowerInvariant(), StringComparison.Ordinal), Catalog) == new AgentJobRef(jobId, 2)
+            && AgentPrograms.Parse("SQLAgent - CmdExec JobStep (Job 0x" + stored + " : Step 999999999)", Catalog) == new AgentJobRef(jobId, 999_999_999),
+            "a job step's program name gives the job id in SQL Server's byte order and the step");
+        string?[] bad =
+        [
+            null, "", "SSMS", "SQLAgent - Generic Refresher", "SQLAgent - Job invocation engine", "sqlagent - TSQL JobStep (Job 0x" + stored + " : Step 2)",
+            program.Replace(" : Step 2)", " : Step 0)", StringComparison.Ordinal), program.Replace(" : Step 2)", " : Step 2147483648)", StringComparison.Ordinal),
+            program.Replace(stored, stored[2..], StringComparison.Ordinal), program.Replace(stored, stored[..31] + "G", StringComparison.Ordinal), program[..^1], program + " ", program + "\n",
+            "SQLAgent - " + new string('x', 118) + " (Job 0x" + stored + " : Step 2)"
+        ];
+        var accepted = bad.Where(text => AgentPrograms.Parse(text, Catalog) is not null).ToList();
+        check(accepted.Count == 0, "Agent's own threads, other programs and malformed job steps name no job: " + string.Join(", ", accepted));
+        var job = new AgentJobRef(jobId, 2);
+        check(AgentPrograms.Text(job, "Nightly", "Load") == "Nightly, step 2 (Load)" && AgentPrograms.Text(job, "Nightly", null) == "Nightly, step 2"
+            && AgentPrograms.Text(job, null, "Load") == "Job 8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9, step 2",
+            "the Agent Job column says the job's and step's names, or the decoded id where msdb named none, as agentJobText does");
+
+        long time = 0;
+        var names = new AgentJobNames(Catalog, () => time);
+        var other = Guid.Parse("00000000-0000-0000-0000-000000000001");
+        var running = new[] { job, job with { Step = 3 }, new AgentJobRef(other, 1) };
+        var wanted = names.WantedJobs(running);
+        check(wanted.Count == 2 && names.WantedSteps(running).Count == 0 && names.Resolve(program) == ("Job 8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9, step 2", null) && names.Resolve("SSMS") is null,
+            "unread names are asked for once per job, steps only once the job is named, and the rows show the decoded id meanwhile");
+        names.AddJobs(wanted, new(["job_id", "name"], [[jobId, "Nightly"]]));
+        var steps = names.WantedSteps(running);
+        check(names.WantedJobs(running).Count == 0 && steps.SequenceEqual([job, job with { Step = 3 }]), "a job msdb did not show the login is not asked again within agentJobNamesMs, nor its steps");
+        names.AddSteps(steps, new(["job_id", "step_id", "step_name"], [[jobId, 2, "Load"]]));
+        check(names.Resolve(program) == ("Nightly, step 2 (Load)", "Nightly") && names.WantedSteps(running).Count == 0, "named jobs and steps resolve from the cache without another read");
+        time = Catalog.Limit("agentJobNamesMs");
+        check(names.WantedJobs(running).Count == 2 && names.Resolve(program)?.Name == "Nightly", "after agentJobNamesMs the names are asked again, the known ones shown meanwhile");
+        names.MissedJobs(names.WantedJobs(running));
+        check(names.WantedJobs(running).Count == 0 && names.Resolve(program)?.Name == "Nightly", "a read that failed for the moment keeps what was known and waits before asking again");
+        names.RefuseSteps();
+        time *= 3;
+        check(names.WantedSteps(running).Count == 0 && names.WantedJobs(running).Count == 2, "a refused step read is not tried again on the connection; the names still are");
+        names.RefuseNames();
+        check(names.WantedJobs(running).Count == 0, "a refused names read is not tried again on the connection");
+        names.Reset();
+        check(!names.NamesRefused && !names.StepsRefused && names.WantedJobs(running).Count == 2 && names.Resolve(program)?.Name is null, "a new connection forgets the names and asks again");
+        var many = Enumerable.Range(1, (int)Catalog.Limit("agentJobCache") + 40).Select(index => new AgentJobRef(new Guid(index, 0, 0, new byte[8]), 1)).ToList();
+        var asked = names.WantedJobs(many);
+        check(asked.Count == Catalog.Limit("agentJobSlots") && asked.Count == ActivitySql.AgentJobSlots, "one read asks for at most agentJobSlots jobs");
+        for (var round = 0; round < many.Count / asked.Count + 2; round++) names.AddJobs(names.WantedJobs(many), new(["job_id", "name"], []));
+        check(names.WantedJobs(many).Count == asked.Count, "the cache keeps at most agentJobCache jobs, so some of more are asked for again");
     }
 }

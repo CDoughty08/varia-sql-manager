@@ -204,7 +204,7 @@ export interface GridViewOptions {
   /** Whether the columns are wider than the grid, so it shows a horizontal scroll bar when it has no vertical one; reported on change. */
   onWide?(wide: boolean): void
   onError(error: unknown): void
-  /** Opens an XML, JSON or plan value; without it no cell is a link. */
+  /** Opens an XML, JSON or plan value, or what a live table's link cell names; without it no cell is a link. */
   onOpenValue?(row: number, column: number): void
   /** A live table's log (LiveGrid): when the view is at the last row as rows arrive, it stays at the last row. */
   readonly followTail?: boolean
@@ -518,7 +518,7 @@ export class GridView {
           // A held Enter opens one tab, not one per repeat.
           if (event.repeat) return true
           const active = this.o.state.selection?.active
-          if (!active || !this.links[active.column] || active.row >= (this.rotated ? this.drawnColumns() : this.rows())) return false
+          if (!active || !this.links[active.column] || active.row >= (this.rotated ? this.drawnColumns() : this.rows()) || this.emptyLink(active.row, active.column)) return false
           this.o.onOpenValue?.(active.row, active.column)
           return true
         }
@@ -921,7 +921,7 @@ export class GridView {
     return new GridData({ handle, columns: this.columns, tone: this.tone, suffix: this.diff ? this.diff.mark : this.columns, ...this.diff && this.diff.old >= 0 ? { previous: this.diff.old } : {}, shape: this.tiles, also: this.headerColumn, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
   }
   private linksOf(descriptor: ResultDescriptor): Uint8Array {
-    return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
+    return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan' || column.role === 'link') ? 1 : 0)
   }
   private numericOf(descriptor: ResultDescriptor): Uint8Array {
     return Uint8Array.from(descriptor.columns, column => isNumericColumn(column) ? 1 : 0)
@@ -1275,7 +1275,7 @@ export class GridView {
     // A link opens on a single click: the second press of a double-click lands before the first one's tab has opened.
     if (drag.dragging || drag.modifiers || drag.hit.kind !== 'cell' || this.clicks > 1) return
     const row = this.rotated ? drag.hit.column : drag.hit.row, column = this.rotated ? drag.hit.row : drag.hit.column
-    if (this.links[column]) this.o.onOpenValue?.(row, column)
+    if (this.links[column] && !this.emptyLink(row, column)) this.o.onOpenValue?.(row, column)
   }
 
   private endDrag(): void {
@@ -1509,7 +1509,8 @@ export class GridView {
       if (bits & LOAD) title = ''
       else if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
       else if (bits & TRUNC) title = `This value was truncated at ${this.truncationLimit(this.rotated ? Math.max(0, slot.row?.row ?? 0) : slot.cell.column)}.`
-      else if (bits & LINK) title = 'Open in a new tab (Enter)'
+      // A live table's link opens what it names (an Agent job, AG-16), which may be a tab already open.
+      else if (bits & LINK) title = this.descriptor.columns[this.rotated ? Math.max(0, slot.row?.row ?? 0) : slot.cell.column]?.role === 'link' ? 'Open (Enter)' : 'Open in a new tab (Enter)'
     } else if (this.rotated && slot?.row && slot.row.row >= 0) title = this.headerTitle(slot.row.row)
     if (title) element.title = title
   }
@@ -2243,6 +2244,16 @@ export class GridView {
     if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return undefined
     const index = (row - window.first) * (window.colEnd - window.colStart) + column - window.colStart, flags = window.flags[index]
     return flags & (FLAG_NULL | FLAG_ERROR) ? { text: null, bits: flags & FLAG_ERROR ? ERR : 0 } : { text: window.text[index], bits: flags & FLAG_TRUNCATED ? TRUNC : 0 }
+  }
+
+  /** A live table's link cell (role `link`, in the result's rows and columns) that names nothing: NULL, unreadable or not read
+   *  yet, such as the Agent Job cell of an Activity Monitor session that runs no job. Enter and the click then go on as on any
+   *  other cell. XML, JSON and plan cells open as before. */
+  private emptyLink(row: number, column: number): boolean {
+    if (this.descriptor.columns[column]?.role !== 'link') return false
+    const window = this.data.peek(tileKey(Math.floor(row / this.tiles.rows), Math.floor(column / this.tiles.columns)))
+    if (!window || row - window.first >= window.count || column >= window.colEnd || column < window.colStart) return true
+    return !!(window.flags[(row - window.first) * (window.colEnd - window.colStart) + column - window.colStart] & (FLAG_NULL | FLAG_ERROR))
   }
 
   /** A hidden suffix cell's text: null for NULL, undefined while its tile is not read. */

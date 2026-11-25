@@ -464,7 +464,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, targetIdOf, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
-  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
+  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
+    openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name, 'history') } })
   const live = fakeLive()
   const ssisPlaces = new SsisPlacesService({ api })
   const operations = new SsisOperationsService({ api, documents, panes, live, places: ssisPlaces, connections, settings, targetIdOf })

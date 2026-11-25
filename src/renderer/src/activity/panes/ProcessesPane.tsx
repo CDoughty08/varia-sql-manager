@@ -85,7 +85,7 @@ export default function ProcessesPane({ state, handle, snapshot, facts, labelled
     </div>
     <PaneState problem={problem} hasRows={!!table} waiting={waiting}>
       <LiveGridPane live={handle} probe={probe} table={0} label="Sessions" toneLabel={processesToneLabel} state={activity.gridState(state.id, 'processes')} filters={filters} onFind={find}
-        onGrid={sessionRows.onGrid} rows={sessionRows.rows} />
+        onGrid={sessionRows.onGrid} rows={sessionRows.rows} onOpenLink={sessionRows.onOpenLink} />
     </PaneState>
     {/* Not a live region: the count changes with every sample on a busy server, and re-announcing it would be noise. */}
     <p className="activity-pane-status" aria-labelledby={labelledBy}>{processesStatus(table?.descriptor.rowsAvailable, !!table?.descriptor.truncated, filter, waiting)}</p>

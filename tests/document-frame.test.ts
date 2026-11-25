@@ -6,7 +6,7 @@ import { defaultSettings, type SettingsValues } from '../src/shared/settings/cat
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import DocumentFrame, { DocumentFrameView, DocumentHeader, FactLine, FrameSectionView, headerVerbs, useHeaderVerbs, type FrameSection, type HeaderVerb, type Verb } from '../src/renderer/src/kit/DocumentFrame'
-import { frameLimits, initialFrameState, resizeScript, restoredSection, revealBy, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
+import { frameLimits, initialFrameState, resizeScript, restoredSection, revealBy, revealSection, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
 import ScriptDrawer, { scriptDrawerActions, type ScriptContent } from '../src/renderer/src/kit/ScriptDrawer'
 import { scriptDestinations, scriptDestinationSpecs } from '../src/shared/scripting/catalog'
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
@@ -38,6 +38,12 @@ describe('document frame state', () => {
     expect(selectSection(state, sections, 'general')).toBe(state)
     expect(selectSection(state, sections, 'nope')).toBe(state)
     expect(scrolledTo(state, 'general')).toBe(state)
+    // A link that shows a section (the Activity Monitor's job link at History) opens it and counts a reveal each time, even when
+    // it is already current, so the mounted frame scrolls to it again; an unknown section changes nothing.
+    const revealed = revealSection(state, sections, 'options')
+    expect(revealed).toEqual({ ...state, section: 'options', collapsed: [], reveal: 1 })
+    expect(revealSection(revealed, sections, 'options').reveal).toBe(2)
+    expect(revealSection(state, sections, 'nope')).toBe(state)
     expect(scrolledTo(state, '')).toBe(state)
     expect(toggleSection(toggleSection(state, 'files'), 'files')).toEqual(state)
     expect(toggleSection(state, 'options').collapsed).toEqual([])

@@ -14,7 +14,7 @@ const collationSchema = z.object({
   options: z.number().int().min(0).max(65535).refine(value => (value & ~compareOptions) === 0)
 }).strict()
 const columnSchema = z.object({
-  name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector', 'old', 'mark', 'leftRow', 'rightRow', 'tone', 'hidden']).optional(),
+  name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector', 'old', 'mark', 'leftRow', 'rightRow', 'tone', 'link', 'hidden']).optional(),
   maxLength: count.optional(), precision: count.optional(), scale: count.optional(), nullable: z.boolean(), collation: collationSchema.optional(),
   of: z.number().int().min(0).max(limits.page.maxColumns - 1).optional(), sortKind: z.enum(sortKinds).optional()
 }).strict()

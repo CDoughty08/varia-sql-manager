@@ -218,10 +218,20 @@ internal static class ActivitySourceChecks
         // A full row: every column has a value, so no column of the live table is left unwritten.
         var everything = WithRequest(Session(60, cpu: 10, reads: 10), cpu: 1, reads: 1, blocker: 61, waitType: "LCK_M_S", waitTime: 900, percent: 5);
         var filled = new ActivitySessionRows(Catalog);
-        filled.Build(SessionResults([everything, Session(61)]), 10_000, Own(["App"]), 99, 0);
-        var row = filled.Build(SessionResults([everything, Session(61)], ticks: 11_000), 11_000, Own(["App"]), 99, 0).Sessions[0];
+        // The Agent Job cells come from the resolver the reader passes (AgentJobNames.Resolve), here one that names every program.
+        Func<string?, (string Text, string? Name)?> named = _ => ("Nightly, step 1 (Load)", "Nightly");
+        filled.Build(SessionResults([everything, Session(61)]), 10_000, Own(["App"]), 99, 0, jobs: named);
+        var row = filled.Build(SessionResults([everything, Session(61)], ticks: 11_000), 11_000, Own(["App"]), 99, 0, jobs: named).Sessions[0];
         var empty = Catalog.Table("sessions").Columns.Where(column => Cell(writer, row, column.Id) is null).Select(column => column.Id).ToList();
         check(empty.Count == 0, "a session with a request, a blocker and a Varia label fills every Processes column: " + string.Join(", ", empty));
+        // AG-16: a job step's session gets the resolver's words and the job's name; any other program, and a step msdb named no job
+        // for, leaves the name empty (the words then carry the decoded id).
+        const string program = "SQLAgent - TSQL JobStep (Job 0x3D2C1B8A5F4E71608293A4B5C6D7E8F9 : Step 2)";
+        var names = new AgentJobNames(Catalog);
+        var jobRows = new ActivitySessionRows(Catalog).Build(SessionResults([Session(80, program: program), Session(81)]), 0, Own(["App"]), 99, 0, jobs: names.Resolve);
+        check(Cell(writer, Row(jobRows, 80), "job") == "Job 8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9, step 2" && Cell(writer, Row(jobRows, 80), "jobName") is null
+            && Cell(writer, Row(jobRows, 81), "job") is null && Cell(writer, Row(jobRows, 81), "jobName") is null,
+            "a job step's session shows its job and step in the Agent Job column (the decoded id until msdb names it), and other sessions none");
     }
 
     /// <summary>A MARS session's requests: one row each, ranked as the statement ranks them.</summary>
@@ -481,12 +491,16 @@ internal static class ActivitySourceChecks
         public List<Dictionary<string, object?>> SessionRows = [];
         public List<Dictionary<string, object?>> Edges = [];
         public List<Dictionary<string, object?>> Active = [];
+        /// <summary>The Agent name reads' rows (AG-16), and each run's parameter values by statement id.</summary>
+        public List<Dictionary<string, object?>> AgentJobs = [];
+        public List<Dictionary<string, object?>> AgentSteps = [];
+        public readonly List<(string Id, IReadOnlyDictionary<string, object> Values)> Asked = [];
         public readonly ActivityReader Reader;
         private readonly SqlConnection connection = new();
 
         public Scripted()
         {
-            Reader = new ActivityReader(new NoHost(), "c") { TestRun = Run };
+            Reader = new ActivityReader(new NoHost(), "c", jobClock: () => Ticks) { TestRun = Run };
             Reader.Unavailable(LiveCatalog.Current.Probes[ActivityReader.OverviewProbe], Box);
             Reader.Unavailable(LiveCatalog.Current.Probes[ActivityReader.SessionsProbe], Box);
         }
@@ -494,6 +508,7 @@ internal static class ActivitySourceChecks
         private Task<ActivityResult> Run(ActivityStatement statement, IReadOnlyDictionary<string, object> values)
         {
             Ran.Add(statement.Probe + " " + statement.Id + (IsLimited(statement) ? " limited" : ""));
+            Asked.Add((statement.Id, values));
             if (Fails(statement)) throw ConnectionFailureChecks.Sql(Failure.Number, 1, Failure.Level, "server", Failure.Message);
             Dictionary<string, object?>[] rows = statement.Id switch
             {
@@ -502,6 +517,8 @@ internal static class ActivitySourceChecks
                 "sessions" => [.. SessionRows],
                 "edges" => [.. Edges],
                 "activeQueries" => [.. Active],
+                "agentJobs" => [.. AgentJobs],
+                "agentSteps" => [.. AgentSteps],
                 "requests" => [new() { ["user_sessions"] = null, ["active_requests"] = null }],
                 _ => []
             };
@@ -618,6 +635,75 @@ internal static class ActivitySourceChecks
 
         StatementErrors(check);
         Facets(check);
+        AgentNames(check);
+    }
+
+    /// <summary>AG-16 through the reader: the Agent name reads after a sessions sample with a job step's session, their slots
+    /// (the rest NULL), the names kept for later samples, a refusal that never fails the sample and is not asked again, and a lost
+    /// connection that still breaks the sample as any statement's does.</summary>
+    private static void AgentNames(Action<bool, string> check)
+    {
+        const string program = "SQLAgent - TSQL JobStep (Job 0x3D2C1B8A5F4E71608293A4B5C6D7E8F9 : Step 2)";
+        var jobId = Guid.Parse("8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9");
+        var spec = LiveCatalog.Current.Probes[ActivityReader.SessionsProbe];
+        var at = spec.Tables.FindIndex(entry => entry.Id == "sessions");
+        string? Job(LiveReaderSample sample, int session)
+        {
+            var columns = spec.Tables[at].Columns;
+            var read = sample.Tables.Single(entry => entry.Table == at);
+            var row = read.Rows.Single(item => item.Cells[columns.FindIndex(column => column.Id == "sessionId")].Text == session.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return row.Cells[columns.FindIndex(column => column.Id == "job")].Text;
+        }
+        Scripted Make() => new()
+        {
+            SessionRows = [Session(80, program: program), Session(81)],
+            AgentJobs = [new() { ["job_id"] = jobId, ["name"] = "Nightly" }],
+            AgentSteps = [new() { ["job_id"] = jobId, ["step_id"] = 2, ["step_name"] = "Load" }]
+        };
+        var named = Make();
+        named.Connect();
+        var first = named.Read(ActivityReader.SessionsProbe, "baseline");
+        var jobs = named.Asked.Single(entry => entry.Id == "agentJobs").Values;
+        var steps = named.Asked.Single(entry => entry.Id == "agentSteps").Values;
+        check(first.Sampled && first.Errors.Count == 0 && Job(first, 80) == "Nightly, step 2 (Load)" && Job(first, 81) is null
+            && Equals(jobs["@take"], ActivitySql.AgentJobSlots) && Equals(jobs["@job0"], jobId) && jobs["@job1"] is DBNull && jobs["@job15"] is DBNull
+            && Equals(steps["@job0"], jobId) && Equals(steps["@step0"], 2) && steps["@job1"] is DBNull && steps["@step1"] is DBNull,
+            "a job step's session is named after its sample through the Agent reads, the job and the step in their first slots and the rest NULL: " + Job(first, 80));
+        named.Asked.Clear();
+        named.Ticks += 1_000;
+        var second = named.Read(ActivityReader.SessionsProbe);
+        check(Job(second, 80) == "Nightly, step 2 (Load)" && !named.Asked.Any(entry => entry.Id is "agentJobs" or "agentSteps"), "the names are kept: the next sample reads msdb again for nothing");
+
+        // sysjobsteps refused (sysadmin only): the sample stands, the job keeps its name, and the steps are not asked again.
+        var refused = Make();
+        refused.Fails = statement => statement.Id == "agentSteps";
+        refused.Failure = (229, 14, "The SELECT permission was denied on the object 'sysjobsteps', database 'msdb', schema 'dbo'.");
+        refused.Connect();
+        var partial = refused.Read(ActivityReader.SessionsProbe, "baseline");
+        refused.Asked.Clear();
+        refused.Ticks += (long)Catalog.Limit("agentJobNamesMs") + 1_000;
+        refused.Read(ActivityReader.SessionsProbe);
+        check(partial.Sampled && partial.Errors.Count == 0 && Job(partial, 80) == "Nightly, step 2" && refused.Asked.Any(entry => entry.Id == "agentJobs") && !refused.Asked.Any(entry => entry.Id == "agentSteps"),
+            "a refused Agent read never fails the sample or shows an error, and is not asked again on the connection: " + Job(partial, 80));
+
+        // No msdb user (916): the decoded id and step, and no read again.
+        var stranger = Make();
+        stranger.Fails = statement => statement.Id == "agentJobs";
+        stranger.Failure = (916, 14, "The server principal is not able to access the database \"msdb\" under the current security context.");
+        stranger.Connect();
+        var unnamed = stranger.Read(ActivityReader.SessionsProbe, "baseline");
+        check(unnamed.Sampled && unnamed.Errors.Count == 0 && Job(unnamed, 80) == "Job 8A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9, step 2" && !stranger.Asked.Any(entry => entry.Id == "agentSteps"),
+            "a login without an msdb user sees the decoded id and step, never an error: " + Job(unnamed, 80));
+
+        // A lost connection is the connection's, not the names': the sample breaks as it would for any statement.
+        var lost = Make();
+        lost.Fails = statement => statement.Id == "agentJobs";
+        lost.Failure = (10054, 20, "A transport-level error has occurred.");
+        lost.Connect();
+        var broke = false;
+        try { lost.Read(ActivityReader.SessionsProbe, "baseline"); }
+        catch (SqlException) { broke = true; }
+        check(broke, "a lost connection during an Agent read breaks the sample, so the sampler reconnects");
     }
 
     /// <summary>D-am amendment 5: a lock wait, unlike a refusal, stops the statements after it for one sample and runs again on
