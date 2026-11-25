@@ -536,7 +536,7 @@ export const commandCatalog = {
   ...logViewerCommandEntries(),
   // The Agent error logs in the Log File Viewer (AG-5b): View Agent Log and Recycle, from src/shared/agent/error-log.ts.
   ...errorLogCommandEntries(),
-  // BigQuery Job History (BQ-9): the document on a connection's and billing project's menus and in the palette, and its row
+  // BigQuery Job History: the document on a connection's and billing project's menus and in the palette, and its row
   // actions, generated from src/shared/bigquery/history-catalog.ts.
   ...jobHistoryCommandEntries(),
   // The Schedules document (AG-6c): Manage Schedules, New Schedule… and the document's verbs, from src/shared/actions/agent-schedule.ts.

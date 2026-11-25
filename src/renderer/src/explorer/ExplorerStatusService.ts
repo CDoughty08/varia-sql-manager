@@ -3,7 +3,7 @@
 // table revision's few rows (only databases that are not plainly online and open, running restores, availability groups),
 // turns them into chips (src/shared/explorer/status.ts) and publishes them for every connection the view serves. It never
 // reloads the tree, and never samples by itself: LiveService pauses the views while Object Explorer or the window is hidden.
-// A connected BigQuery connection gets its own view, of the `bigquery.explorer` source: its node's running-jobs chip (BQ-12).
+// A connected BigQuery connection gets its own view, of the `bigquery.explorer` source: its node's running-jobs chip.
 import { bigQueryStatusChipKinds, statusChipKinds } from '../../../shared/explorer/catalog'
 import { agentChips, bigQueryChips, databaseChips, serverChips, type AgentServiceState, type DatabaseStatusRow, type GroupRow, type ProgressRow, type StatusChip } from '../../../shared/explorer/status'
 import type { LiveProbeId } from '../../../shared/live/catalog'

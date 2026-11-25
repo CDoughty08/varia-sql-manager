@@ -422,7 +422,7 @@ describe('BackendSupervisor providers', () => {
     // databases.list serves both engines (BigQuery's datasets); tables.columns is SQL Server's alone.
     await expect(value.request('databases.list', { connectionId: bigQuery.id })).resolves.toEqual({ method: 'databases.list' })
     expect(await failure(value.request('tables.columns', { connectionId: bigQuery.id, database: 'sales', schema: 'dbo', name: 'orders' }))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
-    // Object Explorer's tree serves both engines (BQ-5); Peek is SQL Server's.
+    // Object Explorer's tree serves both engines; Peek is SQL Server's.
     expect(await failure(value.request('explorer.peek', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), node: { type: 'server' } } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
     // Execute serves both engines, but main refuses each engine the other's options before sending.
     expect(await failure(value.request('query.execute', { connectionId: bigQuery.id, requestId: crypto.randomUUID(), sql: 'SELECT 1', includeActualPlan: true } as never))).toMatchObject({ code: 'UNSUPPORTED_PROVIDER', message: sentences.unsupportedOptions })

@@ -5,8 +5,8 @@ import { jobIdSchema } from './bigquery/jobs'
 /**
  * What ends query sessions, and so asks first about their open transactions and running queries: closing a query (or
  * several), moving it to another server, disconnecting it (Disconnect, or Change Connection to Disconnected), disconnecting
- * a server or every query, closing the window or quitting, and switching a BigQuery query to a dataset in another location
- * (decision 18), whose session lives in one location.
+ * a server or every query, closing the window or quitting, and switching a BigQuery query to a dataset in another location,
+ * whose session lives in one location.
  */
 export const sessionActions = ['close', 'closeAll', 'changeConnection', 'disconnectQuery', 'disconnect', 'disconnectAll', 'exit', 'switchLocation'] as const
 export type SessionAction = typeof sessionActions[number]
@@ -21,7 +21,7 @@ export interface SessionJob { readonly elapsedMs: number; readonly estimateBytes
 export type CloseRunningJob = 'ask' | 'cancel' | 'leave'
 /** The engine a query's session is on, which picks the "not checked" note's causes. */
 export type SessionProvider = 'sqlserver' | 'bigquery'
-/** A BigQuery query switching to `dataset` in location `to`, while its session is in `from` (decision 18). */
+/** A BigQuery query switching to `dataset` in location `to`, while its session is in `from`. */
 export interface SessionLocationSwitch { readonly dataset: string; readonly from: string; readonly to: string }
 /** `location` asks the location question of a `switchLocation` (one query, before any transaction is asked about). */
 export interface SessionPromptRequest { readonly action: SessionAction; readonly tabs: readonly SessionTab[]; readonly location?: SessionLocationSwitch }
@@ -182,7 +182,7 @@ export function rememberedJobAnswer({ action, tabs, location }: SessionPromptReq
   return closeRunningJob === 'cancel' ? 'proceed' : 'leave'
 }
 /**
- * The first box for BigQuery queries holding a job (decision 52): Cancel the job, Leave it running, or Don't close (the
+ * The first box for BigQuery queries holding a job: Cancel the job, Leave it running, or Don't close (the
  * default, and Escape), with "Remember my choice". Beside executing SQL Server queries (a mixed box), the box keeps SQL
  * Server's buttons and the BigQuery choice is its checkbox, "Leave BigQuery jobs running", which remembers nothing.
  */
@@ -236,7 +236,7 @@ export function jobPromptAnswer(prompt: SessionPrompt, response: number, checked
 export const runningJobRequestSchema = z.object({ name: z.string().min(1).max(sessionPromptLimits.name), job: jobSchema }).strict()
 export type RunningJobRequest = z.infer<typeof runningJobRequestSchema>
 /**
- * Close Results while a BigQuery job runs (decision 52): Cancel the job (`proceed`: stopped as Stop does), Leave it running
+ * Close Results while a BigQuery job runs: Cancel the job (`proceed`: stopped as Stop does), Leave it running
  * (`leave`: the job carries on in the tab's session, which the next Execute waits for), or Don't Close (`cancel`, the
  * default and Escape), with "Remember my choice".
  */
@@ -253,7 +253,7 @@ export function runningJobPrompt({ name, job }: RunningJobRequest, prices = true
   }
 }
 
-/** Decision 18's question: a BigQuery session lives in one location, so a dataset in another ends it. Switch proceeds;
+/** The location switch question: a BigQuery session lives in one location, so a dataset in another ends it. Switch proceeds;
  *  Don't Switch (and Escape) keeps the tab's dataset and session. */
 function locationPrompt(tab: SessionTab, { dataset, from, to }: SessionLocationSwitch): SessionPrompt {
   return {

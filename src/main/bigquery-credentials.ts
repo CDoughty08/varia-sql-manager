@@ -86,10 +86,10 @@ export interface BigQueryCredentialEnvironment {
   readonly home: string
   /** Emulator mode (VARIA_TEST_BIGQUERY_ENDPOINT in an unpackaged build): anonymous credentials, no Google token. */
   readonly emulator: boolean
-  /** Whether the user confirmed a federation configuration's file source in the Connect dialog (decision 49). Without
+  /** Whether the user confirmed a federation configuration's file source in the Connect dialog. Without
    *  it every file source is refused. */
   readonly sourceConfirmed?: (keyPath: string, source: string) => Promise<boolean>
-  /** Asks the user about the token file the gcloud ADC file's federation configuration reads (decision 49), recording a
+  /** Asks the user about the token file the gcloud ADC file's federation configuration reads, recording a
    *  Use It as `sourceConfirmed` reads it; only for a request the user is waiting on. */
   readonly askSource?: (keyPath: string, source: string) => Promise<boolean>
   /** Reads the saved connections, which maps saved key file references back to their paths (a reconnect at startup
@@ -100,7 +100,7 @@ export interface BigQueryCredentialEnvironment {
 /**
  * A federation configuration's `credential_source.file` as written, or undefined when the file is not a configuration with
  * a file source. Main never resolves or opens it: a link, mount or network path in untrusted content would reach another
- * host before anyone confirmed it; the backend judges the canonical path under its own rules when it reads. Decision 49 shows this path in the dialog
+ * host before anyone confirmed it; the backend judges the canonical path under its own rules when it reads. The Connect dialog shows this path
  * and asks before the file's content first goes to Google's STS. A file source main cannot show as one full path (not
  * a string, relative, too long or with a control character) is refused rather than passed on unconfirmed.
  */
@@ -148,7 +148,7 @@ export class BigQueryCredentials {
   get emulator(): boolean { return this.environment.emulator }
 
   /** `interactive`: the user waits on this request (a Connect, Test Connection or Browse, not a background reconnect), so an
-   *  unconfirmed ADC token file may be asked about; otherwise it is refused, as decision 49 fails closed. */
+   *  unconfirmed ADC token file may be asked about; otherwise it is refused: an unasked token file fails closed. */
   async material(params: Pick<BigQueryCredentialParams, 'authentication' | 'keyFile'>, { interactive = false }: { interactive?: boolean } = {}): Promise<BigQueryCredentialMaterial> {
     if (this.environment.emulator) return { source: 'anonymous' }
     if (usesKeyFile(params.authentication)) {
@@ -173,7 +173,7 @@ export class BigQueryCredentials {
     if (!adc.explicit && !await exists(adc.path)) return { source: 'metadata' }
     const json = await readCredentialFile(adc.path, { json: false, what: adc.explicit ? 'The file GOOGLE_APPLICATION_CREDENTIALS names' : 'The gcloud credentials file' })
     // A federation configuration as ADC (gcloud auth application-default login --cred-file, or the variable) reading a token
-    // file: confirmed once, as a picked configuration is (decision 49).
+    // file: confirmed once, as a picked configuration is.
     const source = await federationSource(json)
     if (source !== undefined && !await this.environment.sourceConfirmed?.(adc.path, source) && !(interactive && await this.environment.askSource?.(adc.path, source)))
       throw new BackendError('AUTH_KEY_FILE', interactive

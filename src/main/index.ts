@@ -157,7 +157,7 @@ let bigQueryStore: BigQueryConnectionStore | undefined
 const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
   env: process.env, platform: process.platform, home: homedir(), emulator: bigQueryEmulatorEndpoint({ packaged: app.isPackaged, env: process.env }) !== undefined,
   sourceConfirmed: async (keyPath, source) => !!bigQueryStore && await bigQueryStore.sourceConfirmed(keyPath, source),
-  // Decision 49 for gcloud's ADC file: Connect's own question, asked here since no file was picked. Use It is remembered.
+  // The token-file confirmation for gcloud's ADC file: Connect's own question, asked here since no file was picked. Use It is remembered.
   askSource: async (keyPath, source) => {
     const store = bigQueryStore
     if (!store) return false
@@ -1207,7 +1207,7 @@ app.whenReady().then(async () => {
   handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
   // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
-  // name, never its path, and for a federation configuration the token file it reads (decision 49).
+  // name, never its path, and for a federation configuration the token file it reads, for the user to confirm.
   handle('varia:connections-pick-key-file', async value => {
     const { authentication } = pickKeyFileParamsSchema.parse(value)
     const what = authentication === 'serviceAccountKey' ? 'The key file' : 'The federation configuration file'
@@ -1219,7 +1219,7 @@ app.whenReady().then(async () => {
     const keyFile = bigQueryKeyFiles.register(path), source = authentication === 'externalAccount' ? await federationSource(json) : undefined
     return { keyFile, name: basename(path), ...source !== undefined ? { source, sourceConfirmed: await bigQueryStore!.sourceConfirmed(path, source) } : {} }
   })
-  // Decision 49: the user confirmed the token file a picked configuration reads. Main re-reads the configuration, so only
+  // The user confirmed the token file a picked configuration reads. Main re-reads the configuration, so only
   // the source it names now is confirmed, never a path the page supplied.
   handle('varia:connections-confirm-source', async value => {
     const { keyFile, source } = confirmSourceParamsSchema.parse(value)
@@ -1344,7 +1344,7 @@ app.whenReady().then(async () => {
       // BigQuery before connecting: main adds the credential material the renderer never holds.
       if (method === 'bigquery.account' || method === 'bigquery.projects') {
         const params = validated as RpcMethods['bigquery.projects']['params']
-        // The account line reads itself as the dialog's fields change, so only Browse (bigquery.projects) may ask decision 49's question.
+        // The account line reads itself as the dialog's fields change, so only Browse (bigquery.projects) may ask about a federation token file.
         const credential = await bigQueryCredentials.material(params, { interactive: method === 'bigquery.projects' })
         return { ok: true, value: validateResult(method, await backend.request(method, { ...params, credential })) }
       }

@@ -53,8 +53,8 @@ internal sealed class BigQueryPage(JsonDocument document, long bytes) : IDisposa
 }
 
 /// <summary>
-/// Query jobs (docs/bigquery.md, Execution). Every query is a <c>jobs.insert</c> with a client-generated job id
-/// (decision 34), so a request that may have reached Google is never sent twice as a new job: after a transport failure
+/// Query jobs (docs/bigquery.md, Execution). Every query is a <c>jobs.insert</c> with a client-generated job id,
+/// so a request that may have reached Google is never sent twice as a new job: after a transport failure
 /// or a 5xx the backend asks <c>jobs.get</c> for that id, sends the insert again with the same id only when Google
 /// answers that no such job exists, and takes a 409 as the job existing. Reads (<c>jobs.get</c>,
 /// <c>jobs.getQueryResults</c>) are idempotent and get bounded retries with backoff on transport failures, 429 and 5xx.

@@ -11,8 +11,8 @@ namespace Varia.Backend.BigQuery;
 
 /// <summary>
 /// Subject tokens for workload and workforce identity federation's file and Azure sources. A file source rotates (projected
-/// Kubernetes and OIDC tokens), so it is read again on every token exchange, under the rules decision 49's confirmation
-/// relies on: a regular file of at most 64 KiB that is none of Varia's own files (<see cref="RefusedRoots"/>) and no known
+/// Kubernetes and OIDC tokens), so it is read again on every token exchange, under the rules the user's confirmation of
+/// the file relies on: a regular file of at most 64 KiB that is none of Varia's own files (<see cref="RefusedRoots"/>) and no known
 /// credential file (ADC, gcloud's configuration, a Google key, SSH and AWS credentials). Azure's token comes from its
 /// instance metadata endpoint, pinned when the configuration was checked.
 /// </summary>

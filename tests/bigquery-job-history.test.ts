@@ -31,7 +31,7 @@ describe('Job History rules', () => {
     expect(optionsAllow('live.subscribe', 'sqlserver', { source: 'activity' })).toBe(true)
     expect(optionsAllow('live.subscribe', 'bigquery', { source: 'activity' })).toBe(false)
     expect(optionsAllow('live.subscribe', 'sqlserver', { source: 'bigquery.jobs' })).toBe(false)
-    // Object Explorer's BigQuery chip (BQ-12) is BigQuery's alone.
+    // Object Explorer's BigQuery chip is BigQuery's alone.
     expect(optionsAllow('live.subscribe', 'bigquery', { source: 'bigquery.explorer' })).toBe(true)
     expect(optionsAllow('live.subscribe', 'sqlserver', { source: 'bigquery.explorer' })).toBe(false)
     expect(optionsAllow('live.subscribe', 'bigquery', { source: 'nope' })).toBe(false)

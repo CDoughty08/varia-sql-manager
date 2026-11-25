@@ -77,7 +77,7 @@ export class TargetService {
     })
   }
   /** Moves a query to another database, or a BigQuery query to another dataset. A dataset in another location than the
-   *  query's session ends the session (decision 18): `switchLocation` asks first, and Don't Switch keeps the dataset. */
+   *  query's session ends the session (a session lives in one location): `switchLocation` asks first, and Don't Switch keeps the dataset. */
   changeDatabase(tabId: string, database: string): void {
     const document = this.documents.get(tabId), connectionId = document?.connectionId
     // A connection with a fixed location runs every session there (TabLocationAsync), so only Automatic ones switch.

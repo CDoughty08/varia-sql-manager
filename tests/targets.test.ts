@@ -210,7 +210,7 @@ describe('query targets', () => {
   })
 })
 
-describe('BigQuery location switch (decision 18)', () => {
+describe('BigQuery location switch', () => {
   function bigQueryFixture(sessionLocation: string | undefined) {
     const docs = documentFixture()
     const queries = {

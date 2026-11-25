@@ -1678,7 +1678,7 @@ describe('ExplorerService: connections', () => {
     expect(asked().every(node => node.type === 'object' && node.object.kind === 'server')).toBe(true)
     expect(explorer.menuNode(root)).toMatchObject({ provider: 'bigquery' })
     expect(explorerNodeProvider(explorer.menuNode(root))).toBe('bigquery')
-    // A reconnect under a new handle can be expanded again (BQ-5: the backend lists its projects).
+    // A reconnect under a new handle can be expanded again (the backend lists its projects).
     connections.set([{ ...bigQuery, lost: true }])
     await settle()
     connections.set([{ ...bigQuery, id: cid('varia-alpha-2'), generation: 2 }])

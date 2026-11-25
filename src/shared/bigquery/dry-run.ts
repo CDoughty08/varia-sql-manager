@@ -77,7 +77,7 @@ export interface CostPromptRules {
 }
 
 /**
- * Whether Execute asks before running (decision 22): above the threshold, or when the estimate may be low and the user has
+ * Whether Execute asks before running, so a costly job never starts unseen: above the threshold, or when the estimate may be low and the user has
  * not turned that warning off. Above the threshold wins: its prompt already names the figure. A faked estimate (emulator)
  * never asks.
  */

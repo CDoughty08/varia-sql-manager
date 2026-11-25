@@ -541,6 +541,8 @@ describe('LiveGrid', () => {
     expect(live.setProbe).not.toHaveBeenCalled()
     expect(grid.canSort(1)).toBe(true)
     expect(grid.canSort(2)).toBe(false)
+    // A probe sort that names the hidden column marks no header: it has none to draw on.
+    expect(grid.headerSort([{ column: 'ref', descending: false }, { column: keySpec.columns[1]!.id, descending: true }])).toEqual([{ column: 1, descending: true }])
   })
 
   it('sorts only its own table of a probe, keeps the other tables\' keys, and shows a sort the probe already had', () => {

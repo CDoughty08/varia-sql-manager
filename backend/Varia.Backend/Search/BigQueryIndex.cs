@@ -63,7 +63,7 @@ internal readonly record struct BigQueryObjectFacts(long Created, bool Detailed,
 /// <summary>
 /// A BigQuery read's facts beside its <see cref="ObjectTable"/> (by entry): creation times and whether details were read, rows, size,
 /// partitioning, clustering, a routine's signature, column descriptions and date-sharded groups. Charged to the budget with the read
-/// (<see cref="Bytes"/>). The editor's hover (BQ-6b) reads them with the entries' types.
+/// (<see cref="Bytes"/>). The editor's hover reads them with the entries' types.
 /// </summary>
 internal sealed class BigQueryFacts(Dictionary<int, BigQueryObjectFacts> objects, Dictionary<int, string> descriptions, Dictionary<int, Varia.Backend.BigQueryShardsDto> shards)
 {
