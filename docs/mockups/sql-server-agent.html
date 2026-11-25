@@ -356,6 +356,7 @@ table.g td.c, table.dtable td.c, table.dtable th.c, table.g th.c { text-align: c
 .fl-legend .fl-quit { position: static; transform: none; display: inline-block }
 .fl-chip { position: absolute; font-size: 10px; line-height: 16px; padding: 0 6px; border-radius: 3px; background: var(--overlay); border: 1px solid var(--border); color: var(--text2); white-space: nowrap; transform: translateY(-50%); display: inline-flex; gap: 4px; align-items: center }
 .fl-chip.acc { color: var(--textAccent); border-color: var(--accent) }
+.fl-chip.fl-dimchip { opacity: .4 }
 .fl-start { position: absolute; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11px; background: var(--sel); color: var(--textAccent); border: 1px solid var(--accent); display: inline-flex; gap: 4px; align-items: center; transform: translateY(-50%) }
 .fl-seq { position: absolute; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--text); color: var(--canvas); font-size: 10px; line-height: 16px; text-align: center; transform: translate(-50%, -50%); font-weight: 600; white-space: nowrap }
 .fl-sname { display: flex; gap: 8px; align-items: center; font-size: 13px; font-weight: 600; color: var(--strong); margin-bottom: 8px }
@@ -1428,7 +1429,11 @@ function rxFlowDraw(o) {
       if (to === 'qs' || to === 'qf') { html += `<span class="fl-quit ${to === 'qs' ? 'ok' : 'bad'} ${o.quit?.[key] || o.edge?.[key] || o.rest || ''}" style="left:${x}px;top:${y0 + 1}px">Quit · ${to === 'qs' ? 'success' : 'failure'}</span>`; continue }
       const t = to === 'next' ? i + 1 : to - 1
       let d
-      if (t === i + 1) { d = `M${x} ${y0}V${flTop(t) - 2}`; mid[key] = [x + 13, y0 + 13] }
+      if (t === i + 1) {
+        d = `M${x} ${y0}V${flTop(t) - 2}`; mid[key] = [x + 13, y0 + 13]
+        // A go-to whose target is the step below is drawn straight but marked: it follows that step if steps move, a next step does not.
+        if (to !== 'next') html += `<span class="fl-chip ${/faded|dim/.test(cls) ? 'fl-dimchip' : ''}" style="left:${x - 10}px;top:${y0 + 13}px;transform:translate(-100%, -50%)">→ ${to}</span>`
+      }
       else {
         const [lane, entry] = lanes[key] || [0, 20], lx = kind === 'ok' ? FL.x0 - 26 - 18 * lane : FL.x0 + FL.w + 26 + 18 * lane, ye = flTop(t) + entry
         d = `M${x} ${y0}V${y0 + 9}H${lx}V${ye}H${kind === 'ok' ? FL.x0 - 2 : FL.x0 + FL.w + 2}`; mid[key] = [lx, (y0 + 9 + ye) / 2]
@@ -1464,7 +1469,7 @@ const rxFlowLegend = () => `<div class="rx-sec"><div class="h">Key</div><div cla
   <span><svg width="28" height="10"><path d="M1 5H27" style="stroke:var(--error);stroke-width:1.5;stroke-dasharray:5 3"/></svg>✗ On failure</span>
   <span><span class="fl-quit ok">Quit · success</span></span><span><span class="fl-quit bad">Quit · failure</span></span>
   <span><span class="fl-start" style="position:static;transform:none">${ic('play', 10)}Start</span>Start step</span><span><span class="rx-tag warn">Never runs</span>nothing reaches it</span>
-  <span style="grid-column:1/-1">Steps stay in step order, top to bottom, as in List and History. Jumps run beside the column: success on the left, failure on the right.</span></div></div>`
+  <span style="grid-column:1/-1">Steps stay in step order, top to bottom, as in List and History. Jumps run beside the column: success on the left, failure on the right. A go-to to the step just below is straight, marked → N.</span></div></div>`
 const rxFlowChecks = (loop = true) => `<div class="rx-sec"><div class="h">Flow checks<span class="r">1 problem</span></div>
   <div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 1 never runs</span><span class="a"><span class="btn">Make Start step</span></span><span class="d">The Start step is 2 and no step goes to step 1, so Archive old extracts is skipped on every scheduled run. Start at step can still run it.</span></div>
   ${loop ? `<div class="rx-check"><span class="i rx-mut">${ic('loop', 14)}</span><span class="t">Steps 3 and 4 can repeat</span><span class="a"></span><span class="d">A failed row count goes back to the load. Agent does not count passes: the loop ends when step 3 fails (to step 6) or step 4 succeeds.</span></div>` : ''}

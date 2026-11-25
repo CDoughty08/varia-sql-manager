@@ -210,7 +210,9 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
 - **Edges**: two ports per node, ✓ On success and ✗ On failure. Success edges are solid, failure edges dashed. Each port
   has its glyph, so colour is never the only cue.
   - Go to the next step: a short straight edge.
-  - Go to step N: an edge in a lane beside the column, success lanes on the left, failure lanes on the right.
+  - Go to step N: an edge in a lane beside the column, success lanes on the left, failure lanes on the right. When N is the
+    step just below, the edge is drawn straight but marked "→ N": unlike Go to the next step, it follows that step if steps
+    move.
   - Quit the job reporting success or failure: a pill under the port.
 - **Start step**: an entry arrow and a Start pill.
 - **Loops**: a cycle is tagged ("Loop · 3 ⇄ 4"). A backward jump that is not part of a cycle (step 7's failure going to step 6)
@@ -265,7 +267,8 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
    - **Usual time per pass**: the usual time adds up all of a step's rows in a run, so a step that a loop ran twice gets a
      doubled usual time. Live run's bar needs the usual time of one pass.
 6. **Flow checks** (principle 6: they warn, they never block Save):
-   - Never runs: a warning, with Make Start step as its fix.
+   - Never runs: a warning. Make Start step is offered as its fix only when the step's paths lead to the current Start step,
+     so nothing else stops running (step 1 in the mock). Otherwise the fix is to edit a step to go to it.
    - Loop: information only, because a loop is a normal retry pattern.
    - A loop with no way out: a warning. Every action of every step in the cycle stays inside it, so the job never ends by
      itself. This check is not drawn in the mocks.
