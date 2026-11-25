@@ -532,8 +532,10 @@ try {
   // Details… and Kill Process… head Query Output's menu on a session row (Sessions, Blocking, Active Expensive Queries).
   const sessionMenu = async (grid, cell) => {
     // A click selects the row first, so the menu's enablement reads that row's session.
-    await grid.getByRole('gridcell', { name: cell, exact: true }).click()
-    await grid.getByRole('gridcell', { name: cell, exact: true }).click({ button: 'right' })
+    const target = grid.getByRole('gridcell', { name: cell, exact: true })
+    await expect(target).toBeVisible()
+    await target.click()
+    await target.click({ button: 'right' })
     await expect(gridMenu).toBeVisible()
     return gridMenu
   }

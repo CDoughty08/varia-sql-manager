@@ -56,7 +56,8 @@ try {
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
   await expect(job('Nightly').getByLabel('Description', { exact: true })).toHaveValue('Nightly maintenance.')
   await expect(documentState(job('Nightly'))).toContainText('Idle · Last run failed')
-  expect((await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
+  // The header can already show the state from Job Activity Monitor's snapshot before the watched subscribe lands in calls.jsonl.
+  await expect.poll(async () => (await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
   await expect(job('Nightly').getByRole('table', { name: 'Alerts that run this job', exact: true })).toContainText('Nightly failed')
   // Enter on another selected job opens a second tab; the first stays open.
   await documentTab(page, 'Job Activity Monitor - server-a').click()
@@ -72,18 +73,24 @@ try {
 
   step = 'history'
   // History (AG-6d): one agent.history view of this job with its usual durations; the newest run is selected with its failed step's
-  // message open, and the step's SSIS execution link opens the catalog's messages in a query window (not run).
+  // message open, and the step's SSIS execution link opens that execution's messages document (AG-13).
   await job('Nightly').getByRole('button', { name: 'History', exact: true }).click()
   const history = job('Nightly').getByRole('group', { name: 'History', exact: true })
   await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(2)
   await expect(history.getByRole('button', { name: /Failed at step 2/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(history.getByRole('img', { name: /^Durations of the last 2 runs, 1 failed; usual 2 s$/ })).toBeVisible()
+  // AG-10: the sparkline draws through ChartView, whose canvas sits inside the named image.
+  await expect(history.getByRole('img', { name: /^Durations of the last 2 runs/ }).locator('canvas')).toHaveCount(1)
   expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: ['a1b2c3d4-0000-4000-8000-000000000001'], usual: true } })
   await expect(history.getByRole('region', { name: 'Step 2 message', exact: true })).toContainText('Violation of PRIMARY KEY constraint.')
   await expect(history.getByRole('table', { name: 'Steps of the selected run', exact: true })).toContainText('Truncate')
   await history.getByRole('button', { name: 'SSIS execution 48213', exact: true }).click()
-  await expect(documentTab(page, 'SSIS execution 48213.sql')).toHaveAttribute('aria-selected', 'true')
-  await closeDocumentButton(page, 'SSIS execution 48213.sql').click()
+  // The server's Integration Services document opens at that run's page.
+  await expect(documentTab(page, 'Operations - server-a')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentFrame(page, 'Execution 48213')).toBeVisible()
+  await expect(page.getByRole('grid', { name: /^Messages, 6 rows, / })).toBeVisible()
+  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 48213 })
+  await closeDocumentButton(page, 'Operations - server-a').click()
   await documentTab(page, 'Job Properties - Nightly').click()
   // Failed lists only the failed run; an older run picked shows its own steps and no failed message.
   await history.getByRole('radio', { name: 'Failed', exact: true }).click()

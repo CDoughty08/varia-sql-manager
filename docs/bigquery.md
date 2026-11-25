@@ -654,11 +654,33 @@ Script As serves BigQuery's tables, snapshots, views, materialized views, extern
 
 ### Properties
 
-Properties on a table-like object opens a read-only document tab from one `tables.get` (free, `bigquery.properties`): Table
-(full name, type, location, description, labels, base table of a snapshot or clone), Storage (rows, logical, long-term and
-physical size), Layout (partitioning, partition filter, clustering, column count) and History (created, last modified,
-expires, snapshot time), in UTC and binary units. Empty facts are left out and values are clipped at 2,000 characters
-without splitting surrogate pairs.
+Properties on a table-like object opens a read-only unified inspector document (`ObjectInspectorFrame`, `BigQueryPropertiesTab.tsx`,
+`BigQueryPropertiesService.ts`) from one `tables.get` (free, `bigquery.properties`), with `connection › project › dataset`
+breadcrumbs, a `BigQuery` engine tag and semantic status pills (Partitioned, Require partition filter, Clustered, Snapshot,
+Clone, External, Materialized View), `Refresh` and `Script As…` header actions, a Hero KPI strip (Rows, Logical size with
+inline Active vs. Long-Term ratio bar, Physical size with compression ratio, Columns count, Location — omitting metrics that
+do not apply), and a collapsible, resizable right **Vitals** rail (flat Active vs. Long-Term ratio bar, compact storage/layout
+facts, and lifecycle timestamps).
+
+Sections appear in canonical order, omitting tabs that do not apply to the object:
+
+- **Overview** (`flow`): Identity & Lifecycle facts (`FactGrid` with click-to-copy), signal-first Capabilities & Flags
+  (`CapabilityChips` with `Notable (n/m) ↔ All`), and Description.
+- **Definition** (`fill`): Views and materialized views render their free `tables.get` SQL immediately in a read-only
+  Monaco GoogleSQL editor with **Copy** and **Open in New Query** (noting truncation if over 1,000,000 characters). Native,
+  external, snapshot and clone tables never run billed SQL automatically; instead they show an explicit **Load DDL** prompt
+  that runs a free dry-run estimate of `INFORMATION_SCHEMA.TABLES` and applies BigQuery's cost prompts before reading the
+  CREATE statement.
+- **Storage & Layout** (`flow`, when storage, layout or snapshot/clone metadata is present): Active vs. Long-Term logical
+  storage `RatioBar` and storage/layout facts (rows, logical, active, long-term, physical, compression ratio, partitioning,
+  require partition filter, clustering, base table and snapshot time).
+- **Columns** (`fill`, when schema is present): Filterable full-bleed `LocalGrid` from `schema` with `PART`, `CLUST` and
+  `REP` badges, expandable/collapsible nested `STRUCT`/`RECORD` rows (double-click, Enter, or the toolbar controls; matching
+  nested fields auto-expand while filtering), and a truncation note when `schemaTruncated` is set.
+- **Labels** (`flow`, when labels are present): Key-value label chips with per-label copy and **Copy all**.
+- **Preview Rows** (`fill`, native tables, snapshots and clones only): Lazy-loaded only when the tab is selected (never on
+  open and never while arrowing past tabs), using the free `tabledata.list` preview path in `ResultsStack` with zero billed
+  queries.
 
 Alongside the formatted `groups` and Search Objects' flattened `columns` (`columnsCut`, up to 1,000 path rows),
 `bigquery.properties` returns bounded structured fields from the same `tables.get` response (`src/shared/bigquery/objects.ts`,
@@ -669,7 +691,8 @@ and physical bytes), `layout` (`partitioning`, `requirePartitionFilter`, up to 1
 fields and a 6 MiB text budget, with `schemaTruncated` when capped), deterministically sorted `labels` (up to 64), and free
 SQL `definition` for views, materialized views and routines (`table.view.query`, `table.materializedView.query`,
 `routine.definitionBody`, up to 1,000,000 characters with `definitionCut`/`definitionTruncated`; omitted for native,
-external, snapshot and clone tables so Properties never runs a billed query).
+external, snapshot and clone tables so Properties never runs a billed query). Empty facts are left out and values are
+clipped at 2,000 characters without splitting surrogate pairs.
 
 Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
 and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
@@ -860,8 +883,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `tabledata.list`'s request, a refused view, `ROW_ACCESS`), Script As › CREATE's dry run, and Properties' facts and
   structured metadata (storage bounds, nested schema depth and field/byte caps, labels, free view/materialized-view SQL,
   and protocol v2 wire round-trip);
-  `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/scripting-service.test.ts` CREATE's cost gate, and
-  `tests/queries.test.ts` Preview Rows' path.
+  `tests/bigquery-explorer.test.ts` the shared rules and schemas, `tests/bigquery-properties.test.ts` the Properties
+  inspector's formatters, nested schema tree, on-demand DDL cost gate, lazy free Preview Rows, and UI tabs,
+  `tests/scripting-service.test.ts` CREATE's cost gate, and `tests/queries.test.ts` Preview Rows' path.
   `BigQueryJobHistoryChecks` covers Job History: reading `jobs.list` and `jobs.get` JSON (states, previews, hidden details,
   bounds), the source's args, the sampler's first listing, refreshes, finished-job reads and idle state, All users and
   its refusal, pinned and expanded jobs, each refresh error code, `bigquery.jobs.get` and `bigquery.jobs.cancel`, and the

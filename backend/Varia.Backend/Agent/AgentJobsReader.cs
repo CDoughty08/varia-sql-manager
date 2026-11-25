@@ -260,8 +260,8 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
 
     private async Task<LiveReaderSample> ServiceAsync(SqlConnection connection, string prologue, Func<string, string, string>? testText, CancellationToken token)
     {
-        (int? Xps, int? State, int? Startup) read;
-        if (TestService is { } test) read = test();
+        (int? Xps, int? State, int? Startup, int? Clustered) read;
+        if (TestService is { } test) { var (xps0, state0, startup0) = test(); read = (xps0, state0, startup0, null); }
         else
         {
             await using var command = connection.CreateCommand();
@@ -271,12 +271,13 @@ internal sealed class AgentJobsReader(AgentJobsLiveArgs? args = null, AgentCatal
             await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, token).ConfigureAwait(false);
             if (!await reader.ReadAsync(token).ConfigureAwait(false)) throw new InvalidOperationException("The Agent state read returned no row.");
             int? Number(int ordinal) => reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
-            read = (Number(0), Number(1), Number(2));
+            read = (Number(0), Number(1), Number(2), Number(3));
         }
         var status = new List<LiveStatus>();
         if (read.Xps is { } xps) status.Add(new("agentXps", (long)xps));
         if (read.State is { } state) status.Add(new("serviceState", (long)state));
         if (read.Startup is { } startup) status.Add(new("startupType", (long)startup));
+        if (read.Clustered is { } clustered) status.Add(new("clustered", (long)clustered));
         return new(null, [], [], Status: status);
     }
 

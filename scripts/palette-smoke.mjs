@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow, explorerStatics, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocumentName, backendReady, connectDialogWindow, documentTabs, editorText as editorTextOf, messages, part, pressToClose, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox, submitConnect, expectEditorShown, dialogClosed } from './fixtures/ui.mjs'
+import { activeDocumentName, backendReady, connectDialogWindow, documentTabs, editorText as editorTextOf, messages, part, pressToClose, queryDatabase, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox, submitConnect, expectEditorShown, dialogClosed } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'palette-profile-'))
@@ -289,7 +289,7 @@ try {
   for (const name of ['master', 'tempdb', 'AppData', 'AppData_Snapshot']) await expect(widget().getByRole('option', { name: new RegExp('^' + name + '(,|$)') })).toHaveCount(1)
   await page.keyboard.type('AppD')
   await page.keyboard.press('Enter')
-  await expect(page.locator('#query-database')).toHaveValue('AppData')
+  await expect(queryDatabase(page)).toHaveValue('AppData')
   await expect(textbox()).toBeFocused()
 
   // 9. Ctrl+K belongs to the editor: Ctrl+K Ctrl+U uncomments instead of opening Change Database. SSMS comments with --

@@ -1,6 +1,6 @@
 import {
   useCallback, useEffect, useLayoutEffect, useRef, useState,
-  type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref, type WheelEvent
+  type CSSProperties, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref, type WheelEvent
 } from 'react'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { reducedMotionClass } from '../../../shared/theme/metrics'
@@ -80,6 +80,13 @@ export interface ObjectInspectorFrameViewProps {
   readonly platform?: Platform
   readonly gestures?: Pick<GestureService, 'matches'>
   readonly attributes?: Readonly<Record<`data-${string}`, string>>
+  readonly className?: string
+  readonly style?: CSSProperties
+  /** Defaults to `region`; Peek Card passes `dialog` with `ariaLabel` so the floating card is the inspector root itself. */
+  readonly role?: 'region' | 'dialog'
+  readonly ariaLabel?: string
+  readonly ariaModal?: boolean
+  readonly tabIndex?: number
   readonly onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void
   readonly rootRef?: Ref<HTMLDivElement>
 }
@@ -109,7 +116,7 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
     tabs, activeTab, onSelectTab, vitals, vitalsTitle = 'Vitals', vitalsOpen = true, vitalsWidth,
     onVitalsOpenChange, onVitalsWidthChange, onVitalsWidthReset, hint, script, scriptOpen = false,
     scriptSize = 0.35, onScriptToggle, onScriptResize, modHeld = false, shortcutScope = false, platform = 'win32',
-    gestures, attributes, onKeyDown, rootRef
+    gestures, attributes, className, style, role = 'region', ariaLabel, ariaModal, tabIndex, onKeyDown, rootRef
   } = props
 
   const localRootRef = useRef<HTMLDivElement | null>(null)
@@ -423,7 +430,9 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
 
   const headerTools = tools || vitalsToggle ? <>{tools}{vitalsToggle}</> : undefined
 
-  return <div ref={setRoot} className="document-frame inspector-frame" role="region" aria-labelledby={`${id}-title`}
+  return <div ref={setRoot} className={['document-frame inspector-frame', className].filter(Boolean).join(' ')} role={role}
+    aria-modal={ariaModal} aria-label={ariaLabel} aria-labelledby={ariaLabel ? undefined : `${id}-title`}
+    tabIndex={tabIndex} style={style}
     data-document-frame={id} data-object-inspector={shortcutScope ? id : undefined} data-inspector-surface={surface}
     data-mod-held={showShortcutCues || undefined} {...attributes}
     onFocusCapture={handleRootFocus} onBlurCapture={handleRootBlur} onKeyDown={onKeyDown}>
@@ -545,6 +554,8 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
 
 export interface ObjectInspectorFrameProps extends Omit<ObjectInspectorFrameViewProps, 'verbs'> {
   readonly verbs?: readonly Verb[]
+  /** Optional trailing non-catalogue header verbs (for example Peek Card's Close button). */
+  readonly extraVerbs?: readonly HeaderVerb[]
 }
 
 /**
@@ -552,9 +563,10 @@ export interface ObjectInspectorFrameProps extends Omit<ObjectInspectorFrameView
  * `workbench.inspector` (persisted separately for `full` vs `peek`), follows modifier-hold state for shortcut badges,
  * and registers the frame for focus-scoped `Ctrl+1`–`9` tab switching.
  */
-export default function ObjectInspectorFrame({ verbs = [], surface = 'full', ...props }: ObjectInspectorFrameProps) {
+export default function ObjectInspectorFrame({ verbs = [], extraVerbs, surface = 'full', ...props }: ObjectInspectorFrameProps) {
   const workbench = useWorkbench()
   const resolvedVerbs = useHeaderVerbs(verbs)
+  const allVerbs = extraVerbs?.length ? [...resolvedVerbs, ...extraVerbs] : resolvedVerbs
   const vitalsPrefs = useServiceSnapshot(workbench.inspector.vitals)
   const modHeld = useServiceSnapshot(workbench.inspector.modHeld)
   const surfacePrefs = vitalsPrefs[surface]
@@ -586,7 +598,7 @@ export default function ObjectInspectorFrame({ verbs = [], surface = 'full', ...
     {...props}
     rootRef={combinedRef}
     surface={surface}
-    verbs={resolvedVerbs}
+    verbs={allVerbs}
     platform={props.platform ?? workbench.platform}
     gestures={props.gestures ?? workbench.gestures}
     modHeld={props.modHeld ?? modHeld}

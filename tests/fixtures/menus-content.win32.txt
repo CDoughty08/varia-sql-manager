@@ -82,6 +82,7 @@ View
   ---
   Activity &Monitor  +++-
   I&ntegration Services Operations  -+++
+  Jo&b Activity Monitor  -+++
   ---
   T&heme >
     &Color Theme…  ++++

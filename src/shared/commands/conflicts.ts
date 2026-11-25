@@ -1,5 +1,5 @@
 import { commandDescriptor, isCommandId, type CommandId } from './catalog'
-import { contextKeyValues, contextRecord, keysOfScope, type ContextKey, type ContextKeys, type FocusKeys } from './context-keys'
+import { contextKeyValues, contextRecord, keysOfScope, type ContextKey, type FocusKeys } from './context-keys'
 import { intrinsicChords } from './intrinsic'
 import { altGrReason, defaultRules, formatLabel, KeySpecError, parseKeySpec, reservedReason, reservedWhere, splitChord, toAccelerator, workbenchRules, type Platform, type ResolvedRule } from './keybindings'
 import { osKeyVerdict } from './os-keys'
@@ -76,6 +76,22 @@ const stateKeys = new Set<string>(keysOfScope('state'))
 // Marks a context built from a `modal` focus sample; `evaluateWhen` never reads it.
 const inModal = Symbol('inModal')
 type Context = ReturnType<typeof contextRecord> & { readonly [inModal]?: true }
+type MutableContext = Record<string, boolean | string> & { [inModal]?: true }
+
+const sampleContextsByPlatform = new Map<Platform, readonly { readonly name: string; readonly context: Context }[]>()
+function sampleContexts(platform: Platform): readonly { readonly name: string; readonly context: Context }[] {
+  let list = sampleContextsByPlatform.get(platform)
+  if (!list) {
+    list = focusSamples.map(sample => {
+      const context = contextRecord(platform, sample.keys) as MutableContext
+      if (sample.modal) context[inModal] = true
+      return { name: sample.name, context: context as Context }
+    })
+    sampleContextsByPlatform.set(platform, list)
+  }
+  return list
+}
+
 /**
  * The first focus sample, combined with some assignment of the state keys `rules` read, where `holds` is true. Focus
  * keys come from the samples and static keys from the platform; only state keys vary freely.
@@ -83,13 +99,26 @@ type Context = ReturnType<typeof contextRecord> & { readonly [inModal]?: true }
 function findContext(rules: readonly ResolvedRule[], platform: Platform, holds: (context: Context) => boolean): string | undefined {
   const keys = [...new Set(rules.flatMap(rule => rule.when ? referencedKeys(rule.when) : []))].filter((key): key is ContextKey => stateKeys.has(key))
   if (keys.length > maxEnumeratedKeys) throw new Error(`Keybindings for ${rules[0].chords[0]} read ${keys.length} state keys; conflict analysis enumerates at most ${maxEnumeratedKeys}.`)
-  const assignments = function* (index: number, values: Record<string, boolean | string>): Generator<Record<string, boolean | string>> {
-    if (index === keys.length) { yield values; return }
-    for (const value of contextKeyValues(keys[index])) yield* assignments(index + 1, { ...values, [keys[index]]: value })
+  const samples = sampleContexts(platform)
+  if (keys.length === 0) {
+    for (const sample of samples) if (holds(sample.context)) return sample.name
+    return undefined
   }
-  for (const sample of focusSamples) for (const values of assignments(0, {})) {
-    const context: Context = { ...contextRecord(platform, { ...sample.keys, ...values } as Partial<ContextKeys>), ...(sample.modal ? { [inModal]: true as const } : {}) }
-    if (holds(context)) return sample.name
+  const domain = keys.map(key => contextKeyValues(key))
+  const scratch: MutableContext = Object.create(null)
+  const search = (index: number): boolean => {
+    if (index === keys.length) return holds(scratch as Context)
+    const key = keys[index]
+    for (const value of domain[index]) {
+      scratch[key] = value
+      if (search(index + 1)) return true
+    }
+    return false
+  }
+  for (const sample of samples) {
+    Object.assign(scratch, sample.context)
+    if (!sample.context[inModal]) delete scratch[inModal]
+    if (search(0)) return sample.name
   }
   return undefined
 }
@@ -113,7 +142,14 @@ function shadowing(a: ResolvedRule, b: ResolvedRule): ResolvedRule | undefined {
  * not. A preset scope's rule that overlaps a Global one is a `shadow`, which the narrower wins. Native rules belong to
  * Monaco and are not checked.
  */
+const defaultConflictsByPlatform = new Map<Platform, readonly Conflict[]>()
+
 export function findConflicts(rules: readonly ResolvedRule[], platform: Platform): Conflict[] {
+  const isDefault = rules === defaultRules(platform)
+  if (isDefault) {
+    const cached = defaultConflictsByPlatform.get(platform)
+    if (cached) return [...cached]
+  }
   const conflicts: Conflict[] = []
   for (const [chord, list] of workbenchRules(rules)) {
     for (const rule of list) {
@@ -139,6 +175,7 @@ export function findConflicts(rules: readonly ResolvedRule[], platform: Platform
       else conflicts.push({ kind: 'overlap', chord, commands: [a.command, b.command], message: `${a.command} and ${b.command} both match ${chord} in ${sample}.` })
     }
   }
+  if (isDefault) defaultConflictsByPlatform.set(platform, Object.freeze([...conflicts]))
   return conflicts
 }
 

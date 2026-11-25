@@ -25,7 +25,7 @@ export interface QueryContextInput {
   /** A document task (saving, closing, ending sessions) is under way. */
   readonly busy: boolean
 }
-export interface ServerOption { readonly id: string; readonly label: string; readonly disabled: boolean }
+export interface ServerOption { readonly id: string; readonly label: string; readonly shortLabel: string; readonly disabled: boolean }
 export interface QueryContextModel {
   readonly connection: LiveConnection | undefined
   /** The connection can run queries: it exists and was not lost with its backend. */
@@ -47,15 +47,22 @@ export interface QueryContextModel {
 }
 
 export const serverLabel = (connection: Pick<LiveConnection, 'displayName' | 'server'>): string => connection.displayName ? `${connection.displayName} (${connection.server})` : connection.server
+export const serverShortLabel = (connection: Pick<LiveConnection, 'displayName' | 'server'>): string => connection.displayName || connection.server
 
 export function queryContextModel({ connectionId, targetId, target, lastServer, database, connections, databases, query, running, busy }: QueryContextInput): QueryContextModel {
   const connection = connectionId ? connections.find(value => value.id === connectionId) : undefined
   const presentation = queryConnectionPresentation({ targetId, lastServer }, connection, target)
   const live = isLiveConnection(connection) && !presentation.disconnected
   const serverValue = connection?.id ?? (presentation.server ? `remembered:${targetId ?? lastServer}` : '')
-  const servers = [{ id: '', label: 'Disconnected', disabled: false }, ...connections.filter(value => isLiveConnection(value) || value === connection)
-    .map(value => ({ id: value.id, label: value === connection ? presentation.label : serverLabel(value), disabled: value === connection ? !live : !isLiveConnection(value) }))]
-  if (!connection && presentation.server) servers.push({ id: serverValue, label: presentation.label, disabled: true })
+  const currentShortLabel = presentation.server ? `${presentation.displayName || presentation.server}${presentation.disconnected ? ' Disconnected' : ''}` : 'Disconnected'
+  const servers: ServerOption[] = [{ id: '', label: 'Disconnected', shortLabel: 'Disconnected', disabled: false }, ...connections.filter(value => isLiveConnection(value) || value === connection)
+    .map(value => ({
+      id: value.id,
+      label: value === connection ? presentation.label : serverLabel(value),
+      shortLabel: value === connection ? currentShortLabel : serverShortLabel(value),
+      disabled: value === connection ? !live : !isLiveConnection(value)
+    }))]
+  if (!connection && presentation.server) servers.push({ id: serverValue, label: presentation.label, shortLabel: currentShortLabel, disabled: true })
   const listed = live ? databases.map(value => value.name) : []
   const datasets = (connection?.providerId ?? connection?.options.provider) === 'bigquery'
   const choices = listed.includes(database) ? listed : [database, ...listed]

@@ -17,7 +17,7 @@ import { liveJob } from '../src/renderer/src/explorer/ExplorerRow'
 import { AgentTreeLive } from '../src/renderer/src/agent/AgentTreeLive'
 import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 
-const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)) }
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const cid = (n: number) => `10000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
 const jobA = 'AAAAAAAA-0000-4000-8000-000000000001', jobB = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -411,6 +411,8 @@ describe('AgentTreeLive: job rows\' chips from agent.jobs', () => {
     f.connect()
     await settle()
     await f.open('SQL Server Agent', 'Jobs')
+    // Wait past the listing's millisecond so the first read's tick is stamped strictly after listedAt.
+    await new Promise(resolve => setTimeout(resolve, 5))
     const [view] = f.viewsOf('agent.jobs')
     view.jobs([job(jobA.toLowerCase(), { status: 'Executing', step: 'Step 2 of 4 · Rebuild' }), job(jobB, { lastOutcome: 'Failed', enabled: 'No' })])
     await settle()

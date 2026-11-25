@@ -75,7 +75,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   administrator rights on <machine>"), an unreachable machine or Service Control Manager `SERVICE_UNREACHABLE`, no
   such service `NOT_FOUND`, and a Start while the service is still stopping `BLOCKED`. The verbs are offered with Varia on Windows for a Windows server that is not Managed Instance
   and not a failover cluster instance; elsewhere they stay in the menu, greyed with the reason (Varia not on Windows, a
-  Linux server, Managed Instance, the service changing state), and the backend refuses them
+  Linux server, Managed Instance, a failover cluster instance, which the node's `explorer.agentService` probe reads from
+  `SERVERPROPERTY('IsClustered')`, a start, stop or restart of it already running in this window, the service changing
+  state), and the backend refuses them
   `NOT_SUPPORTED`. A start, stop or restart takes the long gate, so one runs per connection. The state shown elsewhere
   stays SQL's (`xp_servicecontrol N'QueryState'`); `xp_servicecontrol` never starts or stops anything.
 - **Job Activity Monitor** (`agent.jobs`, docs/live.md). The Agent node's menu (first after New), Enter or double-click on its
@@ -101,8 +103,16 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   version and date as they are, so every job's request passes the same guard); a job sysadmin's links show already on the
   schedule gets "Already uses this schedule" and no request, and one the read did not list fails its line unsent. Each
   result is its own line, a refusal fails only that job, and Stop and Escape (which closes a form) work as for Start; Agent stopped or Agent XPs off is a banner,
-  a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. Double-click,
-  Enter or Open on the selected job opens its job document.
+  a note below the list says Status is msdb's last reading, and the list refreshes once Agent runs again. The Agent-stopped
+  banner has **Start Agent…**, which runs the Agent node's Start (`explorer.startAgent`, with its confirmation and rules: greyed
+  with the reason where the node's would be, or while a dialog is open; the monitor's own `agent.jobs.service` reading, which
+  carries the cluster fact too, stands in for one the tree has not sampled). Double-click, Enter or Open on the selected job
+  opens its job document, and F5 in it refreshes the list (Refresh Jobs). View › Job Activity Monitor opens it too, on the active
+  tab's server or Object Explorer's selected one, else asking which server when more than one is connected. The list's row menu (right-click, Shift+F10 or the context-menu
+  key; `agent.jobs.context` through MenuService) acts on the selected jobs: Open, Create Job Like This and Script Job as CREATE
+  (a new query window, through Object Explorer's Script As) on one job, Start Job, Stop Job, Enable Job and Disable Job as the
+  bar runs them, View History, and Refresh. The row menu replaces Query Output's, but the grid keeps Query Output's keys
+  (Ctrl+C, Ctrl+Shift+C, Ctrl+A, Ctrl+S, and Alt+Down for a column's filter).
 - **Activity Monitor job links** (docs/activity-monitor.md › SQL Server Agent jobs). A session running a job step shows the
   job and step in the Activity Monitor's Agent Job column, a link to the job document at History; Open Job and Stop Job are on
   the session's menu.
@@ -117,7 +127,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
   Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New alert for this job… opens New Alert with the job as its response).
   **Steps** is a master/detail page: the list shows each step's number, type and where it goes on success and on failure, marks
-  the Start step, and reorders by drag or Move up and Move down; go-to targets follow the step they name, since the draft keys
+  the Start step, and reorders by drag, Move up and Move down, or Alt+Up and Alt+Down (Move Step Up and Move Step Down, in the
+  Steps section but not in a field or the step's command editor, where the keys open a list or move lines); moving the step shown
+  keeps it shown. Go-to targets follow the step they name, since the draft keys
   steps rather than numbering them. Delete acts at once and its banner names the steps that went to the deleted one and now quit
   reporting failure (as SSMS does), with Undo putting all of it back. The editor shows the step's name and type, then the
   type's fields: T-SQL in a Monaco editor that completes against the step's database, with **Parse** (`language.parse`,
@@ -226,8 +238,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   and its steps with outcome, duration and retries. The run's last failed step opens with its whole message (agent.historyMessage
   where the grid's copy was cut), with Copy, **Edit step** (the step of that name as the job is now) and **Start at step**. A step
   whose message names an SSIS Catalog execution ("Execution ID: 48213", which a failed catalog step writes) has an **SSIS execution**
-  link that opens a query window, not run, over `SSISDB.catalog.event_messages` for that execution, errors first, where the real error
-  usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
+  link that opens that run's page in the server's Integration Services document ([Integration Services](integration-services.md#the-integration-services-document)):
+  where it failed, its task timeline and its catalog messages, where the real error usually is. While the job runs, the section starts with the run view: the elapsed time from the run's start and the server's clock
   (the header's `agent.jobs.watched` probe; no elapsed time where the start is unreadable, never a guess) against the usual time as a
   bar, each step's state (finished steps as their rows say, the step Agent reports as current Executing or Between retries, the rest
   Waiting; with this run not selected under All, or its rows not read yet, the others show — rather than a guess) with this run's and
@@ -237,15 +249,21 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   disconnected); it runs while the document is the active one with History open, pauses while the document is hidden or the section
   collapsed, and runs nothing between samples: the backend schedules every read. The watched clock redraws the document only while
   History shows. A New Job has no History until it is
-  saved. All jobs' history in Log File Viewer opens the viewer with this job checked. The bars are plain elements with one
-  accessible name, not a ChartView chart: runs are not samples of a series.
+  saved. All jobs' history in Log File Viewer opens the viewer with this job checked. The sparkline draws through ChartView like
+  every chart: a ring of the last 14 finished runs, evenly spaced oldest first (runs, not samples over time), their durations over
+  a faint fill and the usual time as a gray line. It is one image whose name (also its tooltip) says how many runs failed and the
+  usual time, since status colours are never a series; a sparkline has no crosshair, so each run's start, outcome and duration
+  are read in the runs list beside it.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
   document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
   jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
   beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
   job (only jobs the login owns, or any for sysadmin, as msdb allows, on any schedule the login can see; another login's schedule takes only these job changes), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
   the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
-  user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. New schedule and Duplicate edit a draft that
+  user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. Below sysadmin it is
+  offered on a schedule another login owns only to a member of msdb's SQLAgentOperatorRole (read once through `agent.profile`),
+  whose `enable` and `disable` send `sp_update_schedule` only the schedule and `@enabled`, as msdb allows that role; the
+  schedule's other settings stay read-only to it. New schedule and Duplicate edit a draft that
   Create adds; Delete asks inline and never forces, so msdb refuses one a job uses (`IN_USE`, 14372), saying how many jobs.
   Every change is the `agentSchedule` object action on the Agent node with `op` `create` (`sp_add_schedule` with the new id as
   an OUTPUT local, then guarded `sp_attach_schedule`s), `update` (the guard, `sp_update_schedule` with what changed, then guarded
@@ -332,7 +350,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   its own jobs' history; msdb's 14392 is `PERMISSION_DENIED` and Agent XPs off `AGENT_STOPPED`. Agent stopped is the same banner as Job Activity
   Monitor's.
 - **Agent error logs** (`agent.errorLog`, `agent.errorLogs`). For sysadmin, Select logs lists SQL Server Agent's error logs
-  under the jobs ("Current - date", "Archive #1 - date"; `xp_enumerrorlogs 2`, archive order, Current alone where the server
+  under the jobs ("Current - date", "Archive #1 - date", the date in one format with Object Explorer's Error Logs labels, both
+  parsed by `ErrorLogTime` from `xp_enumerrorlogs`' text; `xp_enumerrorlogs 2`, archive order, Current alone where the server
   lists none, as on Linux). View Agent Log on the Error Logs folder (Current) or a log opens the server's viewer with that log
   checked and no job. The checked logs' rows show in their own grid (Agent log: date, log, type, message), newest first across
   logs, with the window and Message contains filters shared with the runs: the window reads the server's clock, and the text is
@@ -416,13 +435,13 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | Error Logs menu | View Agent Log, Recycle | Same (Recycle asks first; not on Managed Instance) |
 | Log File Viewer | Select logs, runs with their steps, message details, Delete history | Same layout (master/detail), with Agent's error logs in the same viewer |
 | Job dialog pages | General, Steps, Schedules, Alerts, Notifications, Targets | Same sections, plus History (rethink); Targets shows the local server only |
-| Job Step dialog | General (name, type, Run as, database, command, Parse, Open), Advanced (on success, on failure, retries, output file, log to table) | Same fields on the Steps page beside the list; Advanced is the folded More options |
+| Job Step dialog | General (name, type, Run as, database, command, Parse, Open), Advanced (on success, on failure, retries, output file, log to table) | Same fields on the Steps page beside the list, with Open as Load from file… on PowerShell and CmdExec steps; Advanced is the folded More options |
 | Job Schedule dialog | Schedule type, frequency, daily frequency, duration, summary sentence | Same fields and SSMS's sentence, plus presets and the next runs (rethink) |
 | Alert dialog | General (event, performance condition, WMI), Response (job, operators), Options | One screen with When / Then / Options; WMI alerts read-only (editing is Later) |
 | Operator dialog | General (e-mail, pager, on-duty schedule), Notifications, History | General, Pager duty and Notifications, plus Send test e-mail and the Operators and Notifications grid; the History page (last notification attempts) is Later |
 | Proxy Account dialog | General (credential, subsystems), Principals, References | One screen with the inline credential; References as Used by on the credential |
 | SQL Server Agent Properties | General, Advanced, Alert System, Job System, Connection, History | General and History (a dialog, as SSMS); the rest are Later |
-| Keys | No default Agent keys; Enter opens, Delete deletes, F2 renames in Object Explorer; F5 refreshes | Same in Object Explorer; F5 in Job Activity Monitor is AG-10 |
+| Keys | No default Agent keys; Enter opens, Delete deletes, F2 renames in Object Explorer; F5 refreshes | Same in Object Explorer; F5 refreshes Job Activity Monitor, and Alt+Up and Alt+Down move a job's steps |
 
 **Deliberate differences (the rethink)**
 
@@ -442,14 +461,6 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 
 | Gap | Where it goes |
 | --- | --- |
-| Job Activity Monitor's View menu item, F5, Start Agent on its banner, and a row menu | AG-10 |
-| Greying the service verbs on a cluster before the backend refuses, and the `busy` rule while a service action runs | AG-10 |
-| Error Logs' date labels | AG-10 |
-| SQLAgentOperatorRole enabling or disabling another owner's schedule | AG-10 |
-| Alt+Up and Alt+Down to move steps (Move up and Move down buttons today) | AG-10 |
-| The history sparkline through ChartView | AG-10 |
-| The palette's Enable and Disable titles for a job (read "Enable Login" and "Disable Login") | AG-10 |
-| Load from file… for CmdExec and PowerShell steps | AG-11 |
 | Job-state chips on job nodes, and reloading the Agent node when Agent XPs flips | AG-12 |
 | An SSIS execution messages view for the job history's SSIS link (a query window today) | AG-13 |
 | Schedules timeline; schedule occurrences across midnight and for every N months; an Agent live suite for schedules | AG-14 |
@@ -567,7 +578,7 @@ with `VARIA_TEST_SQL_SCRATCH=1`, `AgentHistoryLiveChecks` reads the scratch job'
 reads a message, and runs Delete History on it and a second scratch job (older than 30 days keeps the run, all deletes it).
 With args.usual the same checks cover the usual durations (the median, the newest 10 succeeded runs only, a retried step's
 rows added up, the table sent empty without it), and the live suite reads the scratch job's. `tests/agent-job-history.test.ts` covers the
-History section's rules (durations, the outcome message, the SSIS execution link and its query, the bars, each step's state while the job
+History section's rules (durations, the outcome message, the SSIS execution link, the sparkline's samples, each step's state while the job
 runs, the elapsed time) and its service against a fake view (opening once, following the newest run, a picked run kept, the failed
 step's whole message, Copy, Failed, refusals). The `agent-jobs` smoke suite opens the Log File Viewer from Job Activity Monitor and drives All jobs, the Failed outcome, a
 run's steps and message, and Delete History, then checks Current, selects a log row and runs Recycle (Enter on its

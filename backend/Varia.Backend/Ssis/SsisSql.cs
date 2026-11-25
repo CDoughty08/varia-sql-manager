@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Varia.Backend.Explorer;
 
@@ -107,6 +108,61 @@ internal static partial class SsisSql
         _ => throw new InvalidOperationException("Unknown SSIS view " + view + ".")
     };
 
+    /// <summary>The bit parameter that keeps one message type in the run page's type filter: @t10 for type 10, @tunknown for -1
+    /// (Unknown), which also keeps every type the catalogue does not name.</summary>
+    public static string TypeParameter(int code) => code < 0 ? "@tunknown" : "@t" + code.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>The run page (ssis.execution), one batch: the package the execution ran, looked up into variables; the execution's row
+    /// (none when the catalog no longer has it or the login may not read it: the catalog views' row-level security); every message
+    /// counted by type; the newest messages of the types whose bit parameter is 1 (and of @source's task, when it is not NULL), newest
+    /// first; the executables with their statistics summed, in the order they started; the parameter values it used, a sensitive one
+    /// never read; this run and the package's runs before it (@runs), and the package's next run; and the task durations of the
+    /// package's last @runs succeeded runs before this one, for the usual durations. Long texts are read one character past the bound,
+    /// so a cut one can be told from one exactly that long. The type filter comes from the catalogue, so the text is the same for
+    /// every request. Each listing is TOP (@take); the runs read TOP (@runs) inside it.</summary>
+    public static (string Text, bool List)[] Execution(SsisCatalog catalog)
+    {
+        var named = catalog.MessageTypes.Keys.Where(code => code >= 0).Order().ToList();
+        var filter = string.Join(" OR ", catalog.MessageTypes.Keys.Order().Select(code => "(" + TypeParameter(code) + " = 1 AND m.message_type "
+            + (code < 0 ? "NOT IN (" + string.Join(", ", named) + ")" : "= " + code.ToString(CultureInfo.InvariantCulture)) + ")"));
+        const string SamePackage = "e.folder_name = @folder AND e.project_name = @project AND e.package_name = @package";
+        return
+        [
+            ("DECLARE @folder sysname, @project sysname, @package nvarchar(260);\n"
+                + "SELECT @folder = e.folder_name, @project = e.project_name, @package = e.package_name FROM [catalog].[executions] AS e WHERE e.execution_id = @execution_id;", false),
+            ("SELECT e.execution_id, e.folder_name, e.project_name, e.package_name, e.environment_folder_name, e.environment_name, e.executed_as_name, e.caller_name, e.use32bitruntime, "
+                + "e.status, e.created_time, e.start_time, e.end_time, e.stopped_by_name, e.server_name, e.machine_name, SYSDATETIMEOFFSET() FROM [catalog].[executions] AS e "
+                + "WHERE e.execution_id = @execution_id;", false),
+            ("SELECT TOP (@take) m.message_type, COUNT_BIG(*) FROM [catalog].[event_messages] AS m WHERE m.operation_id = @execution_id GROUP BY m.message_type ORDER BY m.message_type;", true),
+            ("SELECT TOP (@take) m.event_message_id, m.message_time, m.message_type, m.message_source_type, m.message_source_name, m.package_name, m.event_name, "
+                + "LEFT(m.execution_path, @chars + 1), m.message_code, LEFT(m.message, @chars + 1) FROM [catalog].[event_messages] AS m "
+                + "WHERE m.operation_id = @execution_id AND (@source IS NULL OR m.message_source_name = @source) AND (" + filter + ") ORDER BY m.message_time DESC, m.event_message_id DESC;", true),
+            ("SELECT TOP (@take) LEFT(x.package_path, @chars + 1), LEFT(x.executable_name, @chars + 1), st.started, st.ended, st.duration, st.runs, st.failed FROM [catalog].[executables] AS x "
+                + "OUTER APPLY (SELECT MIN(s.start_time) AS started, MAX(s.end_time) AS ended, SUM(CAST(s.execution_duration AS bigint)) AS duration, COUNT_BIG(s.statistics_id) AS runs, "
+                + "MAX(CASE WHEN s.execution_result = 1 THEN 1 ELSE 0 END) AS failed FROM [catalog].[executable_statistics] AS s WHERE s.execution_id = x.execution_id AND s.executable_id = x.executable_id) AS st "
+                + "WHERE x.execution_id = @execution_id ORDER BY CASE WHEN st.started IS NULL THEN 1 ELSE 0 END, st.started, x.executable_id;", true),
+            ("SELECT TOP (@take) p.object_type, p.parameter_name, p.parameter_data_type, CASE WHEN p.sensitive = 1 THEN NULL ELSE LEFT(CONVERT(nvarchar(4000), p.parameter_value), @chars + 1) END, "
+                + "p.sensitive, p.required, p.value_set, p.runtime_override FROM [catalog].[execution_parameter_values] AS p WHERE p.execution_id = @execution_id ORDER BY p.object_type, p.parameter_name;", true),
+            ("SELECT TOP (@take) r.execution_id, r.status, r.start_time, r.end_time FROM (SELECT TOP (@runs) e.execution_id, e.status, e.start_time, e.end_time FROM [catalog].[executions] AS e "
+                + "WHERE " + SamePackage + " AND e.execution_id <= @execution_id ORDER BY e.execution_id DESC) AS r ORDER BY r.execution_id DESC;", true),
+            ("SELECT TOP (1) e.execution_id FROM [catalog].[executions] AS e WHERE " + SamePackage + " AND e.execution_id > @execution_id ORDER BY e.execution_id;", false),
+            ("SELECT TOP (@take) LEFT(x.package_path, @chars + 1), s.execution_duration FROM [catalog].[executable_statistics] AS s "
+                + "JOIN [catalog].[executables] AS x ON x.executable_id = s.executable_id AND x.execution_id = s.execution_id "
+                + "WHERE s.execution_result = 0 AND s.execution_id IN (SELECT TOP (@runs) e.execution_id FROM [catalog].[executions] AS e WHERE " + SamePackage + " AND e.status = @succeeded "
+                + "AND e.execution_id < @execution_id ORDER BY e.execution_id DESC) ORDER BY s.execution_id DESC, s.statistics_id;", true)
+        ];
+    }
+
+    /// <summary>The package step (ssis.packageRuns): one package's newest runs, each with its error and warning counts from
+    /// catalog.operation_messages (the catalogue's types), and the server's clock.</summary>
+    public static (string Text, bool List)[] PackageRuns(SsisCatalog catalog) =>
+    [
+        ("SELECT TOP (@take) e.execution_id, e.status, e.created_time, e.start_time, e.end_time, e.caller_name, "
+            + "(SELECT COUNT_BIG(*) FROM [catalog].[operation_messages] AS m WHERE m.operation_id = e.execution_id AND m.message_type IN (" + string.Join(", ", catalog.ErrorMessageTypes) + ")), "
+            + "(SELECT COUNT_BIG(*) FROM [catalog].[operation_messages] AS m WHERE m.operation_id = e.execution_id AND m.message_type IN (" + string.Join(", ", catalog.WarningMessageTypes) + ")), "
+            + "SYSDATETIMEOFFSET() FROM [catalog].[executions] AS e WHERE e.folder_name = @folder AND e.project_name = @project AND e.package_name = @package ORDER BY e.execution_id DESC;", true)
+    ];
+
     /// <summary>The project a project or package describe reads, by folder and project name.</summary>
     private const string ProjectLookup = "DECLARE @project_id bigint;\n"
         + "SELECT @project_id = p.project_id FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id WHERE f.name = @folder AND p.name = @project;";
@@ -185,8 +241,8 @@ internal static partial class SsisSql
         return problems;
     }
 
-    /// <summary>Every statement this file renders, for the lint: the profile, the state check, the write preflight, and each
-    /// view's statements for each band and feature set. Write templates have their own lint (<see cref="LintWrite"/>).</summary>
+    /// <summary>Every statement this file renders, for the lint: the profile, the state check, the write preflight, each
+    /// view's statements for each band and feature set, and the run page's and the package step's. Write templates have their own lint (<see cref="LintWrite"/>).</summary>
     public static IEnumerable<(string Id, string Text, bool List)> All(IEnumerable<string> views)
     {
         yield return ("profile", ProfilePrologue + Profile, false);
@@ -198,5 +254,9 @@ internal static partial class SsisSql
                 foreach (var features in SsisFeatures.Every())
                     foreach (var (statement, index) in Statements(view, new SsisRender(band, features)).Select((statement, index) => (statement, index)))
                         yield return (view + " " + band + " " + features + " #" + index, statement.Text, statement.List);
+        foreach (var (statement, index) in Execution(SsisCatalog.Current).Select((statement, index) => (statement, index)))
+            yield return ("execution #" + index, statement.Text, statement.List);
+        foreach (var (statement, index) in PackageRuns(SsisCatalog.Current).Select((statement, index) => (statement, index)))
+            yield return ("packageRuns #" + index, statement.Text, statement.List);
     }
 }

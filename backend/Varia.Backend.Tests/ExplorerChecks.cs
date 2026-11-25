@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Actions;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 
@@ -181,6 +182,12 @@ internal static class ExplorerChecks
         check(AgentListings.ErrorLog(context, 0, new DateTime(2026, 11, 18, 14, 20, 0)) is { Label: "Current - 2026-11-18 14:20", HasChildren: false } current && current.Ref.Object!.Name == "0"
             && AgentListings.ErrorLog(context, 3, null).Label == "Archive #3",
             "error logs are keyed by archive number and labelled Current or Archive #n with their date");
+        // xp_enumerrorlogs sends its Date as text ("11/22/2026  21:44"): the label formats it as the Log File Viewer's Select logs does.
+        check(AgentListings.ErrorLog(context, 0, "11/22/2026  21:44").Label == "Current - 2026-11-22 21:44"
+            && AgentListings.ErrorLog(context, 2, "1/5/2026 9:03").Label == "Archive #2 - 2026-01-05 09:03"
+            && AgentListings.ErrorLog(context, 1, "not a date").Label == "Archive #1"
+            && ActionService.ErrorLogDate("11/22/2026  21:44") == "2026-11-22T21:44:00",
+            "Error Logs labels parse xp_enumerrorlogs's text date through the Log File Viewer's formatter (ActionService.ErrorLogTime)");
     }
 
     /// <summary>Every node that lists rows: a folder with a query (its filters, gate and owner kinds), or a kind that lists rows
@@ -857,6 +864,11 @@ internal static class ExplorerChecks
             && split.Contains("IF ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER SECURITY STATE'), 0) = 1 OR ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER PERFORMANCE STATE'), 0) = 1\n", StringComparison.Ordinal)
             && split.Contains("IF @state IS NULL AND ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER PERFORMANCE STATE'), 0) = 1\n", StringComparison.Ordinal),
             "explorer.agentService reads the Agent service DMV under VIEW SERVER STATE below SQL Server 2022 and under VIEW SERVER SECURITY or PERFORMANCE STATE from it, and counts Agent's sessions only where the login sees them");
+        // AG-10: the probe says whether the server is a failover cluster instance (no permission needed), last, so agent.jobs.service's
+        // readers (ordinals 0-2) are unchanged and the Agent node's Start, Stop and Restart grey before the backend refuses them.
+        check(split.EndsWith(", CONVERT(int, SERVERPROPERTY('IsClustered')) AS is_clustered;", StringComparison.Ordinal)
+            && Varia.Backend.Live.LiveCatalog.Current.Probes["explorer.agentService"].Status.SequenceEqual(["agentXps", "serviceState", "startupType", "clustered"]),
+            "explorer.agentService reports clustered from SERVERPROPERTY('IsClustered') as its last status value");
         var listless = new FakeHost { Opening = (_, _) => Task.CompletedTask };
         var unlisted = new Varia.Backend.Agent.AgentReader { TestRun = (_, _, _) => throw new Varia.Backend.Agent.AgentShapeException("NOT_SUPPORTED", "no list") };
         using (var linuxLogs = new ExplorerService(listless, new ExplorerOptions { AgentReader = unlisted }))

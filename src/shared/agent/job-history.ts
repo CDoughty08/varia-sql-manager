@@ -66,13 +66,23 @@ export const inProgressTone = 'running'
 export const runIsInProgress = (run: JobHistoryRun): boolean => run.tone === inProgressTone
 export const sameRun = (a: HistoryRunKey | undefined, b: HistoryRunKey | undefined): boolean => !!a && !!b && historyRunKeyText(a) === historyRunKeyText(b)
 
-/** The sparkline's bars: the newest finished runs with a duration, oldest first, each a share of the tallest (or of the usual time when longer). */
-export function sparkBars(runs: readonly JobHistoryRun[], usual?: number): { readonly bars: readonly { readonly key: string; readonly height: number; readonly failed: boolean; readonly label: string }[]; readonly usualAt?: number } {
+/** One step of the sparkline's time axis: runs are drawn evenly spaced, oldest first, since they are runs and not samples over time. */
+export const sparkStepMs = 1000
+/**
+ * The sparkline's samples for ChartView (AG-10): the newest finished runs with a duration, oldest first, each at `index × sparkStepMs`
+ * with [its seconds, the usual time] (the usual time a line where known); the scale's top (the longest run or the usual time, at least 1 s);
+ * and its accessible name, which says how many failed (status colours are never a series).
+ */
+export function sparkSamples(runs: readonly JobHistoryRun[], usual?: number): {
+  readonly samples: readonly { readonly time: number; readonly values: readonly (number | null)[] }[]; readonly top: number; readonly label: string
+} {
   const finished = runs.filter(run => run.seconds !== undefined && !runIsInProgress(run)).slice(0, jobHistoryLimits.sparkRuns).reverse()
-  const top = Math.max(1, usual ?? 0, ...finished.map(run => run.seconds!))
+  const failed = finished.filter(run => run.tone === 'error').length
+  const label = finished.length ? `Durations of the last ${finished.length} ${finished.length === 1 ? 'run' : 'runs'}${failed ? `, ${failed} failed` : ''}${usual !== undefined ? `; usual ${durationWords(usual)}` : ''}` : ''
   return {
-    bars: finished.map(run => ({ key: historyRunKeyText(run.key), height: (run.seconds ?? 0) / top, failed: run.tone === 'error', label: `${run.started}: ${run.outcome}, ${run.duration}` })),
-    ...usual !== undefined ? { usualAt: usual / top } : {}
+    samples: finished.map((run, at) => ({ time: at * sparkStepMs, values: [run.seconds!, usual ?? null] })),
+    top: Math.max(1, usual ?? 0, ...finished.map(run => run.seconds!)),
+    label
   }
 }
 
@@ -98,20 +108,6 @@ export function ssisExecutionId(message: string): number | undefined {
   const id = match ? Number(match[1]) : NaN
   return Number.isSafeInteger(id) && id > 0 ? id : undefined
 }
-/** The query a step's SSIS execution link opens in a query window (never run by itself): the catalog's messages for that execution,
- *  where the real error usually is. The id is a parsed integer, so the text holds nothing from the server but digits. */
-export function ssisExecutionQuery(id: number): string {
-  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('An SSIS execution id is a positive integer.')
-  return [
-    `-- SSIS Catalog messages of execution ${id}, from the job's history (errors first).`,
-    '-- message_type: 120 Error, 130 Task failed, 110 Warning, 70 Information.',
-    'SELECT message_time, message_type, message_source_name, message',
-    'FROM SSISDB.catalog.event_messages',
-    `WHERE operation_id = ${id}`,
-    'ORDER BY CASE WHEN message_type IN (120, 130) THEN 0 ELSE 1 END, message_time, event_message_id;'
-  ].join('\n')
-}
-
 /** The step a run's detail opens with its message: the last step that failed, else none. */
 export function failedStep(steps: readonly JobHistoryStep[]): JobHistoryStep | undefined {
   return [...steps].reverse().find(step => step.stepId > 0 && step.tone === 'error')

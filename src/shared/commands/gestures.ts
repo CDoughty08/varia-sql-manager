@@ -13,7 +13,7 @@ export type GestureModifier = 'mod' | 'ctrl' | 'alt' | 'shift' | 'meta'
 export const gestureModifiers: readonly GestureModifier[] = ['mod', 'ctrl', 'alt', 'shift', 'meta']
 /** A gesture's modifiers, all held (other modifiers do not matter, as before the catalogue); empty means none needed. */
 export type GestureModifiers = readonly GestureModifier[]
-export type PointerAction = 'click' | 'doubleClick' | 'hover' | 'drag' | 'wheel'
+export type PointerAction = 'click' | 'doubleClick' | 'hover' | 'drag' | 'wheel' | 'backButton' | 'forwardButton'
 /**
  * - `modifier`: a behaviour the modifier switches on while pointing, not a command.
  * - `pointerCommand`: a pointer action that runs a command, which also has a keyboard path (`keyboard`).
@@ -32,6 +32,7 @@ export const gestureScopes = {
   panels: 'Panels and Editor Tabs',
   popouts: 'Popout Windows',
   documentTabs: 'Document Tabs',
+  integrationServices: 'Integration Services',
   connectionDialog: 'Connect Dialog'
 } as const
 export type GestureScope = keyof typeof gestureScopes
@@ -216,6 +217,16 @@ export const gestureCatalog = {
     title: 'Go to Error Line', description: 'Reveals an SQL error\'s line in the query that produced it, while its text is unchanged.',
     kind: 'fixed', scope: 'messages', action: 'doubleClick', target: 'a query error', modifiers: [],
     locked: 'Double-clicking an error reveals its source; its Go to line button also works from the keyboard.'
+  },
+  'ssis.mouseBack': {
+    title: 'Go Back', description: 'Goes back to the place an Integration Services document showed before: the list, a package or a run.',
+    kind: 'fixed', scope: 'integrationServices', action: 'backButton', target: 'an Integration Services document', modifiers: [], keyboard: ['ssis.goBack'],
+    locked: "The mouse's back button walks the document's history, as a browser's does; Go Back's keys also work."
+  },
+  'ssis.mouseForward': {
+    title: 'Go Forward', description: 'Goes forward again to the place an Integration Services document went back from.',
+    kind: 'fixed', scope: 'integrationServices', action: 'forwardButton', target: 'an Integration Services document', modifiers: [], keyboard: ['ssis.goForward'],
+    locked: "The mouse's forward button walks the document's history, as a browser's does; Go Forward's keys also work."
   }
 } as const satisfies Record<string, GestureDescriptor>
 
@@ -256,7 +267,7 @@ export function physicalModifiers(modifiers: GestureModifiers, platform: Platfor
   return physicalOrder.filter(modifier => held.has(modifier))
 }
 
-const actionWords: Readonly<Record<PointerAction, string>> = { click: 'Click', doubleClick: 'Double-click', hover: 'Hover', drag: 'Drag', wheel: 'Wheel' }
+const actionWords: Readonly<Record<PointerAction, string>> = { click: 'Click', doubleClick: 'Double-click', hover: 'Hover', drag: 'Drag', wheel: 'Wheel', backButton: 'Back button', forwardButton: 'Forward button' }
 const shortNames = (platform: Platform): Readonly<Record<PhysicalModifier, string>> =>
   platform === 'darwin' ? { ctrl: '⌃', alt: '⌥', shift: '⇧', meta: '⌘' } : { ctrl: 'Ctrl', shift: 'Shift', alt: 'Alt', meta: platform === 'win32' ? 'Win' : 'Super' }
 const longNames = (platform: Platform): Readonly<Record<PhysicalModifier, string>> =>

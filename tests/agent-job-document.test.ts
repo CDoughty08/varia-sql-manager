@@ -8,12 +8,13 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionRequest } from '.
 import { agentLimits } from '../src/shared/agent/catalog'
 import { createFromDraft } from '../src/shared/agent/create-from'
 import { commandDescriptor } from '../src/shared/commands/catalog'
+import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import type { ApiResult } from '../src/shared/contracts'
 import { jobDocumentText, jobLive } from '../src/renderer/src/agent/JobDocumentService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -548,6 +549,28 @@ describe("the job document's Steps page", () => {
     const state = jobDocuments.get(id)!
     expect(state.parse).toBeUndefined()
     expect(state.draft?.steps.steps.find(step => step.key === state.step)?.name).toBe('Notify')
+  })
+  it('moves the selected step with Alt+Up and Alt+Down in the Steps section, not in a field or the step\'s editor (AG-10)', async () => {
+    const { jobDocuments, commands } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    for (const [command, key] of [['agentJob.moveStepUp', 'alt+up'], ['agentJob.moveStepDown', 'alt+down']] as const) {
+      const binding = commandDescriptor(command).keybindings?.[0]
+      expect(binding?.key).toBe(key)
+      const when = compileWhen(binding!.when!)
+      expect(evaluateWhen(when, { activeDocumentIsAgentJob: true, agentStepsFocus: true, textInputFocus: false })).toBe(true)
+      expect(evaluateWhen(when, { activeDocumentIsAgentJob: true, agentStepsFocus: true, textInputFocus: true })).toBe(false)
+      expect(evaluateWhen(when, { activeDocumentIsAgentJob: true, agentStepsFocus: false, textInputFocus: false })).toBe(false)
+    }
+    // The first step selected: it cannot move up; down swaps it with the next, go-to targets following.
+    expect(commands.isEnabled('agentJob.moveStepUp', { tabId: id })).toBe(false)
+    await commands.execute('agentJob.moveStepDown', { tabId: id }, 'keybinding')
+    expect(keys(jobDocuments, id)).toEqual(['s2', 's1', 's3'])
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    jobDocuments.selectStep(id, 's3')
+    expect(commands.isEnabled('agentJob.moveStepDown', { tabId: id })).toBe(false)
+    await commands.execute('agentJob.moveStepUp', { tabId: id }, 'keybinding')
+    expect(keys(jobDocuments, id)).toEqual(['s2', 's3', 's1'])
   })
   it('lists the steps of a job with more than Varia reads read-only, with no problems', async () => {
     const { jobDocuments } = opened({ ...stepped(), stepsTruncated: true })

@@ -120,7 +120,7 @@ function setup() {
   let ids = 0
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, longRuns, newId: () => `id-${++ids}` })
   cleanups.push(() => dialogs.dispose())
-  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+  const settle = () => new Promise(resolve => setImmediate(resolve))
   const open = async () => {
     dialogs.open('newLogin', folder('logins'))
     await settle()

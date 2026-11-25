@@ -65,7 +65,7 @@ function fixture() {
   }
   return { client, api, window, workers, worker, handOver, serve, scheduled, advance: (ms: number) => { now += ms }, flush: () => { for (const callback of scheduled.splice(0)) callback() } }
 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 
 describe('ResultClient', () => {
   it('accepts exactly one port from its own window while it waits for one', async () => {

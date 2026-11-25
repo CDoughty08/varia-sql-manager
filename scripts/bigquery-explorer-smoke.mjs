@@ -85,11 +85,17 @@ try {
   expect(fake.inserted).toEqual([])
   console.log('BigQuery Explorer checks: a view\'s menu has no Preview Rows, and Script View as › SELECT To writes its template with no job.')
 
-  // Properties: the table's facts from tables.get in a document of its own.
+  // Properties: the table's structured facts from tables.get in the unified ObjectInspectorFrame, with zero billed jobs.
   await chooseExplorerMenuItem(page, tableRow, 'Properties')
-  const properties = documentFrame(page, 'orders').getByRole('region', { name: 'Properties', exact: true })
+  const properties = documentFrame(page, 'orders')
   await expect(properties).toContainText('customer', { timeout: 30000 })
   await expect(properties).toContainText(/DAY/)
+  await expect(properties.getByRole('tab', { name: 'Overview', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(properties.getByRole('complementary', { name: 'Vitals', exact: true })).toContainText(/DAY/)
+  await properties.getByRole('tab', { name: 'Storage & Layout', exact: true }).click()
+  await expect(properties.getByRole('tabpanel')).toContainText('customer')
+  await properties.getByRole('tab', { name: /^Columns/ }).click()
+  await expect(properties.getByRole('button', { name: 'Expand all', exact: true })).toBeVisible()
   expect(fake.inserted).toEqual([])
   expect(failures).toEqual([])
   expect(fake.unanswered).toEqual([])
