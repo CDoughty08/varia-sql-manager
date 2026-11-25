@@ -35,7 +35,9 @@ export const agentBulkText = {
   scheduleDone: (name: string) => `Attached ${name}`,
   jobUnread: "Not sent: Varia could not read this job's version (msdb may hide it from this login). Refresh and try again.",
   readFailed: 'Varia could not read what this needs.',
-  ownJobsOnly: 'Below sysadmin, msdb attaches schedules only to jobs this login owns.'
+  ownJobsOnly: 'Below sysadmin, msdb attaches schedules only to jobs this login owns.',
+  formUnavailable: 'Job Activity Monitor cannot reach the server now: reconnect, then try again.',
+  formBusy: 'Job Activity Monitor is running a bulk action: wait for it to finish, then try again.'
 } as const
 
 /** One selected job's plan: send a request, or a result decided without one (already so, or not sendable). */

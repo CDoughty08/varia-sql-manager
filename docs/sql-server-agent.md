@@ -113,6 +113,46 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   (a new query window, through Object Explorer's Script As) on one job, Start Job, Stop Job, Enable Job and Disable Job as the
   bar runs them, View History, and Refresh. The row menu replaces Query Output's, but the grid keeps Query Output's keys
   (Ctrl+C, Ctrl+Shift+C, Ctrl+A, Ctrl+S, and Alt+Down for a column's filter).
+- **Agent overview** (AG-15; `agent.overview`, docs/live.md; the rules in `src/shared/agent/overview.ts`, `AgentOverviewService`
+  and `AgentOverview.tsx` in the renderer). Agent Overview on the Agent node's menu, or the palette's SQL Server Agent: Agent
+  Overview (Ctrl+Q finds it as a command), opens one document per connection ("Agent Overview - server"). Its header shows
+  Agent's state, startup type, service account and the server's version, with Check again and Properties; tiles count jobs,
+  jobs failed in the last 24 hours (by the server's clock), running jobs and alerts (those fired this week); then the health
+  checks, each with a severity, the jobs or schedules it names (each name a link in its sentence that opens it) and a fix that opens the usual editor
+  or confirmation. Nothing is written by the overview itself:
+  - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
+  - **Failed jobs**: a job whose last run failed and started within 24 hours ("(retrying)" while it retries); Show
+    them opens Job Activity Monitor on its Failed view, which lists every job whose last run failed, as the check's detail says.
+  - **Owners that cannot log in**: a job owner whose login is disabled, missing (a SQL login's SID no longer in
+    `sys.server_principals`; a Windows SID is not checked, as the domain may know it) or denied CONNECT SQL; a sysadmin owner
+    such as a disabled `sa` passes, as Agent runs its jobs' steps as the service account. Change owner… opens Job Activity
+    Monitor's AG-3b form for exactly those jobs (the first `startJobs` of more, saying so; a monitor running a bulk action or
+    off its server says why no form opened). Sysadmin only.
+  - **Jobs that notify no one**: an enabled job with no e-mail, pager or net send notification on failure or completion
+    (the event log and success-only notifications count as no one); Set notifications… opens the first job's Notifications.
+  - **History retention**: a job at its per-job cap, or every job together at the total cap, whose history covers less than
+    a week, unless the job was created within the week; History settings… opens SQL Server Agent Properties' History page.
+    Unlimited history passes. Sysadmin only.
+  - **Recommended alerts**: the alerts Add recommended alerts… would create (counted as its own dialog counts them); the
+    fix opens Operators and Notifications with it, for sysadmin. A recommended alert that exists but is disabled is named, and
+    is a warning even when none is missing. Windows only; elsewhere the check says the server has no alerts.
+  - **Agent mail**: the job document's Database Mail check (Database Mail XPs, a profile, Agent's mail profile set and still
+    a profile); a warning while a job or alert notifies by e-mail, a note otherwise. Varia has no Database Mail editor yet,
+    so the text points to SSMS. Where Agent's own mail settings do not read (`sp_get_sqlagent_properties` sends no
+    `use_databasemail` or `databasemail_profile` on SQL Server 2025), the check decides on Database Mail XPs and the
+    profiles and says Agent's profile was not read. Sysadmin only.
+  - **Unused schedules**: shared schedules no job uses; Open Schedules opens the Schedules document. Sysadmin only.
+
+  The source's one probe, `agent.overview.read` (every 60 s, 15 s to 5 min), runs on the server pool through AgentReader:
+  `JobDocumentFacts`, Agent's state (`explorer.agentService`'s text), the server's clock, `sp_help_job`, Agent's properties,
+  `sp_help_alert` (Windows only), the mail profiles and, for sysadmin, the owners' logins, the history counts per job, the
+  schedules, Agent's mail settings and `sys.dm_server_services`. Each read is recorded in a reads table as `ok`, `role` (not
+  run below sysadmin), `platform` (not on this platform) or the read's error code and message, so a refused read is a value
+  and its check says "Not checked" with the reason (a failed facts read stops the sysadmin reads with its own reason, and a
+  failed state read is "Not checked", not a stopped Agent); the probe itself fails only when the connection does. A list
+  read cut at its cap (`listRows`) makes the checks over it say they checked only the first rows, a pass there becomes a
+  note, and the Jobs and Alerts tiles show the count with a +. The checks are
+  computed in the renderer from the raw facts.
 - **Activity Monitor job links** (docs/activity-monitor.md › SQL Server Agent jobs). A session running a job step shows the
   job and step in the Activity Monitor's Agent Job column, a link to the job document at History; Open Job and Stop Job are on
   the session's menu.
@@ -453,7 +493,7 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | Surface | SSMS 2022 | Varia |
 | --- | --- | --- |
 | Agent node | After the server's folders; children Jobs, Job Activity Monitor, Alerts, Operators, Proxies, Error Logs | Same order and names; which children show follows the login's Agent role, as SSMS's do; Managed Instance has no Alerts or Proxies, as in SSMS |
-| Agent node menu | New › Job…, Alert…, Operator…, Proxy…, Schedule…; Start, Stop, Restart; View History; Properties | Same items, grouped differently (Job Activity Monitor and View History after New, then Start, Stop and Restart); Start, Stop and Restart through the Service Control Manager as the Windows user, as SSMS |
+| Agent node menu | New › Job…, Alert…, Operator…, Proxy…, Schedule…; Start, Stop, Restart; View History; Properties | Same items, grouped differently (Job Activity Monitor, Agent Overview and View History after New, then Start, Stop and Restart); Start, Stop and Restart through the Service Control Manager as the Windows user, as SSMS |
 | Jobs folder menu | New Job…, Manage Schedules, View History | Same (Manage Schedules opens the Schedules document) |
 | Job menu | New Job…, Script Job as, Start Job at Step…, Stop Job, Enable/Disable, View History, Rename, Delete, Properties | Same names, grouped as Varia's menus are: New Job… and Create Job Like This…, View History, Start Job at Step… and Stop Job, Script Job as, Enable/Disable, Rename and Delete, Properties |
 | Job Activity Monitor node | Double-click or View Job Activity opens it | Double-click, Enter or Job Activity Monitor opens it, one per server |
@@ -490,7 +530,6 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | Job-state chips on job nodes, and reloading the Agent node when Agent XPs flips | AG-12 |
 | An SSIS execution messages view for the job history's SSIS link (a query window today) | AG-13 |
 | Schedules timeline; schedule occurrences across midnight and for every N months; an Agent live suite for schedules | AG-14 |
-| Agent overview health checks | AG-15 |
 | Activity Monitor sessions that link to the job they run | AG-16 |
 | Manage Job Categories; multi-server targets (MSX/TSX); Script Action to Job; output file and table log viewers; SQL Server Logs and Database Mail in the Log File Viewer; Agent Properties' Advanced, Alert System, Job System and Connection pages and the fail-safe operator; the operator's History page; Error Logs' Configure; WMI alert editing; Copy to another server; New Job templates; Flow view; Elastic Jobs | Later |
 | SSMS's Start PowerShell, Reports and Policies items on Agent nodes | Not planned (Varia has none of them on any node) |

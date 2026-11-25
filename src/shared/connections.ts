@@ -60,7 +60,7 @@ export const connectionOptionsSchema = z.object({
  * (domain-scoped `example.com:proj` included) up to 128 characters, datasets of letters, digits and underscores up to 1,024.
  * SQL Server's 128-character names stay on its own branch.
  */
-export const bigQueryLimits = { project: 128, dataset: 1024, location: 64, extraProjects: 16, serviceAccount: 254 } as const
+export const bigQueryLimits = { project: 128, dataset: 1024, location: 64, extraProjects: 16, serviceAccount: 254, costThresholdGiB: 1_048_576 } as const
 export const bigQueryProjectSchema = z.string().max(bigQueryLimits.project).regex(/^(?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]$/, 'Enter a Google Cloud project id.')
 export const bigQueryDatasetSchema = z.string().min(1).max(bigQueryLimits.dataset).regex(/^\w+$/, 'A dataset name has only letters, numbers and underscores.')
 export const bigQueryConnectionOptionsSchema = z.object({
@@ -75,6 +75,9 @@ export const bigQueryConnectionOptionsSchema = z.object({
   // false: Execute does not ask above the cost threshold on this connection ("Don't ask again"); a preference, not part of
   // which entry the connection is (connectionKey) or of its target.
   costPrompt: z.boolean().optional(),
+  // The connection's own cost-prompt threshold in whole GiB, overriding Options' (docs/bigquery.md, Cost); a preference like
+  // costPrompt. 0 is only ever sent, never kept: "use the Options default", which clears a saved threshold.
+  costThreshold: z.number().int().min(0).max(bigQueryLimits.costThresholdGiB).optional(),
   displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional()
 }).strict().refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), { error: issue => usesKeyFile((issue.input as BigQueryConnectionOptions).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' })
 const keyFileRule = { error: (issue: { input: unknown }) => usesKeyFile((issue.input as { authentication: BigQueryAuthenticationMode }).authentication) ? 'This authentication needs a key file.' : 'gcloud credentials take no key file.' }

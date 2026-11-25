@@ -152,7 +152,6 @@ In Agent's first release (0.10.0):
 
 After the first release, in docs/agent-plan.md's lanes:
 - Schedules Timeline (AG-14).
-- Agent overview health checks (AG-15).
 - Activity Monitor job links (AG-16).
 
 Later:

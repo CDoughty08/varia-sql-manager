@@ -61,7 +61,7 @@ export function bigQueryFormOptions(form: BigQueryConnectionOptions): BigQueryCo
     ...location ? { location } : {}, ...dataset ? { dataset } : {}, ...extraProjects?.length ? { extraProjects } : {},
     ...usesKeyFile(form.authentication) && form.keyFile ? { keyFile: form.keyFile } : {},
     ...impersonate ? { impersonateServiceAccount: impersonate } : {}, ...form.maximumBytesBilled ? { maximumBytesBilled: form.maximumBytesBilled } : {},
-    ...form.costPrompt !== undefined ? { costPrompt: form.costPrompt } : {},
+    ...form.costPrompt !== undefined ? { costPrompt: form.costPrompt } : {}, ...form.costThreshold !== undefined ? { costThreshold: form.costThreshold } : {},
     ...form.displayName?.trim() ? { displayName: form.displayName } : {}, ...form.color ? { color: form.color } : {}, ...form.environment ? { environment: form.environment } : {}
   }
   const parsed = bigQueryConnectionOptionsSchema.safeParse(value)
@@ -70,20 +70,47 @@ export function bigQueryFormOptions(form: BigQueryConnectionOptions): BigQueryCo
 }
 
 /**
- * The cost-prompt choice (docs/bigquery.md, Cost) belongs to the saved entry: the form starts without one, shows the saved
- * entry's, and names one only when Advanced Properties changes it, so a remembered or stale value never overwrites
- * "Don't ask again" made since.
+ * The cost-prompt choice and the connection's own threshold (docs/bigquery.md, Cost) belong to the saved entry: the form
+ * starts without them, shows the saved entry's, and names one only when Advanced Properties changes it, so a remembered or
+ * stale value never overwrites "Don't ask again" made since, and a live connection's settings (which never carry them)
+ * never clear a saved threshold.
  */
-export function withoutCostPrompt(options: BigQueryConnectionOptions): BigQueryConnectionOptions {
-  const { costPrompt: _costPrompt, ...rest } = options
+export function withoutCostPreferences(options: BigQueryConnectionOptions): BigQueryConnectionOptions {
+  const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...rest } = options
   return { ...rest }
+}
+/** The entries with the form's settings, as Connect would send them (a field typed into and cleared again is no field). */
+function sameSettings<T extends { readonly options: BigQueryConnectionOptions }>(profiles: readonly T[], options: BigQueryConnectionOptions): T[] {
+  let key: string
+  try { key = connectionKey(bigQueryFormOptions(options)) } catch { return [] }
+  return profiles.filter(profile => { try { return connectionKey(profile.options) === key } catch { return false } })
 }
 /** The saved choice for these settings: false when an entry with them chose "Don't ask again". */
 export function savedCostPrompt(profiles: readonly { readonly options: BigQueryConnectionOptions }[], options: BigQueryConnectionOptions): false | undefined {
-  let key: string
-  // The form as Connect would send it: a field typed into and cleared again ('' or spaces) is no field.
-  try { key = connectionKey(bigQueryFormOptions(options)) } catch { return undefined }
-  return profiles.some(profile => { try { return profile.options.costPrompt === false && connectionKey(profile.options) === key } catch { return false } }) ? false : undefined
+  return sameSettings(profiles, options).some(profile => profile.options.costPrompt === false) ? false : undefined
+}
+/** The saved threshold (GiB) for these settings, which entries with them share; undefined follows Options'. */
+export function savedCostThreshold(profiles: readonly { readonly options: BigQueryConnectionOptions }[], options: BigQueryConnectionOptions): number | undefined {
+  return sameSettings(profiles, options).find(profile => profile.options.costThreshold)?.options.costThreshold
+}
+/** The threshold Advanced Properties shows: the form's when it names one (0: Options', shown empty), else the saved one. */
+export function shownCostThreshold(options: BigQueryConnectionOptions, saved: number | undefined): number | undefined {
+  return options.costThreshold === undefined ? saved : options.costThreshold || undefined
+}
+/** What the form names for a threshold typed in Advanced Properties (undefined: empty, Options'): the value, or 0. Once
+ *  edited the field always names what it shows, so changing the settings afterwards (another entry, another saved
+ *  threshold) never leaves it showing one value while Connect keeps another; the "changed?" checks compare it as it shows. */
+export function advancedCostThreshold(value: number | undefined): number {
+  return value ?? 0
+}
+/** "Prompt above" as typed: whole GiB from 1 to the limit, undefined for an empty field, or an error. */
+export function parseCostThreshold(text: string): { ok: true; value?: number } | { ok: false; error: string } {
+  // Digit grouping as the limit is written ("1,048,576") is fine.
+  const value = text.trim().replace(/[,_\s]/g, '')
+  if (!value) return { ok: true }
+  const number = /^\d{1,7}$/.test(value) ? Number(value) : NaN
+  if (!(number >= 1 && number <= bigQueryLimits.costThresholdGiB)) return { ok: false, error: `Enter Prompt above as a whole number of GiB from 1 to ${bigQueryLimits.costThresholdGiB.toLocaleString('en-US')}, or leave it empty to use the Options threshold.` }
+  return { ok: true, value: number }
 }
 /** What Advanced Properties' OK names: the form's choice when the box is as it was, else the box (true clears a saved
  *  "Don't ask again", false sets it). */
@@ -91,12 +118,13 @@ export function advancedCostPrompt(options: BigQueryConnectionOptions, saved: fa
   return checked === ((options.costPrompt ?? saved) !== false) ? options.costPrompt : checked
 }
 
-/** The form's settings for "changed?" checks: key order does not count, and the cost-prompt choice counts as it shows
- *  (`costPrompt`: the form's, else the saved entry's), so a box ticked and unticked again is no change. */
-export function bigQueryFormShape(from: BigQueryConnectionOptions, autoReconnect: string | undefined, costPrompt = from.costPrompt): string {
-  const { costPrompt: _costPrompt, ...rest } = from
+/** The form's settings for "changed?" checks: key order does not count, and the cost-prompt choice and threshold count as
+ *  they show (`costPrompt`, `costThreshold`: the form's, else the saved entry's), so a box ticked and unticked again, or a
+ *  threshold typed and put back, is no change. */
+export function bigQueryFormShape(from: BigQueryConnectionOptions, autoReconnect: string | undefined, costPrompt = from.costPrompt, costThreshold = from.costThreshold): string {
+  const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...rest } = from
   // A field typed into and cleared again holds '' where the saved entry has none: both are empty.
-  return JSON.stringify([Object.entries(rest).map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value] as const).filter(([, value]) => value !== undefined && value !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), autoReconnect, costPrompt !== false])
+  return JSON.stringify([Object.entries(rest).map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value] as const).filter(([, value]) => value !== undefined && value !== '').sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), autoReconnect, costPrompt !== false, costThreshold || null])
 }
 
 /** How many projects Load projects keeps across its pages. */

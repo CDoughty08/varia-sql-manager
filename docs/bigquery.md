@@ -30,7 +30,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
+| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), Ask before running a query over the cost threshold (cleared by "Don't ask again"), and **Prompt above**, the connection's own threshold in whole GiB (empty, its placeholder naming Options' value, follows Options'; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -47,8 +47,8 @@ a Connect, Test Connection, Browse or the Default dataset list (which loads when
 ## Saved connections
 
 BigQuery entries live in `bigquery-connections.json` beside SQL Server's library: favourites, saved entries and the 30
-most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
-[Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
+most recent connects, each keyed by its settings, with environment labels, the cost-prompt choice (`costPrompt: false`) and the connection's own threshold (`costThreshold`,
+whole GiB; [Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
 saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. An
 entry pruned from the 30 most recent leaves its key file's path behind (`keptKeyFiles`, the newest 48, for main only; with the 200 saved entries that stays within main's 256 remembered key files), so a
 connection still open from it reconnects after a restart without asking for the file again; a later connect from the
@@ -576,7 +576,16 @@ Messages).
   first, and a pending diagnostics run is dropped. Varia asks in only two cases, each opening with focus on
   Cancel as an alert dialog with a **Cost settings…** link:
   - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
-    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
+    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. The threshold is
+    the connection's own when its Advanced Properties › Cost › **Prompt above** sets one (1 to 1,048,576 GiB, as Options'),
+    else Options'; the chip's amber follows the same one (read from the saved entry when the tab connects and before each
+    prompt, and at once after a Connect or Save that changes it). Like the choice below, it is a preference of the saved entry,
+    not part of the connection's identity or target, so changing it never opens a second connection: entries with the
+    same settings share it, a connect that names none (a live connection's settings never carry it) keeps it, and the
+    dialog shows the saved one and names a value only when Prompt above changes (emptied, it sends 0, which clears it and
+    is never stored). A connect that reuses a live connection saves it through main; one that cannot be saved holds for the session.
+    A read that finds the saved connections unreadable keeps the threshold last read. When the threshold is the
+    connection's own, the prompt says so. That choice is
     kept on the saved entry as `costPrompt: false` (written through main's `varia:bigquery-cost-prompt`), so reconnects
     and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
     threshold** shows the saved choice and turns it back on. The Connect form names a choice only when that box is
@@ -589,6 +598,10 @@ Messages).
     `UNKNOWN` (DDL that reads no table, such as DROP or TRUNCATE, never counts as 0-byte; DML and CREATE TABLE AS SELECT
     do). **Don't warn me about incomplete estimates
     again** clears `queryExecution.bigQuery.incompleteEstimateWarning`.
+
+  Every billed path asks through these same prompts with the same threshold: Execute, Job History's Re-run, a windowed
+  result's sort, filter, value list and sample, Script As › CREATE and the on-demand definitions of Peek and Properties,
+  and the Search Objects index's billed build (`BigQueryCostService.prompts`).
 
   One prompt shows at a time: another tab's waits its turn, so an answer always goes to the query it was shown for, and
   one that the answer before it made moot (Don't ask again) is not shown; the incomplete-estimate warning it was

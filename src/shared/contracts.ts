@@ -117,6 +117,8 @@ export interface BigQueryConnectionOptions {
   maximumBytesBilled?: number
   /** false: Execute does not ask above the cost threshold on this connection (Don't ask again). Not part of its identity. */
   costPrompt?: boolean
+  /** The connection's own cost-prompt threshold in whole GiB, over Options' (0, sent only: back to Options'). Not part of its identity. */
+  costThreshold?: number
   displayName?: string
   color?: string
   environment?: string
@@ -961,7 +963,7 @@ export interface VariaApi {
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
   /** Both engines' saved connections: SQL Server's `library`, and BigQuery's (key files by name only). */
-  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView }>>
+  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView; /** BigQuery's file could not be read this time: its empty list is not what it holds. */ bigQueryUnreadable?: true }>>
   /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
   /** A BigQuery profile answers with BigQuery's library too (`bigQuery`); a SQL Server one leaves it out (unchanged). */

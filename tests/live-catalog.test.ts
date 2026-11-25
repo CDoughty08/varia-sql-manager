@@ -120,7 +120,7 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree', 'bigquery.explorer'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree', 'agent.overview', 'bigquery.explorer'])
     // Object Explorer's BigQuery chip (BQ-12): the bigquery scope and engine only, no args, no table, a running-jobs count and a
     // cap flag, 10 s by default and never under 5 s, with the load guard off (a REST listing's cost is network waits).
     expect(liveSources['bigquery.explorer']).toMatchObject({ testOnly: false, scope: 'bigquery', providers: ['bigquery'], probes: ['explorer.bigquery'], hidden: 'pause' })

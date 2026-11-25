@@ -63,6 +63,8 @@ export const liveArgsSchemas = {
   'agent.history': agentHistoryArgsSchema,
   // SQL Server Agent's error logs (AG-5b): the Log File Viewer's checked logs and its window and text filters.
   'agent.errorLog': agentErrorLogArgsSchema,
+  // SQL Server Agent's overview (AG-15) takes no args.
+  'agent.overview': z.never(),
   // BigQuery's Job History (BQ-9): the scope, filters, pinned jobs, expanded scripts and price setting. Each args replaces the last
   // whole, and a new scope or filter lists again from scratch.
   'bigquery.jobs': jobHistoryArgsSchema,

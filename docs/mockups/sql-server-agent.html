@@ -363,7 +363,7 @@ table.g td.c, table.dtable td.c, table.dtable th.c, table.g th.c { text-align: c
       <option value="rx-schedules-doc">Schedules document (replaces Manage Schedules)</option>
       <option value="rx-timeline">Schedules · Timeline (later)</option>
       <option value="rx-jam">Job Activity Monitor · bulk actions, last run in place</option>
-      <option value="rx-agent-overview">Agent overview · health checks (later)</option>
+      <option value="rx-agent-overview">Agent overview · health checks</option>
       <option value="rx-agent-props">SQL Server Agent Properties document · History</option>
     </optgroup>
     <optgroup label="Object Explorer">
@@ -1170,7 +1170,7 @@ const RXN = {
   'rx-schedules-doc': 'Rethink: Manage Schedules becomes a Schedules document: filterable grid (Unused is a view, never a guess for non-sysadmin), Enabled saves at once, the selected schedule\'s editor and its jobs beside it. Grid / Timeline switch.',
   'rx-timeline': 'Aid (later tier): when jobs run over the next 24 hours or 7 days, bars sized by each job\'s usual duration. Overlaps are flagged and explained; disabled jobs are dashed. Third-party Agent tools (job calendars and timelines) made this a familiar view.',
   'rx-jam': 'Rethink: Job Activity Monitor gains a checkbox column with a bulk bar (Start, Enable, Disable, Change owner, Attach schedule, Notify, Script), a chevron that shows the last run\'s steps and error in place, and double-click opening the job\'s tab. Each bulk action is one request per job with its own result.',
-  'rx-agent-overview': 'Aid (later tier): an Agent overview with read-only health checks in the spirit of community best-practice scripts: failed jobs, owners that cannot log in, jobs that notify no one, history retention, missing recommended alerts, Agent mail, unused schedules. Each fix opens the normal editor or confirmation.',
+  'rx-agent-overview': 'Aid: an Agent overview with read-only health checks in the spirit of community best-practice scripts: failed jobs, owners that cannot log in, jobs that notify no one, history retention, missing recommended alerts, Agent mail, unused schedules. Each fix opens the normal editor or confirmation.',
   'rx-copy-server': 'Aid (later tier): Copy to another server, the pattern dbatools made common (Copy-DbaAgentJob). It checks what the job needs on the target first: owner, category, schedules, operators, databases, SSIS packages. It creates only Agent objects there; packages, databases and logins are only checked.',
   'rx-alerts-recommended': 'Aid: the community-standard alert set (severity 17–25, errors 823–825) in one step. What exists is shown and left alone. One operator and delay for all. Each alert is its own sp_add_alert plus sp_add_notification.'
 }

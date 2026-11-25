@@ -9,7 +9,7 @@ namespace Varia.Backend.BigQuery;
 /// </summary>
 internal sealed record BigQueryConnectOptions(string Provider, string Project, string Authentication,
     string? Location = null, string? Dataset = null, IReadOnlyList<string>? ExtraProjects = null, string? KeyFile = null,
-    string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, bool? CostPrompt = null, string? DisplayName = null, string? Color = null,
+    string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, bool? CostPrompt = null, int? CostThreshold = null, string? DisplayName = null, string? Color = null,
     string? Environment = null, bool NonInteractive = false, BigQueryCredentialMaterial? Credential = null);
 
 /// <summary>
@@ -46,6 +46,8 @@ internal static partial class BigQueryLimits
     public const int Location = 64;
     public const int ExtraProjects = 16;
     public const int ServiceAccount = 254;
+    /// <summary>A connection's own cost-prompt threshold, in whole GiB (src/shared/connections.ts, bigQueryLimits).</summary>
+    public const int CostThresholdGiB = 1_048_576;
     public const int DisplayName = 128;
     /// <summary>A key or federation configuration file main reads: at most 64 KiB (docs/bigquery.md, Authentication).</summary>
     public const int CredentialBytes = 64 * 1024;
@@ -99,6 +101,8 @@ internal static partial class BigQueryLimits
         if (options.Dataset is { } dataset && (dataset.Length is 0 or > Dataset || !DatasetId().IsMatch(dataset))) Invalid("A dataset name has only letters, numbers and underscores.");
         if (options.ExtraProjects is { } extra && (extra.Count > ExtraProjects || extra.Any(project => !IsProject(project)))) Invalid("Extra projects must be at most 16 project ids.");
         if (options.MaximumBytesBilled is < 1 or > MaxSafeInteger) Invalid("Maximum bytes billed is outside its supported range.");
+        // The renderer's prompt threshold in whole GiB (0: Options'); the backend never reads it, only bounds it.
+        if (options.CostThreshold is < 0 or > CostThresholdGiB) Invalid("The cost threshold is outside its supported range.");
         if (options.DisplayName is { Length: > DisplayName }) Invalid("Display name exceeds its supported length.");
         if (options.Color is { } color && !Color().IsMatch(color)) Invalid("The color is not valid.");
         if (options.Environment is { } environment && !ConnectionSettings.IsEnvironmentLabel(environment))

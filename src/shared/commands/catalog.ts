@@ -15,6 +15,7 @@ import { createFromCommandEntries } from '../agent/create-from.ts'
 import { agentProxyCommandEntries } from '../actions/agent-proxy.ts'
 import { logViewerCommandEntries } from '../agent/history.ts'
 import { errorLogCommandEntries } from '../agent/error-log.ts'
+import { agentOverviewCommandEntries } from '../agent/overview.ts'
 import { jobHistoryCommandEntries } from '../bigquery/history-catalog.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
@@ -542,6 +543,8 @@ export const commandCatalog = {
   ...agentScheduleCommandEntries(),
   // Create Job Like This (AG-6e): from src/shared/agent/create-from.ts.
   ...createFromCommandEntries(),
+  // SQL Server Agent's overview and health checks (AG-15).
+  ...agentOverviewCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),

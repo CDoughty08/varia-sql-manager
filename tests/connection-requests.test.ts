@@ -254,6 +254,32 @@ describe('remembered password requests', () => {
     setBigQueryCostPrompt.mockResolvedValueOnce(false)
     expect(await settleReused(prepared({ mode: 'interactive' }), connected, deps)).toMatchObject({ ok: true, value: { historyWarning: expect.stringContaining('cost prompt') } })
   })
+  it("saves the threshold Advanced Properties named when Connect reuses a live BigQuery connection", async () => {
+    const setBigQueryCostThreshold = vi.fn(async () => true)
+    const principal = { provider: 'bigquery', project: 'varia-alpha', principal: 'bigquery:user:ada@example.com' } as const
+    const deps = {
+      connections: { setBigQueryCostThreshold },
+      authentication: { resolve: () => ({ expectedPrincipal: principal }), prepare: () => {} },
+      savedPasswords: {}
+    } as unknown as ConnectionRequestDeps
+    const bigQuery = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', costThreshold: 50 } as const
+    const prepared = (context: object, params: object = bigQuery) => ({ method: 'connections.connect', validated: params, params, context, injected: false })
+    const connected = { ...info(), targetId: randomUUID(), authentication: { principal } } as ConnectionInfo
+    expect(await settleReused(prepared({ mode: 'interactive' }), connected, deps)).toMatchObject({ ok: true })
+    expect(setBigQueryCostThreshold).toHaveBeenCalledWith(bigQuery, 50)
+    // 0 goes back to Options' threshold.
+    await settleReused(prepared({ mode: 'interactive' }, { ...bigQuery, costThreshold: 0 }), connected, deps)
+    expect(setBigQueryCostThreshold).toHaveBeenLastCalledWith({ ...bigQuery, costThreshold: 0 }, 0)
+    // A background reconnect, or a dialog that named none, leaves the saved one alone.
+    setBigQueryCostThreshold.mockClear()
+    await settleReused(prepared({ mode: 'background' }), connected, deps)
+    const { costThreshold: _costThreshold, ...unnamed } = bigQuery
+    await settleReused(prepared({ mode: 'interactive' }, unnamed), connected, deps)
+    expect(setBigQueryCostThreshold).not.toHaveBeenCalled()
+    // A failed write still connects, with a warning.
+    setBigQueryCostThreshold.mockResolvedValueOnce(false)
+    expect(await settleReused(prepared({ mode: 'interactive' }), connected, deps)).toMatchObject({ ok: true, value: { historyWarning: expect.stringContaining('cost threshold') } })
+  })
   it('does not readmit a rejected revision from ordinary live-session equality without fresh password proof', async () => {
     const { remembered, deps, savedPasswords } = await setup()
     const id = await remembered(), credential = (await savedPasswords.reference(id, empty))!
