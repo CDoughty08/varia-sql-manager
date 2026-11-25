@@ -246,6 +246,9 @@ internal sealed partial class SqlService
         async Task<(List<BigQueryChild> Children, bool Complete)> ChildrenAsync(bool full)
         {
             var listed = await bigQuery.ChildrenAsync(connection, project, jobId, full ? null : readChildren, token);
+            // An incremental listing cut short holds only the newest children: reading them now would skip the ones before,
+            // so they wait for the next poll or the final listing.
+            if (!full && !listed.Complete) return listed;
             foreach (var child in listed.Children)
             {
                 if (readChildren.Contains(child.Id)) continue;
