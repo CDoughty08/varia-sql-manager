@@ -75,6 +75,7 @@ Each is a well-known pattern elsewhere. Each would cut steps or prevent a common
 | Multi-select and bulk actions | Every admin grid | Job Activity Monitor bulk bar | `rx-jam` |
 | Templates on New | Project templates, cloud quick-starts | New Job: Blank, Copy an existing job, or a template | `rx-job-new` |
 | Copy to another environment with a dependency check | dbatools Copy-DbaAgentJob | Copy to another server | `rx-copy-server` |
+| Steps as a graph with a run drawn over it | CI pipeline graphs, SSIS control flow, workflow schedulers | Steps › Flow (Later) | `rx-flow`, `rx-flow-lastrun` |
 
 ## Create from…
 
@@ -157,7 +158,7 @@ After the first release, in docs/agent-plan.md's lanes:
 Later:
 - Copy to another server (a write on a second connection).
 - New Job templates.
-- A Flow view of step targets.
+- A Flow view of step targets (mocked 2026-11-24; see [Flow view (Later)](#flow-view-later)).
 
 ## Every changed view has a rethink scene
 
@@ -191,6 +192,100 @@ Unchanged, so no rethink scene: the Object Explorer scenes, Log File Viewer (cro
 service-control dialog and progress state, Delete Object for a job, Delete History, Filter Settings and the status-bar
 chip.
 
+## Flow view (Later)
+
+Status: **mocked on 2026-11-24 for the owner's review. It stays Later**: no lane, no release. Mocks: the "Rethink · steps
+flow (later)" group in `docs/mockups/sql-server-agent.html` (`rx-flow`, `rx-flow-menu`, `rx-flow-edit`,
+`rx-flow-lastrun`, `rx-flow-running`), in Dark and Light through the page's Theme box. The fictional job is
+"Finance nightly load": seven steps of five types, with a step that never runs, a loop, a forward jump that skips a step and a
+backward jump that is not a loop.
+
+SSMS shows steps as a flat list. Each step's On success and On failure actions sit on its Advanced page, so to see where a
+failure goes, or whether a step can ever run, you check one step at a time. The Flow view draws the same steps as a graph.
+
+### What it shows
+
+- **Steps**: one node per step with its number, name, type and icon (T-SQL, PowerShell, CmdExec, SSIS, Analysis Services
+  and the replication types), and its key field (database, package, run as, or retries).
+- **Edges**: two ports per node, ✓ On success and ✗ On failure. Success edges are solid, failure edges dashed. Each port
+  has its glyph, so colour is never the only cue.
+  - Go to the next step: a short straight edge.
+  - Go to step N: an edge in a lane beside the column, success lanes on the left, failure lanes on the right.
+  - Quit the job reporting success or failure: a pill under the port.
+- **Start step**: an entry arrow and a Start pill.
+- **Loops**: a cycle is tagged ("Loop · 3 ⇄ 4"). A backward jump that is not part of a cycle (step 7's failure going to step 6)
+  gets no tag.
+- **Never runs**: a step that nothing reaches from the Start step is dashed and tagged, and is listed as a problem.
+- **Selected step**: its summary beside the graph. The summary includes **Reached from**, which lists the steps that lead to
+  it. SSMS shows that nowhere.
+
+### Decisions proposed
+
+1. **Where it lives**: a List | Flow switch at the top of the job document's Steps section (rx-job-steps already draws it).
+   It is not a new section or tab: both views show the same draft, and the selection carries across.
+2. **Layout**: steps stay in step order, top to bottom, and are never auto-arranged. That way the numbers match List, History
+   and Start at step, and a move in List moves the node. Edges run in lanes. Where two cross, the one on top gets a small gap.
+3. **Editing from the graph**: every edit goes to the same draft as List. That means the dirty dot, Save · N changes, Undo,
+   Script, and the unchanged step save planner. A changed edge is drawn in the accent with a "changed" tag.
+   - Click selects a step and shows its summary.
+   - Double-click or Enter opens the step editor, the same component List uses, docked beside the graph, and the graph zooms
+     to fit. Close editor goes back to the summary.
+   - Right-click or Shift+F10 opens the step's menu: Edit step, Start job at this step, Make Start step, On success ›,
+     On failure ›, Add step after ›, Move up, Move down, Delete step. The On success and On failure submenus list SSMS's four
+     actions, with "Go to step N · name" for every other step and the current choice checked.
+   - Delete and Move work as in List: targets follow the move, and rx-step-delete's banner offers Undo.
+4. **Overlays**: a Show switch with Targets only, Last run and Live run.
+   - **Last run** draws one run from the History section over the graph. A box picks the run. The path is bold, with the
+     order on each edge, and each step shows its outcome and duration. A step that ran more than once shows ×N and each pass.
+     Steps the run never reached are faded. Beside the graph: the run's summary, every pass in order, and the selected failed
+     step's message.
+   - **Live run** turns on when the job starts and goes back to the previous view when it ends. It shows the current step with
+     a ring and a bar against its usual time, each finished step's outcome, the two ways the run can go next, and Stop.
+5. **Data**: no new backend method is expected. The view is drawn in the renderer from what the job document already holds:
+   - the step fields from its describe (`start_step_id`, `on_success_action`, `on_success_step_id`, `on_fail_action`,
+     `on_fail_step_id`);
+   - the History section's `agent.history` read, whose step rows are kept per history row, so a step that ran twice has two
+     rows;
+   - the live run state the header and History's live run already receive, with no polling.
+
+   Confirm all three when the view is built.
+6. **Flow checks** (principle 6: they warn, they never block Save):
+   - Never runs: a warning, with Make Start step as its fix.
+   - Loop: information only, because a loop is a normal retry pattern.
+   - A loop with no way out: a warning. Every action of every step in the cycle stays inside it, so the job never ends by
+     itself. This check is not drawn in the mocks.
+   - A go-to target that no longer exists: already a problem in List.
+
+   The same checks tag steps in List, so they are not Flow-only.
+7. **Keyboard and screen readers**: the canvas is a tree of steps in step order, and arrow keys move between them. Each node's
+   accessible name includes its type and both actions. For example: "Step 4, Validate row counts, T-SQL. On success, go to the
+   next step. On failure, go to step 3, loop." The menu is the keyboard path for setting actions, and List stays available as
+   the plain alternative.
+8. **Look**: Calm Pro.
+   - Nodes are graphite.
+   - The success and error colours appear only on edges and outcomes.
+   - The iris accent is kept for the selection, the Start step, the current step and changed edges.
+   - Icons are codicon-style strokes: code for T-SQL, a terminal for PowerShell, a window for CmdExec, a package for SSIS, a
+     chart for Analysis Services. No SSMS icons.
+   - Zoom: −, the percentage, +, and Fit.
+
+### Open questions for the owner
+
+1. **Remember List or Flow?** Proposed: remember the last choice per window. The alternatives are per job, or always open on
+   List.
+2. **Drag to connect?** Dragging a ✓ or ✗ port onto a step would set Go to step N, and dropping on empty space would open the
+   menu. Proposed: yes, as a shortcut beside the menu, which stays the accessible path. The alternative is the menu only at
+   first.
+3. **Reorder by dragging nodes?** Proposed: no. Reordering stays in List and in the menu's Move up and Move down, because the
+   Flow layout is step order.
+4. **The last step's "Go to the next step"**: msdb accepts it, and the job ends after that step. How should it be drawn, and
+   should it be flagged? Before it is drawn, check on a live server which outcome Agent reports.
+5. **Loop check**: information (proposed) or a warning?
+6. **Large jobs** (30 or more steps): proposed Fit and scrolling with no minimap. The alternative is a minimap.
+7. **Entry from History**: should History's run summary get a "Show in Flow" link that opens Flow with that run's Last run?
+   Proposed: yes.
+
 ## Questions for the owner
 
-None. Create from… schedules default to Share (decided 2026-11-18); each can be switched to Copy or Leave out.
+None for the first release. Create from… schedules default to Share (decided 2026-11-18); each can be switched to Copy or
+Leave out. The Flow view's open questions are listed in [Flow view (Later)](#flow-view-later).
