@@ -1,6 +1,6 @@
 import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
 import { bigQueryPath } from '../../../shared/bigquery/names'
-import { bigQueryPreviewRows, bigQueryPropertyKinds, type BigQueryProperties, type BigQueryPropertyKind } from '../../../shared/bigquery/objects'
+import { bigQueryPreviewRows, isBigQueryPropertyKind, type BigQueryProperties, type BigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { NodeSubtype } from '../../../shared/explorer/catalog'
 import type { ObjectRef } from '../../../shared/explorer/refs'
@@ -12,7 +12,7 @@ import type { ExplorerMenuNode } from '../menus/targets'
 import type { ResultsService } from '../results/ResultsService'
 import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
-import { isBigQueryTabAvailable, type BigQueryPropertiesTabId } from './bigquery-properties-format'
+import { hasDefinitionTab, isBigQueryTabAvailable, supportsPreviewTab, type BigQueryPropertiesTabId } from './bigquery-properties-format'
 
 export type BigQueryDdlState =
   | { readonly status: 'loading'; readonly phase: 'estimating' | 'reading' }
@@ -44,7 +44,7 @@ export interface BigQueryPropertiesSnapshot { readonly views: Readonly<Record<st
 
 export interface BigQueryPropertiesOptions {
   readonly api: Pick<VariaApi, 'bigQueryProperties'> & Partial<Pick<VariaApi, 'scriptObjects' | 'cancelScripting' | 'execute' | 'cancel'>>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider'> & Partial<Pick<DocumentService, 'activate'>>
   readonly connections?: ExternalStore<readonly (ConnectionAvailability & { readonly id: string })[]>
   readonly results?: Pick<ResultsService, 'begin' | 'finish' | 'release'>
   readonly scriptingOptions?: ExternalStore<{ readonly options: ScriptingOptions }>
@@ -66,11 +66,20 @@ interface PreviewRun {
   running: boolean
 }
 
-const isPropertyKind = (kind: string): kind is BigQueryPropertyKind => (bigQueryPropertyKinds as readonly string[]).includes(kind)
 const previewTimeoutSeconds = 110
 const disconnectedMessage = 'The connection is no longer open.'
 const previewUnavailableMessage = 'Preview Rows is not available for this object.'
 const ddlUnavailableMessage = 'Loading table DDL is not available on this connection.'
+
+/** Extracts the BigQuery properties identity from an ObjectRef, normalizing dataset refs (`dataset === name`). */
+export function bigQueryObjectIdentity(object: ObjectRef): { readonly kind: BigQueryPropertyKind; readonly project: string; readonly dataset: string; readonly name: string } | undefined {
+  if (!isBigQueryPropertyKind(object.kind) || !object.project || !object.name) return undefined
+  if (object.kind === 'bqDataset') {
+    return { kind: 'bqDataset', project: object.project, dataset: object.name, name: object.name }
+  }
+  if (!object.dataset) return undefined
+  return { kind: object.kind, project: object.project, dataset: object.dataset, name: object.name }
+}
 
 const settled = <T>(request: Promise<ApiResult<T>>): Promise<ApiResult<T>> =>
   request.catch((error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }) as ApiResult<T>)
@@ -107,25 +116,54 @@ export class BigQueryPropertiesService extends SnapshotStore<BigQueryPropertiesS
     this.unsubscribeConnections = o.connections?.subscribe(() => this.connectionsChanged())
   }
 
-  /** Whether `node` has BigQuery Properties: a table, snapshot, clone, view, materialized view or external table. */
+  /** Whether `node` has BigQuery Properties: a table, snapshot, clone, view, materialized view, external table, routine or dataset. */
   canOpen(node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
-    return !!node && !node.lost && node.ref.type === 'object' && isPropertyKind(node.ref.object.kind) && node.ref.object.project !== undefined && node.ref.object.dataset !== undefined
+    return !!node && !node.lost && node.ref.type === 'object' && bigQueryObjectIdentity(node.ref.object) !== undefined
   }
 
-  /** Opens `node`'s Properties in a new tab, active; resolves to the document's id. */
-  open(node: ExplorerMenuNode | undefined): string | undefined {
+  /**
+   * Opens `node`'s Properties (or focuses an already-open tab for the same object), optionally selecting `tab`.
+   * Resolves to the document's id.
+   */
+  open(node: ExplorerMenuNode | undefined, tab?: BigQueryPropertiesTabId): string | undefined {
     if (this.disposed || !this.canOpen(node) || node.ref.type !== 'object') return undefined
-    const object = node.ref.object
-    if (!isPropertyKind(object.kind) || object.project === undefined || object.dataset === undefined || object.name === undefined) return undefined
-    const document = this.o.documents.openCustom('bigQueryProperties', object.name, node.connectionId, object.dataset)
+    const identity = bigQueryObjectIdentity(node.ref.object)
+    if (!identity) return undefined
+    const existing = Object.entries(this.getSnapshot().views).find(([, view]) =>
+      view.connectionId === node.connectionId && view.kind === identity.kind
+      && view.project === identity.project && view.dataset === identity.dataset && view.name === identity.name
+    )
+    if (existing) {
+      const [existingId, existingView] = existing
+      this.o.documents.activate?.(existingId)
+      if (tab !== undefined) {
+        const alwaysValid = tab === 'overview'
+          || (tab === 'definition' && hasDefinitionTab(existingView.kind))
+          || (tab === 'preview' && supportsPreviewTab(existingView.kind))
+        const nextTab = existingView.value
+          ? (isBigQueryTabAvailable(tab, existingView.kind, existingView.value) ? tab : existingView.activeTab)
+          : existingView.loading
+            ? ((tab === 'definition' && !hasDefinitionTab(existingView.kind)) || (tab === 'preview' && !supportsPreviewTab(existingView.kind)) ? existingView.activeTab : tab)
+            : (alwaysValid ? tab : existingView.activeTab)
+        this.selectTab(existingId, nextTab)
+      }
+      this.o.focus?.(existingId)
+      return existingId
+    }
+    const initialTab: BigQueryPropertiesTabId = tab !== undefined
+      && (tab !== 'definition' || hasDefinitionTab(identity.kind))
+      && (tab !== 'preview' || supportsPreviewTab(identity.kind))
+      ? tab
+      : 'overview'
+    const document = this.o.documents.openCustom('bigQueryProperties', identity.name, node.connectionId, identity.dataset)
     this.set(document.id, {
       connectionId: node.connectionId,
-      kind: object.kind,
+      kind: identity.kind,
       ...(node.subtype === undefined ? {} : { subtype: node.subtype }),
-      project: object.project,
-      dataset: object.dataset,
-      name: object.name,
-      activeTab: 'overview',
+      project: identity.project,
+      dataset: identity.dataset,
+      name: identity.name,
+      activeTab: initialTab,
       loading: true
     })
     void this.refresh(document.id)
@@ -143,7 +181,7 @@ export class BigQueryPropertiesService extends SnapshotStore<BigQueryPropertiesS
   /** Whether on-demand billed CREATE DDL can be loaded for `id` right now. */
   canLoadDdl(id: string): boolean {
     const view = this.view(id)
-    return !this.disposed && !!view && !view.loading && !!view.value && view.value.definition === undefined && view.ddl?.status !== 'loading'
+    return !this.disposed && !!view && hasDefinitionTab(view.kind) && !view.loading && !!view.value && view.value.definition === undefined && view.ddl?.status !== 'loading'
       && !!this.o.api.scriptObjects && !!this.o.billedGate && this.isLive(view.connectionId)
   }
 
@@ -154,6 +192,9 @@ export class BigQueryPropertiesService extends SnapshotStore<BigQueryPropertiesS
   selectTab(id: string, tab: BigQueryPropertiesTabId): void {
     const view = this.view(id)
     if (!view || this.disposed) return
+    if (tab === 'definition' && !hasDefinitionTab(view.kind)) return
+    if (tab === 'preview' && !supportsPreviewTab(view.kind)) return
+    if (view.value && !isBigQueryTabAvailable(tab, view.kind, view.value)) return
     if (view.activeTab !== tab) this.set(id, { ...view, activeTab: tab })
     if (tab === 'preview' && view.kind === 'bqTable') {
       const latest = this.view(id)
@@ -208,7 +249,7 @@ export class BigQueryPropertiesService extends SnapshotStore<BigQueryPropertiesS
     const view = this.view(id)
     const scriptObjects = this.o.api.scriptObjects
     const gate = this.o.billedGate
-    if (this.disposed || !view || view.loading || !view.value || view.value.definition !== undefined) return
+    if (this.disposed || !view || !hasDefinitionTab(view.kind) || view.loading || !view.value || view.value.definition !== undefined) return
     if (!scriptObjects || !gate) {
       this.set(id, { ...view, ddl: { status: 'error', message: ddlUnavailableMessage } })
       return

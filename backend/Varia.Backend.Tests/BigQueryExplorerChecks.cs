@@ -297,6 +297,75 @@ internal static class BigQueryExplorerChecks
             && heavyWire.Length < Varia.Backend.Protocol.ProtocolLimits.ResponseBody,
             $"7-level nested schema and combined worst-case heavy payload round-trip within protocol v2 depth and 16 MiB limits ({heavyWire.Length} bytes)");
 
+        // Structured routine mapping: scalar, TVF return table type, determinism, arguments, truncation & wire round-trip.
+        var richRoutine = BigQueryService.MapRoutine(new Routine
+        {
+            RoutineType = "TABLE_VALUED_FUNCTION",
+            Language = "SQL",
+            DeterminismLevel = "DETERMINISTIC",
+            Description = "Orders for a customer.",
+            CreationTime = 1700000000000,
+            LastModifiedTime = 1700086400000,
+            DefinitionBody = "SELECT id FROM `varia-alpha.sales.orders` WHERE customer = target_customer",
+            Arguments =
+            [
+                new Argument { Name = "target_customer", Mode = "IN", ArgumentKind = "FIXED_TYPE", DataType = new StandardSqlDataType { TypeKind = "STRING" } },
+                new Argument { Name = "tags", ArgumentKind = "FIXED_TYPE", DataType = new StandardSqlDataType { TypeKind = "ARRAY", ArrayElementType = new StandardSqlDataType { TypeKind = "STRING" } } },
+                new Argument { Name = "dyn", ArgumentKind = "ANY_TYPE" }
+            ],
+            ReturnTableType = new StandardSqlTableType
+            {
+                Columns = [new StandardSqlField { Name = "id", Type = new StandardSqlDataType { TypeKind = "INT64" } }]
+            }
+        }, "orders_for_customer", "varia-alpha.sales.orders_for_customer", 5);
+        var wideRoutine = BigQueryService.MapRoutine(new Routine
+        {
+            RoutineType = "PROCEDURE",
+            Language = "SQL",
+            DeterminismLevel = "DETERMINISM_LEVEL_UNSPECIFIED",
+            DefinitionBody = "   ",
+            Arguments = [.. Enumerable.Range(0, BigQueryPropertiesLimits.RoutineArguments + 10).Select(i => new Argument { Name = "p" + i, Mode = "INOUT", DataType = new StandardSqlDataType { TypeKind = "INT64" } })]
+        }, "many_args", "p.d.many_args", 1);
+        var routineWire = EncodeResponse(richRoutine);
+        var decodedRoutine = Varia.Backend.Protocol.JsonBridge.ParseControl(routineWire).GetProperty("result");
+        check(richRoutine is { Type: "table function", Routine: { RoutineType: "TABLE_VALUED_FUNCTION", Language: "SQL", Determinism: "DETERMINISTIC", ReturnType: "TABLE<id INT64>", ArgumentsTruncated: null } }
+            && richRoutine.Routine.Arguments is [{ Name: "target_customer", Type: "STRING", Mode: "IN" }, { Name: "tags", Type: "ARRAY<STRING>" }, { Name: "dyn", Type: "ANY TYPE", Kind: "ANY_TYPE" }]
+            && wideRoutine is { Definition: null, DefinitionCut: null, DefinitionTruncated: null, Routine: { RoutineType: "PROCEDURE", Determinism: null, ArgumentsTruncated: true } } && wideRoutine.Routine.Arguments!.Count == BigQueryPropertiesLimits.RoutineArguments
+            && decodedRoutine.GetProperty("routine").GetProperty("arguments").GetArrayLength() == 3,
+            "MapRoutine maps routine type, language, determinism, return type, bounded arguments, omits whitespace-only definition, and round-trips through Protocol v2");
+
+        // Structured dataset mapping: location, default expirations, KMS encryption, collation, time travel, billing, sorted labels & wire round-trip.
+        var richDataset = BigQueryService.MapDataset(new Dataset
+        {
+            Location = "EU",
+            FriendlyName = "Sales Analytics",
+            Description = "Primary commerce dataset.",
+            DefaultTableExpirationMs = 86_400_000L * 90,
+            DefaultPartitionExpirationMs = 86_400_000L * 30,
+            DefaultEncryptionConfiguration = new EncryptionConfiguration { KmsKeyName = "projects/p/locations/eu/keyRings/r/cryptoKeys/k" },
+            DefaultCollation = "und:ci",
+            IsCaseInsensitive = true,
+            MaxTimeTravelHours = 168,
+            StorageBillingModel = "PHYSICAL",
+            CreationTime = 1700000000000,
+            LastModifiedTime = 1700086400000,
+            Labels = new Dictionary<string, string> { ["tier"] = "gold", ["domain"] = "commerce" }
+        }, "sales", "varia-alpha.sales", 4);
+        var minimalDataset = BigQueryService.MapDataset(new Dataset(), "empty_ds", "p.empty_ds", 0);
+        var longKmsDataset = BigQueryService.MapDataset(new Dataset
+        {
+            DefaultEncryptionConfiguration = new EncryptionConfiguration { KmsKeyName = new string('k', BigQueryPropertiesLimits.KmsKeyName + 50) }
+        }, "kms_ds", "p.kms_ds", 1);
+        var datasetWire = EncodeResponse(richDataset);
+        var decodedDataset = Varia.Backend.Protocol.JsonBridge.ParseControl(datasetWire).GetProperty("result");
+        check(richDataset is { Type: "dataset", FullName: "varia-alpha.sales", Location: "EU", Description: "Primary commerce dataset.", CreatedUtc: "2023-11-14 22:13:20 UTC", ModifiedUtc: "2023-11-15 22:13:20 UTC" }
+            && richDataset.Dataset is { FriendlyName: "Sales Analytics", DefaultTableExpirationMs: 7_776_000_000, DefaultPartitionExpirationMs: 2_592_000_000, KmsKeyName: "projects/p/locations/eu/keyRings/r/cryptoKeys/k", DefaultCollation: "und:ci", IsCaseInsensitive: true, MaxTimeTravelHours: 168, StorageBillingModel: "PHYSICAL" }
+            && richDataset.Labels is [BigQueryLabel { Key: "domain", Value: "commerce" }, BigQueryLabel { Key: "tier", Value: "gold" }]
+            && minimalDataset is { Type: "dataset", Dataset: null, Labels: null, Location: null, Description: null }
+            && longKmsDataset.Dataset!.KmsKeyName!.Length == BigQueryPropertiesLimits.KmsKeyName
+            && decodedDataset.GetProperty("dataset").GetProperty("kmsKeyName").GetString() == "projects/p/locations/eu/keyRings/r/cryptoKeys/k",
+            "MapDataset maps location, expirations, KMS encryption, collation, time travel, billing, sorted labels, bounds, and round-trips through Protocol v2");
+
         // Adversarial timestamps, cyclic/degenerate schemas, and range/non-positive-expiration partitioning.
         var badTimes = BigQueryService.MapTable(new Table
         {
@@ -810,17 +879,36 @@ internal static class BigQueryExplorerChecks
             $"bigquery.properties cuts a view's text at 1,000,000 characters: {longView?.Definition?.Length} {longView?.DefinitionCut}");
         harness.Fake.On("GET", Sales + "/routines/to_cents", new BigQueryFake.Reply(200, """
             {"routineReference":{"projectId":"varia-alpha","datasetId":"sales","routineId":"to_cents"},"routineType":"SCALAR_FUNCTION","language":"SQL",
-             "description":"Dollars to cents.","creationTime":"1700000000000","lastModifiedTime":"1700086400000","definitionBody":"CAST(x * 100 AS INT64)",
-             "arguments":[{"name":"x","dataType":{"typeKind":"NUMERIC"}}],"returnType":{"typeKind":"INT64"}}
+             "determinismLevel":"DETERMINISTIC","description":"Dollars to cents.","creationTime":"1700000000000","lastModifiedTime":"1700086400000","definitionBody":"CAST(x * 100 AS INT64)",
+             "arguments":[{"name":"x","mode":"IN","dataType":{"typeKind":"NUMERIC"}}],"returnType":{"typeKind":"INT64"}}
             """));
         var (routineCode, routineResult, _) = await harness.Call("bigquery.properties", Args("bqRoutine", "to_cents"));
         var routine = routineResult as BigQueryProperties;
         var routineFacts = routine?.Groups.SelectMany(group => group.Facts.Select(fact => group.Title + "/" + fact.Label + "=" + fact.Value)).ToArray() ?? [];
         check(routineCode == "ok" && routine is { Name: "to_cents", Type: "function", Definition: "CAST(x * 100 AS INT64)", Columns: null }
+            && routine.Routine is { RoutineType: "SCALAR_FUNCTION", Language: "SQL", Determinism: "DETERMINISTIC", ReturnType: "INT64", Arguments: [{ Name: "x", Type: "NUMERIC", Mode: "IN" }] }
             && routineFacts.Contains("Routine/Full name=varia-alpha.sales.to_cents") && routineFacts.Contains("Routine/Language=SQL")
             && routineFacts.Contains("Routine/Signature=(x NUMERIC) RETURNS INT64") && routineFacts.Contains("Routine/Description=Dollars to cents.")
             && routine.Groups.Select(group => group.Title).SequenceEqual(["Routine", "History"]) && harness.Fake.To(Sales + "/routines/to_cents").Count() == 1,
-            $"bigquery.properties answers a routine's facts and body from one routines.get: {routineCode} {string.Join(" | ", routineFacts)}");
+            $"bigquery.properties answers a routine's structured metadata, facts and body from one routines.get: {routineCode} {string.Join(" | ", routineFacts)}");
+
+        harness.Fake.On("GET", Sales + "$", new BigQueryFake.Reply(200, """
+            {"datasetReference":{"projectId":"varia-alpha","datasetId":"sales"},"location":"US","friendlyName":"Sales Data",
+             "description":"Commerce tables.","defaultTableExpirationMs":"7776000000","defaultPartitionExpirationMs":"2592000000",
+             "defaultEncryptionConfiguration":{"kmsKeyName":"projects/varia-alpha/locations/us/keyRings/bq/cryptoKeys/k1"},
+             "creationTime":"1700000000000","lastModifiedTime":"1700086400000","labels":{"team":"sales","env":"prod"}}
+            """));
+        var (datasetCode, datasetResult, _) = await harness.Call("bigquery.properties", Args("bqDataset", "sales"));
+        var datasetProps = datasetResult as BigQueryProperties;
+        var (mismatchedDataset, _, _) = await harness.Call("bigquery.properties", Args("bqDataset", "other"));
+        var badDatasetArgs = Args("bqDataset", "sa`les");
+        badDatasetArgs["dataset"] = "sa`les";
+        var (hostileDataset, _, _) = await harness.Call("bigquery.properties", badDatasetArgs);
+        check(datasetCode == "ok" && datasetProps is { Name: "sales", Type: "dataset", FullName: "varia-alpha.sales", Location: "US", Description: "Commerce tables." }
+            && datasetProps.Dataset is { FriendlyName: "Sales Data", DefaultTableExpirationMs: 7_776_000_000, DefaultPartitionExpirationMs: 2_592_000_000, KmsKeyName: "projects/varia-alpha/locations/us/keyRings/bq/cryptoKeys/k1" }
+            && datasetProps.Labels is [BigQueryLabel { Key: "env", Value: "prod" }, BigQueryLabel { Key: "team", Value: "sales" }]
+            && mismatchedDataset == "INVALID_PARAMS" && hostileDataset == "INVALID_PARAMS",
+            $"bigquery.properties answers a dataset's metadata from one free datasets.get and validates dataset names: {datasetCode} {mismatchedDataset} {hostileDataset}");
         harness.Fake.On("GET", Sales + "/tables/orders", BigQueryFake.Fixture("error-not-found", 404));
         var (gone, _, _) = await harness.Call("bigquery.properties", Args("bqTable", "orders"));
         check(code == "ok" && properties is { Name: "orders", Type: "table" } && properties.Groups.Count == 4 && model == "INVALID_PARAMS" && badRoutine == "INVALID_PARAMS" && gone == "NOT_FOUND",

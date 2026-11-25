@@ -5,6 +5,7 @@ import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
 import { liveJobStatus, loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
 import { codiconClass } from '../../../shared/icons'
+import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import Icon from '../Icon'
 import StatusPill from '../kit/StatusPill'
@@ -384,7 +385,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
   const tooltip = [rowTooltip(node, note), serverWords, tag?.description].filter(Boolean).join('\n')
   // The tree shows the peek cursor over these while Peek on Hover's modifier is held (styles.css, data-peek-armed).
-  const peekable = node.ref.type === 'object' && node.kind !== 'folder' && isPeekKind(node.kind) && !node.lost
+  const peekable = node.ref.type === 'object' && node.kind !== 'folder' && (isPeekKind(node.kind) || isBigQueryPropertyKind(node.kind)) && !node.lost
   // An open server's children follow its row, so a server dropped after it lands below them, not where a line under its
   // row would show: its whole row drops above it (below it is the next server's top half, or the background below the last).
   const edgeOf = (event: DragEvent): 'before' | 'after' => {

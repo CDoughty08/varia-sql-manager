@@ -566,20 +566,20 @@ export const commandCatalog = {
   // Peek: the object's definition and properties in a card beside its row (src/shared/explorer/peek.ts). Space on the selected
   // row opens it too, except while type-ahead collects a name with spaces; Ctrl+hover (⌘ on macOS) is the tree's own.
   'explorer.peek': {
-    title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'], methods: ['explorer.peek'],
+    title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'], providers: both,
     precondition: 'backendReady && explorerSelectionPeekable',
-    unavailableHint: 'Select an object Peek describes: a table, view, procedure, function, index, trigger, database, login, synonym, sequence, or type.',
+    unavailableHint: 'Select an object Peek describes: a SQL Server table, view, procedure, function, index, key, constraint, trigger, database, login, synonym, sequence or type, or a BigQuery table, view, routine or dataset.',
     keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: 'explorerNodePeekable && !explorerServerLost' }]
   },
   // Peek promoted to a document tab, with more room: the card's object while the card is open, otherwise the selection. A
   // Ctrl+click (⌘-click on macOS) on a row opens one too (gestures.ts, explorer.openPeekTab).
   'explorer.openPeekTab': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Open Peek as Tab', category: 'Object Explorer', icon: 'link-external', keywords: ['peek', 'definition', 'properties', 'preview', 'document', 'promote'],
     // The open card, else the menu's or Ctrl+click's row, else the selection: the handler's own condition says which applies.
     precondition: 'backendReady',
-    unavailableHint: 'Peek or select an object Peek describes, such as a table, procedure, index or login.',
+    unavailableHint: 'Peek or select an object Peek describes, such as a table, view, procedure, routine, dataset, index or login.',
     // Not in the card's grid, whose keys stay the results grid's.
     keybindings: [{ key: 'mod+enter', when: 'peekFocus && !outputGridFocus' }, { key: 'mod+enter', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }]
   },
@@ -593,7 +593,7 @@ export const commandCatalog = {
   },
   // The Peek card's or the active Peek tab's Refresh: it reads the object again, its script and its top rows included.
   'peek.refresh': {
-    providerContext: 'own',
+    providerContext: 'own', providers: both,
     title: 'Refresh Peek', category: 'Object Explorer', icon: 'refresh',
     // The card has no state key of its own: the handler's condition asks whether one is open.
     precondition: 'backendReady', unavailableHint: 'Open Peek first.',
@@ -609,12 +609,12 @@ export const commandCatalog = {
       { menu: 'search.hit.context', group: '1_query', order: 2, mnemonic: 'p', when: "explorerSelectionKind == 'bqTable'" }
     ]
   },
-  // BigQuery's Properties: a table-like object's facts from tables.get in a read-only document tab.
+  // BigQuery's Properties: a table-like object's, routine's or dataset's free metadata in a read-only document tab.
   'explorer.bigQueryProperties': {
-    title: 'BigQuery Properties', category: 'Object Explorer', icon: 'info', keywords: ['bigquery', 'properties', 'details', 'size', 'partitioning', 'clustering'], methods: ['bigquery.properties'], providers: ['bigquery'],
-    precondition: "backendReady && (explorerSelectionKind == 'bqTable' || explorerSelectionKind == 'bqView' || explorerSelectionKind == 'bqMaterializedView' || explorerSelectionKind == 'bqExternalTable')",
-    unavailableHint: 'Select a BigQuery table or view in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '9_properties', order: 2, title: 'Properties', mnemonic: 'r', when: "(explorerNode == 'bqTable' || explorerNode == 'bqView' || explorerNode == 'bqMaterializedView' || explorerNode == 'bqExternalTable') && !explorerServerLost" }]
+    title: 'BigQuery Properties', category: 'Object Explorer', icon: 'info', keywords: ['bigquery', 'properties', 'details', 'size', 'partitioning', 'clustering', 'routine', 'dataset'], methods: ['bigquery.properties'], providers: ['bigquery'],
+    precondition: 'backendReady && explorerSelectionPeekable',
+    unavailableHint: 'Select a BigQuery dataset, table, view, or routine in Object Explorer.',
+    menus: [{ menu: 'explorer.context', group: '9_properties', order: 2, title: 'Properties', mnemonic: 'r', when: "(explorerNode == 'bqTable' || explorerNode == 'bqView' || explorerNode == 'bqMaterializedView' || explorerNode == 'bqExternalTable' || explorerNode == 'bqRoutine' || explorerNode == 'bqDataset') && !explorerServerLost" }]
   },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.', providers: both,
