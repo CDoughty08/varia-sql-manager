@@ -1,14 +1,20 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { scriptMenuState } from '../../../shared/scripting/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import { googleSqlReservedKeywords } from '../../../shared/googlesql/catalog.ts'
 import { reservedKeywords } from '../../../shared/sql/lexer.ts'
 import type { Disposable } from '../core/types'
 import { monacoKeyCodes, type BridgeMonaco } from '../editor/keybinding-bridge'
 import type { PeekAnchor, PeekService, PeekSource } from '../explorer/PeekService'
 import type { PeekTabService } from '../explorer/PeekTabService'
 import type { ScriptingService } from '../scripting/ScriptingService'
-import { definitionLabel, definitionMessages, definitionNode } from './definition'
+import { bigQueryDefinitionKinds, definitionErrors, definitionLabel, definitionMessages, definitionNode, indexObjectLabel, indexObjectNode } from './definition'
+import { googleSqlLanguageId } from './googlesql'
+import type { IndexDefinitionOutcome } from './bigquery-definition'
+import type { FoundIndexObject, IndexCompletionService } from './IndexCompletionService'
 import type { SqlLanguageService } from './SqlLanguageService'
+
+const googleSqlReserved: ReadonlySet<string> = new Set(googleSqlReservedKeywords)
 
 /** A name in a SQL editor: the editor, its model and a position in the name. */
 export interface EditorPlace {
@@ -25,6 +31,13 @@ export interface EditorPeekOptions {
   readonly scripting?: Pick<ScriptingService, 'run' | 'inform'>
   readonly peek?: Pick<PeekService, 'peekAt' | 'hoverAt' | 'cancelHover' | 'getSnapshot' | 'close' | 'subscribe'>
   readonly peekTabs?: Pick<PeekTabService, 'open'>
+  /** A BigQuery tab's lookup, from the connection's Search Objects index. */
+  readonly indexDefinition?: Pick<IndexCompletionService, 'definition'>
+  /**
+   * F12 on a BigQuery view or routine: opens its free definition (`bigquery.properties`, `tables.get` or `routines.get`) in a new
+   * query (`indexDefinitionOpener`); throws when the read fails.
+   */
+  readonly openIndexDefinition?: (found: FoundIndexObject) => Promise<IndexDefinitionOutcome>
 }
 
 /**
@@ -100,7 +113,8 @@ export function bindPeekCardKey(editor: Pick<Monaco.editor.IStandaloneCodeEditor
 /**
  * Go To Definition, Peek Definition and their pointer gestures for SQL editors (a query tab's, or Peek's read-only one): F12
  * scripts the object as CREATE to a new query (Script As, as SSMS does), Alt+F12 and Ctrl+hover open Peek's card beside the
- * name, and Ctrl+click opens a Peek tab. A name that resolves to nothing, or a lookup that fails, is a quiet status-bar notice
+ * name, and Ctrl+click opens a Peek tab. In a BigQuery tab the name resolves through the Search Objects index; F12 opens a view's
+ * or routine's free definition in a new query, and Peek opens on its Definition tab, so nothing is billed. A name that resolves to nothing, or a lookup that fails, is a quiet status-bar notice
  * from the keyboard and nothing at all from a hover, never an error banner.
  */
 export class EditorPeekService {
@@ -149,8 +163,7 @@ export class EditorPeekService {
    * the card, tab or script opened.
    */
   async run(mode: DefinitionMode, place: EditorPlace, source: PeekSource = 'keyboard', wanted: () => boolean = () => true): Promise<boolean> {
-    const { sqlLanguage, scripting } = this.options
-    if (!sqlLanguage.definition || !scripting) return false
+    if (!this.options.scripting) return false
     // Until Alt+F12's card opens, Escape in its editor drops it, so a slow lookup never opens a card (and takes focus) later.
     const opening = mode === 'card' && source !== 'hover' ? { editor: place.editor } : undefined
     if (opening) this.setOpening(opening)
@@ -159,6 +172,7 @@ export class EditorPeekService {
   }
 
   private async find(mode: DefinitionMode, place: EditorPlace, source: PeekSource, wanted: () => boolean): Promise<boolean> {
+    if (place.model.getLanguageId() === googleSqlLanguageId) return this.findIndexed(mode, place, source, wanted)
     const { sqlLanguage, scripting, connections } = this.options
     if (!sqlLanguage.definition || !scripting) return false
     const quiet = source === 'hover'
@@ -192,6 +206,44 @@ export class EditorPeekService {
     catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
   }
 
+  /** `find` for a BigQuery tab: the object from the index, a free definition for F12, Peek on its Definition tab. */
+  private async findIndexed(mode: DefinitionMode, place: EditorPlace, source: PeekSource, wanted: () => boolean): Promise<boolean> {
+    const { indexDefinition, scripting, connections, openIndexDefinition } = this.options
+    if (!indexDefinition || !scripting) return false
+    const inform = (text: string) => { if (source !== 'hover') scripting.inform(text) }
+    const word = place.model.getWordAtPosition(place.position)?.word, version = place.model.getVersionId()
+    let found
+    try { found = await indexDefinition.definition(place.model, place.position, wanted) }
+    catch (error) { if (wanted()) inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
+    if (found === undefined || !wanted()) return false
+    if (!found) { inform(definitionMessages.notFound(word === undefined ? undefined : displayText(word))); return false }
+    if (!connections.isLive(found.connectionId)) { inform(definitionErrors.connectBigQueryFirst); return false }
+    const label = indexObjectLabel(found), node = indexObjectNode(found)
+    // A model: the index has it, but Peek and Properties do not describe one.
+    if (!node) { inform(mode === 'script' ? definitionMessages.notScriptable(label) : definitionMessages.notPeekable(label)); return false }
+    const tab = bigQueryDefinitionKinds.has(found.kind) ? 'definition' as const : undefined
+    if (mode === 'card') {
+      if (place.model.getVersionId() !== version || place.editor.getModel() !== place.model) return false
+      const anchor = editorPeekAnchor(place)
+      if (anchor && this.options.peek?.peekAt(node, anchor, source, tab)) return true
+      inform(definitionMessages.notPeekable(label))
+      return false
+    }
+    if (mode === 'tab') {
+      if (this.options.peekTabs?.open(node, tab)) return true
+      inform(definitionMessages.notPeekable(label))
+      return false
+    }
+    // A table's CREATE statement is a billed INFORMATION_SCHEMA query (Script As › CREATE asks first); F12 never runs one.
+    if (!tab || !openIndexDefinition) { inform(definitionMessages.noFreeDefinition(label)); return false }
+    try {
+      const outcome = await openIndexDefinition(found)
+      if (outcome === 'none') { inform(definitionMessages.noStoredDefinition(label)); return false }
+      if (outcome === 'cut') inform(definitionMessages.definitionCut(label))
+      return true
+    } catch (error) { inform(definitionMessages.failed(error instanceof Error ? error.message : undefined)); return false }
+  }
+
   /**
    * The pointer rests on `position` with Peek on Hover's modifier held: the card opens there after the hover delay (the
    * Peek service's timer, which releasing the modifier or another key cancels). Keywords and the name the card already
@@ -201,7 +253,8 @@ export class EditorPeekService {
     const peek = this.options.peek
     if (!peek) return
     const word = place.model.getWordAtPosition(place.position)
-    if (!word || reservedKeywords.has(word.word.toUpperCase())) { peek.cancelHover(); return }
+    const reserved = place.model.getLanguageId() === googleSqlLanguageId ? googleSqlReserved : reservedKeywords
+    if (!word || reserved.has(word.word.toUpperCase())) { peek.cancelHover(); return }
     const key = `${place.model.uri.toString()}\n${place.model.getVersionId()}\n${place.position.lineNumber}\n${word.startColumn}`
     const open = peek.getSnapshot().open
     if ((open?.anchor && this.shown?.key === key && this.shown.id === open.id) || (this.pending?.key === key && this.pending.wanted())) return
