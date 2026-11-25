@@ -178,15 +178,19 @@ describe('results as tabs', () => {
     expect(tabWindow(1000, 999, 64)).toEqual([936, 999])
   })
 
-  it('need the two tab rows and the selected grid at its floor, or at its rows when it needs less, for the Messages strip', () => {
-    const { results, one } = fixture()
+  it('need one tab row for a solo Table and two when the view bar shows, plus the grid floor, for the Messages strip', () => {
+    const { results, one, three, diff } = fixture()
     const tab = results.getSnapshot().t1, floor = minGridHeight(scrollbarSize())
-    expect(tabsNeed(tab)).toBe(g.resultTabsHeight + g.viewTabsHeight + floor)
+    // Result 1 is a solo Table without filters: Smart 2-Bar hides .rt-views and reclaims viewTabsHeight.
+    expect(tabsNeed(tab)).toBe(g.resultTabsHeight + floor)
     const settled = new Map(tab.settled)
     settled.set(`${tab.sets[0].descriptor.generation}:${tab.sets[0].descriptor.resultId}`, { rows: 1, strip: false })
     const small = tabsNeed({ ...tab, settled })
-    expect(small).toBeLessThan(g.resultTabsHeight + g.viewTabsHeight + floor)
-    expect(small).toBeGreaterThan(g.resultTabsHeight + g.viewTabsHeight)
+    expect(small).toBeLessThan(g.resultTabsHeight + floor)
+    expect(small).toBeGreaterThan(g.resultTabsHeight)
+    // Result 3 has a Pivot, and diff is a comparison: both render .rt-views and need both tab rows.
+    expect(tabsNeed({ ...tab, focused: three })).toBe(g.resultTabsHeight + g.viewTabsHeight + floor)
+    expect(tabsNeed({ ...tab, focused: diff })).toBe(g.resultTabsHeight + g.viewTabsHeight + floor)
     expect(tabsNeed({ ...tab, sets: [], focused: undefined })).toBe(0)
     expect(one).toBeDefined()
   })
@@ -196,7 +200,10 @@ describe('results as tabs', () => {
     draw()
     expect(names(resultTabs())).toEqual(['Result 1', 'Result 2', 'Result 3', 'Result 1 → Result 2'])
     expect(chosen(resultTabs())).toBe('Result 1')
-    expect(names(viewTabs())).toEqual(['Table'])
+    // Solo Table without filters collapses .rt-views and shows inline facts + Save in .rt-results.
+    expect(viewTabs()).toHaveLength(0)
+    expect(all('.rt-results .rt-inline-right .rt-facts')).toHaveLength(1)
+    expect(all('.rt-results .rt-inline-right .rt-save')).toHaveLength(1)
     expect(grids()).toEqual([one])
     expect([...mountedGrids]).toEqual([one])
     // Drawn again with the same selection, the grid is the same one, not built again.
@@ -204,32 +211,36 @@ describe('results as tabs', () => {
     draw()
     expect(all('[data-grid]')[0].dataset.instance).toBe(built)
     expect(all('[data-grid]')[0].dataset.focused).toBe('true')
-    // The tab panel is named by the view tab that shows it.
+    // In Smart 2-Bar mode (solo Table), the tab panel is labelled by the active result tab.
     const panel = all('[role="tabpanel"]')[0]
-    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent).toBe('Table')
-    // Result 3: its Table first, then its Pivot from the view tabs; the grid shown is the only one mounted.
+    expect(document.getElementById(panel.getAttribute('aria-labelledby')!)?.textContent).toBe('Result 1')
+    // Result 3 has a Pivot: .rt-views expands with Table and Pivot view tabs, and aria-labelledby points to the active view tab.
     act(() => { resultTabs()[2].click() })
     draw()
     expect(results.getSnapshot().t1.focused).toBe(three)
     expect(names(viewTabs())).toEqual(['Table', 'Pivot'])
+    expect(document.getElementById(all('[role="tabpanel"]')[0].getAttribute('aria-labelledby')!)?.textContent).toBe('Table')
     act(() => { viewTabs()[1].click() })
     draw()
     expect(grids()).toEqual([pivot])
     expect([...mountedGrids]).toEqual([pivot])
     expect(all('[data-grid]')[0].dataset.view).toBe('pivot')
+    expect(document.getElementById(all('[role="tabpanel"]')[0].getAttribute('aria-labelledby')!)?.textContent).toBe('Pivot')
     // Another group and back: Result 3's tab returns to the Pivot it showed.
     act(() => { resultTabs()[0].click() })
     draw()
+    expect(viewTabs()).toHaveLength(0)
     expect(grids()).toEqual([one])
     act(() => { resultTabs()[2].click() })
     draw()
     expect(chosen(viewTabs())).toBe('Pivot')
     expect(grids()).toEqual([pivot])
-    // A comparison has no view tabs: a label says what it is.
+    // A comparison has no view tabs: a label says what it is in .rt-views, and aria-labelledby points to the result tab.
     act(() => { resultTabs()[3].click() })
     draw()
     expect(viewTabs()).toHaveLength(0)
     expect(all('.rt-view-label')[0].textContent).toBe('Comparison')
+    expect(document.getElementById(all('[role="tabpanel"]')[0].getAttribute('aria-labelledby')!)?.textContent).toBe('Result 1 → Result 2')
     expect(grids()).toEqual([diff])
     expect(all('[data-grid]')[0].dataset.view).toBe('comparison')
     // Clicking into the grid that is shown changes nothing.
@@ -431,7 +442,7 @@ describe('results as tabs', () => {
     draw()
     // A group's tab says what goes with it.
     expect(closer('Result 3').title).toBe('Close Result 3 and its Pivot')
-    // Closing the Pivot that shows selects its Table, and the focus goes to the Table's view tab.
+    // Closing the Pivot that shows selects its Table, collapses .rt-views (solo Table), and focuses Result 3's tab.
     act(() => { resultTabs()[2].click() })
     draw()
     act(() => { viewTabs()[1].click() })
@@ -439,9 +450,9 @@ describe('results as tabs', () => {
     closer('Pivot of Result 3').focus()
     act(() => { closer('Pivot of Result 3').click() })
     draw()
-    expect(names(viewTabs())).toEqual(['Table'])
+    expect(viewTabs()).toHaveLength(0)
     expect(grids()).toEqual([three])
-    expect(document.activeElement).toBe(viewTabs()[0])
+    expect(document.activeElement).toBe(resultTabs()[2])
     expect(client.released()).toEqual([803])
     // Closing the selected group selects the next item and focuses its tab.
     closer('Result 3').focus()
@@ -574,6 +585,9 @@ describe('the Tabs layout in a short pane', () => {
     expect(tabsFold(g.resultTabsHeight + need - 1, 10)).toBe('none')
     // The results pane at its 100 px minimum, under its toolbar: the grid alone.
     expect(tabsFold(64, 10)).toBe('none')
+    // Smart 2-Bar mode (solo Table, one tab row): skips 'one' and stays unfolded until a single row no longer fits.
+    expect(tabsFold(g.resultTabsHeight + need, 10, false)).toBeUndefined()
+    expect(tabsFold(g.resultTabsHeight + need - 1, 10, false)).toBe('none')
   })
 
   it('fold when first drawn, and in the shortest pane give the grid the focus from the picker, picked or closed', () => {
@@ -878,15 +892,49 @@ describe('moving through the results as tabs', () => {
     draw()
     expect(document.activeElement).toBe(viewTabs()[1])
     expect(document.activeElement?.getAttribute('aria-selected')).toBe('true')
-    // From a view tab to another result: its view tabs replace the old ones, and the focus goes to its selected view tab.
+    // From a view tab to a solo Table result (no view row): focus moves cleanly to its result tab.
     act(() => { results.focusEntry('t1', results.getSnapshot().t1.sets[0].key) })
     draw()
-    expect(document.activeElement).toBe(viewTabs()[0])
-    expect(document.activeElement?.getAttribute('aria-label')).toBe('Table')
+    expect(document.activeElement).toBe(resultTabs()[0])
+    expect(document.activeElement?.textContent).toBe('Result 1')
     // To a comparison, which has no view tabs: the focus goes to its tab in the result row.
     act(() => { results.focusEntry('t1', results.getSnapshot().t1.comparisons[0].key) })
     draw()
     expect(document.activeElement?.textContent).toBe('Result 1 → Result 2')
+  })
+
+  it('expand .rt-views when a solo Table has active filter chips and collapse back cleanly with focus rescue', () => {
+    const { results, one, draw, resultTabs, viewTabs, all } = fixture()
+    draw()
+    expect(all('.rt-views')).toHaveLength(0)
+    expect(all('.rt-results .rt-inline-right .rt-facts')).toHaveLength(1)
+    expect(document.getElementById(all('[role="tabpanel"]')[0].getAttribute('aria-labelledby')!)?.textContent).toBe('Result 1')
+    // Adding a filter chip expands .rt-views so FilterChips have room and wires aria-labelledby to the Table view tab.
+    const tab = results.getSnapshot().t1
+    const sorts = tab.sorts as Map<string, NonNullable<ReturnType<typeof tab.sorts.get>>>
+    sorts.set(one, {
+      keys: [], filters: [{ filter: { op: 'keepRows', rows: [0] }, label: '1 selected row' }],
+      applied: [], sorting: false, approximate: false, stale: false
+    })
+    draw()
+    expect(all('.rt-views')).toHaveLength(1)
+    expect(all('.rt-results .rt-inline-right')).toHaveLength(0)
+    expect(viewTabs().map(t => t.textContent)).toEqual(['Table'])
+    expect(document.getElementById(all('[role="tabpanel"]')[0].getAttribute('aria-labelledby')!)?.textContent).toBe('Table')
+    // Removing the last filter chip collapses .rt-views back to 2-bar mode and rescues focus to Result 1 tab.
+    const remove = all<HTMLButtonElement>('.rs-filter-remove')[0]
+    remove.focus()
+    const removeFilter = vi.spyOn(results, 'removeFilter').mockImplementation(() => {
+      sorts.delete(one)
+      return true
+    })
+    act(() => { remove.click() })
+    draw()
+    expect(removeFilter).toHaveBeenCalled()
+    expect(all('.rt-views')).toHaveLength(0)
+    expect(all('.rt-results .rt-inline-right .rt-facts')).toHaveLength(1)
+    expect(document.activeElement).toBe(resultTabs()[0])
+    expect(document.getElementById(all('[role="tabpanel"]')[0].getAttribute('aria-labelledby')!)?.textContent).toBe('Result 1')
   })
 })
 

@@ -93,11 +93,12 @@ try {
   await expect(page.locator(part.resultStack)).toHaveCount(0)
   await expect(resultTabs(page).getByRole('tab')).toHaveText(['Result 1', 'Result 2', 'Result 3'])
   await expect(resultTab(page, 'Result 1')).toHaveAttribute('aria-selected', 'true')
-  await expect(viewTabs(page).getByRole('tab')).toHaveText(['Table'])
-  // One grid is mounted: the selected view's, in the panel its view tab names.
+  // Smart 2-Bar: solo Table with no Pivot or filters hides the redundant view bar and labels the panel by its result tab.
+  await expect(viewTabs(page)).toHaveCount(0)
+  // One grid is mounted: the selected view's, in the panel its active tab names.
   await expect(anyResultGrid(page)).toHaveCount(1)
   await expect(resultTabPanel(page).locator(resultGrid(page, 'Result 1', 'table'))).toHaveCount(1)
-  await expect(resultTabPanel(page)).toHaveAttribute('aria-labelledby', await viewTab(page, 'Table').getAttribute('id'))
+  await expect(resultTabPanel(page)).toHaveAttribute('aria-labelledby', await resultTab(page, 'Result 1').getAttribute('id'))
   console.log('Grouped results checks: the results toolbar\'s Tabs shows one result at a time under a row of result tabs, with one grid mounted.')
 
   // 2. Switching keeps each view's state: a cell selected in Result 1 is still selected after Result 2 was shown.
@@ -154,7 +155,7 @@ try {
   await expect(anyResultGrid(page)).toHaveCount(1)
   await pivoting.getByRole('button', { name: 'Close Pivot', exact: true }).click()
   await resultTab(page, 'Result 3').click()
-  await expect(viewTabs(page).getByRole('tab')).toHaveText(['Table'])
+  await expect(viewTabs(page)).toHaveCount(0)
   await resultTab(page, 'Result 1').click()
   await expect(viewTab(page, 'Pivot of Result 1')).toHaveAttribute('aria-selected', 'true')
   await viewTab(page, 'Table').click()
@@ -168,12 +169,12 @@ try {
   await menu('theme.mode.dark')
   console.log('Grouped results checks: a Pivot is a view tab beside its Table, and a result\'s tab returns to the view it showed last.')
 
-  // 5. Closing from the tabs: the Pivot's close selects its Table and focuses its view tab; a result's close selects the
-  // next tab and focuses it.
+  // 5. Closing from the tabs: the Pivot's close selects its Table, collapses the view bar and focuses Result 1's tab;
+  // a result's close selects the next tab and focuses it.
   await expect(tabClose(page, 'Result 1')).toHaveAttribute('title', 'Close Result 1 and its Pivot')
   await tabClose(page, 'Pivot of Result 1').click()
-  await expect(viewTabs(page).getByRole('tab')).toHaveText(['Table'])
-  await expect(viewTab(page, 'Table')).toBeFocused()
+  await expect(viewTabs(page)).toHaveCount(0)
+  await expect(resultTab(page, 'Result 1')).toBeFocused()
   await tabClose(page, 'Result 1').click()
   await expect(resultTabs(page).getByRole('tab')).toHaveText(['Result 2', 'Result 3'])
   await expect(resultTab(page, 'Result 2')).toHaveAttribute('aria-selected', 'true')
@@ -384,9 +385,9 @@ try {
   await expect(longTab).toHaveText(name128)
   await expect(longTab).toHaveAttribute('title', `${name128} · Result 1`)
   expect(await nameCut(longTab)).toBe(true)
-  // The tab stops at its widest and the next tab still shows beside it; the view row's facts give way inside the pane.
+  // The tab stops at its widest and the next tab still shows beside it; the inline facts give way inside the pane.
   await expect(resultTab(page, 'Result 2')).toBeVisible()
-  expect(await fitsAcross(viewTabs(page).locator('xpath=..'))).toBe(true)
+  expect(await fitsAcross(resultTabs(page).locator('xpath=..'))).toBe(true)
   expect((await resultsToolbarFit(page)).fits).toBe(true)
   // Go to Result… lists it whole in a row that fits the picker, which stays inside the window.
   await textbox().focus()
@@ -446,7 +447,8 @@ try {
   await expect(poppedTab).toHaveText(name128)
   await expect(poppedTab).toHaveAttribute('title', `${name128} · Result 1`)
   await expect(resultTab(popout, 'Result 2')).toBeVisible()
-  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(640, 480) })
+  // Progressive disclosure keeps Compare & Transposed visible at 640 px; 560 px exercises folding through `view`.
+  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().sort((a, b) => b.id - a.id)[0].setContentSize(560, 480) })
   await expect.poll(async () => (await resultsToolbarFit(popout)).fold).toMatch(/^layout tight view/)
   expect((await resultsToolbarFit(popout)).fits).toBe(true)
   expect(await searchPlaceholderFit(popout)).toMatchObject({ fits: true })

@@ -60,29 +60,41 @@ export function tabWindow(count: number, at: number, size: number = g.resultTabs
   return [first, first + size - 1]
 }
 
-/** The room the Tabs layout needs before the Messages strip opens by itself: its two rows of tabs and the selected grid at
+/** Whether the Tabs layout renders the `.rt-views` sub-bar: hidden for a solo Table view with no Pivot and no active filters. */
+export function showsViewRow(group: ReturnType<typeof selectedGroup>, sort?: GridSort): boolean {
+  if (!group) return true
+  if (group.pivot) return true
+  return (sort?.filters.length ?? 0) > 0
+}
+
+/** The room the Tabs layout needs before the Messages strip opens by itself: its tab row(s) and the selected grid at
  *  its minimum height, or at its rows' height when its result has them all and needs less. No caption. */
-export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
   const entry = selectedEntry(tab)
   if (!entry) return 0
   const turned = transposedView(grids?.get(entry.key), entry.descriptor) ? new Set([entry.key]) : undefined
   const content = settledContent({ sets: [entry], settled: tab.settled, ...tab.sorts ? { sorts: tab.sorts } : {} }, undefined, turned)[0]
   const minHeight = minGridHeight(scrollbarSize())
-  return g.resultTabsHeight + g.viewTabsHeight + Math.min(minHeight, content ?? minHeight)
+  const group = tab.groups ? selectedGroup({ ...tab, groups: tab.groups, comparisons: tab.comparisons ?? [] }) : undefined
+  const viewBar = tab.groups ? (showsViewRow(group, tab.sorts?.get(entry.key)) ? g.viewTabsHeight : 0) : g.viewTabsHeight
+  return g.resultTabsHeight + viewBar + Math.min(minHeight, content ?? minHeight)
 }
 
 /**
- * How the Tabs layout folds its two rows of tabs in a short pane, so the grid keeps room for its header and two rows (the
- * results pane can be dragged to 100 px, and a window made smaller takes its room first): undefined, both rows; `one`, the
- * result tabs and the selected view's row side by side in one row, without the facts (the status line has them); `none`,
- * the grid alone, as Stacked's one set gives up its caption. Next Result, Go to Result N and Go to Result… still reach
- * every view then. Undefined before the layout has a height.
+ * How the Tabs layout folds its rows of tabs in a short pane, so the grid keeps room for its header and two rows (the
+ * results pane can be dragged to 100 px, and a window made smaller takes its room first): undefined, every shown row;
+ * `one` (only when `.rt-views` is shown), the result tabs and the selected view's row side by side in one row, without
+ * the facts (the status line has them); `none`, the grid alone, as Stacked's one set gives up its caption. Next Result,
+ * Go to Result N and Go to Result… still reach every view then. Undefined before the layout has a height.
  */
-export function tabsFold(height: number, scrollbar: number = scrollbarSize()): 'one' | 'none' | undefined {
+export function tabsFold(height: number, scrollbar: number = scrollbarSize(), twoRows = true): 'one' | 'none' | undefined {
   if (height <= 0) return undefined
   const need = g.headerHeight + 2 * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder
-  if (height - g.resultTabsHeight - g.viewTabsHeight >= need) return undefined
-  return height - g.resultTabsHeight >= need ? 'one' : 'none'
+  if (twoRows) {
+    if (height - g.resultTabsHeight - g.viewTabsHeight >= need) return undefined
+    return height - g.resultTabsHeight >= need ? 'one' : 'none'
+  }
+  return height - g.resultTabsHeight >= need ? undefined : 'none'
 }
 
 /** The selected view's facts beside its view tabs: rows (counting while they stream) and columns, the batch it came from. */
@@ -136,6 +148,8 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const selected = selectedEntry(tab)
   const items = topItems(tab)
   const group = selectedGroup(tab)
+  const sort = selected ? tab.sorts.get(selected.key) : undefined
+  const showViewRow = showsViewRow(group, sort)
   const at = Math.max(0, selectedItem(tab, items))
   const [first, last] = tabWindow(items.length, at)
   const shown = items.slice(first, last + 1)
@@ -198,7 +212,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const view = row === 'view' ? root?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]') : undefined
     if (view) view.focus()
     else if (row) { focusTab.current = items[at]?.key; focusResultTab() }
-  }, [selected?.key, first])
+  }, [selected?.key, first, showViewRow])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!gridFocus.current || !root || (active && active !== root.ownerDocument.body && active !== resultsTab() && !root.contains(active))) return
@@ -288,7 +302,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     else clipStrip(strip)
     setHidden(hiddenTabs(strip, count.current))
   }
-  useLayoutEffect(() => { measureStrip(true) }, [group?.table.key ?? selected?.key, first, !selected])
+  useLayoutEffect(() => { measureStrip(true) }, [group?.table.key ?? selected?.key, first, !selected, showViewRow])
   useLayoutEffect(() => { measureStrip(false) }, [items.length, last, !selected])
   useEffect(() => {
     const strip = stripRef.current
@@ -305,10 +319,10 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
-    setFold(tabsFold(root.clientHeight))
-    const observer = observeResize(root, () => setFold(tabsFold(root.clientHeight)))
+    setFold(tabsFold(root.clientHeight, undefined, showViewRow))
+    const observer = observeResize(root, () => setFold(tabsFold(root.clientHeight, undefined, showViewRow)))
     return () => observer.dispose()
-  }, [!selected])
+  }, [!selected, showViewRow])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (fold !== 'none' || !root || !active || ![...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))) return
@@ -375,11 +389,12 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
   if (!selected) return null
   const selectedSlot = group ? (group.pivot?.key === selected.key ? group.pivot : group.table) : tab.comparisons.find(slot => slot.key === selected.key)
-  const selectedName = entryName(selected), sort = tab.sorts.get(selected.key)
+  const selectedName = entryName(selected)
   // The selected group's Pivot is out of date: a dot on its view tab, and its mark with Update while it is shown.
   const stale = !!group && pivotOutOfDate(tab, group)
-  const labelledBy = group ? tabIdOf(selected.key, 'view') : tabIdOf(selected.key, 'result')
-  return <div ref={rootRef} className="rt-root" data-fold={fold} onFocus={trackFocus} onBlur={trackBlur}>
+  const labelledBy = group && showViewRow ? tabIdOf(selected.key, 'view') : tabIdOf(selected.key, 'result')
+  const cached = tab.summary?.job?.cacheHit === true
+  return <div ref={rootRef} className="rt-root" data-fold={fold} data-compact={!showViewRow || undefined} onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" data-tab-row="result" onKeyDown={resultKey}>
       <div className="rt-strip" ref={stripRef} role="tablist" aria-label="Results and comparisons" onScroll={() => measureStrip(false)} onWheel={wheel}>
       {shown.map((item, place) => {
@@ -404,9 +419,13 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       {hidden > 0 && <button ref={overflowRef} type="button" className="rt-overflow" aria-haspopup="dialog" aria-expanded={picking}
         aria-label={`All results, views and comparisons; ${formatCount(hidden)} not shown as tabs`} title="All results, views and comparisons (Go to Result…)"
         onClick={() => { pickerFrom.current = undefined; setPicking(open => !open) }}>+{formatCount(hidden)}<Icon name="chevron-down" /></button>}
+      {!showViewRow && <div className="rt-inline-right">
+        <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={cached} />
+        <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />
+      </div>}
       {picking && <ResultsPicker tab={tab} anchor={pickerAnchor} selected={selected?.key} onPick={pick} onClose={closePicker} />}
     </div>
-    <div className="rt-views">
+    {showViewRow && <div className="rt-views">
       {group ? <div className="rt-view-tabs" role="tablist" aria-label={`Views of ${distinctName(group.table.entry, tab.sets)}`} data-tab-row="view" onKeyDown={viewKey}>
         {views.map(view => {
           const on = view.key === selected.key, pivot = view.view === 'pivot', marked = pivot && stale
@@ -420,11 +439,11 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
           </div>
         })}
       </div> : <span className="rt-view-label"><Icon name="git-compare" />Comparison</span>}
-      <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={tab.summary?.job?.cacheHit === true} />
+      <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={cached} />
       {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} source={distinctName(group.table.entry, tab.sets)} stale={stale} running={running} refocus={refocusView} />}
       <FilterChips tabId={tabId} entry={selected} name={spokenName(selected)} sort={sort} refocus={refocusView} />
       <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />
-    </div>
+    </div>}
     <div className="rt-panel" role="tabpanel" id={id + 'panel'} aria-labelledby={labelledBy}>
       {/* Keyed by result: another view is another grid, and the one it replaces unmounts and gives back its pool; so is a
           rebuilt Pivot, which keeps its entry key but is drawn over its new result. */}

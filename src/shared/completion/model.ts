@@ -59,8 +59,9 @@ export interface CompletionWord extends TextSpan { readonly typed: string; reado
 /** A grammar's reading of one position: what to complete, the scope, and the word. */
 export interface CompletionRead { readonly site: CompletionSite; readonly scope: QueryScope; readonly word: CompletionWord }
 
-/** A name chain under the caret for hover: its parts, which part the caret is on, its span, and whether it names a table (FROM). */
-export interface HoverRead { readonly parts: readonly string[]; readonly at: number; readonly span: TextSpan; readonly object: boolean; readonly scope: QueryScope }
+/** A name chain under the caret for hover: its parts, which part the caret is on, its span, whether it names a table (FROM), and
+ *  whether a parenthesis follows it outside FROM (`call`: a function, which Go To Definition looks up as a routine). */
+export interface HoverRead { readonly parts: readonly string[]; readonly at: number; readonly span: TextSpan; readonly object: boolean; readonly call?: boolean; readonly scope: QueryScope }
 
 /** A function the dialect knows, for completion and hover. */
 export interface DialectFunction { readonly name: string; readonly summary: string; readonly signatures: readonly string[] }

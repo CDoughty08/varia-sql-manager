@@ -1444,7 +1444,13 @@ const fakeSessions = [
 ]
 /** Sessions the fake Kill Process ended: they leave Sessions. */
 const killedSessions = new Set()
-const fakeSessionOf = id => fakeSessions.find(row => row.sessionId === id && !killedSessions.has(id))
+// AG-16: while the control file activity-agent-job exists, SQL Server Agent runs step 2 of the Nightly job (a running run, so
+// Stop Job can end it). The program name carries the job id's bytes in SQL Server's order; the backend resolves the names.
+const agentSession = { sessionId: 72, status: 'running', login: 'NT SERVICE\\SQLSERVERAGENT', database: 'master', command: 'WAITFOR', application: 'SQLAgent - TSQL JobStep (Job 0xD4C3B2A1000000408000000000000001 : Step 2)',
+  hostName: 'DB-01', job: 'Nightly, step 2 (Load)', jobName: 'Nightly', openTransactions: '0', loginTime: '2026-11-09 08:04:00.000', hostProcessId: '8500' }
+const agentSessionShown = () => !!controlDirectory && existsSync(join(controlDirectory, 'activity-agent-job'))
+const allSessions = () => agentSessionShown() ? [...fakeSessions, agentSession] : fakeSessions
+const fakeSessionOf = id => allSessions().find(row => row.sessionId === id && !killedSessions.has(id))
 const sameLoginTime = (row, loginTime) => !!row.loginTime && row.loginTime.replace(' ', 'T') === String(loginTime).replace(/(\.\d{3})\d*$/, '$1')
 function activityDetails(params) {
   const row = fakeSessionOf(params.sessionId)
@@ -1486,10 +1492,11 @@ function activityKill(params) {
   })
   return { results, elapsedMs: 6 }
 }
-const sessionTextColumns = ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status']
+const sessionTextColumns = ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
-  return fakeSessions.filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
+  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00' })
+  return allSessions().filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
 }
@@ -1529,7 +1536,7 @@ function activitySessionsSample(live, probe, revision = revisionOf(probe)) {
   // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
   const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
   if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })
-  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...(column.role ? { role: column.role } : {}) }))
   const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
   const kept = live.kept.get(probe.probe) ?? []
   kept.push(result.resultId)

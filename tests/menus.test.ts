@@ -387,7 +387,7 @@ describe('menu state', () => {
       // Go To Definition and Peek Definition: the query editor's menu and its keys, as in SSMS.
       'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
-      'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.sessionDetails', 'activity.killProcess', 'activity.close',
+      'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.sessionDetails', 'activity.killProcess', 'activity.openJob', 'activity.stopJob', 'activity.close',
       // The SSISDB node's Active Operations and reports, a package's Executions and Last Execution, the Integration Services document's
       // list menu, header and history (Back, Forward); View has All Operations.
       'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders', 'ssis.openExecution', 'ssis.goBack', 'ssis.goForward', 'ssis.packageExecutions', 'ssis.lastRun',

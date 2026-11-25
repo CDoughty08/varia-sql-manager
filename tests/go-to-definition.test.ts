@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { languagesContribution } from '../src/renderer/src/contributions/languages'
-import { definitionMessages, definitionNode } from '../src/renderer/src/languages/definition'
+import { definitionErrors, definitionMessages, definitionNode, indexObjectNode } from '../src/renderer/src/languages/definition'
+import type { IndexDefinitionOutcome } from '../src/renderer/src/languages/bigquery-definition'
+import type { FoundIndexObject } from '../src/renderer/src/languages/IndexCompletionService'
 import type { FoundDefinition } from '../src/renderer/src/languages/SqlLanguageService'
 import { commandCatalog } from '../src/shared/commands/catalog'
 import { gestureCatalog } from '../src/shared/commands/gestures'
@@ -373,6 +375,10 @@ describe('Go To Definition', () => {
     expect(move).toBeUndefined()
   })
 
+  it('declares F12, Alt+F12 and Open Definition in Peek Tab for both engines', () => {
+    for (const id of ['edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab'] as const) expect(commandCatalog[id].providers, id).toEqual(['sqlserver', 'bigquery'])
+  })
+
   it('binds F12, Alt+F12 and the definition gestures only through the catalogues, in query and Peek editors alike', () => {
     expect(commandCatalog['edit.goToDefinition'].keybindings).toEqual([{ key: 'f12', when: 'editorTextFocus || peekEditorFocus' }])
     expect(commandCatalog['edit.peekDefinition'].keybindings).toEqual([{ key: 'alt+f12', when: 'editorTextFocus || peekEditorFocus' }])
@@ -380,5 +386,125 @@ describe('Go To Definition', () => {
     for (const id of ['edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab'] as const) expect(commandCatalog[id].precondition).toBe('backendReady')
     expect(gestureCatalog['editor.goToDefinition']).toMatchObject({ kind: 'pointerCommand', modifiers: ['mod'], keyboard: ['edit.openPeekTab'] })
     expect(gestureCatalog['editor.peekHover']).toMatchObject({ kind: 'modifier', action: 'hover', modifiers: ['mod'], keyboard: ['edit.peekDefinition'] })
+  })
+})
+
+// BigQuery tabs resolve through the Search Objects index (IndexCompletionService.definition, tests/googlesql-completion.test.ts
+// has the resolution) and never run a billed query: F12 opens a view's or routine's free definition, Peek opens on Definition.
+describe('Go To Definition in a BigQuery tab', () => {
+  const daily: FoundIndexObject = { connectionId: 'c1', kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' }
+  const orders: FoundIndexObject = { connectionId: 'c1', kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }
+  const toCents: FoundIndexObject = { connectionId: 'c1', kind: 'bqRoutine', subtype: 'scalar', project: 'varia-alpha', dataset: 'sales', name: 'to_cents' }
+  function bigQuery(answer: () => Promise<FoundIndexObject | null | undefined>, options: { live?: boolean; opened?: IndexDefinitionOutcome; document?: false } = {}) {
+    const handlers: Record<string, Handler> = {}
+    const model = { getLanguageId: () => 'googlesql', getWordAtPosition: () => ({ word: 'daily', startColumn: 15, endColumn: 20 }), uri: { toString: () => 'q1' }, getVersionId: () => 3 }
+    const dom = { ownerDocument: { defaultView: null }, getBoundingClientRect: () => ({ left: 100, top: 50, right: 900, bottom: 650 }) }
+    const editor = { hasWidgetFocus: () => true, getModel: () => model, getPosition: () => ({ lineNumber: 1, column: 17 }), getDomNode: () => dom, focus: vi.fn() }
+    const sqlDefinition = vi.fn(async () => null)
+    const definition = vi.fn(answer)
+    const openIndexDefinition = vi.fn(async (_found: FoundIndexObject): Promise<IndexDefinitionOutcome> => options.opened ?? 'opened')
+    const scripting = { run: vi.fn(async () => {}), inform: vi.fn() }
+    const peekTabs = { open: vi.fn(() => 'tab-1' as string | undefined) }
+    const peek = { peekAt: vi.fn(() => true), hoverAt: vi.fn(), cancelHover: vi.fn(), getSnapshot: vi.fn(() => ({}) as object) }
+    const connections = { isLive: () => options.live ?? true }
+    const editorPeek = new EditorPeekService({ sqlLanguage: { definition: sqlDefinition } as never, connections, scripting, peek: peek as never, peekTabs, indexDefinition: { definition } as never, openIndexDefinition })
+    languagesContribution({
+      commands: { register: (id: string, handler: Handler) => { handlers[id] = handler; return { dispose: () => {} } } } as never,
+      documents: { get: () => undefined, getSnapshot: () => ({ activeId: 'q1', documents: [{ id: 'q1' }] }), getModel: () => options.document === false ? undefined : model } as never,
+      connections: connections as never, sqlLanguage: { refreshCache: vi.fn() } as never,
+      monaco: { editor: { getEditors: () => [editor] } } as never, editorPeek
+    })
+    return { handlers, definition, sqlDefinition, openIndexDefinition, scripting, peekTabs, peek, editorPeek, model, place: { editor, model, position: { lineNumber: 1, column: 17 } } }
+  }
+
+  it('opens a view\'s or routine\'s free definition in a new query (F12), never Script As or SQL Server\'s lookup', async () => {
+    for (const found of [daily, toCents]) {
+      const f = bigQuery(async () => found)
+      expect(f.handlers['edit.goToDefinition']!.when!()).toBe(true)
+      await f.handlers['edit.goToDefinition']!.run()
+      expect(f.definition).toHaveBeenCalledWith(f.model, { lineNumber: 1, column: 17 }, expect.any(Function))
+      expect(f.openIndexDefinition).toHaveBeenCalledWith(found)
+      expect(f.sqlDefinition).not.toHaveBeenCalled()
+      expect(f.scripting.run).not.toHaveBeenCalled()
+      expect(f.scripting.inform).not.toHaveBeenCalled()
+    }
+    const cut = bigQuery(async () => daily, { opened: 'cut' })
+    await cut.handlers['edit.goToDefinition']!.run()
+    expect(cut.scripting.inform).toHaveBeenCalledWith(definitionMessages.definitionCut('`varia-alpha.sales.daily`'))
+    const none = bigQuery(async () => toCents, { opened: 'none' })
+    await none.handlers['edit.goToDefinition']!.run()
+    expect(none.scripting.inform).toHaveBeenCalledWith(definitionMessages.noStoredDefinition('`varia-alpha.sales.to_cents`'))
+  })
+
+  it('reads no table\'s CREATE statement on F12, which would be a billed query', async () => {
+    const f = bigQuery(async () => orders)
+    await f.handlers['edit.goToDefinition']!.run()
+    expect(f.openIndexDefinition).not.toHaveBeenCalled()
+    expect(f.scripting.run).not.toHaveBeenCalled()
+    expect(f.scripting.inform).toHaveBeenCalledWith(definitionMessages.noFreeDefinition('`varia-alpha.sales.orders`'))
+  })
+
+  it('opens Peek on a view\'s or routine\'s Definition tab (Alt+F12, Ctrl+click), and a table\'s on the tab it opens today', async () => {
+    const view = bigQuery(async () => daily)
+    await view.handlers['edit.peekDefinition']!.run()
+    expect(view.peek.peekAt).toHaveBeenCalledWith(indexObjectNode(daily), expect.anything(), 'keyboard', 'definition')
+    expect(indexObjectNode(daily)).toMatchObject({ id: -1, connectionId: 'c1', kind: 'bqView', ref: { type: 'object', object: { kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' } } })
+    await view.handlers['edit.openPeekTab']!.run()
+    expect(view.peekTabs.open).toHaveBeenCalledWith(indexObjectNode(daily), 'definition')
+    expect(indexObjectNode(toCents)).toMatchObject({ kind: 'bqRoutine', subtype: 'scalar' })
+    const table = bigQuery(async () => orders)
+    await table.handlers['edit.peekDefinition']!.run()
+    expect(table.peek.peekAt).toHaveBeenCalledWith(indexObjectNode(orders), expect.anything(), 'keyboard', undefined)
+    await table.handlers['edit.openPeekTab']!.run()
+    expect(table.peekTabs.open).toHaveBeenCalledWith(indexObjectNode(orders), undefined)
+    for (const f of [view, table]) expect(f.openIndexDefinition).not.toHaveBeenCalled()
+    // A model is not something Peek shows.
+    expect(indexObjectNode({ ...orders, kind: 'bqModel' })).toBeUndefined()
+  })
+
+  it('answers no object, a lost connection, a failure and a stale answer quietly', async () => {
+    const notFound = bigQuery(async () => null)
+    await notFound.handlers['edit.goToDefinition']!.run()
+    expect(notFound.scripting.inform).toHaveBeenCalledWith('No definition found for daily.')
+    const lost = bigQuery(async () => daily, { live: false })
+    await lost.handlers['edit.peekDefinition']!.run()
+    expect(lost.scripting.inform).toHaveBeenCalledWith(definitionErrors.connectBigQueryFirst)
+    expect(lost.peek.peekAt).not.toHaveBeenCalled()
+    for (const error of [definitionErrors.connectBigQueryFirst, definitionErrors.indexUnavailable]) {
+      const failed = bigQuery(async () => { throw new Error(error) })
+      await failed.handlers['edit.goToDefinition']!.run()
+      expect(failed.scripting.inform).toHaveBeenCalledWith(error)
+    }
+    // A model the index found: Peek does not describe one, and it has no free definition.
+    const model = bigQuery(async () => ({ ...orders, kind: 'bqModel', name: 'churn' }))
+    await model.handlers['edit.peekDefinition']!.run()
+    expect(model.scripting.inform).toHaveBeenCalledWith(definitionMessages.notPeekable('`varia-alpha.sales.churn`'))
+    await model.handlers['edit.goToDefinition']!.run()
+    expect(model.scripting.inform).toHaveBeenLastCalledWith(definitionMessages.notScriptable('`varia-alpha.sales.churn`'))
+    expect(model.peek.peekAt).not.toHaveBeenCalled()
+    // BigQuery Properties' read-only Definition editor is no query tab: the commands are not offered there.
+    const properties = bigQuery(async () => daily, { document: false })
+    for (const id of ['edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab']) expect(properties.handlers[id]!.when!(), id).toBe(false)
+    const readFails = bigQuery(async () => daily)
+    readFails.openIndexDefinition.mockRejectedValueOnce(new Error('Not found: Table varia-alpha:sales.daily'))
+    await readFails.handlers['edit.goToDefinition']!.run()
+    expect(readFails.scripting.inform).toHaveBeenCalledWith(definitionMessages.failed('Not found: Table varia-alpha:sales.daily'))
+    const stale = bigQuery(async () => undefined)
+    await stale.handlers['edit.goToDefinition']!.run()
+    expect(stale.scripting.inform).not.toHaveBeenCalled()
+    // A hover says nothing either way.
+    const quiet = bigQuery(async () => null)
+    await quiet.editorPeek.run('card', quiet.place as never, 'hover')
+    expect(quiet.scripting.inform).not.toHaveBeenCalled()
+  })
+
+  it('peeks on Ctrl+hover, skipping GoogleSQL\'s reserved keywords', async () => {
+    const f = bigQuery(async () => daily)
+    f.editorPeek.hover({ ...f.place, model: { ...f.model, getWordAtPosition: () => ({ word: 'qualify', startColumn: 1, endColumn: 8 }) } } as never)
+    expect(f.peek.hoverAt).not.toHaveBeenCalled()
+    f.editorPeek.hover(f.place as never)
+    const [, open] = f.peek.hoverAt.mock.calls[0] as unknown as [string, () => void]
+    open()
+    await vi.waitFor(() => expect(f.peek.peekAt).toHaveBeenCalledWith(indexObjectNode(daily), expect.anything(), 'hover', 'definition'))
   })
 })

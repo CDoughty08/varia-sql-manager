@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (451)
+## Commands (453)
 
 ### File
 
@@ -444,6 +444,8 @@ keys it uses are listed below.
 | Previous Panel (not in the palette) | `activity.previousPane` | Shift+F6 (`activityMonitorFocus`) | Shift+F6 (`activityMonitorFocus`) | ⇧F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
 | Session Details… | `activity.sessionDetails` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Details… |
 | Kill Process… | `activity.killProcess` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Kill Process… |
+| Open Job | `activity.openJob` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Open Job |
+| Stop Job | `activity.stopJob` | — | — | — | `activeDocumentIsActivityMonitor` | Query Output context menu › Stop Job |
 | Close Activity Monitor | `activity.close` | Shift+Escape (`activityMonitorFocus`) | Shift+Escape (`activityMonitorFocus`) | ⇧⎋ (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !documentBusy` | — |
 
 ### SQL Server Agent
@@ -1036,6 +1038,8 @@ Right-click the results grid or Messages, or press Shift+F10 or the context-menu
 | --- | --- | --- | --- |
 | `0_session` | Detai**l**s… | `activity.sessionDetails` | `outputView == 'live' && outputLiveRows == 'session'` |
 | `0_session` | **K**ill Process… | `activity.killProcess` | `outputView == 'live' && outputLiveRows == 'session'` |
+| `0_session` | Open **J**ob | `activity.openJob` | `outputView == 'live' && outputLiveRows == 'session'` |
+| `0_session` | Sto**p** Job | `activity.stopJob` | `outputView == 'live' && outputLiveRows == 'session'` |
 | `1_copy` | **C**opy | `output.copy` | Always |
 | `1_copy` | Copy with **H**eaders | `output.copyWithHeaders` | `outputView == 'grid' \|\| outputView == 'live'` |
 | `1_copy` | Cop**y** Column Name | `output.copyColumnName` | `outputView == 'grid' \|\| outputView == 'live'` |

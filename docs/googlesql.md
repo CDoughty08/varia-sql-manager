@@ -16,7 +16,8 @@ of tab: only its language, its colours and its signature help differ.
 - **Highlighting.** Backtick identifiers with dots and dashes (`` `my-proj.dataset.table` ``), `r`, `b`, `rb` and `br`
   string prefixes, triple-quoted strings, `--`, `#` and `/* */` comments, `@param` and `@@system_variable`,
   `STRUCT<…>`, `ARRAY<…>` and `RANGE<…>` types, and the keywords below. Function names are coloured where they are called,
-  since many (`DATE`, `LEFT`, `FORMAT`) are common column names too; a name after a dot is always a name. The colours
+  since many (`DATE`, `LEFT`, `FORMAT`) are common column names too; a name after a dot is always a name, except a
+  namespaced function's (`NET.HOST(`, `SAFE.NET.HOST(`). The colours
   are the SQL syntax colours of the theme.
 - **Brackets and quotes.** `(` and `[` pair and match; quotes and backticks close themselves outside strings and
   comments. Toggle Comment uses `--`.

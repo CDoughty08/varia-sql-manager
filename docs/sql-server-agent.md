@@ -153,6 +153,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   read cut at its cap (`listRows`) makes the checks over it say they checked only the first rows, a pass there becomes a
   note, and the Jobs and Alerts tiles show the count with a +. The checks are
   computed in the renderer from the raw facts.
+- **Activity Monitor job links** (docs/activity-monitor.md › SQL Server Agent jobs). A session running a job step shows the
+  job and step in the Activity Monitor's Agent Job column, a link to the job document at History; Open Job and Stop Job are on
+  the session's menu.
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the
