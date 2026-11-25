@@ -240,7 +240,7 @@ export function referencedBigQueryProjects(sql: string): string[] {
         else if (createHeader === 'create') createHeader = token.upper === 'TABLE' ? 'table' : createTableModifiers.has(token.upper) ? 'create' : 'none'
         else if (createHeader === 'table' && createTableEndWords.has(token.upper)) createHeader = 'none'
       }
-      if (token.upper === 'FROM' && !parenExtract.at(-1)) { inFrom = true; continue }
+      if (token.upper === 'FROM' && !parenExtract.at(-1) && !(prev?.kind === 'word' && prev.upper === 'DISTINCT')) { inFrom = true; continue }
       if (token.upper === 'JOIN') { inFrom = true; continue }
       if (fromEndWords.has(token.upper)) { inFrom = false; continue }
     }
@@ -249,8 +249,9 @@ export function referencedBigQueryProjects(sql: string): string[] {
     // Do not start mid-chain after a dot (already consumed as part of the preceding chain).
     if (isPunct(prev, '.')) continue
 
+    const isDistinctFrom = prev?.kind === 'word' && prev.upper === 'FROM' && toks[index - 2]?.kind === 'word' && toks[index - 2].upper === 'DISTINCT'
     const isCreateTableLike = createHeader === 'table' && fromStack.length === 0 && prev?.kind === 'word' && prev.upper === 'LIKE'
-    const isObjectPos = (prev?.kind === 'word' && objectLeadWords.has(prev.upper) && !(prev.upper === 'FROM' && parenExtract.at(-1)))
+    const isObjectPos = (prev?.kind === 'word' && objectLeadWords.has(prev.upper) && !(prev.upper === 'FROM' && parenExtract.at(-1)) && !isDistinctFrom)
       || isCreateTableLike
       || (inFrom && isPunct(prev, ','))
     if (isCreateTableLike) createHeader = 'none'

@@ -114,12 +114,14 @@ export class ConnectionWorkspaceSealer {
       if (key.length !== keyBytes) return false
       const actual = Buffer.from(seal.mac)
       const matches = (expected: Buffer) => expected.length === actual.length && timingSafeEqual(expected, actual)
-      if (matches(Buffer.from(mac(key, workspace))) || matches(Buffer.from(legacyMac(key, workspace)))) return true
-      if (legacyExtraByTarget?.size) {
-        return matches(Buffer.from(legacyExtraMac(key, workspace, legacyExtraByTarget, false)))
-          || matches(Buffer.from(legacyExtraMac(key, workspace, legacyExtraByTarget, true)))
+      // If any silent target had legacy extraProjects stripped on read, the seal MUST cover those extraProjects —
+      // never fall back to matching the post-upgrade MAC without them, or an external writer could inject extraProjects.
+      const hasSilentLegacyExtra = !!legacyExtraByTarget?.size && workspace.targets.some(target => silent(target) && legacyExtraByTarget.has(target.id))
+      if (hasSilentLegacyExtra) {
+        return matches(Buffer.from(legacyExtraMac(key, workspace, legacyExtraByTarget!, false)))
+          || matches(Buffer.from(legacyExtraMac(key, workspace, legacyExtraByTarget!, true)))
       }
-      return false
+      return matches(Buffer.from(mac(key, workspace))) || matches(Buffer.from(legacyMac(key, workspace)))
     } catch { return false }
   }
 }

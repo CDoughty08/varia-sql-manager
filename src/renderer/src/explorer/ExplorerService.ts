@@ -660,6 +660,17 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
     return !!principal && !!this.bigQueryStarred?.isStarred(principal, project)
   }
+  /** Drops session-only projects that are now the connection's billing project or starred, reclaiming slots toward the per-connection cap. */
+  private pruneBigQuerySessionProjects(connectionId: string): void {
+    const set = this.sessionProjects.get(connectionId)
+    if (!set) return
+    const connection = this.connectionOf(connectionId)
+    const billing = connection?.options.provider === 'bigquery' ? connection.options.project : undefined
+    for (const project of [...set]) {
+      if (project === billing || this.isBigQueryProjectStarred(connectionId, project)) set.delete(project)
+    }
+    if (!set.size) this.sessionProjects.delete(connectionId)
+  }
   /**
    * Ensures `project` appears under a BigQuery server node for this session (e.g. before `seek` / Reveal in Object Explorer):
    * adds it to `sessionProjects` when it is neither the billing project nor already starred, and reconciles the server node's
@@ -668,6 +679,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   ensureBigQueryProject(connectionId: string, project: string): void {
     const connection = this.connectionOf(connectionId)
     if (!connection || connection.options.provider !== 'bigquery' || !bigQueryProjectSchema.safeParse(project).success) return
+    this.pruneBigQuerySessionProjects(connectionId)
     if (project === connection.options.project || this.isBigQueryProjectStarred(connectionId, project)) return
     let set = this.sessionProjects.get(connectionId)
     if (set?.has(project)) { this.reconcileBigQueryProjects(connectionId); return }
@@ -687,6 +699,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   syncBigQueryReferencedProjects(connectionId: string, projects: readonly string[]): void {
     const connection = this.connectionOf(connectionId)
     if (!connection || connection.options.provider !== 'bigquery' || !projects.length) return
+    this.pruneBigQuerySessionProjects(connectionId)
     let set = this.sessionProjects.get(connectionId), changed = false
     for (const project of projects) {
       if (!bigQueryProjectSchema.safeParse(project).success) continue
@@ -1531,6 +1544,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   /** Reconciles a loaded BigQuery server's project children in memory so star/unstar and `ensureBigQueryProject` take effect immediately. */
   private reconcileBigQueryProjects(connectionId: string): void {
+    this.pruneBigQuerySessionProjects(connectionId)
     const rootId = this.rootByConnection.get(connectionId), root = rootId === undefined ? undefined : this.nodes.get(rootId)
     if (!root || root.lost || root.children === undefined) return
     const wires = this.bigQueryServerWiresFor(connectionId)

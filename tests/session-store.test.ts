@@ -445,6 +445,23 @@ describe('the hot exit session store', () => {
     // A tampered seal still fails closed and strips expectedPrincipal!
     const tampered = await sealer.trusted(taken!.workspace!, { ...taken!.seal!, mac: '0'.repeat(64) }, legacyExtra)
     expect(tampered.targets[0]?.expectedPrincipal).toBeUndefined()
+    // A post-upgrade sealed target with attacker-injected extraProjects MUST NOT verify against the post-upgrade MAC.
+    const postUpgradeWorkspace = {
+      version: 1 as const,
+      targets: [
+        {
+          id: pinnedId,
+          options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' as const },
+          inExplorer: true, resumeWanted: true, details: { autoReconnect: 'inherit' as const },
+          expectedPrincipal: { provider: 'bigquery' as const, project: 'varia-alpha', principal: ada }
+        }
+      ]
+    }
+    const postUpgradeSeal = await sealer.seal(postUpgradeWorkspace)
+    expect(postUpgradeSeal).toBeDefined()
+    const injectedExtra = new Map<string, readonly string[]>([[pinnedId, ['attacker-proj']]])
+    const rejectedInjection = await sealer.trusted(postUpgradeWorkspace, postUpgradeSeal, injectedExtra)
+    expect(rejectedInjection.targets[0]?.expectedPrincipal).toBeUndefined()
     // Oversized legacy extraProjects (> 16) quarantines instead of bypassing the pre-upgrade cap.
     const freshFolder = join(directory, 'SessionOversized')
     await mkdir(freshFolder, { recursive: true })

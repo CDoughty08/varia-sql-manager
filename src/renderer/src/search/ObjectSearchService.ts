@@ -480,9 +480,11 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Refreshes any starred project for `connectionId` that was not yet included when its index started (e.g. after startup/migration starred load). */
   syncBigQueryStarred(connectionId: string): void {
     if (this.disposed || !this.getSnapshot().indexes[connectionId]) return
+    const connection = this.o.connections.get(connectionId)
+    const billing = connection?.options.provider === 'bigquery' ? connection.options.project : undefined
     const starred = this.o.starredProjects?.(connectionId) ?? []
     for (const project of starred) {
-      if (this.indexedStarred.get(connectionId)?.has(project)) continue
+      if (project === billing || this.indexedStarred.get(connectionId)?.has(project)) continue
       this.refreshBigQuery(connectionId, { scope: { project } })
     }
   }

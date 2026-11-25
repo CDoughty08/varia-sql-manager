@@ -184,7 +184,9 @@ export function explorerContribution({ commands, documents, connections, explore
           const refreshPrincipalProject = (projectId: string) => {
             if (!objectSearch?.refreshBigQuery) return
             for (const candidate of connections.liveBigQuery()) {
-              if (bigQueryPrincipalOf(candidate) === principal) objectSearch.refreshBigQuery(candidate.id, { scope: { project: projectId } })
+              if (bigQueryPrincipalOf(candidate) === principal && (candidate.options.provider !== 'bigquery' || candidate.options.project !== projectId)) {
+                objectSearch.refreshBigQuery(candidate.id, { scope: { project: projectId } })
+              }
             }
           }
           const starAndRefresh = async (projectId: string) => {
@@ -321,7 +323,9 @@ export function explorerContribution({ commands, documents, connections, explore
           if (!result.ok) commands.reportError(result.error)
           else if (wantStarred && objectSearch?.refreshBigQuery) {
             for (const candidate of connections.liveBigQuery()) {
-              if (bigQueryPrincipalOf(candidate) === principal) objectSearch.refreshBigQuery(candidate.id, { scope: { project } })
+              if (bigQueryPrincipalOf(candidate) === principal && (candidate.options.provider !== 'bigquery' || candidate.options.project !== project)) {
+                objectSearch.refreshBigQuery(candidate.id, { scope: { project } })
+              }
             }
           }
         }

@@ -194,13 +194,16 @@ describe('referencedBigQueryProjects', () => {
       '  EXTRACT(YEAR FROM orders.placed.ts)',
       'FROM `real-project-1.sales.orders` t1',
       'JOIN t2 ON t1.arr = [t2.first, array-false-pos.profile.val]',
-      'WHERE t1.email LIKE like-false-pos.profile.pattern;',
+      'WHERE t1.email LIKE like-false-pos.profile.pattern',
+      '  AND t1.code IS NOT DISTINCT FROM distinct-false-pos.profile.code;',
+      'SELECT t1.x IS DISTINCT FROM t2.y, select-false-pos.address.city FROM `real-project-2.sales.orders` t1;',
       'SELECT * FROM t1 JOIN t2 USING (id), using-comma-proj.sales.orders;',
       'CREATE OR REPLACE TEMP TABLE dst-create-proj.sales.copy LIKE like-src-proj.sales.orders;',
       'DELETE del-direct-proj.sales.orders WHERE id = 1;'
     ].join('\n')
     expect(referencedBigQueryProjects(sql)).toEqual([
       'real-project-1',
+      'real-project-2',
       'using-comma-proj',
       'dst-create-proj',
       'like-src-proj',

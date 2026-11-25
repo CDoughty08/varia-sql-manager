@@ -479,13 +479,34 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     const starredHtml = renderRow(base('starred', 'varia-beta'))
     expect(starredHtml).toContain('oe-star-button starred')
     expect(starredHtml).toContain('data-icon="star-full"')
-    expect(starredHtml).toContain('aria-label="Unstar varia-beta"')
+    expect(starredHtml).toContain('aria-label="Star varia-beta"')
+    expect(starredHtml).toContain('aria-pressed="true"')
     const sessionHtml = renderRow(base('session', 'bigquery-public-data'))
     expect(sessionHtml).toContain('oe-star-button')
     expect(sessionHtml).toContain('data-icon="star-empty"')
     expect(sessionHtml).toContain('aria-label="Star bigquery-public-data"')
+    expect(sessionHtml).toContain('aria-pressed="false"')
     // Clicking the star button does not trigger rowClick (Open Peek as Tab).
     rowClick(actions, 2, { detail: 1, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, target: { closest: (sel: string) => sel.includes('.oe-star-button') ? {} : null } as unknown as EventTarget })
     expect(actions.click).not.toHaveBeenCalled()
+  })
+
+  it('reclaims session project slots when session projects are starred', async () => {
+    const { explorer, bigQueryStarred } = setupExplorer([])
+    await bigQueryStarred.load()
+    await Promise.resolve()
+    await Promise.resolve()
+    const root = explorer.node(explorer.rootIds[0]!)!
+    // Fill all 50 session project slots.
+    for (let i = 0; i < 50; i++) explorer.ensureBigQueryProject(connectionId, `session-proj-${String(i).padStart(2, '0')}`)
+    // Cap blocks a 51st session project while 50 unstarred session projects exist.
+    explorer.ensureBigQueryProject(connectionId, 'session-proj-50')
+    expect(root.children?.map(child => child.label)).not.toContain('session-proj-50')
+    // Starring one of the session projects reclaims its slot so a new session project can be revealed.
+    await bigQueryStarred.setStarred(ada, 'session-proj-00', true)
+    explorer.ensureBigQueryProject(connectionId, 'session-proj-50')
+    expect(root.children?.map(child => child.label)).toContain('session-proj-50')
+    explorer.dispose()
+    bigQueryStarred.dispose()
   })
 })

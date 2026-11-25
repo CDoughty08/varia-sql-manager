@@ -46,12 +46,9 @@ function migrateLegacyLibrary(raw: unknown): { value: unknown; migrated: boolean
     return { ...entry, options: rest }
   })
   if (!migrated) return { value: raw, migrated: false }
-  if (record.migratedProjects !== undefined && (!Array.isArray(record.migratedProjects) || !record.migratedProjects.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) {
-    return { value: raw, migrated: false }
-  }
-  const existing: string[] = []
-  for (const project of (record.migratedProjects as string[] | undefined) ?? []) if (!existing.includes(project)) existing.push(project)
-  const merged: string[] = [...existing]
+  const existingMigrated = bigQueryLibraryFileSchema.shape.migratedProjects.safeParse(record.migratedProjects)
+  if (!existingMigrated.success) return { value: raw, migrated: false }
+  const merged: string[] = [...existingMigrated.data ?? []]
   for (const project of collected) if (!merged.includes(project) && merged.length < bigQueryLibraryLimits.starredPerPrincipal) merged.push(project)
   const next: Record<string, unknown> = { ...record, profiles }
   if (merged.length) next.migratedProjects = merged

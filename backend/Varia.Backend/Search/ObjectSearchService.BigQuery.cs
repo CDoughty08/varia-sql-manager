@@ -65,9 +65,10 @@ internal sealed partial class ObjectSearchService
     /// and the reads held now. A connection with no index yet still answers its billing project.</summary>
     internal BigQueryLookup LookupBigQuery(string connectionId, string billing)
     {
-        if (!states.TryGetValue(connectionId, out var state) || !state.BigQuery) return new(billing, [], [], null, [], false, false, budget, Changed);
+        if (!states.TryGetValue(connectionId, out var state)) return new(billing, [], [], null, [], false, false, budget, Changed);
         lock (state.Gate)
         {
+            if (!state.BigQuery) return new(billing, [], [], null, [], false, false, budget, Changed);
             var databases = state.Index.Databases;
             List<string> others =
             [
@@ -157,8 +158,6 @@ internal sealed partial class ObjectSearchService
             {
                 state.Definitions = definitions;
                 state.Bulk = null;
-                state.StarredProjects = [.. starred];
-                if (!allProjects) state.DiscoveredProjects = [];
             }
             knownProjects = [billing, .. state.StarredProjects, .. state.DiscoveredProjects];
             state.Databases = 0;
@@ -290,6 +289,10 @@ internal sealed partial class ObjectSearchService
                                 Interlocked.CompareExchange(ref failed, skip, null);
                             }
                         }
+                        catch (Exception error) when (loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                        {
+                            throw new OperationCanceledException(loop);
+                        }
                         finally
                         {
                             slots.Release();
@@ -332,6 +335,10 @@ internal sealed partial class ObjectSearchService
                     }
                     Report(tickDone(), total, "names", false);
                     return;
+                }
+                catch (Exception error) when (loop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                {
+                    throw new OperationCanceledException(loop);
                 }
                 var key = project + "\u0001" + dataset;
                 var force = scope is not null || marked || stale.Contains(target);
@@ -381,7 +388,21 @@ internal sealed partial class ObjectSearchService
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || cut
                         || onlyDataset is { } kept && kept != dataset);
                 }
-                if (!cut && onlyDataset is null) PruneProjectStale(project, names);
+                if (!cut)
+                {
+                    if (onlyDataset is null) PruneProjectStale(project, names);
+                    else if (!names.Contains(onlyDataset))
+                    {
+                        lock (state.Gate)
+                        {
+                            if (Current())
+                            {
+                                state.Stale.Remove((project, onlyDataset));
+                                stale.Remove((project, onlyDataset));
+                            }
+                        }
+                    }
+                }
             }
 
             if (scope is not null || staleOnly)
@@ -837,7 +858,7 @@ internal sealed partial class ObjectSearchService
             finishedBuild = true;
             return new(Status(state), watch.ElapsedMilliseconds);
         }
-        catch (OperationCanceledException)
+        catch (Exception error) when (error is OperationCanceledException || (stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" }))
         {
             throw new RequestException("CANCELLED", "The object index build was stopped.");
         }

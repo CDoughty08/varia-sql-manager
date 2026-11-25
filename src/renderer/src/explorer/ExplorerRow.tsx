@@ -407,7 +407,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const starRole = node.kind === 'bqProject' && !node.lost && (node.bigQueryProjectRole === 'starred' || node.bigQueryProjectRole === 'session') ? node.bigQueryProjectRole : undefined
   const starAction = starRole ? <span className="oe-actions">
     <button type="button" tabIndex={-1} className={`oe-star-button${starRole === 'starred' ? ' starred' : ''}`}
-      aria-label={starRole === 'starred' ? `Unstar ${node.label}` : `Star ${node.label}`}
+      aria-label={`Star ${node.label}`}
       aria-pressed={starRole === 'starred'}
       title={starRole === 'starred' ? 'Unstar project' : 'Star project to keep in Object Explorer'}
       onMouseDown={stop} onDoubleClick={stop}

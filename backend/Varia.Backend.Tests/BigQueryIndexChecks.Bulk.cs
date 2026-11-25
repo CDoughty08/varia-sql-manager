@@ -386,7 +386,31 @@ internal static partial class BigQueryIndexChecks
         check(fellBack.Status.Bulk is { Locations: 0, Failed: 1, Code: "PERMISSION_DENIED" } && Entries(failing.Service, failing.ConnectionId, "varia-alpha", "sales").SequenceEqual(rest)
             && failingJobs.Created.Count == 1 && failingJobs.Cancels == 1 && fellBack.Status.Skipped.Count == 0,
             $"a refused bulk read falls back to the free calls, fills the same entries, starts no further job, cancels its own and is reported once ({fellBack.Status.Bulk?.Code}, {failingJobs.Created.Count} jobs, {failingJobs.Cancels} cancels)");
-        check(harness.Fake.Unmatched.IsEmpty && failing.Fake.Unmatched.IsEmpty,
-            "every bulk request had a route: " + string.Join(", ", harness.Fake.Unmatched.Concat(failing.Fake.Unmatched).Select(request => request.Method + " " + request.Url)));
+
+        // Wave 3 bulk path covers starred projects alongside Wave 1 billing project, sharing BigQueryBulkBudget.
+        using var starredBulk = new Harness();
+        var starredJobs = new BulkJobs();
+        starredJobs.Route(starredBulk.Fake);
+        await starredBulk.ConnectAsync(key);
+        var builtStarred = await starredBulk.Index(more =>
+        {
+            more["allProjects"] = false;
+            more["starredProjects"] = new JsonArray("varia-beta");
+            more["bulk"] = new JsonObject
+            {
+                ["locations"] = new JsonArray(
+                    new JsonObject { ["project"] = "varia-alpha", ["location"] = "US" },
+                    new JsonObject { ["project"] = "varia-beta", ["location"] = "US" }),
+                ["budgetBytes"] = 200L << 20
+            };
+        });
+        check(builtStarred.Status.Bulk is { Locations: 2, Failed: 0 }
+            && starredJobs.Created.Any(job => job.Sql.Contains("`varia-alpha`", StringComparison.Ordinal))
+            && starredJobs.Created.Any(job => job.Sql.Contains("`varia-beta`", StringComparison.Ordinal))
+            && starredBulk.Service.Search.HeldOf(starredBulk.ConnectionId).Any(read => read.Database == "varia-beta" && read.Dataset == "census"),
+            $"wave 3 bulk reads starred project alongside billing project ({builtStarred.Status.Bulk?.Locations} locations, {starredJobs.Created.Count} jobs)");
+
+        check(harness.Fake.Unmatched.IsEmpty && failing.Fake.Unmatched.IsEmpty && starredBulk.Fake.Unmatched.IsEmpty,
+            "every bulk request had a route: " + string.Join(", ", harness.Fake.Unmatched.Concat(failing.Fake.Unmatched).Concat(starredBulk.Fake.Unmatched).Select(request => request.Method + " " + request.Url)));
     }
 }

@@ -232,6 +232,14 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     }))
     const oversized = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
     expect(oversized.warning).toContain('invalid')
+    // Duplicate migratedProjects alongside valid extraProjects quarantines instead of silently deduplicating.
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      profiles: [{ id: legacyId, options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: ['varia-beta'] }, favorite: false }],
+      migratedProjects: ['varia-gamma', 'varia-gamma']
+    }))
+    const duplicateMigrated = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).load()
+    expect(duplicateMigrated.warning).toContain('invalid')
   })
 })
 

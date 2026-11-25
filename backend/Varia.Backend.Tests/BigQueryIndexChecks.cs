@@ -683,6 +683,107 @@ internal static partial class BigQueryIndexChecks
             check(cleanScope.Status.NamesOnly is ["disc-02", "disc-03"],
                 "clean whole-project scoped refresh clears only that project from NamesOnly");
         }
+
+        // 6. Wave 2 budget early-stop racing with a sibling non-OCE API error still completes cleanly (does not crash with TIMEOUT).
+        {
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c", "disc-d"], tablesPerDiscovered: 80, columnsPerTable: 0)
+            {
+                ThrowOnCancelObjectsProject = "disc-b"
+            };
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
+            var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            check(search.HeldOf(id).Any(read => read.Database == "varia-alpha" && read.Dataset == "sales")
+                && result.Status.Skipped.Count(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }) == 1,
+                "wave 2 early-stop survives a sibling non-OCE API error racing with cancellation");
+        }
+
+        // 7. Dataset-scoped refresh of a dropped stale dataset on a session-only project clears its stale mark (no leaked StaleMark).
+        {
+            var source = new FakeBudgetSource(discoveredProjects: [], tablesPerDiscovered: 1, columnsPerTable: 1)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["session-only-proj"] = ["adhoc"] }
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), AllProjects: false), source, CancellationToken.None);
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("session-only-proj")), source, CancellationToken.None);
+            search.MarkStale(id, "session-only-proj", "adhoc");
+            var hadMark = search.StaleMarkOf(id) is not null && search.StaleOf(id).Contains(("session-only-proj", "adhoc"));
+            source.CustomDatasets["session-only-proj"] = [];
+            var refreshed = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("session-only-proj", "adhoc")), source, CancellationToken.None);
+            check(hadMark
+                && !search.HeldOf(id).Any(read => read.Database == "session-only-proj")
+                && search.StaleOf(id).Count == 0
+                && search.StaleMarkOf(id) is null
+                && refreshed.Status.StaleMark is null,
+                "dataset-scoped refresh of a dropped stale dataset clears its stale mark even for session-only projects");
+        }
+
+        // 8. Full rebuild with priorNamesOnly retains failed projects, clears clean ones, and drops newly noise-filtered projects + stale marks.
+        {
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-01", "disc-02", "disc-03"], tablesPerDiscovered: 1, columnsPerTable: 300);
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 25_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
+            var build1 = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var hadNamesOnly = build1.Status.NamesOnly is { Count: > 0 } && build1.Status.NamesOnly.Contains("disc-02", StringComparer.Ordinal);
+
+            // Shrink tables so full details fit; fail DatasetsAsync on disc-02 so it stays NamesOnly while others clear.
+            source.ColumnsPerTable = 2;
+            source.FailDatasetsForProject = ("disc-02", "TIMEOUT");
+            var build2 = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var retainedFailed = build2.Status.NamesOnly is ["disc-02"];
+
+            // Clean full rebuild clears NamesOnly completely.
+            source.FailDatasetsForProject = null;
+            var build3 = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var clearedAll = build3.Status.NamesOnly is null;
+
+            // Previously indexed discovered project transitioning to noise-filtered (API_DISABLED) drops its datasets, stale marks, and lookup presence.
+            search.MarkStale(id, "disc-01", "ds");
+            search.MarkProjectStale(id, "disc-01");
+            source.FailDatasetsForProject = ("disc-01", "API_DISABLED");
+            var build4 = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var lookup4 = search.LookupBigQuery(id, "varia-alpha");
+            check(hadNamesOnly && retainedFailed && clearedAll
+                && !search.HeldOf(id).Any(read => read.Database == "disc-01")
+                && !search.StaleOf(id).Any(item => item.Project == "disc-01")
+                && !search.StaleProjectsOf(id).Contains("disc-01")
+                && !lookup4.Projects.Contains("disc-01")
+                && !build4.Status.Skipped.Any(skip => skip.Project == "disc-01"),
+                "full rebuild retains priorNamesOnly on failed re-reads, clears on clean rebuild, and drops datasets/stale marks when a discovered project becomes API_DISABLED");
+        }
+
+        // 9. Superseded concurrent build answers CANCELLED without corrupting the superseding build or leaking index memory.
+        {
+            var enteredBuild1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseBuild1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var callCount = 0;
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-01"], tablesPerDiscovered: 2, columnsPerTable: 3)
+            {
+                OnObjectsAsync = async (project, _) =>
+                {
+                    if (project == "varia-alpha" && Interlocked.Increment(ref callCount) == 1)
+                    {
+                        enteredBuild1.TrySetResult();
+                        await releaseBuild1.Task;
+                    }
+                }
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var build1Task = search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            await enteredBuild1.Task;
+            var build2 = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            releaseBuild1.TrySetResult();
+            var build1Cancelled = false;
+            try { await build1Task; }
+            catch (RequestException error) when (error.Code == "CANCELLED") { build1Cancelled = true; }
+            var heldAfter = search.HeldOf(id).Count;
+            search.Forget(id);
+            check(build1Cancelled && build2.Status.State == "ready" && heldAfter == 2 && search.MemoryUsed == 0,
+                $"superseded concurrent build answers CANCELLED ({build1Cancelled}), leaves superseding build intact ({heldAfter} datasets), and leaks 0 bytes on Forget ({search.MemoryUsed})");
+        }
     }
 
     sealed class UnusedHost : IObjectSearchHost
@@ -697,15 +798,34 @@ internal static partial class BigQueryIndexChecks
         private int discoveredObjectCalls, discoveredDetailCalls;
         public int DiscoveredObjectCalls => Volatile.Read(ref discoveredObjectCalls);
         public int DiscoveredDetailCalls => Volatile.Read(ref discoveredDetailCalls);
+        public int ColumnsPerTable { get; set; } = columnsPerTable;
         public string? FailTableForProject { get; set; }
+        public (string Project, string Code)? FailDatasetsForProject { get; set; }
+        public string? ThrowOnCancelObjectsProject { get; set; }
+        public Dictionary<string, IReadOnlyList<string>>? CustomDatasets { get; set; }
+        public Func<string, CancellationToken, Task>? OnObjectsAsync { get; set; }
 
         public string BillingProject(string connectionId) => "varia-alpha";
         public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token) =>
             Task.FromResult(new BigQueryProjectDiscovery([.. discoveredProjects.Take(maxProjects)], discoveredProjects.Count > maxProjects));
-        public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token) =>
-            Task.FromResult(new BigQueryDatasetList([project == "varia-alpha" ? "sales" : "ds"], false));
+        public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token)
+        {
+            if (FailDatasetsForProject is { } fail && fail.Project == project)
+                throw new RequestException(fail.Code, "Simulated datasets failure.");
+            if (CustomDatasets is not null && CustomDatasets.TryGetValue(project, out var custom))
+                return Task.FromResult(new BigQueryDatasetList([.. custom], false));
+            return Task.FromResult(new BigQueryDatasetList([project == "varia-alpha" ? "sales" : "ds"], false));
+        }
         public async Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)
         {
+            if (OnObjectsAsync is not null) await OnObjectsAsync(project, token);
+            if (project == ThrowOnCancelObjectsProject)
+            {
+                var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = token.Register(() => canceled.TrySetResult());
+                await canceled.Task;
+                throw new RequestException("TIMEOUT", "Simulated non-OCE sibling failure after cancel.");
+            }
             if (project != "varia-alpha")
             {
                 Interlocked.Increment(ref discoveredObjectCalls);
@@ -727,7 +847,7 @@ internal static partial class BigQueryIndexChecks
                 Interlocked.Increment(ref discoveredDetailCalls);
                 await Task.Yield();
             }
-            var count = project == "varia-alpha" ? 2 : columnsPerTable;
+            var count = project == "varia-alpha" ? 2 : ColumnsPerTable;
             var fields = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableFieldSchema
             {
                 Name = "col_" + project + "_" + index, Type = "STRING", Mode = "NULLABLE"

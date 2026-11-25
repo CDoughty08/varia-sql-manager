@@ -1254,8 +1254,8 @@ describe('ObjectSearchService', () => {
     expect(calls.index[1]).toMatchObject({ starredProjects: ['varia-beta'] })
     pendingIndex[1]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
-    // syncBigQueryStarred skips varia-beta (already built) and refreshes only newly added varia-gamma.
-    starred = ['varia-beta', 'varia-gamma']
+    // syncBigQueryStarred skips varia-alpha (own billing project) and varia-beta (already built) and refreshes only varia-gamma.
+    starred = ['varia-alpha', 'varia-beta', 'varia-gamma']
     service.syncBigQueryStarred('bq')
     expect(calls.index).toHaveLength(3)
     expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-gamma' } })
