@@ -33,7 +33,7 @@ page.on('pageerror', error => failures.push(error.message))
 const status = () => outputStatus(page)
 const strip = name => resultGrid(page, name).locator('xpath=..').locator(gridPart.strip)
 /** The strip's text, or '' once the grid shows none (an in-memory result with nothing to say). */
-const stripText = async name => await strip(name).count() ? await strip(name).innerText() : ''
+const stripText = async name => (await strip(name).allInnerTexts()).join(' ')
 const sampleDialog = () => page.getByRole('dialog', { name: 'Load Sample', exact: true })
 /** Opens Load Sample… from the results toolbar's ⋯ menu for the grid that has the focus. */
 async function openSample(name) {

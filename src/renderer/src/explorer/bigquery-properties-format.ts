@@ -1,7 +1,11 @@
 import { formatBytes } from '../../../shared/bigquery/cost'
-import { bigQueryPath } from '../../../shared/bigquery/names'
-import type { BigQueryLayoutInfo, BigQueryProperties, BigQueryPropertyKind, BigQuerySchemaField, BigQueryStorageInfo } from '../../../shared/bigquery/objects'
+import { bigQueryPath, isBigQueryName } from '../../../shared/bigquery/names'
+import type {
+  BigQueryLayoutInfo, BigQueryProperties, BigQueryPropertyKind, BigQueryRoutineArgument,
+  BigQuerySchemaField, BigQueryStorageInfo
+} from '../../../shared/bigquery/objects'
 import { kindSpecs, type NodeSubtype } from '../../../shared/explorer/catalog'
+import type { ObjectRef } from '../../../shared/explorer/refs'
 import type { LocalTableData } from '../../../shared/results/local-table'
 import type { StatusTone } from '../../../shared/theme/tones'
 import type { CapabilityItem } from '../kit/CapabilityChips'
@@ -10,8 +14,11 @@ import type { InspectorKpi } from '../kit/ObjectInspectorFrame'
 import type { RatioSegment } from '../kit/RatioBar'
 import { formatCount, plural } from '../results/status'
 
-/** Canonical tab ids for BigQuery Properties, in owner-agreed inspector order. */
-export type BigQueryPropertiesTabId = 'overview' | 'definition' | 'storage' | 'columns' | 'labels' | 'preview'
+/** Canonical tab ids for BigQuery Properties & Peek, in owner-agreed inspector order. */
+export const bigQueryPropertiesTabIds = ['overview', 'definition', 'storage', 'columns', 'parameters', 'labels', 'preview'] as const
+export type BigQueryPropertiesTabId = typeof bigQueryPropertiesTabIds[number]
+export const isBigQueryPropertiesTabId = (tab: string): tab is BigQueryPropertiesTabId =>
+  (bigQueryPropertiesTabIds as readonly string[]).includes(tab)
 
 export interface BigQueryHeaderPill {
   readonly id: string
@@ -45,14 +52,22 @@ const typeTitles: Readonly<Record<string, string>> = {
   clone: 'Table Clone',
   view: 'View',
   'materialized view': 'Materialized View',
-  'external table': 'External Table'
+  'external table': 'External Table',
+  function: 'Scalar Function',
+  procedure: 'Stored Procedure',
+  'table function': 'Table-Valued Function',
+  'aggregate function': 'Aggregate Function',
+  dataset: 'Dataset',
+  external: 'External Dataset'
 }
 
 const kindSubtitles: Readonly<Record<BigQueryPropertyKind, string>> = {
   bqTable: 'BigQuery Table',
   bqView: 'BigQuery View',
   bqMaterializedView: 'BigQuery Materialized View',
-  bqExternalTable: 'BigQuery External Table'
+  bqExternalTable: 'BigQuery External Table',
+  bqRoutine: 'BigQuery Routine',
+  bqDataset: 'BigQuery Dataset'
 }
 
 /** Human-readable BigQuery object type for the Overview fact grid. */
@@ -69,7 +84,50 @@ export function formatBigQuerySubtitle(kind: BigQueryPropertyKind, rawType?: str
   const key = rawType?.trim().toLowerCase()
   if (key === 'snapshot' || subtype === 'snapshot') return 'BigQuery Snapshot'
   if (key === 'clone' || subtype === 'clone') return 'BigQuery Clone'
+  if (kind === 'bqRoutine') {
+    if (key === 'procedure' || subtype === 'procedure') return 'BigQuery Procedure'
+    if (key === 'table function' || subtype === 'tableValued') return 'BigQuery Table Function'
+    if (key === 'aggregate function') return 'BigQuery Aggregate Function'
+    if (key === 'function') return 'BigQuery Function'
+  }
   return kindSubtitles[kind]
+}
+
+/** Formats a BigQuery duration in milliseconds (e.g. default table/partition expiration) cleanly. */
+export function formatExpirationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return 'None'
+  const dayMs = 86_400_000
+  const hourMs = 3_600_000
+  if (ms >= dayMs) {
+    const days = ms / dayMs
+    const text = Number.isInteger(days) ? formatCount(days) : Number(days.toFixed(2)).toString()
+    return `${text} ${days === 1 ? 'day' : 'days'}`
+  }
+  if (ms >= hourMs) {
+    const hours = ms / hourMs
+    const text = Number.isInteger(hours) ? formatCount(hours) : Number(hours.toFixed(2)).toString()
+    return `${text} ${hours === 1 ? 'hour' : 'hours'}`
+  }
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  return `${formatCount(minutes)} ${minutes === 1 ? 'min' : 'mins'}`
+}
+
+/** Formats BigQuery routine determinism level into readable text. */
+export function formatDeterminismLabel(level?: string): string | undefined {
+  if (!level) return undefined
+  const upper = level.trim().toUpperCase()
+  if (upper === 'DETERMINISTIC') return 'Deterministic'
+  if (upper === 'NOT_DETERMINISTIC') return 'Non-deterministic'
+  return upper ? level : undefined
+}
+
+function parseBigQueryTablePath(fullName?: string): { readonly project: string; readonly dataset: string; readonly name: string } | undefined {
+  if (!fullName) return undefined
+  const parts = fullName.split('.')
+  if (parts.length !== 3) return undefined
+  const [project, dataset, name] = parts
+  if (!isBigQueryName('project', project!) || !isBigQueryName('dataset', dataset!) || !isBigQueryName('table', name!)) return undefined
+  return { project: project!, dataset: dataset!, name: name! }
 }
 
 /** Active logical bytes (total logical minus long-term logical, clamped at 0). */
@@ -142,6 +200,23 @@ export function bigQueryHeaderPills(kind: BigQueryPropertyKind, value?: BigQuery
   else if (kind === 'bqExternalTable' || rawType === 'external table') pills.push({ id: 'external', label: 'External', tone: 'neutral' })
   else if (kind === 'bqMaterializedView') pills.push({ id: 'mv', label: 'Materialized View', tone: 'info' })
 
+  if (kind === 'bqRoutine') {
+    const routine = value?.routine
+    if (routine?.language) pills.push({ id: 'language', label: routine.language, tone: 'info' })
+    const det = formatDeterminismLabel(routine?.determinism)
+    if (det) pills.push({ id: 'determinism', label: det, tone: det === 'Deterministic' ? 'success' : 'warning' })
+    return pills
+  }
+
+  if (kind === 'bqDataset') {
+    if (value?.location) pills.push({ id: 'location', label: value.location, tone: 'neutral' })
+    const ds = value?.dataset
+    if (ds?.kmsKeyName) pills.push({ id: 'cmek', label: 'CMEK', tone: 'info', title: `Customer-managed encryption key: ${ds.kmsKeyName}` })
+    if (ds?.storageBillingModel === 'PHYSICAL') pills.push({ id: 'billing', label: 'Physical billing', tone: 'info' })
+    if (ds?.isCaseInsensitive) pills.push({ id: 'ci', label: 'Case-insensitive', tone: 'neutral' })
+    return pills
+  }
+
   const layout = value?.layout
   if (layout?.partitioning) pills.push({ id: 'partitioned', label: shortPartitionLabel(layout.partitioning), tone: 'running', title: layout.partitioning })
   if (layout?.requirePartitionFilter) pills.push({ id: 'requireFilter', label: 'Require partition filter', tone: 'warning', title: 'Queries must include a filter over the partitioning column.' })
@@ -160,6 +235,27 @@ export function bigQueryHeaderPills(kind: BigQueryPropertyKind, value?: BigQuery
 export function bigQueryKpis(value?: BigQueryProperties): readonly InspectorKpi[] {
   if (!value) return []
   const kpis: InspectorKpi[] = []
+  if (value.routine) {
+    const routine = value.routine
+    if (routine.language) kpis.push({ id: 'language', label: 'Language', value: routine.language })
+    if (routine.returnType) kpis.push({ id: 'returns', label: 'Returns', value: routine.returnType })
+    if (routine.arguments) {
+      const count = routine.arguments.length
+      kpis.push({ id: 'parameters', label: 'Parameters', value: routine.argumentsTruncated ? `${formatCount(count)}+` : formatCount(count) })
+    }
+    const det = formatDeterminismLabel(routine.determinism)
+    if (det) kpis.push({ id: 'determinism', label: 'Determinism', value: det })
+    return kpis
+  }
+  if (value.dataset) {
+    const ds = value.dataset
+    if (value.location) kpis.push({ id: 'location', label: 'Location', value: value.location })
+    if (ds.defaultTableExpirationMs !== undefined) kpis.push({ id: 'tableExpiry', label: 'Default table expiry', value: formatExpirationMs(ds.defaultTableExpirationMs) })
+    if (ds.maxTimeTravelHours !== undefined) kpis.push({ id: 'timeTravel', label: 'Time travel', value: `${formatCount(ds.maxTimeTravelHours)} h` })
+    if (ds.storageBillingModel) kpis.push({ id: 'billing', label: 'Billing model', value: ds.storageBillingModel === 'PHYSICAL' ? 'Physical' : ds.storageBillingModel === 'LOGICAL' ? 'Logical' : ds.storageBillingModel })
+    if (value.labels?.length) kpis.push({ id: 'labels', label: 'Labels', value: formatCount(value.labels.length) })
+    return kpis
+  }
   const storage = value.storage
   if (storage?.rows !== undefined) {
     kpis.push({ id: 'rows', label: 'Rows', value: formatCount(storage.rows) })
@@ -198,6 +294,11 @@ export function bigQueryKpis(value?: BigQueryProperties): readonly InspectorKpi[
   return kpis
 }
 
+/** Whether the Definition tab applies (every BigQuery properties kind except datasets). */
+export function hasDefinitionTab(kind: BigQueryPropertyKind): boolean {
+  return kind !== 'bqDataset'
+}
+
 /** Whether the Storage & Layout tab applies to this object. */
 export function hasStorageOrLayout(value?: BigQueryProperties): boolean {
   if (!value) return false
@@ -209,6 +310,11 @@ export function hasColumnsTab(value?: BigQueryProperties): boolean {
   return !!((value?.schema && value.schema.length > 0) || (value?.columns && value.columns.length > 0))
 }
 
+/** Whether the Parameters tab applies (BigQuery routines with arguments). */
+export function hasParametersTab(value?: BigQueryProperties): boolean {
+  return !!(value?.routine?.arguments && value.routine.arguments.length > 0)
+}
+
 /** Whether the Preview Rows tab applies (stored tables, snapshots and clones via free tabledata.list). */
 export function supportsPreviewTab(kind: BigQueryPropertyKind): boolean {
   return kind === 'bqTable'
@@ -217,10 +323,11 @@ export function supportsPreviewTab(kind: BigQueryPropertyKind): boolean {
 /** Whether a given canonical tab id is currently available for this object and properties payload. */
 export function isBigQueryTabAvailable(tab: BigQueryPropertiesTabId, kind: BigQueryPropertyKind, value?: BigQueryProperties): boolean {
   switch (tab) {
-    case 'overview':
-    case 'definition': return true
+    case 'overview': return true
+    case 'definition': return hasDefinitionTab(kind)
     case 'storage': return hasStorageOrLayout(value)
     case 'columns': return hasColumnsTab(value)
+    case 'parameters': return hasParametersTab(value)
     case 'labels': return !!(value?.labels && value.labels.length > 0)
     case 'preview': return supportsPreviewTab(kind)
   }
@@ -229,17 +336,81 @@ export function isBigQueryTabAvailable(tab: BigQueryPropertiesTabId, kind: BigQu
 /** Identity & Lifecycle facts for the Overview tab. */
 export function bigQueryOverviewFacts(
   object: { readonly kind: BigQueryPropertyKind; readonly project: string; readonly dataset: string; readonly name: string },
-  value: BigQueryProperties
+  value: BigQueryProperties,
+  onFollow?: (target: ObjectRef, label: string) => void
 ): readonly FactItem[] {
+  if (object.kind === 'bqDataset') {
+    const fullName = value.fullName ?? `${object.project}.${object.dataset}`
+    const ds = value.dataset
+    const facts: FactItem[] = [
+      { id: 'fullName', label: 'Full name', value: fullName, mono: true, copyValue: bigQueryPath(object.project, object.dataset) },
+      { id: 'type', label: 'Type', value: formatBigQueryType(object.kind, value.type) },
+      { id: 'project', label: 'Project', value: object.project, mono: true }
+    ]
+    if (value.location) facts.push({ id: 'location', label: 'Location', value: value.location })
+    if (ds?.friendlyName) facts.push({ id: 'friendlyName', label: 'Friendly name', value: ds.friendlyName })
+    if (ds?.defaultTableExpirationMs !== undefined) facts.push({ id: 'defaultTableExpiry', label: 'Default table expiration', value: formatExpirationMs(ds.defaultTableExpirationMs) })
+    if (ds?.defaultPartitionExpirationMs !== undefined) facts.push({ id: 'defaultPartitionExpiry', label: 'Default partition expiration', value: formatExpirationMs(ds.defaultPartitionExpirationMs) })
+    facts.push({
+      id: 'encryption',
+      label: 'Encryption',
+      value: ds?.kmsKeyName ?? 'Google-managed',
+      ...(ds?.kmsKeyName ? { mono: true } : {})
+    })
+    if (ds?.defaultCollation) facts.push({ id: 'defaultCollation', label: 'Default collation', value: ds.defaultCollation, mono: true })
+    if (ds?.maxTimeTravelHours !== undefined) facts.push({ id: 'timeTravel', label: 'Time travel window', value: `${formatCount(ds.maxTimeTravelHours)} hours` })
+    if (ds?.storageBillingModel) facts.push({ id: 'billingModel', label: 'Storage billing model', value: ds.storageBillingModel })
+    if (value.createdUtc) facts.push({ id: 'created', label: 'Created', value: value.createdUtc })
+    if (value.modifiedUtc) facts.push({ id: 'modified', label: 'Last modified', value: value.modifiedUtc })
+    return facts
+  }
+
   const fullName = value.fullName ?? `${object.project}.${object.dataset}.${object.name}`
+  const datasetLink = onFollow
+    ? {
+        onLink: () => onFollow({ kind: 'bqDataset', project: object.project, name: object.dataset }, `${object.project}.${object.dataset}`),
+        linkLabel: `Peek ${object.project}.${object.dataset}`
+      }
+    : {}
+
+  if (object.kind === 'bqRoutine') {
+    const routine = value.routine
+    const facts: FactItem[] = [
+      { id: 'fullName', label: 'Full name', value: fullName, mono: true, copyValue: bigQueryPath(object.project, object.dataset, object.name) },
+      { id: 'type', label: 'Type', value: formatBigQueryType(object.kind, value.type) },
+      { id: 'project', label: 'Project', value: object.project, mono: true },
+      { id: 'dataset', label: 'Dataset', value: object.dataset, mono: true, ...datasetLink }
+    ]
+    if (routine?.language) facts.push({ id: 'language', label: 'Language', value: routine.language })
+    const det = formatDeterminismLabel(routine?.determinism)
+    if (det) facts.push({ id: 'determinism', label: 'Determinism', value: det })
+    if (routine?.returnType) facts.push({ id: 'returnType', label: 'Return type', value: routine.returnType, mono: true })
+    if (routine?.signature) facts.push({ id: 'signature', label: 'Signature', value: routine.signature, mono: true })
+    if (value.createdUtc) facts.push({ id: 'created', label: 'Created', value: value.createdUtc })
+    if (value.modifiedUtc) facts.push({ id: 'modified', label: 'Last modified', value: value.modifiedUtc })
+    return facts
+  }
+
   const facts: FactItem[] = [
     { id: 'fullName', label: 'Full name', value: fullName, mono: true, copyValue: bigQueryPath(object.project, object.dataset, object.name) },
     { id: 'type', label: 'Type', value: formatBigQueryType(object.kind, value.type) },
     { id: 'project', label: 'Project', value: object.project, mono: true },
-    { id: 'dataset', label: 'Dataset', value: object.dataset, mono: true }
+    { id: 'dataset', label: 'Dataset', value: object.dataset, mono: true, ...datasetLink }
   ]
   if (value.location) facts.push({ id: 'location', label: 'Location', value: value.location })
-  if (value.baseTable) facts.push({ id: 'baseTable', label: 'Base table', value: value.baseTable, mono: true })
+  if (value.baseTable) {
+    const parsedBase = onFollow ? parseBigQueryTablePath(value.baseTable) : undefined
+    facts.push({
+      id: 'baseTable',
+      label: 'Base table',
+      value: value.baseTable,
+      mono: true,
+      ...(parsedBase && onFollow ? {
+        onLink: () => onFollow({ kind: 'bqTable', project: parsedBase.project, dataset: parsedBase.dataset, name: parsedBase.name }, value.baseTable!),
+        linkLabel: `Peek ${value.baseTable}`
+      } : {})
+    })
+  }
   if (value.createdUtc) facts.push({ id: 'created', label: 'Created', value: value.createdUtc })
   if (value.modifiedUtc) facts.push({ id: 'modified', label: 'Last modified', value: value.modifiedUtc })
   if (value.expiresUtc) facts.push({ id: 'expires', label: 'Expires', value: value.expiresUtc })
@@ -250,6 +421,52 @@ export function bigQueryOverviewFacts(
 /** Signal-first CapabilityChips for the Overview tab. */
 export function bigQueryCapabilities(kind: BigQueryPropertyKind, value: BigQueryProperties, subtype?: NodeSubtype): readonly CapabilityItem[] {
   const items: CapabilityItem[] = []
+  if (kind === 'bqRoutine') {
+    const routine = value.routine
+    if (routine?.language) items.push({ id: 'language', label: 'Language', value: routine.language, notable: true, tone: 'accent' })
+    const det = formatDeterminismLabel(routine?.determinism)
+    if (det) items.push({ id: 'determinism', label: det, notable: true, tone: det === 'Deterministic' ? 'success' : 'warning' })
+    const argCount = routine?.arguments?.length ?? 0
+    items.push({
+      id: 'arguments',
+      label: 'Parameters',
+      value: argCount > 0 ? (routine?.argumentsTruncated ? `${formatCount(argCount)}+` : formatCount(argCount)) : 'None',
+      notable: argCount > 0
+    })
+    if (value.definition !== undefined) {
+      items.push({ id: 'freeSql', label: 'Definition', value: 'Free (routines.get)', notable: false })
+    }
+    return items
+  }
+  if (kind === 'bqDataset') {
+    const ds = value.dataset
+    items.push({
+      id: 'encryption',
+      label: 'Encryption',
+      value: ds?.kmsKeyName ? 'CMEK' : 'Google-managed',
+      notable: !!ds?.kmsKeyName,
+      ...(ds?.kmsKeyName ? { tone: 'accent' as const, title: ds.kmsKeyName } : {})
+    })
+    items.push({
+      id: 'defaultTableExpiry',
+      label: 'Default table expiry',
+      value: ds?.defaultTableExpirationMs !== undefined ? formatExpirationMs(ds.defaultTableExpirationMs) : 'Never',
+      notable: ds?.defaultTableExpirationMs !== undefined,
+      ...(ds?.defaultTableExpirationMs !== undefined ? { tone: 'warning' as const } : {})
+    })
+    if (ds?.defaultPartitionExpirationMs !== undefined) {
+      items.push({ id: 'defaultPartitionExpiry', label: 'Default partition expiry', value: formatExpirationMs(ds.defaultPartitionExpirationMs), notable: true, tone: 'warning' })
+    }
+    if (ds?.isCaseInsensitive !== undefined) {
+      items.push({ id: 'caseInsensitive', label: 'Case-insensitive', value: ds.isCaseInsensitive ? 'Yes' : 'No', notable: ds.isCaseInsensitive, ...(ds.isCaseInsensitive ? { tone: 'accent' as const } : {}) })
+    }
+    if (ds?.storageBillingModel) {
+      items.push({ id: 'billingModel', label: 'Billing model', value: ds.storageBillingModel, notable: ds.storageBillingModel === 'PHYSICAL', ...(ds.storageBillingModel === 'PHYSICAL' ? { tone: 'accent' as const } : {}) })
+    }
+    const labelCount = value.labels?.length ?? 0
+    items.push({ id: 'labels', label: 'Labels', value: labelCount > 0 ? formatCount(labelCount) : 'None', notable: labelCount > 0 })
+    return items
+  }
   const layout = value.layout
   const storage = value.storage
   const rawType = value.type?.trim().toLowerCase()
@@ -404,6 +621,25 @@ export function bigQueryVitalsStorageFacts(value: BigQueryProperties): readonly 
   } else if (value.columns?.length) {
     facts.push({ id: 'columns', label: 'Columns', value: formatCount(value.columns.length) })
   }
+  if (value.routine) {
+    const routine = value.routine
+    if (routine.language) facts.push({ id: 'language', label: 'Language', value: routine.language })
+    if (routine.returnType) facts.push({ id: 'returns', label: 'Returns', value: routine.returnType, mono: true })
+    if (routine.arguments) {
+      const count = routine.arguments.length
+      facts.push({ id: 'parameters', label: 'Parameters', value: routine.argumentsTruncated ? `${formatCount(count)}+` : formatCount(count) })
+    }
+    const det = formatDeterminismLabel(routine.determinism)
+    if (det) facts.push({ id: 'determinism', label: 'Determinism', value: det })
+  }
+  if (value.dataset) {
+    const ds = value.dataset
+    if (ds.defaultTableExpirationMs !== undefined) facts.push({ id: 'tableExpiry', label: 'Table expiry', value: formatExpirationMs(ds.defaultTableExpirationMs) })
+    if (ds.defaultPartitionExpirationMs !== undefined) facts.push({ id: 'partExpiry', label: 'Partition expiry', value: formatExpirationMs(ds.defaultPartitionExpirationMs) })
+    if (ds.maxTimeTravelHours !== undefined) facts.push({ id: 'timeTravel', label: 'Time travel', value: `${formatCount(ds.maxTimeTravelHours)} h` })
+    if (ds.kmsKeyName) facts.push({ id: 'encryption', label: 'Encryption', value: 'CMEK' })
+    if (ds.storageBillingModel) facts.push({ id: 'billing', label: 'Billing', value: ds.storageBillingModel })
+  }
   if (value.baseTable) facts.push({ id: 'baseTable', label: 'Base table', value: value.baseTable, mono: true })
   return facts
 }
@@ -544,5 +780,22 @@ export function flatColumnsToLocalTable(columns: NonNullable<BigQueryProperties[
   return {
     columns: [{ name: 'Column' }, { name: 'Type' }, { name: 'Description' }],
     rows: filtered.map(col => [col.name, col.type, col.description ?? ''])
+  }
+}
+
+/** Converts BigQuery routine arguments into a `LocalTableData` payload for full-bleed `LocalGrid`. */
+export function routineArgumentsToLocalTable(args: readonly BigQueryRoutineArgument[], filter: string): LocalTableData {
+  const query = filter.trim().toLowerCase()
+  const filtered = query
+    ? args.filter(arg =>
+        arg.name.toLowerCase().includes(query)
+        || (arg.type?.toLowerCase().includes(query) ?? false)
+        || (arg.mode?.toLowerCase().includes(query) ?? false)
+        || (arg.kind?.toLowerCase().includes(query) ?? false)
+      )
+    : args
+  return {
+    columns: [{ name: 'Parameter' }, { name: 'Type' }, { name: 'Mode' }, { name: 'Kind' }],
+    rows: filtered.map(arg => [arg.name || '(unnamed)', arg.type ?? '', arg.mode ?? 'IN', arg.kind ?? ''])
   }
 }

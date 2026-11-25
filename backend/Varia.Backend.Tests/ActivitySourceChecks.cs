@@ -298,6 +298,20 @@ internal static class ActivitySourceChecks
         check(steady == "500.0" && missed.Sessions.Count == 0 && after == "500.0",
             "a session missing from a sample (its statement failed after the clock read) gets a rate over its own four seconds when it returns, never two intervals over one: " + steady + ", " + after);
 
+        // New args read again only the probes whose filters change: a Sessions filter or focus never runs the plan-cache probe early.
+        {
+            var filtered = new ActivityReader(new NoHost(), "c", new ActivityLiveArgs([new ActivityFilterDto("sessions"), new ActivityFilterDto("files", LatencyWarningMs: 200)]));
+            var same = filtered.Rereads(new ActivityLiveArgs([new ActivityFilterDto("sessions"), new ActivityFilterDto("files", LatencyWarningMs: 200)]));
+            var text = filtered.Rereads(new ActivityLiveArgs([new ActivityFilterDto("sessions", Text: "x"), new ActivityFilterDto("files", LatencyWarningMs: 200)]));
+            var focus = filtered.Rereads(new ActivityLiveArgs(FocusSession: 52));
+            var files = filtered.Rereads(new ActivityLiveArgs([new ActivityFilterDto("files", LatencyWarningMs: 300)]));
+            filtered.Apply(new ActivityLiveArgs([new ActivityFilterDto("sessions", Text: "x")], FocusSession: 52));
+            var applied = filtered.Rereads(new ActivityLiveArgs([new ActivityFilterDto("sessions", Text: "x")], FocusSession: 52));
+            check(same is { Count: 0 } && text is not null && text.SequenceEqual([ActivityReader.SessionsProbe]) && focus is not null && focus.SequenceEqual([ActivityReader.SessionsProbe])
+                && files is not null && files.SequenceEqual(["activity.resources"]) && applied is { Count: 0 },
+                "new Activity Monitor args read again only the probes whose filters or focus change");
+        }
+
         // The sessions probe's clock: the server's between samples that read it, else the schedule's; a restart starts again.
         var reader = new ActivityReader(new NoHost(), "c");
         var spec = LiveCatalog.Current.Probes[ActivityReader.SessionsProbe];

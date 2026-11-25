@@ -73,16 +73,17 @@ describe('Properties lists as local tables', () => {
 
 describe('Properties grid', () => {
   const workbench = { ...workbenchFixture(), platform: 'win32' } as unknown as Workbench
-  const draw = (table: LocalTableData, label = 'Database files') => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(PropertiesGrid, { table, label, empty: 'None.', suggestedName: 'AppData files' }) }))
+  const draw = (table: LocalTableData, label = 'Database files', maxRows?: number) => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(PropertiesGrid, { table, label, empty: 'None.', suggestedName: 'AppData files', ...(maxRows === undefined ? {} : { maxRows }) }) }))
   /** The fitted frame's height: header, rows, any strip and the border (no scroll bar until the columns are wider than it). */
   const heightOf = (markup: string) => Number(/data-local-fit="" style="height:(\d+)px;flex:none"/.exec(markup)?.[1])
-  it('draws a fitted page grid named for its list, as tall as its rows up to a window of them', () => {
+  it('draws a fitted page grid named for its list, as tall as its rows up to a window of them or natural height when unbounded', () => {
     const markup = draw(filesTable(databaseModel()))
     expect(markup).toMatch(/<div class="properties-grid"><div class="rg-frame local-grid" data-local-grid="page" data-local-fit=""/)
     expect(markup).toMatch(/role="grid"[^>]*aria-label="Database files"|aria-label="Database files"[^>]*role="grid"/)
     expect(heightOf(markup)).toBe(22 + 2 * 20 + 2)
     const many = { columns: [{ name: 'Name' }], rows: Array.from({ length: 40 }, (_, row) => [`r${row}`]) }
     expect(heightOf(draw(many, 'Many'))).toBe(22 + propertiesGridRows * 20 + 2)
+    expect(heightOf(draw(many, 'Natural', Infinity))).toBe(22 + 40 * 20 + 2)
     expect(heightOf(draw({ columns: [{ name: 'Name' }], rows: [] }, 'Empty'))).toBe(22 + 48 + 2)
   })
   it('makes room for its strip under its rows, rather than hiding a row behind it', () => {

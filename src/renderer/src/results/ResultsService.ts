@@ -1150,6 +1150,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   /**
+   * Releases all non-running results across every query tab without closing any query tabs (Memory popover's Close all).
+   * Running queries and bare runs (Peek) are left untouched. Returns how many tabs had results closed.
+   */
+  closeAllResults(isRunning?: (tabId: string) => boolean): number {
+    let closed = 0
+    for (const [tabId, run] of this.runs) {
+      if (run.bare || run.status === 'running' || run.status === 'closed' || isRunning?.(tabId)) continue
+      if (run.sets.length === 0 && run.planSets.length === 0) continue
+      this.closeResults(tabId)
+      closed++
+    }
+    return closed
+  }
+
+  /**
    * Closes one view of a run that has ended (a caption's close button, Close Result): a Table closes its group, so its
    * Pivot goes with it; a Pivot or a comparison closes alone. What
    * closes leaves the run and its results are released (`drop`); the entries after move up and keep their keys, numbers,

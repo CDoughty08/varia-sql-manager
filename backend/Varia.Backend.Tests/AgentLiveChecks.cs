@@ -213,6 +213,8 @@ internal static class AgentLiveChecks
             await AgentObjectLiveChecks.RunAsync(check, service, info, json, scratch, sql);
             // Proxies and credentials (AG-8b) on their own scratch proxy and credential.
             await AgentProxyLiveChecks.RunAsync(check, service, info, json, scratch, sql);
+            // Schedules (AG-6c, AG-14): a scratch shared schedule on a scratch job, created, read back, updated, refused STALE, disabled, enabled and deleted.
+            await AgentScheduleLiveChecks.RunAsync(check, service, info, json, scratch, sql);
         }
         finally { await sql("EXEC msdb.dbo.sp_delete_job @job_id = '" + id.ToString("D") + "', @delete_history = 1, @delete_unused_schedule = 1;", "msdb"); }
     }

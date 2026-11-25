@@ -478,12 +478,17 @@ export default function TableProperties({ documentId }: { documentId: string }) 
 
   const tabProps: TabProps | undefined = model && draft ? { state, model, draft, editable, errors, service: tableProperties } : undefined
   const depsReady = state.dependencies?.status === 'ready' ? state.dependencies.value : undefined
-  const depsCount = depsReady ? `${(depsReady.uses.length + depsReady.usedBy.length).toLocaleString()}${depsReady.usesTruncated || depsReady.usedByTruncated ? '+' : ''}` : undefined
-  const permsCount = model ? `${(model.permissions.length + (model.securityPredicates?.length ?? 0)).toLocaleString()}${model.permissionsTruncated || model.securityPredicatesTruncated ? '+' : ''}` : undefined
-  const extCount = draft && model ? `${draft.extendedProperties.filter(row => !row.removed).length.toLocaleString()}${model.extendedPropertiesTruncated ? '+' : ''}` : undefined
-  const partCount = model?.storage.partitioned ? `${model.storage.partitions.length.toLocaleString()}${model.storage.partitionsTruncated ? '+' : ''}` : undefined
-  const colsCount = catalogCounts?.columns ? `${catalogCounts.columns.count.toLocaleString()}${catalogCounts.columns.truncated ? '+' : ''}` : undefined
-  const idxsCount = catalogCounts?.indexes ? `${catalogCounts.indexes.count.toLocaleString()}${catalogCounts.indexes.truncated ? '+' : ''}` : undefined
+  const tabCount = (count: number, truncated: boolean | undefined, singular: string, plural: string) => {
+    const isTruncated = !!truncated
+    const formatted = `${count.toLocaleString()}${isTruncated ? '+' : ''}`
+    return { count: formatted, countLabel: `${formatted} ${count === 1 && !isTruncated ? singular : plural}` }
+  }
+  const partBadge = model?.storage.partitioned ? tabCount(model.storage.partitions.length, model.storage.partitionsTruncated, 'partition', 'partitions') : undefined
+  const colsBadge = catalogCounts?.columns ? tabCount(catalogCounts.columns.count, catalogCounts.columns.truncated, 'column', 'columns') : undefined
+  const idxsBadge = catalogCounts?.indexes ? tabCount(catalogCounts.indexes.count, catalogCounts.indexes.truncated, 'index or key', 'indexes and keys') : undefined
+  const depsBadge = depsReady ? tabCount(depsReady.uses.length + depsReady.usedBy.length, !!(depsReady.usesTruncated || depsReady.usedByTruncated), 'dependency', 'dependencies') : undefined
+  const permsBadge = model ? tabCount(model.permissions.length + (model.securityPredicates?.length ?? 0), !!(model.permissionsTruncated || model.securityPredicatesTruncated), 'permission or predicate', 'permissions and predicates') : undefined
+  const extBadge = draft && model ? tabCount(draft.extendedProperties.filter(row => !row.removed).length, model.extendedPropertiesTruncated, 'extended property', 'extended properties') : undefined
 
   const tabs: InspectorTab[] = [
     {
@@ -497,32 +502,32 @@ export default function TableProperties({ documentId }: { documentId: string }) 
     },
     {
       id: 'storage', title: 'Storage & Layout', layout: 'flow',
-      ...(partCount !== undefined ? { count: partCount, countLabel: `${partCount} partitions` } : {}),
+      ...partBadge,
       content: model ? <StorageTab state={state} model={model} /> : <ModelPlaceholder state={state} />
     },
     {
       id: 'columns', title: 'Columns', layout: 'fill',
-      ...(colsCount !== undefined ? { count: colsCount, countLabel: `${colsCount} columns` } : {}),
+      ...colsBadge,
       content: <CatalogListTab state={state} id="columns" tabId="columns" list={catalogReady?.columns} part={state.catalog} connected={connected} service={tableProperties} />
     },
     {
       id: 'indexes', title: 'Indexes & Keys', layout: 'fill',
-      ...(idxsCount !== undefined ? { count: idxsCount, countLabel: `${idxsCount} indexes and keys` } : {}),
+      ...idxsBadge,
       content: <CatalogListTab state={state} id="tableObjects" tabId="indexes" list={catalogReady?.tableObjects} part={state.catalog} connected={connected} service={tableProperties} />
     },
     {
       id: 'dependencies', title: 'Dependencies', layout: 'flow',
-      ...(depsCount !== undefined ? { count: depsCount, countLabel: `${depsCount} dependencies` } : {}),
+      ...depsBadge,
       content: <DependenciesTab state={state} part={state.dependencies} connectionId={connectionId} connected={connected} service={tableProperties} />
     },
     {
       id: 'permissions', title: 'Permissions & RLS', layout: 'flow',
-      ...(permsCount !== undefined ? { count: permsCount, countLabel: `${permsCount} permissions and predicates` } : {}),
+      ...permsBadge,
       content: model ? <PermissionsTab state={state} model={model} /> : <ModelPlaceholder state={state} />
     },
     {
       id: 'extendedProperties', title: 'Extended Properties', layout: 'flow',
-      ...(extCount !== undefined ? { count: extCount, countLabel: `${extCount} extended properties` } : {}),
+      ...extBadge,
       modified: modifiedTabs.has('extendedProperties'), problem: problemTabs.has('extendedProperties'),
       content: tabProps ? <ExtendedPropertiesTab {...tabProps} /> : <ModelPlaceholder state={state} />
     },

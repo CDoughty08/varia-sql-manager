@@ -431,17 +431,18 @@ Long actions: Restore Database…, Restore Files and Filegroups…, Start SQL Se
 Database Properties opens as a document tab, one per database and connection (Properties on a database whose
 document is open brings that tab forward). Its header names the server and the database, shows the database's
 state in SMO's words ("Normal", "Restoring, Standby", "Normal, Read-Only"), and offers Refresh, Discard Changes and
-Apply; Stop replaces them while the changes run. Its sections are SSMS's pages. General shows read-only facts as
-text: backups, name, status, owner, date created, size, space available, number of users, memory-optimized memory and
-collation. Files and Filegroups list the database's files and filegroups read-only in this version, as results grids
-(Database files; Rows, FILESTREAM and Memory Optimized Data filegroups): select, copy with headers, sort and Save
-Results As as in query results, each as tall as its rows up to 12 before it scrolls; an empty list says so in its
+Apply; Stop replaces them while the changes run. Its sections are SSMS's pages. General shows a Database Space
+`RatioBar` (and a Memory-Optimized Objects `RatioBar` when allocated memory is reported) plus click-to-copy `FactGrid`
+groups for backups, name, status, owner, date created, size, space available, number of users, memory-optimized memory
+and collation. Files and Filegroups list the database's files and filegroups read-only in this version, as natural-height
+results grids (Database files; Rows, FILESTREAM and Memory Optimized Data filegroups): select, copy with headers, sort
+and Save Results As as in query results, with zero nested vertical scrolling; an empty list says so in its
 frame. Owner in Files is editable (typed, suggested from the server's logins, or chosen in Select Database Owner).
 Options shows Collation,
 Recovery model, Compatibility level and Containment type, then every option under its category: a boolean as a
 switch, an enum of four values or fewer as a segmented control, a longer or server-supplied one as a list, a number as
 a number field, and what Varia does not change as text. A row's whole description shows in a strip under the
-sections while the pointer or focus is in the row, and as the label's tooltip; why a row is greyed and what is wrong
+sections while the pointer or focus is in the row (cleared cleanly when switching sections), and as the label's tooltip; why a row is greyed and what is wrong
 with a value show under it, and a section with a problem is marked in the list. Changed values are bold and say
 "Changed" (part of the control's description for screen readers), and the tab shows unsaved changes.
 
@@ -576,7 +577,7 @@ Table Properties adds zero extra SQL round-trips:
 - **Storage & Layout**: Data vs. Index `RatioBar`, compression, filegroups, partitioning and space facts, plus a
   natural-height **Partitions** results grid (at most 1,000 partitions, zero nested vertical scrolling) on partitioned tables.
 - **Columns**: Lazy-loaded full-bleed `Columns` results grid (`explorer.peek`).
-- **Indexes & Keys**: Lazy-loaded full-bleed `Indexes & keys` results grid (`explorer.peek` `tableObjects`).
+- **Indexes & Keys**: Lazy-loaded full-bleed `Indexes & Keys` results grid (`explorer.peek` `tableObjects`).
 - **Dependencies**: Lazy-loaded `Uses` and `Used by` clickable links (`explorer.peekDependencies`).
 - **Permissions & RLS**: Natural-height **Permissions** (at most 1,024 rows) and **Row-level security predicates** (SQL Server
   2016 and later) results grids with select, copy with headers, sort and Save Results As and zero nested vertical scrolling.

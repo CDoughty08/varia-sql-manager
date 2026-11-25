@@ -473,10 +473,12 @@ try {
   await expect(monitor().getByText('4 wait categories · benign waits hidden', { exact: true })).toBeVisible()
   await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toHaveCount(0)
   // Hide benign waits off: the backend filters the next sample, and Idle shows.
+  const refreshNow = monitor().getByRole('button', { name: 'Refresh Now', exact: true })
   await waitTools.getByRole('button', { name: 'Hide benign waits', exact: true }).click()
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('{"table":"waitTypes","hideBenign":false}'))).toBe(true)
+  await refreshNow.click()
   await expect(monitor().getByText('5 wait categories', { exact: true })).toBeVisible(nextSample)
   await expect(categories.getByRole('gridcell', { name: 'Idle', exact: true })).toBeVisible(nextSample)
-  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('{"table":"waitTypes","hideBenign":false}'))).toBe(true)
   // By type shows the other table of the same sample: no args change, so nothing is sent.
   const argsBefore = (await calls('live.update')).filter(call => call.params.args).length
   await waitTools.getByRole('button', { name: 'By type', exact: true }).click()
@@ -484,7 +486,10 @@ try {
   await expect(types.getByRole('gridcell', { name: 'LCK_M_S', exact: true })).toBeVisible()
   await expect(monitor().getByText('5 wait types', { exact: true })).toBeVisible()
   expect((await calls('live.update')).filter(call => call.params.args).length).toBe(argsBefore)
+  const hideOnUpdates = (await calls('live.update')).length
   await waitTools.getByRole('button', { name: 'Hide benign waits', exact: true }).click()
+  await expect.poll(async () => (await calls('live.update')).length).toBeGreaterThan(hideOnUpdates)
+  await refreshNow.click()
   await expect(monitor().getByText('4 wait types · benign waits hidden', { exact: true })).toBeVisible(nextSample)
   await expect(types.getByRole('gridcell', { name: 'SLEEP_TASK', exact: true })).toHaveCount(0, nextSample)
   await waitTools.getByRole('button', { name: 'By category', exact: true }).click()
@@ -499,10 +504,14 @@ try {
   // Over threshold keeps the files the backend toned (SalesDb's log at 61.5 ms and data at 34 ms); Log keeps the logs.
   const fileTools = monitor().getByRole('toolbar', { name: 'Data File I/O filters', exact: true })
   await fileTools.getByRole('button', { name: 'Over threshold', exact: true }).click()
+  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"fileView":"overThreshold"'))).toBe(true)
+  await refreshNow.click()
   await expect(monitor().getByText('2 files · Over threshold only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
   await expect(fileGrid.getByRole('gridcell', { name: 'master', exact: true })).toHaveCount(0, nextSample)
-  await expect.poll(async () => (await calls('live.update')).some(call => JSON.stringify(call.params.args ?? {}).includes('"fileView":"overThreshold"'))).toBe(true)
+  const overOffUpdates = (await calls('live.update')).length
   await fileTools.getByRole('button', { name: 'Over threshold', exact: true }).click()
+  await expect.poll(async () => (await calls('live.update')).length).toBeGreaterThan(overOffUpdates)
+  await refreshNow.click()
   await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
   // Paused, a chip or a threshold setting changes the args at once, but the rows wait for a sample, so the status line
   // counts them and says the view and thresholds apply from the next one. The settings reach an open monitor.
@@ -519,10 +528,17 @@ try {
   await pause.click()
   await expect(monitor().getByText('2 files · Log only · warning at 70 ms, error at 70 ms · latencies and tones from the next sample', { exact: true })).toBeVisible(nextSample)
   await expect(fileGrid.getByRole('gridcell', { name: '/var/opt/mssql/data/SalesDb.mdf', exact: true })).toHaveCount(0)
+  await refreshNow.click()
   await expect(monitor().getByText('2 files · Log only · warning at 70 ms, error at 70 ms', { exact: true })).toBeVisible(nextSample)
+  const resetWarningUpdates = (await calls('live.update')).length
   expect(await page.evaluate(() => window.varia.updateSettings({ 'activityMonitor.fileLatencyWarningMs': null }))).toMatchObject({ ok: true })
+  await expect.poll(async () => (await calls('live.update')).length).toBeGreaterThan(resetWarningUpdates)
+  await refreshNow.click()
   await expect(monitor().getByText('2 files · Log only · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
+  const logOffUpdates = (await calls('live.update')).length
   await fileTools.getByRole('button', { name: 'Log', exact: true }).click()
+  await expect.poll(async () => (await calls('live.update')).length).toBeGreaterThan(logOffUpdates)
+  await refreshNow.click()
   await expect(monitor().getByText('5 files · warning at 20 ms, error at 50 ms', { exact: true })).toBeVisible(nextSample)
   await page.screenshot({ path: join('artifacts', 'activity-monitor-resources.png') })
   await firstTabs.getByRole('tab', { name: 'Sessions', exact: true }).click()

@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, connectDialogWindow, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, explorerFilterToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
+  dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, objectSearchSummary, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard } from './fixtures/ui.mjs'
@@ -1401,7 +1401,7 @@ try {
     await setStub({ holdSearch: true })
     await rerun()
     await releaseSearch('table')
-    await expect(page.locator(part.objectSearchTab).getByRole('status')).toHaveText(/^2 results/)
+    await expect(objectSearchSummary(page)).toHaveText(/^2 results/)
     expect(await results.evaluate(list => list.scrollTop)).toBe(scrolled)
     // With focus on the selected hit too: the search runs again while the hit has focus and the list is scrolled past it.
     await page.keyboard.press('Backspace')
@@ -1410,7 +1410,7 @@ try {
     await objectSearchSelected(page).evaluate(button => button.focus({ preventScroll: true }))
     await results.evaluate((list, top) => { list.scrollTop = top }, scrolled)
     await releaseSearch('table')
-    await expect(page.locator(part.objectSearchTab).getByRole('status')).toHaveText(/^2 results/)
+    await expect(objectSearchSummary(page)).toHaveText(/^2 results/)
     expect(await results.evaluate(list => list.scrollTop)).toBe(scrolled)
     await objectSearchBox(page).focus()
     await expect(objectSearchSelected(page)).toHaveAttribute('title', 'Reveal in Object Explorer: dbo.table1')
@@ -1500,7 +1500,7 @@ try {
     await expect(objectSearchServer(page)).toBeFocused()
     await expect(objectSearchGroup(page, 'server-a').getByRole('option')).toHaveCount(2)
     await expect(objectSearchGroup(page, 'server-b').getByRole('option')).toHaveCount(2)
-    await expect(page.locator(part.objectSearchTab).getByRole('status')).toContainText('2 servers · 4 results')
+    await expect(objectSearchSummary(page)).toContainText('2 servers · 4 results')
     // Each option shows its results for the search, read from the answers already in; ↓ walks them and Escape closes unchosen.
     await page.keyboard.press('ArrowDown')
     await expect(objectSearchServerOptions(page)).toHaveCount(3)

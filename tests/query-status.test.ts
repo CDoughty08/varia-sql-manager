@@ -6,10 +6,13 @@ import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } fro
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
 import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
+import EditorStatus, { sqlStatusChip } from '../src/renderer/src/EditorStatus'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { QueryTab } from '../src/renderer/src/documents'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
+import { SnapshotStore } from '../src/renderer/src/core/store'
+import { stylesheetRules } from './fixtures/css-rules'
 import { workbenchFixture } from './fixtures/workbench'
 
 const settings = defaultSettings
@@ -114,5 +117,102 @@ describe('the query status facts\' environment tag', () => {
     expect(render('bar')).toContain('PROD')
     expect(render('segment')).not.toContain('query-status-environment')
     expect(render('segment')).not.toContain('PROD')
+  })
+
+  it('collapses the redundant plug icon and Connected label when compact is enabled for a ready connection, while keeping non-ready states prominent', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    const workbench = { ...fixture, theme } as unknown as Workbench
+    const tab: QueryTab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'c1')
+    const live: LiveConnection = { id: 'c1', server: 'sql01', database: 'master', serverVersion: '16.00.4135', generation: 1, options: { server: 'sql01', database: 'master', authentication: 'windows', trustServerCertificate: false } }
+    const renderStatus = (connection: LiveConnection | undefined, variant: 'segment' | 'bar', compact: boolean) =>
+      renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab, connection, variant, compact }) }))
+
+    const compactReady = renderStatus(live, 'segment', true)
+    expect(compactReady).toContain('data-compact="true"')
+    expect(compactReady).toContain('query-status-state visually-hidden')
+    expect(compactReady).toContain('Connected.')
+    expect(compactReady).not.toContain('data-icon="plug"')
+    expect(compactReady).toContain('sql01 (16.0)')
+
+    // Non-ready backend (compact=false) keeps the full state visible alongside the backend's non-ready status.
+    const nonReadyBackend = renderStatus(live, 'segment', false)
+    expect(nonReadyBackend).not.toContain('data-compact="true"')
+    expect(nonReadyBackend).not.toContain('query-status-state visually-hidden')
+    expect(nonReadyBackend).toContain('data-icon="plug"')
+
+    // Disconnected / lost connections always stay prominent even when compact=true.
+    const disconnected = renderStatus(undefined, 'segment', true)
+    expect(disconnected).not.toContain('data-compact="true"')
+    expect(disconnected).not.toContain('query-status-state visually-hidden')
+    expect(disconnected).toContain('Disconnected.')
+    expect(disconnected).toContain('data-icon="debug-disconnect"')
+
+    // Classic SSMS bar ignores compact.
+    const classic = renderStatus(live, 'bar', true)
+    expect(classic).not.toContain('data-compact="true"')
+    expect(classic).toContain('data-icon="plug"')
+  })
+})
+
+describe('grouped calm status bar and condensed SQL status chip', () => {
+  const cleanups: (() => void)[] = []
+  afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
+
+  it('condenses IntelliSense off and SQL analysis paused into one chip while surfacing issues and full tooltip detail', () => {
+    expect(sqlStatusChip(undefined, undefined)).toBeUndefined()
+    const paused = sqlStatusChip(
+      { label: 'IntelliSense off', detail: 'Language service is not configured.' },
+      { label: 'SQL analysis paused', detail: 'Reconnect to restore analysis.' }
+    )!
+    expect(paused).toMatchObject({ label: 'SQL: Paused', icon: 'code', tone: 'muted' })
+    expect(paused.detail).toContain('IntelliSense off: Language service is not configured.')
+    expect(paused.detail).toContain('SQL analysis paused: Reconnect to restore analysis.')
+
+    const errors = sqlStatusChip(
+      { label: 'IntelliSense', detail: 'Active' },
+      { label: 'SQL: 1 error, 1 warning', detail: 'Alt+F8 goes to the next issue.' }
+    )!
+    expect(errors).toMatchObject({ label: 'SQL: 1 error, 1 warning', icon: 'error', tone: 'error' })
+
+    const unavailable = sqlStatusChip(
+      { label: 'IntelliSense unavailable', detail: 'Provider crashed.' },
+      { label: 'SQL analysis unavailable', detail: 'Provider crashed.' }
+    )!
+    expect(unavailable).toMatchObject({ label: 'SQL: Unavailable', icon: 'warning', tone: 'warning' })
+  })
+
+  it('renders EditorStatus as calm groups with one clickable SQL chip and intact aria-live status regions', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const tab = fixture.documents.create('Query1.sql', 'SELECT 1', 'master', 'c1')
+    const workbench = {
+      ...fixture,
+      editorStatus: new SnapshotStore({ line: 9, column: 28, character: 28, eol: 'crlf' as const }),
+      inputMode: new SnapshotStore({ mode: 'insert' as const, available: true }),
+      sqlLanguage: Object.assign(new SnapshotStore({}), { availability: () => ({ label: 'IntelliSense off', detail: 'Disabled.' }) }),
+      sqlDiagnostics: Object.assign(new SnapshotStore({}), { status: () => ({ label: 'SQL analysis paused', detail: 'Paused.' }) }),
+      bigQueryCost: Object.assign(new SnapshotStore(new Map()), { status: () => undefined }),
+      indexCompletion: Object.assign(new SnapshotStore({}), { availability: () => undefined })
+    } as unknown as Workbench
+    expect(tab.id).toBeTruthy()
+    const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(EditorStatus) }))
+    expect(html).toContain('editor-status-caret')
+    expect(html).toContain('editor-status-file')
+    expect(html).toContain('editor-status-sql')
+    expect(html).toContain('SQL: Paused')
+    expect(html).toContain('aria-live="polite"')
+    expect(html).toContain('aria-label="SQL IntelliSense"')
+    expect(html).toContain('aria-label="SQL query issues"')
+  })
+
+  it('replaces vertical pipe separators with calm dividers in the window status bar', () => {
+    const rules = stylesheetRules()
+    expect(rules.some(rule => rule.selector === '.editor-status > * + *::before')).toBe(false)
+    const querySeg = rules.find(rule => rule.selector === '.query-status .query-status-segment + .query-status-segment::before')
+    expect(querySeg?.declarations.find(d => d.property === 'content')?.value).toBe("'·'")
+    const groupDivider = rules.find(rule => rule.selector === '.editor-status-group + .editor-status-group::before')
+    expect(groupDivider?.declarations.find(d => d.property === 'width')?.value).toBe('1px')
   })
 })

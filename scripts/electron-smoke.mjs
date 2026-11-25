@@ -7,7 +7,7 @@ import { parseCalls } from './fixtures/call-log.mjs'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, resultIdOf, backendReady, closeDocumentButton, connectDialogWindow, documentTab, documentTabs, editorStatus, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
-  editorGroups, environmentPill, executingMark, explorerFooter, kindIcon, messages, openMenus, outputStatus, outputView, paneMenuButton, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
+  editorGroups, environmentPill, executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, paneMenuButton, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryPlanButton, queryPlanMenu, queryPlanOption, queryServer,
   queryStatus, readOnlyMark, resultGrid, selectOpenDocument, statusChips, submitConnect, tabNameBox, toolbar, toolbarButton, unsavedMark, workspaceEmpty, expectEditorShown
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
@@ -235,25 +235,33 @@ try {
   await page.keyboard.press('Space')
   await expect(clientStatistics).toHaveAttribute('aria-pressed', 'false')
   await page.keyboard.press('ArrowLeft')
-  const livePlan = queryBarButton(page, 'Include Live Execution Plan')
-  await expect(livePlan).toBeFocused()
+  const planTrigger = queryPlanButton(page)
+  await expect(planTrigger).toBeFocused()
+  await expect(planTrigger).toHaveText('Plan')
+  await page.keyboard.press('ArrowDown')
+  await expect(queryPlanMenu(page)).toBeVisible()
+  await expect(queryPlanOption(page, 'Include Actual Plan')).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(planTrigger).toBeFocused()
+  await expect(planTrigger).toHaveText('Actual Plan')
+  await page.keyboard.press('ArrowDown')
+  await expect(queryPlanOption(page, 'Include Actual Plan')).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('Enter')
+  await expect(planTrigger).toHaveText('Plan')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(queryPlanOption(page, 'Include Live Plan')).toBeFocused()
   await page.keyboard.press('Space')
-  await expect(livePlan).toHaveAttribute('aria-pressed', 'true')
+  await expect(planTrigger).toBeFocused()
+  await expect(planTrigger).toHaveText('Live Plan')
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Space')
-  await expect(livePlan).toHaveAttribute('aria-pressed', 'false')
-  await page.keyboard.press('ArrowLeft')
-  const actualPlan = queryBarButton(page, 'Include Actual Execution Plan')
-  await expect(actualPlan).toBeFocused()
-  await page.keyboard.press('Space')
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'true')
-  await page.keyboard.press('Space')
-  await expect(actualPlan).toHaveAttribute('aria-pressed', 'false')
+  await expect(planTrigger).toHaveText('Plan')
   await page.keyboard.press('ArrowLeft')
   await expect(queryBarButton(page, 'Execute')).toBeFocused()
   await page.keyboard.press('ArrowRight')
-  await expect(actualPlan).toBeFocused()
-  await page.keyboard.press('ArrowRight')
-  await expect(livePlan).toBeFocused()
+  await expect(planTrigger).toBeFocused()
   await page.keyboard.press('ArrowRight')
   await expect(clientStatistics).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -271,7 +279,7 @@ try {
     return [server.left - edge.left, server.top - edge.top, edge.bottom - server.bottom, edge.right - database.right]
   })).toEqual([0, 0, 0, 0])
   await expect(queryServer(page)).toHaveValue('')
-  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, -1, -1, -1, 0, -1])
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
@@ -634,7 +642,7 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).length).toBe(executed.length + 1)
   expect((await executions()).at(-1).params).toMatchObject({ connectionId: idA, database: 'AppData', sql: 'SELECT 1;' })
-  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
   // Preset environments yield too: a read-only, running query still fits its name, five-digit SID and actions.
   await selectOpenDocument(page, tabB)
   await writeFile(crowdedQuery, 'WAIT_FOR_CANCEL')
@@ -688,7 +696,7 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
   expect((await executions()).at(-1).params.startLine).toBe(3)
-  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Control+Enter')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql.replaceAll('\r\n', '\n')).toBe('-- heading\nSELECT 10;\nSELECT 20;')
@@ -1018,7 +1026,7 @@ try {
   await expect(queryServer(page).getByRole('option', { selected: true })).toHaveText('server-b Disconnected')
   await expect(queryServer(page).getByRole('option', { selected: true })).toBeDisabled()
   // A disconnected query's Execute connects it first.
-  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(part => {

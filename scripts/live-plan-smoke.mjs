@@ -4,7 +4,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { checkLargePlan } from './fixtures/large-plan.mjs'
 import { checkCaptureRecovery } from './fixtures/capture-recovery.mjs'
-import { backendReady, documentTabs, gridCell, localGrid, outputStatus, outputView, planCanvas, planViewer, queryBarButton } from './fixtures/ui.mjs'
+import { backendReady, clickQueryPlanOption, documentTabs, gridCell, localGrid, outputStatus, outputView, planCanvas, planViewer, queryBarButton, queryPlanButton } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -32,13 +32,13 @@ try {
   await expect(backendReady(page)).toBeVisible({ timeout: 30_000 })
   await connectLive(application, page, expect)
   await enlargeOutput(page)
-  const toggle = page.getByRole('button', { name: 'Include Live Execution Plan', exact: true })
-  await toggle.click()
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await clickQueryPlanOption(page, 'Include Live Plan')
+  await expect(queryPlanButton(page)).toHaveText('Live Plan')
+  await expect(queryPlanButton(page)).toHaveAttribute('data-active', '')
   await queryBarButton(page, 'Include Client Statistics').click()
   step = 'first live sample'
-  // Bound the work independently of the SQL Server version's metadata count while retaining observable live progress.
-  const aggregate = "WITH source AS (SELECT TOP (2000) object_id FROM sys.all_objects ORDER BY object_id) SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured FROM source a CROSS JOIN source b OPTION(MAXDOP 1);"
+  // Bound the work independently of the SQL Server version's metadata count while retaining observable live progress (~7 s on CI).
+  const aggregate = "WITH source AS (SELECT TOP (950) object_id FROM sys.all_objects ORDER BY object_id) SELECT SUM(CONVERT(bigint,CHECKSUM(HASHBYTES('SHA2_256',CONCAT(a.object_id,':',b.object_id))))) AS measured FROM source a CROSS JOIN source b OPTION(MAXDOP 1);"
   await sql('SET STATISTICS XML ON; ' + aggregate)
   await expect(outputStatus(page)).toContainText(/^Executing/)
   await outputView(page, /^Execution plan/).click()
@@ -110,11 +110,11 @@ try {
   step = 'estimation after live capture'
   const editor = page.locator('.monaco-editor [role="textbox"]')
   await editor.focus(); await page.keyboard.press('Control+A'); await page.keyboard.insertText('SELECT 1 AS estimated_after_live;')
-  await queryBarButton(page, 'Display Estimated Execution Plan').click()
+  await clickQueryPlanOption(page, 'Display Estimated Plan')
   await expect(page.locator('[data-estimated-plan]')).toContainText('Estimated')
   await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
   await expect(planViewer(page).getByRole('button', { name: 'Live', exact: true })).toHaveCount(0)
-  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(queryPlanButton(page)).toHaveText('Live Plan')
   await sql('SELECT name AS executed_after_estimate FROM sys.databases WHERE database_id = 1;')
   await expect(outputStatus(page)).toContainText(/^Completed/)
   await outputView(page, /^Execution plan/).click()

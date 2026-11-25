@@ -129,8 +129,13 @@ describe('Search Objects details pane', () => {
       renderToStaticMarkup(createElement(Properties, { details: { id: 1, key: 'k', connectionId, hit, kind, facts: { status: 'ready', value: facts }, definition: { status: 'none' }, ...(refused ? { refused } : {}) } }))
     const alias: ObjectSearchHit = { object: { kind: 'type', database: 'Sales', schema: 'dbo', name: 'Phone' }, folder: 'userDefinedDataTypes', label: 'dbo.Phone', subtype: 'alias' }
     const markup = render(alias, 'type', { schema: 'dbo', baseType: 'nvarchar(20)', assembly: null, className: null })
+    expect(markup).toContain('<dl class="fact-grid compact" aria-label="Properties">')
+    expect(markup).toContain('aria-label="Copy Data type"')
     expect(markup).toContain('nvarchar(20)')
     expect(markup).not.toContain('Assembly')
+    // Null Peek fact renders muted dash without a copy button.
+    const emptyBase = render(alias, 'type', { schema: 'dbo', baseType: null })
+    expect(emptyBase).not.toContain('aria-label="Copy Data type"')
     const index: ObjectSearchHit = { object: { kind: 'index', database: 'Sales', parent: { kind: 'table', schema: 'dbo', name: 'Orders' }, name: 'IX' }, folder: 'indexes', label: 'dbo.Orders.IX', subtype: 'nonclustered' }
     const usage = peekSpecs.index.groups.find(group => group.id === 'usage')!
     expect(render(index, 'index', { indexType: 'Nonclustered' }, ['usage'])).toContain(usage.refused)

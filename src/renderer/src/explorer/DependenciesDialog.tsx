@@ -6,6 +6,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { findInWindows, returnFocusTo } from '../core/focus'
 import Icon from '../Icon'
 import DialogFooter from '../kit/DialogFooter'
+import FactGrid, { type FactItem } from '../kit/FactGrid'
 import { trapFocus } from '../trap-focus'
 import ExplorerIcon from './ExplorerIcon'
 import type { OpenDependencies } from './DependenciesService'
@@ -94,15 +95,19 @@ function DependenciesForm({ open }: { open: OpenDependencies }) {
         aria-activedescendant={selected ? `dependency-${open.id}-${selected.id}` : undefined}>
         {rows.map(row => <TreeRow key={row.node.id} dialog={open.id} lost={unavailable} node={row.node} index={row.index} count={row.count} selected={row.node.id === open.selected} />)}
       </div>
-      {selected && <section className="property-section" aria-label="Selected object">
-        <h3 className="peek-group">Selected object</h3>
-        <dl className="peek-facts">
-          <div className="peek-fact"><dt>Name</dt><dd><bdi>{displayText(selected.label)}</bdi></dd></div>
-          <div className="peek-fact"><dt>Type</dt><dd>{selected.type}</dd></div>
-          <div className="peek-fact"><dt>Dependency type</dt><dd>{selected.dependencyType ?? '—'}</dd></div>
-          {selected.leaf && <div className="peek-fact"><dt>Note</dt><dd>{dependencyLeafWords[selected.leaf]}</dd></div>}
-        </dl>
-      </section>}
+      {selected && (() => {
+        const selectedName = displayText(selected.label)
+        const selectedFacts: FactItem[] = [
+          { id: 'name', label: 'Name', value: selectedName, content: <bdi>{selectedName}</bdi>, copyValue: selectedName, mono: true },
+          { id: 'type', label: 'Type', value: selected.type },
+          { id: 'dependencyType', label: 'Dependency type', value: selected.dependencyType ?? '' },
+          ...selected.leaf ? [{ id: 'note', label: 'Note', value: dependencyLeafWords[selected.leaf] }] : []
+        ]
+        return <section className="property-section dependencies-selected" aria-label="Selected object">
+          <h3 className="peek-group">Selected object</h3>
+          <FactGrid key={selected.id} compact facts={selectedFacts} />
+        </section>
+      })()}
     </div>
     <DialogFooter
       leading={<>

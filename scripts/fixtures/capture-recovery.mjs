@@ -1,4 +1,4 @@
-import { activeDocumentName, backendReady, clickToClose, connectDialogWindow, dialogClosed, documentTabs, explorerTree, outputStatus, outputView, planCanvas, planViewer, queryBarButton, quickInputActive } from './ui.mjs'
+import { activeDocumentName, backendReady, clickQueryPlanOption, clickToClose, connectDialogWindow, dialogClosed, documentTabs, explorerTree, outputStatus, outputView, planCanvas, planViewer, queryBarButton, queryPlanButton, quickInputActive } from './ui.mjs'
 
 /** Crash the real sidecar while one tab profiles, inspect only that run's collector from another query tab,
  * reconnect through the palette, and let the next toolbar capture recover it. No backend request starts a run. */
@@ -17,8 +17,7 @@ export async function checkCaptureRecovery({ application, page, expect, run, agg
     await expect(planViewer(page).getByRole('button', { name: 'Live', exact: true })).toHaveAttribute('aria-pressed', 'true')
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
     await page.keyboard.press(`${mod}+n`)
-    await expect(queryBarButton(page, 'Include Live Execution Plan')).toHaveAttribute('aria-pressed', 'false')
-    await expect(queryBarButton(page, 'Include Actual Execution Plan')).toHaveAttribute('aria-pressed', 'false')
+    await expect(queryPlanButton(page)).toHaveText('Plan')
     await run(`SELECT name AS isolated_collector FROM sys.server_event_sessions WHERE SUBSTRING(name,46,32)=N'${id}' AND name LIKE N'VariaActual[_]%';`)
     await expect(outputStatus(page)).toContainText(/^Completed/)
     await outputView(page, /^Results/).click()
@@ -58,13 +57,13 @@ export async function checkCaptureRecovery({ application, page, expect, run, agg
     await run(`DECLARE @until datetime2=DATEADD(second,5,SYSDATETIME()); WHILE EXISTS(${alive}) AND SYSDATETIME()<@until WAITFOR DELAY '00:00:00.025'; SELECT COUNT(*) AS physical_connections_remaining FROM (${alive}) AS c(n);`)
     await outputView(page, /^Results/).click()
     await expect(page.getByRole('gridcell', { name: '0', exact: true })).toBeVisible()
-    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
-    await queryBarButton(page, 'Include Actual Execution Plan').click()
+    await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
+    await clickQueryPlanOption(page, 'Include Actual Plan')
     await run('SELECT TOP (1) name AS recovered_capture FROM sys.all_objects ORDER BY object_id;')
-    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+    await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
     await outputView(page, /^Execution plan/).click()
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
-    await queryBarButton(page, 'Include Actual Execution Plan').click()
+    await clickQueryPlanOption(page, 'Include Actual Plan')
     await run(count)
     await expect(outputStatus(page)).toContainText(/^Completed/)
     await outputView(page, /^Results/).click()

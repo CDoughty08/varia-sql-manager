@@ -179,7 +179,7 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   },
   'ssis.operations': {
     id: 'ssis.operations', label: 'SSIS Operations', scope: 'ssisdb', testOnly: false, probes: ['ssis.operations.list'],
-    description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again. A catalog that no longer exists ends it (CATALOG_MISSING).'
+    description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again at once, and its first rows under them keep no departed row. A catalog that no longer exists ends it (CATALOG_MISSING).'
   },
   'agent.jobs': {
     id: 'agent.jobs', label: 'SQL Server Agent jobs', scope: 'server', testOnly: false, probes: ['agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched'], hidden: 'statusOnly',

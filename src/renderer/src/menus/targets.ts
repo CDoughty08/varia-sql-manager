@@ -2,6 +2,7 @@ import type { ContextKeys, TargetKeys } from '../../../shared/commands/context-k
 import type { ContextMenuId } from '../../../shared/commands/menus'
 import { folderSpecs, kindSpecs, nodeStatuses } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
+import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { searchHitNames, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
@@ -198,7 +199,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
     explorerFolderInsertable: target?.kind === 'explorer' && target.node?.kind === 'folder' && !!target.node.insertable,
     explorerNodeNameless: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && target.node.kind !== 'server' && Object.hasOwn(kindSpecs, target.node.kind) && kindSpecs[target.node.kind as keyof typeof kindSpecs].insert === 'none',
-    explorerNodePeekable: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && isPeekKind(target.node.kind),
+    explorerNodePeekable: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && (isPeekKind(target.node.kind) || isBigQueryPropertyKind(target.node.kind)),
     explorerNodeDependencies: target?.kind === 'explorer' && !!target.node && target.node.kind !== 'folder' && isDependencyKind(target.node.kind),
     explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',

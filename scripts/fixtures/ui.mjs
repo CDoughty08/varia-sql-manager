@@ -152,6 +152,8 @@ export const part = {
   explorerSearch: '.object-search-pane',
   /** A Search Objects tab's document. */
   objectSearchTab: '[data-object-search]',
+  /** The Search Objects tab's summary status line (distinct from SearchDetails' FactGrid copy live region). */
+  objectSearchSummary: '.object-search-summary',
   explorerSearchField: '.object-search-pane .object-search-field',
   explorerSearchBar: '.object-search-pane .object-search-bar',
   explorerSearchFilters: '.object-search-pane .object-search-pane-filters',
@@ -273,6 +275,9 @@ export const part = {
   restoreTimelineLog: '.restore-timeline-track .restore-timeline-log',
   restoreTimelineCovered: '.restore-timeline-track .restore-timeline-covered',
   restoreTimelineSwatch: '.restore-timeline-swatch',
+  // The Schedules Timeline (src/renderer/src/agent/TimelineView.ts): a run's bar in a lane (hidden from assistive technology, as
+  // the live region announces the active run), to click one where it is drawn.
+  agentTimelineBar: '.agent-timeline-bar:not([hidden])',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',
@@ -399,9 +404,21 @@ export const menubar = page => page.getByRole('menubar', { name: 'Application me
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
 const activeQuerySurface = page => page.locator(`${part.activeEditorGroup}, ${part.toolbar}`)
-/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. Scopes to the active group when given a page, or to a specific group locator. */
+/** A query's own bar (SSMS's SQL Editor toolbar): Execute (morphing to Cancel while running), scope pill, unified Plan menu and Connection group. Scopes to the active group when given a page, or to a specific group locator. */
 export const queryBar = scope => ('mainFrame' in scope ? scope.locator(part.activeEditorGroup) : scope).getByRole('toolbar', { name: 'SQL Editor', exact: true })
 export const queryBarButton = (scope, name) => queryBar(scope).getByRole('button', named(name))
+/** The unified `Plan ▾` menu trigger on the modern QueryBar (`Plan`, `Actual Plan`, `Live Plan`, or `Actual + Live`). */
+export const queryPlanButton = scope => queryBar(scope).getByRole('button', { name: /^(?:Plan|Actual Plan|Live Plan|Actual \+ Live)$/ })
+/** The open `Plan ▾` popover menu (`Execution Plan Options`). */
+export const queryPlanMenu = page => page.getByRole('menu', { name: 'Execution Plan Options', exact: true })
+/** An item inside the open `Plan ▾` menu, matched by ARIA role and exact accessible name. */
+export const queryPlanOption = (page, name) => queryPlanMenu(page).getByRole('menuitemcheckbox', named(name)).or(queryPlanMenu(page).getByRole('menuitem', named(name)))
+/** Opens the unified `Plan ▾` menu (if closed) and clicks one of its items by exact name. */
+export async function clickQueryPlanOption(scope, name, page = 'mainFrame' in scope ? scope : scope.page()) {
+  const trigger = queryPlanButton(scope)
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await queryPlanOption(page, name).click()
+}
 export const queryScope = scope => queryBar(scope).locator(part.queryScope)
 export const queryConnection = scope => queryBar(scope).getByRole('group', { name: 'Connection', exact: true })
 /** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
@@ -904,6 +921,8 @@ export const objectSearchServerOptions = page => page.locator(part.objectSearchT
 export const objectSearchGroup = (page, server) => page.locator(part.objectSearchTab).getByRole('listbox', { name: `Results on ${server}`, exact: true })
 export const objectSearchHits = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option')
 export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
+/** The Search Objects tab's own summary status line (`role="status"`). */
+export const objectSearchSummary = page => page.locator(part.objectSearchTab).locator(part.objectSearchSummary)
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })

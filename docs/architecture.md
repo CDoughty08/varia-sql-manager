@@ -378,8 +378,11 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     (`plans/plan-copy.ts`). An editable grid copies its selected rows on the copy event (Ctrl+C, Edit › Copy) through
     `grid/row-copy.ts`: Table Designer, User Mapping and Securables (whose rows are virtualized) from their models, the others from the row as shown (`domCopyRows`, a cell's
     `data-copy` overriding its text), unless the copy is of selected text.
-    Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), each table memoized on the model, so editing
-    the draft keeps a grid's selection.
+    Table and Database Properties' lists are `fit` pages (`PropertiesGrid`), and SSIS Properties' lists (`SsisList`) are
+    `fit` pages too, each table memoized on the model so editing a draft keeps a grid's selection. Fitted grids in
+    scrolling columns render at natural height (`maxRows={Infinity}`) so the outer column is the sole vertical scroller
+    (zero scroll-within-a-scroll), while `GridView` (`outerScroll`) virtualizes painted rows against the nearest scrolling
+    ancestor so capped lists keep bounded DOM pools.
 - **Copy and Save** text is formatted only by `ResultTextWriter` and, for local tables, its TypeScript twin
   (`src/shared/results/text-writer.ts`, which the fake backend uses too), held byte for byte to the same goldens
   (`tests/fixtures/results-text/cases.json`: `TextChecks.cs`, `tests/results-text.test.ts`). A local table copies in the
@@ -810,6 +813,17 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
   (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs). Fonts are fixed in
   `src/renderer/src/fonts.ts`.
+- **Object inspectors and properties.** Full inspectors (`TableProperties`, `BigQueryPropertiesTab`, `PeekCard`,
+  `PeekTab`) share `ObjectInspectorFrame` (`src/renderer/src/kit/ObjectInspectorFrame.tsx`) with canonical tab order
+  (`Overview`, `Definition`, `Storage & Layout` / `Usage Telemetry`, then data/relationship tabs), focus-scoped
+  `Ctrl+1`–`9` (`objectInspectorFocus`), and a collapsible, resizable Vitals rail whose open state and width persist
+  independently for `full` and `peek` surfaces (`src/main/json-file.ts`). Every inspector and secondary property surface
+  (`DatabaseProperties`, `SsisProperties`, `SearchDetails`, `DependenciesDialog`) renders read-only metadata through
+  `FactGrid` (click-to-copy via `window.varia.writeClipboardText` with polite status announcements) and proportion meters
+  through `RatioBar`, upholding the zero scroll-within-a-scroll invariant: flow panes scroll as one page with
+  natural-height `LocalGrid` tables (`maxRows={Infinity}`), while fill panes host one edge-to-edge scrolling grid or
+  Monaco editor. Editable property sheets keep `FieldHintStrip` in a zero-height overlay dock cleared via
+  `<FieldHints resetKey={...}>` on tab or section switch.
 - **Getting Started** uses `src/shared/help/catalog.ts` and lazy JSX guide modules with matching stable IDs; references
   resolve through the live command, setting, effective shortcut and gesture catalogues. Lesson focus is explicit, so Help
   focus does not erase editor or results bindings. The singleton custom document has no text model, SQL session,

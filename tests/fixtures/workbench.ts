@@ -477,7 +477,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)
   const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, agentObjectOptions)
-  const schedules = new SchedulesService({ api, documents, connections, targetIdOf })
+  const schedules = new SchedulesService({ api, documents, connections, targetIdOf, openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name) } })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewerRecycled = vi.fn<(connectionId: string) => void>()

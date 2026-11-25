@@ -6,8 +6,10 @@ namespace Varia.Backend.Live;
 /// <summary>A table a reader built: its index in the probe's catalogue entry, its rows in catalogue column order, the rows it
 /// read past its cap (cut, as rowLimit), the predicate the source's own filter keeps rows by (null: every row), and the one
 /// its facets count rows by (null: every row; the Activity Monitor's view chip and toggles, but not its filter box or column
-/// value filters, so a column's own filter never empties its list).</summary>
-internal sealed record LiveReaderTable(int Table, List<LiveRow> Rows, long More = 0, Func<LiveRow, bool>? View = null, Func<LiveRow, bool>? FacetScope = null);
+/// value filters, so a column's own filter never empties its list), and whether the source read these rows anew under new
+/// args (Refiltered: a source whose args filter in SQL, as ssis.operations', so a tracked row they leave out was filtered
+/// away, not gone, and does not linger as departed).</summary>
+internal sealed record LiveReaderTable(int Table, List<LiveRow> Rows, long More = 0, Func<LiveRow, bool>? View = null, Func<LiveRow, bool>? FacetScope = null, bool Refiltered = false);
 
 /// <summary>What one probe's statements gave: the metrics row (null without series), its tables, status values, and the
 /// errors of statements that failed alone, each naming the tables or series it feeds. Sampled is false when nothing was read:
@@ -31,6 +33,8 @@ internal interface ILiveSqlReader
     Task<LiveReaderSample> ReadAsync(SqlConnection connection, string prologue, LiveDue item, Func<string, string, string>? testText, CancellationToken token);
     /// <summary>New args from live.subscribe or live.update, already checked for the source.</summary>
     void Apply(object args);
+    /// <summary>Before Apply on live.update: the probes whose rows the args change (ILiveSampler.Rereads); null for every probe.</summary>
+    IReadOnlyCollection<string>? Rereads(object args) => null;
     /// <summary>The connection was lost and may reach another server: per-row rates start again.</summary>
     void Reset();
     /// <summary>The prologue the reader's statements run with once its session probe has chosen one (an SSISDB reader reads

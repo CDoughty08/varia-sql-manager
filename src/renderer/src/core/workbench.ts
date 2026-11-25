@@ -500,6 +500,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // Object Explorer's Peek on Hover modifier arms the peek cursor and a press over a resting row; releasing either one
   // (Object Explorer's or the query editor's, as remapped) forgets a pending hover.
   const peek = new PeekService({ api, connections, scriptingOptions, platform, results, gestures: gesturesFor(platform),
+    billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     hoverModifier: key => gesturesFor(platform).isModifierKey('explorer.peekHover', key) || gesturesFor(platform).isModifierKey('editor.peekHover', key) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
@@ -600,8 +601,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const operatorsDocuments = new AlertOperatorDocumentService(operatorsSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operators') })
   // The Schedules document (AG-6c): Manage Schedules, and New › Schedule… with a new schedule in its editor.
   const schedules = new SchedulesService({
-    api, documents, connections, targetIdOf,
-    focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : '[data-agent-schedules-focus]'}`)?.focus())
+    api, documents, connections, targetIdOf, openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name) },
+    focus: (id, target) => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-schedules="${CSS.escape(id)}"] ${target === 'name' ? '[data-schedule-name]' : target === 'selected' ? 'button[aria-current]' : '[data-agent-schedules-focus]'}`)?.focus())
   })
   // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
   const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
@@ -628,10 +629,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
-  const peekTabs = new PeekTabService({
-    peek, documents, connections, targetIdOf, tableProperties,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
-  })
   const bigQueryProperties = new BigQueryPropertiesService({
     api, documents, connections, results, scriptingOptions,
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
@@ -639,6 +636,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       const root = document.querySelector<HTMLElement>(`[data-bigquery-properties="${CSS.escape(id)}"]`)
       ;(root?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('button'))?.focus()
     })
+  })
+  const peekTabs = new PeekTabService({
+    peek, documents, connections, targetIdOf, tableProperties, bigQueryProperties,
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-peek-tab="${CSS.escape(id)}"] [role="tab"][aria-selected="true"]`)?.focus())
   })
   const inspector = new InspectorService({ api, platform })
   const editorPeek = new EditorPeekService({ sqlLanguage, connections, scripting, peek, peekTabs })

@@ -6,7 +6,7 @@ import { connectLive } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { checkCanvasUx } from './fixtures/plan-canvas-ux.mjs'
-import { backendReady, connectDialogWindow, localGrid, planCanvas, planViewer, queryBarButton, documentTabs, outputView, pane, selectOpenDocument, submitConnect } from './fixtures/ui.mjs'
+import { backendReady, clickQueryPlanOption, connectDialogWindow, localGrid, planCanvas, planViewer, queryBarButton, queryPlanButton, queryPlanOption, documentTabs, outputView, pane, selectOpenDocument, submitConnect } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -34,7 +34,9 @@ try {
     await expect(backendReady(page, live ? /\.NET \d+\./ : 'fake')).toBeVisible({ timeout: 30_000 })
     // Windows CI has a 1024x768 display. Exercise that layout everywhere instead of relying on the host's screen.
     await resizeContent(application, page, 1024, 700)
-    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeDisabled()
+    await queryPlanButton(page).click()
+    await expect(queryPlanOption(page, 'Display Estimated Plan')).toBeDisabled()
+    await page.keyboard.press('Escape')
     if (live) await connectLive(application, page, expect)
     else {
       await page.getByRole('button', { name: 'Connect', exact: true }).first().click()
@@ -48,11 +50,11 @@ try {
     }
     const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
     // All three features coexist: an estimate preserves ordinary grids, actual capture and the statistics trial.
-    await queryBarButton(page, 'Include Actual Execution Plan').click()
+    await clickQueryPlanOption(page, 'Include Actual Plan')
     await queryBarButton(page, 'Include Client Statistics').click()
     await text(live ? 'SELECT COUNT_BIG(*) AS first_value FROM sys.objects;\nGO\nSELECT COUNT_BIG(*) AS second_value FROM sys.columns;' : 'ACTUAL_PLAN_FIXTURE')
     await page.keyboard.press('F5')
-    await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+    await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
     await expect(outputView(page, 'Execution plan, 2 plans')).toBeVisible()
     const firstCell = page.getByRole('grid', { name: /^Result 1 of/ }).getByRole('gridcell').first()
     // The result summary can arrive before the worker paints this cell's page.
@@ -66,7 +68,7 @@ try {
     await expect(page.locator('[data-estimated-plan]')).toContainText('Estimated')
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
     await expect(outputView(page, 'Execution plan, Estimated').getByText('1', { exact: true })).toBeVisible()
-    await expect(queryBarButton(page, 'Include Actual Execution Plan')).toHaveAttribute('aria-pressed', 'true')
+    await expect(queryPlanButton(page)).toHaveText('Actual Plan')
     await expect(queryBarButton(page, 'Include Client Statistics')).toHaveAttribute('aria-pressed', 'true')
     await outputView(page, 'Client Statistics').click()
     await expect(statistics.getByRole('columnheader', { name: 'Run 1', exact: true })).toBeVisible()
@@ -160,7 +162,7 @@ try {
     // A toolbar click keeps Monaco's selection: the erroneous first line must not be submitted.
     await text('SELECT * FROM dbo.VariaEstimateMissing;\nSELECT name FROM sys.objects;')
     await page.keyboard.press('Home'); await page.keyboard.press('Shift+End')
-    await queryBarButton(page, 'Display Estimated Execution Plan').click()
+    await clickQueryPlanOption(page, 'Display Estimated Plan')
     await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
     if (!live) {
       const calls = parseCalls(await readFile(join(control, 'calls.jsonl'), 'utf8'))
@@ -169,14 +171,14 @@ try {
     }
     if (live) {
       await text('SET SHOWPLAN_XML OFF\nGO\nSELECT 1;')
-      await queryBarButton(page, 'Display Estimated Execution Plan').click()
+      await clickQueryPlanOption(page, 'Display Estimated Plan')
       await expect(page.locator('[data-estimated-plan]').getByRole('alert')).toContainText('Remove SHOWPLAN')
       await text('CREATE TABLE #estimate_ui(n int); INSERT #estimate_ui VALUES(42); SET ARITHABORT OFF; SET TEXTSIZE 1234; BEGIN TRAN;')
       await page.keyboard.press('F5')
-      await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+      await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
       await text('SELECT * FROM dbo.VariaEstimateMissing;\nSELECT n FROM #estimate_ui;')
       await page.keyboard.press('Home'); await page.keyboard.press('Shift+End')
-      await queryBarButton(page, 'Display Estimated Execution Plan').click()
+      await clickQueryPlanOption(page, 'Display Estimated Plan')
       await expect(page.locator('[data-estimated-plan]').getByRole('alert')).toContainText('#estimate_ui')
       // Switch mode through the visible pane. The second line stays selected and can see the original session's temp table.
       await page.getByRole('button', { name: 'Estimate in query session', exact: true }).click()
@@ -188,18 +190,18 @@ try {
       await page.getByRole('menubar', { name: 'Application menu', exact: true }).getByRole('menuitem', { name: 'Query', exact: true }).click()
       await page.getByRole('menu', { name: 'Query', exact: true }).getByRole('menuitem', { name: 'Display Estimated Plan in Query Session', exact: true }).click()
       await expect(planCanvas(page).locator('canvas')).toHaveCount(1)
-      await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+      await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
       await text('SELECT @@TRANCOUNT AS open_transactions, n FROM #estimate_ui;')
       await page.keyboard.press('F5')
       await expect(page.getByRole('gridcell', { name: '42', exact: true })).toBeVisible()
       await expect(page.getByRole('gridcell', { name: '1', exact: true })).toBeVisible()
-      await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+      await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
       await text('ROLLBACK; SELECT 42 AS ordinary;')
       await page.keyboard.press('F5')
       await expect(page.getByRole('gridcell', { name: '42', exact: true })).toBeVisible()
       await expect(page.locator('[data-estimated-plan]')).toHaveCount(0)
       // A streamed row can precede actual-capture cleanup; close only after the execution has settled.
-      await expect(queryBarButton(page, 'Display Estimated Execution Plan')).toBeEnabled()
+      await expect(queryBarButton(page, /Execute|Run Selection/)).toBeEnabled()
     }
     // A query with only an estimate has no ordinary ResultsService run to supply its Ctrl+R restore view.
     await selectOpenDocument(page, /^SQLQuery2/)

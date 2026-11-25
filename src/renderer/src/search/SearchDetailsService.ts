@@ -1,4 +1,4 @@
-import { bigQueryDetailKinds, bigQueryPropertyKinds, type BigQueryDetailKind, type BigQueryProperties } from '../../../shared/bigquery/objects'
+import { bigQueryDetailKinds, bigQueryTablePropertyKinds, type BigQueryDetailKind, type BigQueryProperties } from '../../../shared/bigquery/objects'
 import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { isLiveConnection, type ConnectionAvailability } from '../services/connection-availability'
@@ -103,7 +103,7 @@ export interface SearchDetailsOptions {
 /** A tab's reads: Peek's reader, a Script As request, a BigQuery properties request, a billed CREATE's cost prompt. */
 interface Reads { peek?: PeekReader; script?: string; timer?: unknown; properties?: string; prompt?: AbortController }
 
-const isBigQueryTableKind = (kind: string): boolean => (bigQueryPropertyKinds as readonly string[]).includes(kind)
+const isBigQueryTableKind = (kind: string): boolean => (bigQueryTablePropertyKinds as readonly string[]).includes(kind)
 /** The kind bigquery.properties reads for a BigQuery hit: a table-like object or a routine. */
 export const bigQueryDetailKind = (object: ObjectSearchHit['object']): BigQueryDetailKind | undefined =>
   object.project !== undefined && object.dataset !== undefined && object.name !== undefined && (bigQueryDetailKinds as readonly string[]).includes(object.kind) ? object.kind as BigQueryDetailKind : undefined
