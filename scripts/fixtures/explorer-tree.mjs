@@ -81,11 +81,16 @@ async function settledInView(row) {
 }
 
 async function findExplorerRow(page, path) {
-  const found = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
-  if (found) return found
   const tree = explorerTree(page), label = path.join(' › ')
+  const immediate = findExplorerPath(await renderedRows(page), path)?.id ?? null
+  if (immediate) return page.locator('#' + immediate)
   const state = () => tree.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight, scrollHeight: element.scrollHeight }))
   const before = await state()
+  // When the tree fits in its viewport, scrolling cannot reveal anything; wait for the row to finish rendering instead.
+  if (before.scrollHeight <= before.height + 1) {
+    const found = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
+    if (found) return found
+  }
   console.log(`Object Explorer row ${label} was not rendered (scrollTop ${before.top}, height ${before.height}, scroll height ${before.scrollHeight}; rows: ${(await explorerLines(page)).join(' | ')}); scrolling to it.`)
   /** Scrolls to `top` and returns the rows rendered for it, once they cover the viewport (or what is rendered after 2 s). */
   const windowAt = async top => {
@@ -98,23 +103,34 @@ async function findExplorerRow(page, path) {
     await expect.poll(async () => explorerCovers(rows = await renderedRows(page), view.top, view.bottom), { timeout: 2000 }).toBe(true).catch(() => {})
     return { view, rows }
   }
-  const step = Math.max(22, Math.floor(before.height / 2)), windows = [await renderedRows(page)]
-  for (let top = 0; ; top += step) {
-    const { view, rows } = await windowAt(top)
-    windows.push(rows)
-    const target = findExplorerPath(explorerOutline(windows), path)
-    if (target) {
-      // In view, then the row rendered at its offset, once that window agrees with the outline.
-      const { rows: there } = await windowAt(Math.max(0, target.top - Math.floor(before.height / 2)))
-      const row = there.find(row => Math.abs(row.top - target.top) <= 1 && row.level === target.level && row.label === target.label)
-      if (row && Math.abs((findExplorerPath(explorerOutline([...windows, there]), path)?.top ?? -2) - target.top) <= 1) {
-        console.log(`Object Explorer row ${label} found at offset ${target.top} in an outline of ${windows.length} windows.`)
-        return page.locator('#' + row.id)
+  const scan = async () => {
+    const current = await state()
+    const step = Math.max(22, Math.floor(current.height / 2)), windows = [await renderedRows(page)]
+    for (let top = 0; ; top += step) {
+      const { view, rows } = await windowAt(top)
+      windows.push(rows)
+      const target = findExplorerPath(explorerOutline(windows), path)
+      if (target) {
+        // In view, then the row rendered at its offset, once that window agrees with the outline.
+        const { rows: there } = await windowAt(Math.max(0, target.top - Math.floor(current.height / 2)))
+        const row = there.find(row => Math.abs(row.top - target.top) <= 1 && row.level === target.level && row.label === target.label)
+        if (row && Math.abs((findExplorerPath(explorerOutline([...windows, there]), path)?.top ?? -2) - target.top) <= 1) {
+          console.log(`Object Explorer row ${label} found at offset ${target.top} in an outline of ${windows.length} windows.`)
+          return page.locator('#' + row.id)
+        }
+        break
       }
-      break
+      if (view.bottom >= (await state()).scrollHeight) break
     }
-    if (view.bottom >= (await state()).scrollHeight) break
+    return null
   }
+  const scanned = await scan()
+  if (scanned) return scanned
+  // A direct caller may arrive while a parent folder is still loading; fall back to waiting up to 2 s and rescanning once.
+  const waited = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
+  if (waited) return waited
+  const rescanned = await scan()
+  if (rescanned) return rescanned
   const after = await state()
   throw new Error(`Object Explorer row ${label} is not in the tree (scrollTop ${after.top}, height ${after.height}, scroll height ${after.scrollHeight}): ${(await explorerLines(page)).join(' | ')}`)
 }

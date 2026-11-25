@@ -40,7 +40,7 @@ if (!appImage) {
   // The backend is published ReadyToRun.
   const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
   if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
-  const languageProblems = await sqlToolsServiceProblems(resolve(resources, 'sqltools-service'), hostRid())
+  const languageProblems = await sqlToolsServiceProblems(resolve(resources, 'sqltools-service'), process.env.VARIA_PACKAGED_RID || hostRid())
   if (languageProblems.length) throw new Error(`Packaged SQL Tools Service: ${languageProblems.join(' ')}`)
 }
 

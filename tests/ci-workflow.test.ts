@@ -75,16 +75,17 @@ describe('CI workflow', () => {
     // BigQuery's emulator checks ride in live slot 1, with no job of their own, against the emulator pinned by digest.
     const emulator = live.steps.find(step => step.run.includes('--bigquery-emulator-live'))!
     expect(emulator.if?.startsWith('matrix.slot == 1 && (success() || failure())')).toBe(true)
-    expect(emulator.run).toContain('node scripts/ci-docker.mjs start-bigquery')
+    expect(live.steps.some(step => step.run.includes('node scripts/ci-docker.mjs start-bigquery --detach'))).toBe(true)
+    expect(emulator.run).toContain('node scripts/ci-docker.mjs wait-bigquery')
     const dockerScript = readFileSync('scripts/ci-docker.mjs', 'utf8')
     expect(dockerScript).toMatch(/ghcr\.io\/goccy\/bigquery-emulator@sha256:[\da-f]{64}/)
     expect(dockerScript).toContain("'-p', '9060:9060'")
     expect(dockerScript).toContain("'--project=varia-emulator', '--dataset=varia_fixture'")
-    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060\n        run: |\n          node scripts/ci-docker.mjs start-bigquery')
+    expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT: http://localhost:9060\n        run: |\n          node scripts/ci-docker.mjs wait-bigquery')
     // And the Connect dialog's BigQuery phase (connections-smoke.mjs) runs against the same emulator in the Linux smoke shard that owns it.
     const linux = workflow.get('smoke-linux')!.steps, start = linux.findIndex(step => step.id === 'bigquery'), shards = linux.findIndex(step => step.run.includes('smoke-shards.mjs ${{ matrix.shard }}'))
     expect(linux[start]?.run).toContain('smoke-shards.mjs --has-suite scripts/connections-smoke.mjs')
-    expect(linux[start]?.run).toContain('node scripts/ci-docker.mjs start-bigquery')
+    expect(linux[start]?.run).toContain('node scripts/ci-docker.mjs start-bigquery --detach')
     expect(start).toBeGreaterThan(-1)
     expect(start).toBeLessThan(shards)
     expect(readFileSync('.github/workflows/ci.yml', 'utf8')).toContain('          VARIA_TEST_BIGQUERY_ENDPOINT: http://localhost:9050\n        run: xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/smoke-shards.mjs')
@@ -213,10 +214,11 @@ describe('CI workflow', () => {
     expect(job.timeout).toBeGreaterThan(step.timeout!)
     expect(readFileSync('scripts/audit.mjs', 'utf8')).toContain("'npm audit --package-lock-only --json --audit-level=high'")
   })
-  it('type-checks on Linux in every full run, and states its job count truly', () => {
+  it('type-checks on Linux in every full run, scopes Windows/macOS Check to OS-sensitive checks, and states its job count truly', () => {
     const yaml = readFileSync('.github/workflows/ci.yml', 'utf8')
-    // Windows and macOS skip tsc: it reads only sources and installed types, and Linux's case-sensitive paths are strictest.
-    expect(yaml).toContain("VARIA_CHECK_SKIP: ${{ matrix.os != 'ubuntu-24.04' && 'typecheck' || '' }}")
+    // Windows and macOS skip tsc and electron-vite build and run the OS-sensitive Vitest/.NET scope; Linux proves the full set.
+    expect(yaml).toContain("VARIA_CHECK_SKIP: ${{ matrix.os != 'ubuntu-24.04' && 'typecheck,build' || '' }}")
+    expect(yaml).toContain("VARIA_CHECK_SCOPE: ${{ matrix.os != 'ubuntu-24.04' && 'os' || '' }}")
     expect(workflow.get('check')!.matrix.get('os')!.split(', ')).toContain('ubuntu-24.04')
     const size = (job: Job) => [...job.matrix.values()].reduce((product, axis) => product * axis.split(',').length, 1)
     const count = own.filter(([, job]) => job.if === runAlways).reduce((sum, [, job]) => sum + size(job), 0)

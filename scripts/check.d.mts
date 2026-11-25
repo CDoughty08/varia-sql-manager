@@ -11,6 +11,7 @@ export function run(name: string, command: string, write?: (text: string) => voi
 export function flushRunning(write?: (text: string) => void): void
 export const skippable: Readonly<Record<string, string>>
 export function parseSkip(value?: string): string[]
+export function parseScope(value?: string): 'full' | 'os'
 export function skippedNote(layout: CheckNode, skip: readonly string[]): string
 export function cpuBudget(env?: Record<string, string | undefined>, machine?: number): number
 export const checkStarted: number

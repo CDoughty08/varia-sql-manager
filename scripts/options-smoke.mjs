@@ -467,6 +467,7 @@ try {
   await dialog().getByRole('button', { name: 'Reset Show outline', exact: true }).click()
   await expect(applyButton).toBeEnabled()
   await applyButton.click()
+  await expect(applyButton).toBeDisabled()
   await dialog().getByRole('button', { name: /^Modified \(/ }).click()
   await showPage('Query Results', 'SQL Server', 'Results to Grid')
   // A text field in the dialog window has its menu, by mouse and by Shift+F10; Escape closes the menu, not the dialog.
@@ -499,8 +500,7 @@ try {
   // Smaller than the default and than CI's screens: a reopened window is kept 32 px inside the screen.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(item => item.getTitle() === 'Options').setContentSize(900, 600))
   await expect.poll(() => options.evaluate(() => [innerWidth, innerHeight])).toEqual([900, 600])
-  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
-  await clickToClose(dialog().getByRole('button', { name: 'Discard Changes', exact: true }))
+  await clickToClose(dialog().getByRole('button', { name: 'Cancel', exact: true }))
   await closed()
   await openOptions()
   expect((await optionsWindow()).size).toEqual([900, 600])

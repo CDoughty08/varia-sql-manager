@@ -197,7 +197,7 @@ describe('result page access', () => {
   })
   it('packs only behind the store\'s switch, off unless a check or the backend process\'s hidden-result policy turns it on', () => {
     const store = readFileSync('backend/Varia.Backend/Results/ResultStore.cs', 'utf8')
-    expect(store).toMatch(/internal static PagePacking DefaultPacking \{ get; set; \} = PagePacking\.Off;/)
+    expect(store).toMatch(/internal static PagePacking DefaultPacking\s*\{\s*get => defaultPacking\.Value \?\? PagePacking\.Off;\s*set => defaultPacking\.Value = value;\s*\}/)
     expect(lines(/DefaultPacking\s*=(?!=)/, ['backend/Varia.Backend.Tests/Program.cs']).filter(line => !line.startsWith('backend/Varia.Backend/Results/ResultStore.cs'))).toEqual([])
     // Only the service that runs the policy (ResultPacker) turns a product store on request, and only the backend process asks it to.
     const file = (line: string) => line.replace(/:\d+$/, '')
