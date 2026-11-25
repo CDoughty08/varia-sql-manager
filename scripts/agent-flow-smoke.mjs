@@ -54,7 +54,8 @@ try {
   await expect(views.getByRole('radio', { name: 'List' })).toBeFocused()
   await views.getByRole('radio', { name: 'Flow' }).click()
   await expect(tree.getByRole('treeitem')).toHaveCount(3)
-  await expect(job.locator('canvas')).toBeVisible()
+  // The tree's own canvas: History's duration chart is a canvas too.
+  await expect(tree.locator('canvas')).toBeVisible()
   await expect(item(1)).toHaveAccessibleName('Step 1, Check integrity, T-SQL, Start step. On success, go to the next step. On failure, quit reporting failure.')
   await expect(item(3)).toHaveAccessibleName(/On success, go to the next step, which fails the job\./)
   await tree.scrollIntoViewIfNeeded()

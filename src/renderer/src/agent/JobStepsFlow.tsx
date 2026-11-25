@@ -135,7 +135,8 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   }, [flow, layout, steps, draft.steps, model])
   const palette: FlowCanvasColors = useMemo(() => ({
     background: colors['panel.background'], card: colors['input.background'], text: colors.foreground, muted: colors.descriptionForeground, border: colors['panel.border'],
-    accent: colors.focusBorder, selection: colors['list.inactiveSelectionBackground'], success: colors.successForeground, error: colors.errorForeground, warning: colors.warningForeground
+    accent: colors.focusBorder, selection: colors['list.inactiveSelectionBackground'], success: colors.successForeground, error: colors.errorForeground, warning: colors.warningForeground,
+    dots: colors['charts.canvasDots']
   }), [colors])
 
   // The canvas is created once per mount (and on Retry) and told what changed; it reads the latest model and handlers through refs.

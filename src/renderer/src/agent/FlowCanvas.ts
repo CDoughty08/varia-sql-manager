@@ -17,7 +17,12 @@ import { LabelPool } from '../plans/labels'
 export interface FlowCanvasColors {
   readonly background: string; readonly card: string; readonly text: string; readonly muted: string; readonly border: string
   readonly accent: string; readonly selection: string; readonly success: string; readonly error: string; readonly warning: string
+  /** The dot grid the graph sits on (rx-flow's canvas). */
+  readonly dots: string
 }
+
+/** The dot grid's pitch at 100 %, in graph units (rx-flow's 16 px), and its dots' radius on screen. */
+const gridPitch = 16, gridDot = 1
 export type FlowTone = 'ok' | 'bad' | 'muted' | 'run' | 'accent'
 /** One step as the canvas draws it. */
 export interface FlowCanvasNode {
@@ -72,6 +77,8 @@ const dash = 5, gap = 3
 export class FlowCanvas {
   private readonly app = new Application()
   private readonly world = new Container()
+  /** In screen space, under the world: the dots move with the graph but stay one size at every zoom. */
+  private readonly grid = new Graphics()
   private readonly back = new Graphics()
   private readonly edges = new Graphics()
   private readonly cards = new Graphics()
@@ -145,7 +152,7 @@ export class FlowCanvas {
       this.app.canvas.addEventListener('webglcontextlost', this.contextLost)
       this.options.root.append(this.app.canvas)
       this.world.addChild(this.back, this.edges, this.cards, this.labels, this.front)
-      this.app.stage.addChild(this.world)
+      this.app.stage.addChild(this.grid, this.world)
       this.resize()
     } catch {
       try { this.app.destroy(true, { children: true }) } catch { /* Initialization may have failed before a renderer exists. */ }
@@ -359,6 +366,16 @@ export class FlowCanvas {
     const angle = Math.atan2(y - py, x - px), dx = Math.cos(angle), dy = Math.sin(angle)
     graphics.moveTo(x, y).lineTo(x - dx * 7 - dy * 4, y - dy * 7 + dx * 4).lineTo(x - dx * 7 + dy * 4, y - dy * 7 - dx * 4).closePath().fill(color)
   }
+  /** Only the dots the view shows, one fill; zoomed out, every other dot is left out so the grid never turns into a texture. */
+  private drawGrid(color: string): void {
+    this.grid.clear()
+    let pitch = gridPitch * this.camera.scale
+    while (pitch < gridPitch / 2) pitch *= 2
+    const first = (offset: number) => ((offset % pitch) + pitch) % pitch
+    const x0 = first(this.camera.x), y0 = first(this.camera.y)
+    for (let y = y0; y < this.height; y += pitch) for (let x = x0; x < this.width; x += pitch) this.grid.circle(Math.round(x), Math.round(y), gridDot)
+    this.grid.fill(color)
+  }
   private draw(): void {
     const { colors, model, selected, focused } = this.options
     const { layout, flow, nodes } = model
@@ -366,6 +383,7 @@ export class FlowCanvas {
     this.world.position.set(this.camera.x, this.camera.y)
     this.world.scale.set(this.camera.scale)
     this.back.clear(); this.edges.clear(); this.cards.clear(); this.front.clear()
+    this.drawGrid(colors.dots)
     this.pool.begin()
     const label = (key: string, text: string, x: number, y: number, style: TextStyle, _fill: string, anchorX = 0) => {
       const sprite = this.pool.get(key)

@@ -197,7 +197,7 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   says what each side added, deleted, edited or reordered.
   **Flow** (the switch at the top left of Steps, List | Flow; every document opens on List; `JobStepsFlow.tsx`, the rules in
   `src/shared/agent/flow.ts`) draws the same draft as a graph with Pixi, as the execution plan viewer does (`FlowCanvas.ts`, sharing its
-  camera, zoom and label pool). Steps stay in step order, top to bottom; each has its number, name, type and icon, and its key field
+  camera, zoom and label pool), on a dot grid that pans with the graph (theme key `charts.canvasDots`). Steps stay in step order, top to bottom; each has its number, name, type and icon, and its key field
   (database, package, run as, retries or command). Its ✓ and ✗ ports lead to the next step (straight), to a Quit pill, to an
   **End · job fails** node (the last step's Go to the next step), or along a lane beside the column (success on the left, failure on
   the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow, a loop is tagged
