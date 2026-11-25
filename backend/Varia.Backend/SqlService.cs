@@ -639,8 +639,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
     private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) =>
-        args.StarredProjects is null && args.AllProjects is null && args.Scope is null && args.Stale is null && args.Bulk is null ? args
-        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: starredProjects, allProjects, scope, stale and bulk are BigQuery's.");
+        args.StarredProjects is null && args.AllProjects is null && args.MaxProjects is null && args.Scope is null && args.Stale is null && args.Bulk is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: starredProjects, allProjects, maxProjects, scope, stale and bulk are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");

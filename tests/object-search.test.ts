@@ -133,12 +133,14 @@ describe('object search contracts', () => {
       expect(ok(bad), JSON.stringify(bad)).toBe(false)
     const index = (params: object) => objectIndexParamsSchema.safeParse({ ...ids, ...params }).success
     expect(index({ allProjects: false, starredProjects: ['varia-alpha', 'varia-beta'], scope: { project: 'varia-alpha', dataset: 'sales' } })).toBe(true)
-    expect(index({ allProjects: true, starredProjects: [] })).toBe(true)
+    expect(index({ allProjects: true, maxProjects: 1, starredProjects: [] })).toBe(true)
+    expect(index({ allProjects: true, maxProjects: objectSearchLimits.bigQuery.maxProjectsCap })).toBe(true)
     expect(index({ scope: { project: 'varia-alpha' } })).toBe(true)
     expect(index({ stale: true })).toBe(true)
     for (const bad of [
       { scope: { project: 'varia-alpha' }, stale: true }, { stale: false }, { scope: { dataset: 'sales' } }, { scope: { project: 'varia-alpha', extra: 1 } }, { scope: { project: 'x' } },
-      { extraDetails: true }, { allProjects: 'yes' }, { starredProjects: ['Bad Project'] },
+      { extraDetails: true }, { allProjects: 'yes' }, { maxProjects: 0 }, { maxProjects: objectSearchLimits.bigQuery.maxProjectsCap + 1 }, { maxProjects: 1.5 }, { maxProjects: '500' },
+      { starredProjects: ['Bad Project'] },
       { starredProjects: Array.from({ length: objectSearchLimits.bigQuery.starredProjects + 1 }, (_, i) => `varia-proj-${i}`) }
     ])
       expect(index(bad), JSON.stringify(bad)).toBe(false)
@@ -214,7 +216,7 @@ class Connections extends SnapshotStore<readonly LiveConnection[]> {
 }
 const connection = (id: string, lost = false) => ({ id, server: 'srv-' + id, database: 'master', serverVersion: '16.0', options: {}, ...lost ? { lost: true } : {} }) as unknown as LiveConnection
 
-function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; allProjects?: boolean; starredProjects?: (connectionId: string) => readonly string[] } = {}) {
+function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; allProjects?: boolean; maxProjects?: number; starredProjects?: (connectionId: string) => readonly string[] } = {}) {
   const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], search: [] as Parameters<VariaApi['explorerSearch']>[0][], cancel: [] as string[][] }
   const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const pendingSearch: ((result: ApiResult<ObjectSearchResult>) => void)[] = []
@@ -234,8 +236,9 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; al
   } as unknown as ObjectSearchOptions['documents']
   const connections = new Connections([])
   // Read from `settings` each time, so a test can change one as Options would.
-  const values: Record<string, boolean> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true },
-    get 'objectExplorer.search.bigQueryAccessibleProjects'() { return settings.allProjects ?? true } }
+  const values: Record<string, boolean | number> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true },
+    get 'objectExplorer.search.bigQueryAccessibleProjects'() { return settings.allProjects ?? true },
+    get 'objectExplorer.search.bigQueryMaxProjects'() { return settings.maxProjects ?? objectSearchLimits.bigQuery.maxProjects } }
   const listeners = new Set<(event: WorkbenchEvent) => void>()
   const events = { subscribe: (listener: (event: WorkbenchEvent) => void) => { listeners.add(listener); return { dispose: () => { listeners.delete(listener) } } }, emit: (event: WorkbenchEvent) => listeners.forEach(listener => listener(event)) }
   const timers: Timers & { run(): void } = (() => {
@@ -387,11 +390,11 @@ describe('ObjectSearchService', () => {
     expect(Object.keys(service.getSnapshot().indexes)).toEqual(['b'])
   })
 
-  it('indexes BigQuery connections on connect, passing bigQueryAccessibleProjects and starredProjects to explorerIndex', async () => {
-    const { service, calls, connections, pendingIndex } = harness({ allProjects: true, starredProjects: id => id === 'bq' ? ['varia-beta', 'bigquery-public-data'] : ['ignored'] })
+  it('indexes BigQuery connections on connect, passing bigQueryAccessibleProjects, bigQueryMaxProjects and starredProjects to explorerIndex', async () => {
+    const { service, calls, connections, pendingIndex } = harness({ allProjects: true, maxProjects: 1200, starredProjects: id => id === 'bq' ? ['varia-beta', 'bigquery-public-data'] : ['ignored'] })
     connections.set([bigQueryConnection('bq'), connection('a')])
     expect(calls.index).toEqual([
-      { connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: true, starredProjects: ['varia-beta', 'bigquery-public-data'] },
+      { connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: true, maxProjects: 1200, starredProjects: ['varia-beta', 'bigquery-public-data'] },
       { connectionId: 'a', requestId: 'req2', definitions: true }
     ])
     pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 3 }), elapsedMs: 1 } })
@@ -401,8 +404,8 @@ describe('ObjectSearchService', () => {
     const id = service.open(undefined, 'orders', true)!
     expect(calls.search.filter(call => call.text === 'orders').map(call => call.connectionId).sort()).toEqual(['a', 'bq'])
     expect(service.getSnapshot().documents[id].allServers).toBe(true)
-    // When allProjects is false and starredProjects is empty, starredProjects is omitted.
-    const off = harness({ allProjects: false, starredProjects: () => [] })
+    // When allProjects is false and starredProjects is empty, maxProjects and starredProjects are omitted.
+    const off = harness({ allProjects: false, maxProjects: 1200, starredProjects: () => [] })
     off.connections.set([bigQueryConnection('bq')])
     expect(off.calls.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: false }])
   })
@@ -450,7 +453,7 @@ describe('ObjectSearchService', () => {
     expect(calls.index).toHaveLength(2)
     bq({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
-    expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: 'req3', definitions: true, allProjects: true, scope: { project: 'varia-alpha', dataset: 'sales' } })
+    expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: 'req3', definitions: true, allProjects: true, maxProjects: 500, scope: { project: 'varia-alpha', dataset: 'sales' } })
     pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
     // A project, a node below a dataset (its dataset), and the server's node (everything).
@@ -463,7 +466,7 @@ describe('ObjectSearchService', () => {
     pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
     service.refreshNode('bq', { type: 'object', object: { kind: 'server' } })
-    expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: expect.any(String), definitions: true, allProjects: true })
+    expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: expect.any(String), definitions: true, allProjects: true, maxProjects: 500 })
     pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
     // SQL Server's nodes re-read nothing (its index has no scoped refresh).
@@ -533,7 +536,7 @@ describe('ObjectSearchService', () => {
     const during = calls.index.length
     pendingIndex.at(-1)!(ok)
     await settle()
-    expect(calls.index.slice(during)).toEqual([{ connectionId: 'bq', requestId: expect.any(String), definitions: true, allProjects: true }])
+    expect(calls.index.slice(during)).toEqual([{ connectionId: 'bq', requestId: expect.any(String), definitions: true, allProjects: true, maxProjects: 500 }])
     pendingIndex.at(-1)!(ok)
     await settle()
     // Stop ends the refreshes waiting behind the build, and so does a build cancelled another way.

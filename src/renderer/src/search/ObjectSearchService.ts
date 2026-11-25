@@ -361,6 +361,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const previous = this.getSnapshot().indexes[connectionId]
     const definitions = this.o.settings.get('objectExplorer.search.definitions')
     const allProjects = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryAccessibleProjects') : undefined
+    const maxProjects = bigQuery && allProjects !== false ? this.o.settings.get('objectExplorer.search.bigQueryMaxProjects') : undefined
     const rawStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
     const starredProjects = rawStarred?.length ? [...rawStarred] : undefined
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
@@ -374,7 +375,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const send = (billed: BigQueryBulkIndex | undefined) => {
       void this.o.api.explorerIndex({
         connectionId, requestId, definitions,
-        ...allProjects !== undefined ? { allProjects } : {}, ...starredProjects ? { starredProjects } : {},
+        ...allProjects !== undefined ? { allProjects } : {}, ...maxProjects !== undefined ? { maxProjects } : {}, ...starredProjects ? { starredProjects } : {},
         ...bigQuery && partial ? partial : {}, ...billed ? { bulk: billed } : {}
       }).then(result => {
         const entry = this.getSnapshot().indexes[connectionId]

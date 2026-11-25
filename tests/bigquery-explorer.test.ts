@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { bigQueryFieldPathMax, bigQueryFieldText, bigQueryPath, isBigQueryFieldPath, isBigQueryName, quoteBigQuery } from '../src/shared/bigquery/names'
 import { bigQueryMaxColumnFacts, bigQueryMaxDefinition, bigQueryPreviewTargetSchema, bigQueryPropertiesLimits, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema, type BigQueryProperties, type BigQuerySchemaField } from '../src/shared/bigquery/objects'
 import type { BigQueryStarredProjectsView } from '../src/shared/bigquery-connections'
-import type { ExplorerChildrenResult, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, ExplorerChildrenResult, VariaApi } from '../src/shared/contracts'
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
 import { validateRequest, validateResult } from '../src/main/validation'
 import { contextRecord } from '../src/shared/commands/context-keys'
@@ -308,7 +308,7 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     bigQueryStarred.dispose()
   })
 
-  it('registers Star a Project… (paging + typing any project ID), Star/Unstar Project, and Remove from Explorer commands', async () => {
+  it('registers Star a Project… (paging + verifying typed project IDs), Star/Unstar Project, and Remove from Explorer commands', async () => {
     const { explorer, bigQueryStarred, connections } = setupExplorer(['varia-beta'])
     await bigQueryStarred.load()
     await Promise.resolve()
@@ -320,9 +320,25 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     const bigQueryConnectionProjects = vi.fn<VariaApi['bigQueryConnectionProjects']>(async params => params.pageToken
       ? { ok: true, value: { projects: [{ id: 'varia-gamma', friendlyName: 'Gamma' }] } }
       : { ok: true, value: { projects: [{ id: 'varia-alpha', friendlyName: 'Alpha' }, { id: 'varia-beta' }], nextPageToken: 'p2' } })
+    let holdPendingVerify: ((result: ApiResult<ExplorerChildrenResult>) => void) | undefined
+    const explorerChildren = vi.fn<VariaApi['explorerChildren']>(async params => {
+      const name = params.node.type === 'object' ? params.node.object.name : ''
+      if (name === 'bobs-tacos') {
+        return { ok: true, value: { nodes: [], elapsedMs: 1, error: { code: 'NOT_FOUND', message: 'BigQuery project “bobs-tacos” was not found.', retryable: false } } }
+      }
+      if (name === 'secret-project') {
+        return { ok: true, value: { nodes: [], elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'Permission denied on project “secret-project”.', retryable: false } } }
+      }
+      if (name === 'slow-project') {
+        return new Promise<ApiResult<ExplorerChildrenResult>>(resolve => { holdPendingVerify = resolve })
+      }
+      return { ok: true, value: { nodes: [], elapsedMs: 1 } }
+    })
+    const explorerCancel = vi.fn<VariaApi['explorerCancel']>(async ids => ({ ok: true, value: { cancelled: ids.length } }))
+    const refreshBigQuery = vi.fn()
     const contrib = explorerContribution(
-      { commands, documents: {} as never, connections, explorer, quickInput, bigQueryStarred },
-      { writeClipboardText: vi.fn(async () => ({ ok: true as const, value: undefined })), bigQueryConnectionProjects }
+      { commands, documents: {} as never, connections, explorer, quickInput, bigQueryStarred, objectSearch: { refreshNode: vi.fn(), refreshBigQuery } },
+      { writeClipboardText: vi.fn(async () => ({ ok: true as const, value: undefined })), bigQueryConnectionProjects, explorerChildren, explorerCancel }
     )
 
     const root = explorer.node(explorer.rootIds[0]!)!
@@ -343,7 +359,7 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.toggleStarProject', 'Star Project'])
     expect(titles(menuFor(sessionNode))).toContainEqual(['bigquery.removeSessionProject', 'Remove from Explorer'])
 
-    // Star a Project… loads all pages from bigQueryConnectionProjects and accepts typing an unlisted valid project ID.
+    // Star a Project… loads all pages from bigQueryConnectionProjects.
     const serverNode = explorer.menuNode(root.id)!
     expect(await commands.execute('bigquery.starProjectPrompt', { target: { kind: 'explorer', node: serverNode } }, 'menu')).toBe(true)
     await Promise.resolve()
@@ -354,11 +370,64 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
       ['varia-beta', true],
       ['varia-gamma', false]
     ])
-    quickInput.filter('bigquery-public-data')
-    expect(quickInput.getSnapshot().rows.map(row => row.item.id)).toEqual(['bigquery-public-data'])
+
+    // Typing a non-existent project ("bobs-tacos") verifies it via explorerChildren, refuses to star it, and keeps the picker open with an error.
+    quickInput.filter('bobs-tacos')
+    expect(quickInput.getSnapshot().rows.map(row => row.item.id)).toEqual(['bobs-tacos'])
     quickInput.accept(0)
     await Promise.resolve()
+    await Promise.resolve()
+    expect(explorerChildren).toHaveBeenLastCalledWith(expect.objectContaining({
+      connectionId,
+      node: { type: 'object', object: { kind: 'bqProject', name: 'bobs-tacos' } },
+      pageSize: 1
+    }))
+    expect(bigQueryStarred.isStarred(ada, 'bobs-tacos')).toBe(false)
+    expect(quickInput.visible).toBe(true)
+    expect(quickInput.getSnapshot().message).toEqual({
+      text: 'Could not star “bobs-tacos”: BigQuery project “bobs-tacos” was not found.',
+      severity: 'error'
+    })
+
+    // Typing an inaccessible project ("secret-project") is also refused.
+    quickInput.filter('secret-project')
+    quickInput.accept(0)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(bigQueryStarred.isStarred(ada, 'secret-project')).toBe(false)
+    expect(quickInput.visible).toBe(true)
+    expect(quickInput.getSnapshot().message?.severity).toBe('error')
+
+    // Editing the input while a verification check is in flight cancels the in-flight check and ignores its late reply.
+    quickInput.filter('slow-project')
+    quickInput.accept(0)
+    expect(quickInput.getSnapshot().busy).toBe(true)
+    quickInput.filter('bigquery-public-data')
+    expect(explorerCancel).toHaveBeenCalledTimes(1)
+    holdPendingVerify?.({ ok: true, value: { nodes: [], elapsedMs: 1 } })
+    await Promise.resolve()
+    expect(bigQueryStarred.isStarred(ada, 'slow-project')).toBe(false)
+
+    // Typing an accessible unlisted project ("bigquery-public-data") verifies it, closes the picker, stars it, and refreshes the index scope.
+    expect(quickInput.getSnapshot().rows.map(row => row.item.id)).toEqual(['bigquery-public-data'])
+    quickInput.accept(0)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(quickInput.visible).toBe(false)
     expect(bigQueryStarred.isStarred(ada, 'bigquery-public-data')).toBe(true)
+    expect(refreshBigQuery).toHaveBeenCalledWith(connectionId, { scope: { project: 'bigquery-public-data' } })
+
+    // Picking a project already listed by projects.list ("varia-gamma") stars immediately without calling explorerChildren again.
+    const callsBeforeListed = explorerChildren.mock.calls.length
+    expect(await commands.execute('bigquery.starProjectPrompt', { target: { kind: 'explorer', node: serverNode } }, 'menu')).toBe(true)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const gammaIndex = quickInput.getSnapshot().rows.findIndex(row => row.item.id === 'varia-gamma')
+    expect(gammaIndex).toBeGreaterThanOrEqual(0)
+    quickInput.accept(gammaIndex)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(explorerChildren).toHaveBeenCalledTimes(callsBeforeListed)
+    expect(quickInput.visible).toBe(false)
+    expect(bigQueryStarred.isStarred(ada, 'varia-gamma')).toBe(true)
+    expect(refreshBigQuery).toHaveBeenCalledWith(connectionId, { scope: { project: 'varia-gamma' } })
 
     // Remove from Explorer removes the session-only project.
     expect(await commands.execute('bigquery.removeSessionProject', { target: { kind: 'explorer', node: sessionNode } }, 'menu')).toBe(true)

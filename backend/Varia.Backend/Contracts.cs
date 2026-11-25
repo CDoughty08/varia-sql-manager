@@ -444,12 +444,13 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// sends droppable explorer.index.progress EVENTs and answers once every database was read or skipped; a newer build of the
 /// same connection, Stop, or a disconnect ends it (CANCELLED), keeping what it read.</summary>
 /// <summary>BigQuery only (SQL Server refuses them): StarredProjects names the user's starred projects (indexed with details even if
-/// projects.list does not return them), AllProjects discovers every accessible project via projects.list (default true), Scope re-reads one
-/// project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
+/// projects.list does not return them), AllProjects discovers every accessible project via projects.list (default true), MaxProjects
+/// caps how many accessible projects discovery keeps (1..BigQueryIndexLimits.MaxProjectsCap, default BigQueryIndexLimits.MaxProjects),
+/// Scope re-reads one project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
 /// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
 /// bigquery.indexEstimate and the cost prompts).</summary>
 internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, List<string>? StarredProjects = null, bool? AllProjects = null,
-    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null);
+    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
 /// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and

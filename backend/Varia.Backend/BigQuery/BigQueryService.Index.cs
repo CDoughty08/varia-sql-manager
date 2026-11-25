@@ -19,8 +19,9 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
 
     string IBigQueryIndexSource.BillingProject(string connectionId) => Connection(connectionId).Options.Project;
 
-    async Task<BigQueryProjectDiscovery> IBigQueryIndexSource.AccessibleProjectsAsync(string connectionId, CancellationToken token)
+    async Task<BigQueryProjectDiscovery> IBigQueryIndexSource.AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token)
     {
+        var cap = Math.Clamp(maxProjects, 1, BigQueryIndexLimits.MaxProjectsCap);
         var connection = Connection(connectionId);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var cut = false;
@@ -39,13 +40,13 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
                 // The emulator names a project only by its id; Google fills projectReference too.
                 var id = project.ProjectReference?.ProjectId ?? project.Id;
                 if (!BqNames.IsProject(id) || seen.Contains(id!)) continue;
-                if (seen.Count >= BigQueryIndexLimits.MaxProjects) { cut = true; break; }
+                if (seen.Count >= cap) { cut = true; break; }
                 seen.Add(id!);
             }
             pageToken = list.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next ? next : null;
             if (cut) break;
             if (pageToken is null) return new([.. seen.Order(StringComparer.Ordinal)], false);
-            if (seen.Count >= BigQueryIndexLimits.MaxProjects) { cut = true; break; }
+            if (seen.Count >= cap) { cut = true; break; }
         }
         if (pageToken is not null) cut = true;
         return new([.. seen.Order(StringComparer.Ordinal)], cut);

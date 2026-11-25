@@ -69,6 +69,8 @@ internal sealed partial class ObjectSearchService
             throw Invalid("starredProjects.");
         var billing = source.BillingProject(args.ConnectionId);
         var allProjects = args.AllProjects ?? true;
+        var maxProjects = args.MaxProjects ?? BigQueryIndexLimits.MaxProjects;
+        if (maxProjects < 1 || maxProjects > BigQueryIndexLimits.MaxProjectsCap) throw Invalid("maxProjects.");
         var starred = (args.StarredProjects ?? []).Where(project => project != billing).Distinct(StringComparer.Ordinal).ToList();
         var starredSet = starred.ToHashSet(StringComparer.Ordinal);
         var scope = args.Scope;
@@ -401,12 +403,12 @@ internal sealed partial class ObjectSearchService
                     Report(0, 0, "projects", true);
                     try
                     {
-                        var discovery = await source.AccessibleProjectsAsync(args.ConnectionId, stop);
+                        var discovery = await source.AccessibleProjectsAsync(args.ConnectionId, maxProjects, stop);
                         discoverySucceeded = true;
                         discoveryCut = discovery.Cut;
                         discovered = [.. discovery.Projects.Where(project => project != billing && !starredSet.Contains(project)).Order(StringComparer.Ordinal)];
                         if (discovery.Cut)
-                            Skip(new("", "TOO_LARGE", "You have access to more than " + BigQueryIndexLimits.MaxProjects.ToString("N0", CultureInfo.InvariantCulture) + " projects; the index keeps the first " + BigQueryIndexLimits.MaxProjects.ToString("N0", CultureInfo.InvariantCulture) + ".", Project: ""));
+                            Skip(new("", "TOO_LARGE", "You have access to more than " + maxProjects.ToString("N0", CultureInfo.InvariantCulture) + " projects; the index keeps the first " + maxProjects.ToString("N0", CultureInfo.InvariantCulture) + ".", Project: ""));
                     }
                     catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
                     {

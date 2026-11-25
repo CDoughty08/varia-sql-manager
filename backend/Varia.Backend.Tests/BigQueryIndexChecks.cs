@@ -315,10 +315,11 @@ internal static partial class BigQueryIndexChecks
         {
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["starredProjects"] = new JsonArray("varia-beta") })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["allProjects"] = false })).Code,
+            (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["maxProjects"] = 10 })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["scope"] = new JsonObject { ["project"] = "varia-alpha" } })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["stale"] = true })).Code
         };
-        check(sqlRefused.All(value => value == "INVALID_PARAMS"), "SQL Server refuses starredProjects, allProjects, scope and stale: " + string.Join(",", sqlRefused));
+        check(sqlRefused.All(value => value == "INVALID_PARAMS"), "SQL Server refuses starredProjects, allProjects, maxProjects, scope and stale: " + string.Join(",", sqlRefused));
         var refreshed = await harness.Index(more => more["scope"] = new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales" });
         var bare = await harness.Index(more => { more["stale"] = true; more["definitions"] = false; });
         check(refreshed.Status.NamesOnly is null && bare.Status.NamesOnly is null && bare.Status.Definitions,
@@ -482,10 +483,10 @@ internal static partial class BigQueryIndexChecks
             && (await harness.Search("metrics")).Hits.Count > 0,
             "when projects.list fails, one discovery skip is recorded, billing + starred still build, and earlier discovered reads are not pruned");
 
-        // 500-project cap (Cut): > 500 projects in one page, and 500 projects + nextPageToken.
+        // 500-project default cap (Cut): > 500 projects in one page, and 500 projects + nextPageToken.
         var fiveHundredOne = new JsonArray([.. Enumerable.Range(0, BigQueryIndexLimits.MaxProjects + 1).Select(index => (JsonNode)new JsonObject { ["id"] = $"cap-proj-{index:D4}" })]);
         harness.Fake.On("GET", BigQueryFake.Projects, new BigQueryFake.Reply(200, new JsonObject { ["projects"] = fiveHundredOne }.ToJsonString()));
-        var overCap = await ((IBigQueryIndexSource)harness.Service.BigQuery).AccessibleProjectsAsync(harness.ConnectionId, CancellationToken.None);
+        var overCap = await ((IBigQueryIndexSource)harness.Service.BigQuery).AccessibleProjectsAsync(harness.ConnectionId, BigQueryIndexLimits.MaxProjects, CancellationToken.None);
         var fiveHundred = new JsonArray([.. Enumerable.Range(0, BigQueryIndexLimits.MaxProjects).Select(index => (JsonNode)new JsonObject { ["projectReference"] = new JsonObject { ["projectId"] = $"cap-proj-{index:D4}" } })]);
         var fiveHundredJson = new JsonObject { ["projects"] = fiveHundred, ["nextPageToken"] = "p2" }.ToJsonString();
         var page2Called = false;
@@ -494,18 +495,27 @@ internal static partial class BigQueryIndexChecks
             if (request.Uri.Query.Contains("pageToken=p2", StringComparison.Ordinal)) { page2Called = true; return new(200, "{\"projects\":[]}"); }
             return new(200, fiveHundredJson);
         });
-        var pageCap = await ((IBigQueryIndexSource)harness.Service.BigQuery).AccessibleProjectsAsync(harness.ConnectionId, CancellationToken.None);
+        var pageCap = await ((IBigQueryIndexSource)harness.Service.BigQuery).AccessibleProjectsAsync(harness.ConnectionId, BigQueryIndexLimits.MaxProjects, CancellationToken.None);
+        var customCap = await ((IBigQueryIndexSource)harness.Service.BigQuery).AccessibleProjectsAsync(harness.ConnectionId, 3, CancellationToken.None);
         check(overCap is { Projects.Count: BigQueryIndexLimits.MaxProjects, Cut: true }
             && pageCap is { Projects.Count: BigQueryIndexLimits.MaxProjects, Cut: true } && !page2Called
+            && customCap is { Projects.Count: 3, Cut: true }
             && overCap.Projects.SequenceEqual(overCap.Projects.Order(StringComparer.Ordinal)),
-            $"AccessibleProjectsAsync caps at {BigQueryIndexLimits.MaxProjects}, sorts ordinally, and sets Cut on both in-page overflow and nextPageToken");
+            $"AccessibleProjectsAsync caps at the requested limit (default {BigQueryIndexLimits.MaxProjects} or custom 3), sorts ordinally, and sets Cut on both in-page overflow and nextPageToken");
 
-        // Full build with Cut == true records a TOO_LARGE truncation skip mentioning 500 and does not prune earlier reads.
+        // Full build with Cut == true records a TOO_LARGE truncation skip mentioning the active cap and does not prune earlier reads.
         harness.Fake.On("GET", Base + @"cap-proj-\d+/datasets", new BigQueryFake.Reply(200, "{\"datasets\":[]}"));
         var cutBuild = await harness.Index();
+        var customCutBuild = await harness.Index(more => more["maxProjects"] = 3);
         check(cutBuild.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" } && skip.Message.Contains("500", StringComparison.Ordinal))
+            && customCutBuild.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" } && skip.Message.Contains("3", StringComparison.Ordinal))
             && (await harness.Search("metrics")).Hits.Count > 0,
-            "a cut project discovery records a TOO_LARGE skip noting the 500-project cap and does not prune earlier reads");
+            "a cut project discovery records a TOO_LARGE skip noting the active project cap (500 or custom 3) and does not prune earlier reads");
+
+        // Out-of-range maxProjects is refused with INVALID_PARAMS.
+        var (badLow, _, _) = await harness.Call("explorer.index", new JsonObject { ["connectionId"] = harness.ConnectionId, ["requestId"] = Guid.NewGuid().ToString(), ["maxProjects"] = 0 });
+        var (badHigh, _, _) = await harness.Call("explorer.index", new JsonObject { ["connectionId"] = harness.ConnectionId, ["requestId"] = Guid.NewGuid().ToString(), ["maxProjects"] = BigQueryIndexLimits.MaxProjectsCap + 1 });
+        check(badLow == "INVALID_PARAMS" && badHigh == "INVALID_PARAMS", $"maxProjects below 1 or above MaxProjectsCap is refused with INVALID_PARAMS: {badLow} {badHigh}");
     }
 
     /// <summary>Three-wave execution order (billing full -> starred+discovered names -> starred details -> discovered details) and Wave 2/3 budget early-stop.</summary>
@@ -584,8 +594,8 @@ internal static partial class BigQueryIndexChecks
         public int DiscoveredDetailCalls => Volatile.Read(ref discoveredDetailCalls);
 
         public string BillingProject(string connectionId) => "varia-alpha";
-        public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, CancellationToken token) =>
-            Task.FromResult(new BigQueryProjectDiscovery([.. discoveredProjects], false));
+        public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token) =>
+            Task.FromResult(new BigQueryProjectDiscovery([.. discoveredProjects.Take(maxProjects)], discoveredProjects.Count > maxProjects));
         public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token) =>
             Task.FromResult(new BigQueryDatasetList([project == "varia-alpha" ? "sales" : "ds"], false));
         public async Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)

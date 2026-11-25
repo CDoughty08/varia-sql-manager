@@ -1,3 +1,4 @@
+import { objectSearchLimits } from '../explorer/search.ts'
 import { scriptingOptionDefs, scriptingOptionGroupLabels } from '../scripting/options.ts'
 import type { BooleanSettingDef, EnumSettingDef, SettingDef } from './types'
 
@@ -70,7 +71,13 @@ export const objectExplorerSettings = [
   {
     key: 'objectExplorer.search.bigQueryAccessibleProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index all accessible BigQuery projects', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'bigquery', 'projects', 'accessible', 'starred', 'columns', 'schemas'],
-    description: 'A BigQuery connection’s Search Objects index discovers and indexes every accessible BigQuery project (up to 500, including tables, views, routines, models, columns and definitions) in addition to the billing project and starred projects. When False, only the billing project and starred projects are indexed. Applies to the next build.'
+    description: 'A BigQuery connection’s Search Objects index discovers and indexes every accessible BigQuery project (up to the configured project limit, including tables, views, routines, models, columns and definitions) in addition to the billing project and starred projects. When False, only the billing project and starred projects are indexed. Applies to the next build.'
+  },
+  {
+    key: 'objectExplorer.search.bigQueryMaxProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Maximum accessible BigQuery projects',
+    type: 'integer', min: 1, max: objectSearchLimits.bigQuery.maxProjectsCap, default: objectSearchLimits.bigQuery.maxProjects, varia: true,
+    enabledBy: 'objectExplorer.search.bigQueryAccessibleProjects', keywords: ['search', 'index', 'bigquery', 'projects', 'limit', 'maximum', 'cap'],
+    description: 'The maximum number of accessible BigQuery projects discovered via projects.list during a Search Objects index build. Starred projects and the billing project are always indexed even when this cap is reached. Applies to the next build.'
   },
   ...scriptingSettingEntries()
 ] as const satisfies readonly SettingDef[]

@@ -41,9 +41,9 @@ export const objectSearchLimits = {
   /** The longest word Fuzzy Match compares, in UTF-16 code units; a search with a longer one matches exactly only. */
   fuzzyWordChars: 64,
   /** BigQuery's index (BigQueryIndexLimits): pages one listing reads (1,000 items each), datasets listed at once, details read at
-   *  once, columns kept per table, the longest column description or routine signature kept, max discovered projects, projects
-   *  whose datasets are listed at once, and max starred projects passed per build. */
-  bigQuery: { listPages: 500, datasets: 4, details: 8, columns: 10_000, factChars: 1024, maxProjects: 500, projects: 4, starredProjects: 200 }
+   *  once, columns kept per table, the longest column description or routine signature kept, default and maximum discovered projects,
+   *  projects whose datasets are listed at once, and max starred projects passed per build. */
+  bigQuery: { listPages: 500, datasets: 4, details: 8, columns: 10_000, factChars: 1024, maxProjects: 500, maxProjectsCap: 5000, projects: 4, starredProjects: 200 }
 } as const
 
 /** The kinds the index holds, as Object Explorer names them: every kind it lists but the server, return values and the SSIS
@@ -184,14 +184,15 @@ export interface BigQueryBulkStatus { readonly locations: number; readonly faile
 export const bigQueryBulkLocations = 64
 /** BigQuery only (SQL Server refuses them): `starredProjects` names the user's starred projects (indexed with details even if
  *  projects.list does not return them, e.g. public or dataset-ACL projects), `allProjects` discovers every accessible project via
- *  projects.list (default true), `scope` re-reads one project or dataset whole (Object Explorer's Refresh), and `stale` re-reads
- *  only the datasets DDL run from a tab marked. */
+ *  projects.list (default true), `maxProjects` caps discovered projects (1..5000, default 500), `scope` re-reads one project or
+ *  dataset whole (Object Explorer's Refresh), and `stale` re-reads only the datasets DDL run from a tab marked. */
 export interface ObjectIndexParams {
   readonly connectionId: string
   readonly requestId: string
   readonly definitions?: boolean
   readonly starredProjects?: readonly string[]
   readonly allProjects?: boolean
+  readonly maxProjects?: number
   readonly scope?: BigQueryIndexScope
   readonly stale?: true
   /** A full build only: pass 2 reads these locations with the billed bulk queries. */
@@ -358,6 +359,7 @@ const starredProjectsSchema = z.array(bigQueryName('project')).max(objectSearchL
 export const objectIndexParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(),
   starredProjects: starredProjectsSchema.optional(), allProjects: z.boolean().optional(),
+  maxProjects: z.number().int().min(1).max(objectSearchLimits.bigQuery.maxProjectsCap).optional(),
   scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional(),
   bulk: z.object({
     locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),

@@ -355,7 +355,8 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
      view text, and `routines.get` for routine bodies and signatures, eight at a time; or the opt-in billed bulk path).
   2. **Starred and discovered projects (names).** When Options › Object Explorer › Commands › Index all accessible
      BigQuery projects (`objectExplorer.search.bigQueryAccessibleProjects`, on by default) is on, a full build calls
-     `projects.list` (up to 500 projects, sorted deterministically) and combines the user's starred projects with all
+     `projects.list` (up to `objectExplorer.search.bigQueryMaxProjects`, default 500, configurable 1–5,000, sorted
+     deterministically) and combines the user's starred projects with all
      discovered accessible projects. It lists their datasets (four projects at a time) and objects (four datasets at a
      time), swapping each dataset into the index immediately so every table, view, routine, model and dataset across all
      accessible projects becomes searchable within seconds.
@@ -390,7 +391,8 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   `CONNECTION_LOST`, `TOO_LARGE`) still report. A dataset whose objects' details could not all be read keeps their names
   and is counted as "details missing". Each metadata call has 30 s. A dataset dropped since its last read leaves the index
   without a skip.
-- **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): up to 500 discovered projects, 4 projects listed at
+- **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): up to 500 discovered projects by default (configurable
+  1–5,000 via `objectExplorer.search.bigQueryMaxProjects`), 4 projects listed at
   once, 200 starred projects, 500 pages of 1,000 per listing, 10,000 columns per table, and 1,024 characters of each
   column description or routine signature.
 
@@ -458,5 +460,5 @@ BigQuery's `phase` — `projects`, `names` or `details` —
 relayed only to the requesting window, at most 4 a second) and `explorer.search` (15 s) run on the explorer lane and are
 cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Failures are values: an invalid pattern
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
-takes BigQuery's `starredProjects`, `allProjects`, `scope` (a project, or a project's dataset), `stale` and `bulk` (SQL Server refuses them), and
+takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a project, or a project's dataset), `stale` and `bulk` (SQL Server refuses them), and
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).

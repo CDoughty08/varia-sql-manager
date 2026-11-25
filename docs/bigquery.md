@@ -609,7 +609,8 @@ listers; nothing in it runs a job.
   BigQuery Studio's explorer starring UX without altering connection identity), then **session-only (unstarred) projects**
   added when Search Objects' Reveal navigates to an unstarred project or when an open BigQuery query tab references another
   project. Right-click a connection node (or use the palette's **BigQuery: Star a Project…**) to star any accessible
-  project (`bigquery.connectionProjects`) or type any public/dataset-ACL project id such as `bigquery-public-data`. Click a
+  project (`bigquery.connectionProjects`) or type any public/dataset-ACL project id such as `bigquery-public-data`
+  (typed project ids are verified for existence and access via a free `datasets.list` check before starring). Click a
   non-billing project row's star button (or right-click **Star Project** / **Unstar Project**) to toggle persistence;
   unstarred session projects offer **Remove from Explorer** and clear on restart unless starred or referenced by an open
   query tab. A project lists its datasets (`datasets.list`, sublabel the location). A dataset has six folders: Tables, Views, Materialized Views,

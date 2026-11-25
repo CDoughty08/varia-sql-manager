@@ -30,10 +30,10 @@ const bigQueryPrincipalOf = (connection: LiveConnection | undefined): string | u
 export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch, quickInput, bigQueryStarred }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
   & { queries?: Pick<Workbench['queries'], 'execute'>; bigQueryProperties?: Pick<Workbench['bigQueryProperties'], 'canOpen' | 'open'> }
   & { objectSearch?: Pick<Workbench['objectSearch'], 'refreshNode'> & Partial<Pick<Workbench['objectSearch'], 'refreshBigQuery'>> }
-  & { quickInput?: Pick<Workbench['quickInput'], 'show' | 'setAnswer'>; bigQueryStarred?: Pick<Workbench['bigQueryStarred'], 'starredFor' | 'isStarred' | 'setStarred'> }
+  & { quickInput?: Pick<Workbench['quickInput'], 'show' | 'setAnswer' | 'hide' | 'setMessage'>; bigQueryStarred?: Pick<Workbench['bigQueryStarred'], 'starredFor' | 'isStarred' | 'setStarred'> }
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
-  api: Pick<VariaApi, 'writeClipboardText'> & Partial<Pick<VariaApi, 'bigQueryConnectionProjects'>>): Disposable {
+  api: Pick<VariaApi, 'writeClipboardText'> & Partial<Pick<VariaApi, 'bigQueryConnectionProjects' | 'explorerChildren' | 'explorerCancel'>>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target && args.target.kind !== 'explorerTools' ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
   const queryNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && (node.kind === 'server' || node.kind === 'database') ? node : undefined }
@@ -157,17 +157,34 @@ export function explorerContribution({ commands, documents, connections, explore
           const loadedIds = new Set<string>()
           let currentValue = ''
           let loadNote: string | undefined
-          const updateAnswer = (value: string) => {
+          let closed = false
+          let verifySeq = 0
+          let activeVerify: { readonly project: string; readonly requestId: string } | undefined
+          const cancelVerify = () => {
+            verifySeq++
+            if (activeVerify) {
+              const id = activeVerify.requestId
+              activeVerify = undefined
+              void api.explorerCancel?.([id]).catch(() => {})
+            }
+          }
+          const updateAnswer = (value: string, busy = false) => {
             currentValue = value
             const trimmed = value.trim()
             if (trimmed && bigQueryProjectSchema.safeParse(trimmed).success
               && trimmed !== billing && !bigQueryStarred.isStarred(principal, trimmed) && !loadedIds.has(trimmed)) {
               quickInput.setAnswer({
-                items: [{ id: trimmed, label: trimmed, description: 'Star project by ID', icon: 'star-empty', group: 'By project ID' }]
+                items: [{ id: trimmed, label: trimmed, description: 'Star project by ID', icon: 'star-empty', group: 'By project ID' }],
+                ...busy ? { busy: true } : {}
               })
               return
             }
             quickInput.setAnswer({ items: [], ...loadNote && !trimmed ? { message: { text: loadNote, severity: 'info' } } : {} })
+          }
+          const starAndRefresh = async (projectId: string) => {
+            const result = await bigQueryStarred.setStarred(principal, projectId, true)
+            if (!result.ok) commands.reportError(result.error)
+            else objectSearch?.refreshBigQuery?.(connection.id, { scope: { project: projectId } })
           }
           quickInput.show<QuickPickItem>({
             ariaLabel: 'Star a BigQuery project',
@@ -175,6 +192,7 @@ export function explorerContribution({ commands, documents, connections, explore
             placeholder: 'Select a project or type a project ID (e.g., bigquery-public-data)',
             noun: 'projects',
             matchOnDescription: true,
+            hideOnAccept: false,
             items: async signal => {
               if (!api.bigQueryConnectionProjects) return []
               let listed: BigQueryProject[] = [], pageToken: string | undefined, pages = 0
@@ -184,7 +202,7 @@ export function explorerContribution({ commands, documents, connections, explore
                 if (signal.aborted) return []
                 if (!result.ok) {
                   loadNote = `Could not list projects: ${result.error} Type a project ID to star it.`
-                  updateAnswer(currentValue)
+                  updateAnswer(currentValue, !!activeVerify)
                   return []
                 }
                 listed = mergeProjects(listed, result.value.projects)
@@ -192,7 +210,7 @@ export function explorerContribution({ commands, documents, connections, explore
               } while (pageToken && ++pages < maxProjectPages)
               for (const project of listed) loadedIds.add(project.id)
               if (pageToken) loadNote = `Showing the first ${listed.length.toLocaleString('en-US')} projects. Type a project ID to star another.`
-              updateAnswer(currentValue)
+              updateAnswer(currentValue, !!activeVerify)
               return listed.map((project): QuickPickItem => {
                 if (project.id === billing) {
                   return {
@@ -211,11 +229,50 @@ export function explorerContribution({ commands, documents, connections, explore
                 return { id: project.id, label: project.id, icon: 'star-empty', ...project.friendlyName ? { description: project.friendlyName } : {} }
               })
             },
-            onDidChangeValue: value => updateAnswer(value),
+            onDidChangeValue: value => {
+              cancelVerify()
+              updateAnswer(value)
+            },
+            onDidHide: () => {
+              closed = true
+              cancelVerify()
+            },
             onDidAccept: async item => {
-              const result = await bigQueryStarred.setStarred(principal, item.id, true)
-              if (!result.ok) commands.reportError(result.error)
-              else objectSearch?.refreshBigQuery?.(connection.id, { scope: { project: item.id } })
+              if (loadedIds.has(item.id)) {
+                quickInput.hide('accept')
+                await starAndRefresh(item.id)
+                return
+              }
+              if (activeVerify?.project === item.id) return
+              if (!api.explorerChildren) {
+                quickInput.setMessage({ text: `Could not verify “${item.id}”.`, severity: 'error' })
+                return
+              }
+              cancelVerify()
+              const seq = verifySeq
+              const requestId = crypto.randomUUID()
+              activeVerify = { project: item.id, requestId }
+              updateAnswer(currentValue, true)
+              quickInput.setMessage({ text: `Checking access to “${item.id}”…`, severity: 'info' })
+              const check = await api.explorerChildren({
+                connectionId: connection.id,
+                requestId,
+                node: { type: 'object', object: { kind: 'bqProject', name: item.id } },
+                pageSize: 1
+              })
+              if (activeVerify?.requestId === requestId) activeVerify = undefined
+              if (closed || seq !== verifySeq) return
+              updateAnswer(currentValue, false)
+              if (!check.ok) {
+                quickInput.setMessage({ text: `Could not verify “${item.id}”: ${check.error}`, severity: 'error' })
+                return
+              }
+              if (check.value.error) {
+                quickInput.setMessage({ text: `Could not star “${item.id}”: ${check.value.error.message}`, severity: 'error' })
+                return
+              }
+              quickInput.hide('accept')
+              await starAndRefresh(item.id)
             }
           })
         }

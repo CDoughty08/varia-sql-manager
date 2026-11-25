@@ -9,8 +9,8 @@ internal interface IBigQueryIndexSource
 {
     /// <summary>The connection's billing project; throws NOT_CONNECTED.</summary>
     string BillingProject(string connectionId);
-    /// <summary>Every accessible project via projects.list, sorted ordinally and capped at <see cref="BigQueryIndexLimits.MaxProjects"/>.</summary>
-    Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, CancellationToken token);
+    /// <summary>Every accessible project via projects.list, sorted ordinally and capped at <paramref name="maxProjects"/>.</summary>
+    Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token);
     Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token);
     Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token);
     Task<Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token);
@@ -45,8 +45,10 @@ internal static class BigQueryIndexLimits
     public const int Columns = 10_000;
     /// <summary>The longest column description or routine signature kept.</summary>
     public const int FactChars = 1024;
-    /// <summary>The most accessible projects projects.list discovery keeps in one build.</summary>
+    /// <summary>The default number of accessible projects projects.list discovery keeps in one build.</summary>
     public const int MaxProjects = 500;
+    /// <summary>The upper bound for the configurable accessible projects cap.</summary>
+    public const int MaxProjectsCap = 5000;
     /// <summary>Projects whose datasets are listed concurrently in wave 2.</summary>
     public const int Projects = 4;
     /// <summary>The most starred projects one build or estimate accepts (matches BigQueryLimits.StarredProjects).</summary>
