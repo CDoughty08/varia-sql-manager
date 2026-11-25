@@ -40,8 +40,12 @@ export interface StepsFlow {
   readonly start: number
   /** Two per step, success then failure, in step order. */
   readonly edges: readonly FlowEdge[]
-  /** Steps the Start step reaches, by position. */
+  /** Steps the Start step reaches, by position. In a partial flow, a step not reached may still run (from a step not read). */
   readonly reachable: readonly boolean[]
+  /** The job has steps past those read: what reaches a step, and whether a step runs at all, is not known from these alone. */
+  readonly partial: boolean
+  /** A partial flow's Start step when it is past the steps read (its saved id): then no read step is the Start. */
+  readonly startUnread?: number
   readonly loops: readonly FlowLoop[]
 }
 
@@ -61,14 +65,18 @@ const targetOf = (draft: AgentStepsDraft, step: AgentStepDraft, at: number, whic
 }
 const stepTarget = (edge: FlowEdge): number | undefined => edge.target.kind === 'step' ? edge.target.index : undefined
 
-/** The steps as a graph: edges, what the Start step reaches and the loops. `more`: the job has steps past those read (its steps were cut). */
-export function stepsFlow(draft: AgentStepsDraft, more = false): StepsFlow {
+/**
+ * The steps as a graph: edges, what the Start step reaches and the loops. `more`: the job has steps past those read (its steps were cut);
+ * `startId`, the job's saved start step, which then may be one not read (the draft's own Start falls back to its first step).
+ */
+export function stepsFlow(draft: AgentStepsDraft, more = false, startId?: number): StepsFlow {
   const count = draft.steps.length
   const raw = draft.steps.flatMap((step, at) => flowWhich.map(which => {
     const action = which === 'success' ? step.onSuccess : step.onFail, target = targetOf(draft, step, at, which, more)
     return { from: at, which, action, target, marked: action === 4 && target.kind === 'step' && target.index === at + 1 }
   }))
-  const start = draft.steps.findIndex(step => step.key === draft.startKey)
+  const cutStart = more && startId !== undefined
+  const start = cutStart ? draft.steps.findIndex(step => step.from === startId) : draft.steps.findIndex(step => step.key === draft.startKey)
   const reachable = reach(count, raw, start)
   const components = strongComponents(count, raw)
   const inLoop = new Map<number, number>()
@@ -83,7 +91,16 @@ export function stepsFlow(draft: AgentStepsDraft, more = false): StepsFlow {
     const exits = inside.filter(edge => !edge.loop)
     return { steps: members, closed: exits.length === 0, back: backs[backs.length - 1]!, exits }
   })
-  return { count, start, edges, reachable, loops }
+  return { count, start, edges, reachable, loops, partial: more, ...cutStart && start < 0 ? { startUnread: startId } : {} }
+}
+/** Never runs: nothing reaches it. Not said of a partial flow, where a step not read may go to it. */
+export const flowNeverRuns = (flow: StepsFlow, at: number): boolean => !flow.reachable[at] && !flow.partial
+/** What goes to a step, in words ("The job's start, Step 3 on failure"); in a partial flow, qualified, since a step not read may too. */
+export function flowReachedFrom(flow: StepsFlow, at: number): string {
+  const from = flow.edges.filter(edge => edge.target.kind === 'step' && edge.target.index === at).map(edge => `Step ${edge.from + 1} on ${edge.which === 'success' ? 'success' : 'failure'}`)
+  const known = [...flow.start === at ? ['The job\'s start'] : [], ...from]
+  if (flow.partial) return [...known, 'perhaps steps Varia does not read'].join(', ')
+  return known.join(', ') || 'No step'
 }
 function reach(count: number, edges: readonly { readonly from: number; readonly target: FlowTarget }[], from: number): boolean[] {
   const seen = Array.from({ length: count }, () => false)
@@ -308,10 +325,13 @@ export function flowLayout(flow: StepsFlow, metrics: FlowMetrics): FlowLayout {
     const k = `${stepTarget(edge)}:${edge.which}`
     entries.set(k, [...entries.get(k) ?? [], id])
   })
+  // The Start arrow enters the Start step's left side too: it takes the first place there, so a jump back to the Start step keeps its own.
+  const startShare = flow.start >= 0 ? 1 : 0, leftOfStart = (entries.get(`${flow.start}:success`)?.length ?? 0) + startShare
   const entryY = (id: number, edge: FlowEdge) => {
     const list = entries.get(`${stepTarget(edge)}:${edge.which}`)!
     const sorted = [...list].sort((a, b) => flow.edges[a]!.from - flow.edges[b]!.from)
-    return nodes[stepTarget(edge)!]!.y + h * (sorted.indexOf(id) + 1) / (sorted.length + 1)
+    const reserved = edge.which === 'success' && stepTarget(edge) === flow.start ? startShare : 0
+    return nodes[stepTarget(edge)!]!.y + h * (sorted.indexOf(id) + 1 + reserved) / (sorted.length + reserved + 1)
   }
   const edges: FlowEdgeLayout[] = []
   const quits: { edge: FlowEdge; at: FlowPoint }[] = []
@@ -337,7 +357,7 @@ export function flowLayout(flow: StepsFlow, metrics: FlowMetrics): FlowLayout {
     edges.push({ edge, lane, points: [[px, y0], [px, y0 + turnDrop], [lx, y0 + turnDrop], [lx, ye], [left ? x - 2 : x + w + 2, ye]], mid: [lx, (y0 + turnDrop + ye) / 2] })
   })
   const startNode = flow.start >= 0 ? nodes[flow.start] : undefined
-  const sy = startNode ? startNode.y + h / 2 : 0
+  const sy = startNode ? startNode.y + h / (leftOfStart + 1) : 0
   const height = (nodes.length ? nodes[nodes.length - 1]!.y + h : top) + portDrop + endDrop + 30
   const chipLeft = x - laneGap - leftCount * laneStep, chipRight = x + w + laneGap + rightCount * laneStep
   return {

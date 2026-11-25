@@ -201,8 +201,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   (database, package, run as, retries or command). Its ✓ and ✗ ports lead to the next step (straight), to a Quit pill, to an
   **End · job fails** node (the last step's Go to the next step; one under each port when both actions do), to a **Step N · not read** pill
   (in a job with more steps than Varia reads, a go-to past them or the last read step's next step), or along a lane beside the column (success on the left, failure on
-  the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow, a loop is tagged
-  ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs, and an action changed since the job was read is drawn in the
+  the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow (its own place on the step's side, apart from a jump back to it), a loop is tagged
+  ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs (not said in a job with more steps than Varia reads, where
+  Reached from adds "perhaps steps Varia does not read" and a Start past the steps read is named under Flow checks), and an action changed since the job was read is drawn in the
   accent and tagged "changed". Beside the graph: the selected step's summary (with **Reached from**), the **Flow checks** and the key.
   The checks are warnings that never block Save, and List tags the same steps: a step that never runs (Make Start step when its paths
   lead to the current Start step), a loop (Agent does not count passes), a loop with no way out, and the last step going to the next
@@ -210,11 +211,13 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   editor goes back); right-click or Shift+F10 opens the step's menu (Edit step, Start job at this step, Make Start step, On success ›
   and On failure › with SSMS's four actions and every other step, Add step after ›, Move up, Move down, Delete step; on macOS, whose
   native menus show no items built when they open, On success…, On failure… and Add step after… pick from the same lists). Dragging a
-  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list. Steps are reordered in List or with Move
+  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list; released off the canvas, it does nothing. Steps are reordered in List or with Move
   up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
   visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
-  readers have the whole graph; arrows move the selection, and a keyboard menu brings its step into view by moving the graph. A pointer menu is
-  the menu of the step under the pointer; empty canvas, an edge or a pill has none. Fit goes below 25 % when a long job needs it. A pane too
+  readers have the whole graph; arrows move the selection, and the selection and a keyboard menu's step come into view by moving the graph, across and up or down. A pointer menu is
+  the menu of the step under the pointer; empty canvas, an edge or a pill has none. Fit goes below 25 % when a long job needs it, and takes in the chips beside the lanes. Scrolled out of view (to History, say), the
+  graph releases its canvas and GPU context, and a new one opens where it was. The step menu's edits, Enter and the drop's list need no
+  backend, so they stay with the draft when the backend is lost; Start job at this step does not. A pane too
   narrow for the graph beside its panel (a split editor) puts the panel under the graph. History's and the copy review's Edit step links open
   Flow's docked editor when Flow shows. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2

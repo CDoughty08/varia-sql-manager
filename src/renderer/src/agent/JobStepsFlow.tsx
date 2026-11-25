@@ -3,13 +3,14 @@
 // the steps carries focus and the step menu over the canvas; beside it, the selected step's summary, the flow checks and the key, or the
 // step's editor (the List's) docked. Every edit goes through JobDocumentService, so Undo, Save, Script and the dirty dot are List's.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { flowActionWords, flowChecks, flowEdgeKey, flowLayout, flowMetrics, stepsFlow, type FlowCheck, type FlowEdge, type FlowWhich, type StepsFlow } from '../../../shared/agent/flow.ts'
+import { flowActionWords, flowChecks, flowEdgeKey, flowLayout, flowMetrics, flowNeverRuns, flowReachedFrom, stepsFlow, type FlowCheck, type FlowEdge, type FlowWhich, type StepsFlow } from '../../../shared/agent/flow.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { parseSsisCommand } from '../../../shared/agent/ssis-step.ts'
 import { initialStepsDraft, stepText, stepTypeShort, type AgentStepDraft, type AgentStepsDraft } from '../../../shared/agent/steps.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
 import type { SvgIconId } from '../../../shared/icons.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import { observeIntersection, windows } from '../core/windows'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
 import type { Camera } from '../plans/geometry'
@@ -61,7 +62,7 @@ function changedEdges(draft: AgentStepsDraft, model: AgentJobDocumentModel): Set
 /** The accessible name of a step's tree item, which says what the node draws. */
 function stepLabel(flow: StepsFlow, step: AgentStepDraft, at: number): string {
   const edge = (which: FlowWhich) => flow.edges[at * 2 + (which === 'success' ? 0 : 1)]!
-  return `Step ${at + 1}, ${step.name || 'Unnamed step'}, ${stepTypeShort(step.subsystem)}${flow.start === at ? ', Start step' : ''}${flow.reachable[at] ? '' : ', never runs'}. `
+  return `Step ${at + 1}, ${step.name || 'Unnamed step'}, ${stepTypeShort(step.subsystem)}${flow.start === at ? ', Start step' : ''}${flowNeverRuns(flow, at) ? ', never runs' : ''}. `
     + `On success, ${flowActionWords(edge('success'))}. On failure, ${flowActionWords(edge('fail'))}.`
 }
 /** "Go to the next step · 5 Merge facts", in the summary. */
@@ -73,10 +74,6 @@ function actionLine(edge: FlowEdge, steps: readonly AgentStepDraft[]): string {
   if (target.kind === 'unread') return `Go to ${edge.action === 3 ? 'the next step' : 'step'}${target.stepId !== undefined ? ` · ${target.stepId}` : ''}, past the steps Varia reads`
   const name = steps[target.index]?.name || 'Unnamed step'
   return edge.action === 3 ? `Go to the next step · ${target.index + 1} ${name}` : `Go to step ${target.index + 1} · ${name}`
-}
-function reachedFrom(flow: StepsFlow, at: number): string {
-  const from = flow.edges.filter(edge => edge.target.kind === 'step' && edge.target.index === at).map(edge => `Step ${edge.from + 1} on ${edge.which === 'success' ? 'success' : 'failure'}`)
-  return [...flow.start === at ? ['The job\'s start'] : [], ...from].join(', ') || 'No step'
 }
 
 const forcedQuery = '(forced-colors: active)'
@@ -112,7 +109,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   const [focused, setFocused] = useState(false)
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
-  const root = useRef<HTMLDivElement>(null)
+  const root = useRef<HTMLDivElement>(null), surface = useRef<HTMLDivElement>(null)
   const canvas = useRef<FlowCanvas | undefined>(undefined)
   const items = useRef(new Map<string, HTMLDivElement>())
   const dropMarker = useRef<HTMLSpanElement>(null)
@@ -120,14 +117,16 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   // A job with more steps than Varia reads: its go-tos past them, and its last read step's next step, lead to steps not read (drawn so),
   // not to the End or a missing step; and it checks nothing (as List).
   const truncated = !!model.stepsTruncated
-  const flow = useMemo(() => stepsFlow(draft.steps, truncated), [draft.steps, truncated])
+  // Its Start is the job's saved one, which may be past the steps read; the draft's falls back to step 1 there.
+  const startId = model.job?.startStepId
+  const flow = useMemo(() => stepsFlow(draft.steps, truncated, startId), [draft.steps, truncated, startId])
   const layout = useMemo(() => flowLayout(flow, flowMetrics), [flow])
   const checks = useMemo(() => truncated ? [] : flowChecks(draft.steps, flow), [draft.steps, flow, truncated])
   const canvasModel: FlowCanvasModel = useMemo(() => {
     const accent = changedEdges(draft.steps, model)
     const nodes = steps.map((step, at): FlowCanvasNode => ({
       name: step.name || 'Unnamed step', type: stepTypeShort(step.subsystem), icon: stepIcon(step.subsystem), sub: flowStepFact(step, model).value,
-      never: !flow.reachable[at], changed: accent.has(flowEdgeKey(at, 'success')) || accent.has(flowEdgeKey(at, 'fail'))
+      never: flowNeverRuns(flow, at), changed: accent.has(flowEdgeKey(at, 'success')) || accent.has(flowEdgeKey(at, 'fail'))
     }))
     const chips = [
       ...flow.loops.map(loop => ({ edge: flowEdgeKey(loop.back.from, loop.back.which), text: `Loop · ${loop.steps.map(step => step + 1).join(loop.steps.length === 2 ? ' \u21C4 ' : ', ')}` })),
@@ -154,16 +153,36 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
     })
   }
   const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 })
+  // As the plan viewer's: the canvas, its GPU context and label textures live only while the graph is on screen (Steps scrolled to History,
+  // a hidden window release them), and the next one opens where the last left off. Watched on the canvas's box, which shows on failure too.
+  const [onScreen, setOnScreen] = useState(false)
+  useEffect(() => {
+    const element = surface.current
+    if (!element) return
+    let intersecting = false, owner = element.ownerDocument
+    const changed = () => setOnScreen(intersecting && !owner.hidden)
+    const visibility = observeIntersection(element, entries => { intersecting = entries.some(entry => entry.isIntersecting); changed() })
+    owner.addEventListener('visibilitychange', changed)
+    const adoption = windows.onDidAdopt(() => {
+      owner.removeEventListener('visibilitychange', changed); owner = element.ownerDocument
+      owner.addEventListener('visibilitychange', changed); changed()
+    })
+    return () => { visibility.dispose(); adoption.dispose(); owner.removeEventListener('visibilitychange', changed) }
+  }, [])
+  /** The camera a released canvas left, and whether the selection moved while none existed (then the next one brings it into view). */
+  const released = useRef<{ camera?: Camera; reveal: boolean }>({ reveal: true })
   useEffect(() => {
     const element = root.current
-    if (!element) return
+    if (!element || !onScreen) return
     let disposed = false
     setFailed(false)
     void import('./FlowCanvas').then(({ FlowCanvas }) => {
       if (disposed) return
-      const now = latest.current
+      const now = latest.current, { camera, reveal } = released.current
+      released.current = { reveal: false }
       canvas.current = new FlowCanvas({
         root: element, model: now.canvasModel, colors: now.palette, selected: now.selected, focused: now.focused, editable: now.editable,
+        ...camera ? { camera } : {}, revealSelected: reveal,
         select: index => { const step = latest.current.steps[index]; if (step) service.selectStep(latest.current.state.id, step.key) },
         open: index => { const step = latest.current.steps[index]; if (step) service.openStepEditor(latest.current.state.id, step.key) },
         connect: (from, which, to) => {
@@ -177,17 +196,17 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
           Object.assign(marker.style, { left: `${clientX - box.left}px`, top: `${clientY - box.top}px` })
           void commands.execute(which === 'success' ? 'agentJob.pickStepOnSuccess' : 'agentJob.pickStepOnFailure', { tabId: latest.current.state.id, target: { kind: 'agentStep', tabId: latest.current.state.id, key: step.key }, anchor: marker }, 'toolbar')
         },
-        cameraChanged: camera => { cameraRef.current = camera; place(camera); setZoom(current => current === camera.scale ? current : camera.scale) },
+        cameraChanged: camera => { cameraRef.current = camera; released.current.camera = camera; place(camera); setZoom(current => current === camera.scale ? current : camera.scale) },
         failed: () => { if (!disposed) setFailed(true) }
       })
     }).catch(() => { if (!disposed) setFailed(true) })
     return () => { disposed = true; canvas.current?.dispose(); canvas.current = undefined }
-  // The handlers read `latest`; the canvas lives as long as the view, and Retry makes a new one.
+  // The handlers read `latest`; the canvas lives while the view is on screen, and Retry makes a new one.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [retry, service])
+  }, [retry, service, onScreen])
   useEffect(() => { canvas.current?.update(canvasModel, selected, focused, editable) }, [canvasModel, selected, focused, editable])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
-  useEffect(() => { if (selected >= 0) canvas.current?.reveal(selected) }, [selected])
+  useEffect(() => { if (selected < 0) return; if (canvas.current) canvas.current.reveal(selected); else released.current.reveal = true }, [selected])
   useLayoutEffect(() => place(cameraRef.current))
   // The docked editor narrows the graph, as closing it widens it: the graph is placed again for its new width (Fit when it no longer fits).
   const editingNow = !!state.stepEditor
@@ -240,7 +259,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
       <button type="button" disabled={failed} onClick={() => canvas.current?.fit()}><Icon name="screen-full" />Fit</button>
     </div>
     <div className="agent-flow-body" data-wide={editing || undefined}>
-      <div className="agent-flow-canvas">
+      <div ref={surface} className="agent-flow-canvas">
         {failed ? <div className="agent-flow-failed" role="status">
           <p className="field-note"><Icon name="info" />GPU drawing is unavailable, so the Flow view cannot draw. List shows the same steps and targets.</p>
           <span className="agent-step-inline"><button type="button" onClick={() => service.setStepsView(state.id, 'list')}>Show List</button><button type="button" onClick={() => setRetry(value => value + 1)}>Retry</button></span>
@@ -282,7 +301,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
                     {loopOf(edge) && <span className="agent-step-tag" data-tone="warning">Loop</span>}</dd>
                 </div>
               })}
-              <div className="agent-flow-fact"><dt>Reached from</dt><dd>{reachedFrom(flow, selected)}</dd></div>
+              <div className="agent-flow-fact"><dt>Reached from</dt><dd>{flowReachedFrom(flow, selected)}</dd></div>
             </dl>
             <span className="agent-step-inline">
               <button type="button" onClick={() => service.openStepEditor(state.id, selectedStep.key)}><Icon name="edit" />Edit step</button>
@@ -292,7 +311,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
           </section>}
           <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-checks`}>
             <h4 id={`agent-flow-${state.id}-checks`}>Flow checks<span className="agent-flow-sec-right">{truncated ? 'Not checked' : problemCount === 0 ? 'No problems' : `${problemCount} ${problemCount === 1 ? 'problem' : 'problems'}`}</span></h4>
-            {truncated ? <p className="field-note" role="note">{stepText.stepsTruncated}</p> : <div role="list" aria-labelledby={`agent-flow-${state.id}-checks`}>
+            {truncated ? <p className="field-note" role="note">{stepText.stepsTruncated}{flow.startUnread !== undefined ? ` The job starts at step ${flow.startUnread}, past the steps read.` : ''}</p> : <div role="list" aria-labelledby={`agent-flow-${state.id}-checks`}>
               {checks.map(check => <Check key={`${check.kind}:${check.key}:${check.field}`} check={check} editable={editable} service={service} id={state.id} />)}
               {missing.map(edge => <div key={`${edge.from}:${edge.which}`} className="agent-flow-check" role="listitem">
                 <Icon name="error" /><span className="agent-flow-check-title">{`Step ${edge.from + 1} goes to a step that no longer exists`}</span>

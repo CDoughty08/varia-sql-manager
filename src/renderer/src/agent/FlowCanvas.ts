@@ -59,6 +59,10 @@ export interface FlowCanvasOptions {
   selected: number
   focused: boolean
   editable: boolean
+  /** Where the camera was when this view's last canvas was released (Steps scrolled out of view): the new one opens there. */
+  readonly camera?: Camera
+  /** Bring the selected step into view on the first placement: a selection made before the canvas existed, or while it was released. */
+  readonly revealSelected?: boolean
   /** A step was clicked (selected) or double-clicked (opened); right-click selects before MenuService opens the step's menu. */
   select(index: number): void
   open(index: number): void
@@ -69,6 +73,7 @@ export interface FlowCanvasOptions {
   failed(): void
 }
 
+type ChipBox = { readonly chip: FlowCanvasModel['chips'][number]; readonly x: number; readonly y: number; readonly width: number; readonly style: TextStyle; readonly color: string }
 const iconPaths = new Map(Object.entries(svgIcons).map(([key, icon]) => [key, new GraphicsPath(icon.path)]))
 const portRadius = 7.5
 const dash = 5, gap = 3
@@ -202,23 +207,31 @@ export class FlowCanvas {
     }
     // The first size places the graph at 100 %, centred, from the top (Fit when it is wider than the view).
     // The selection made before the canvas existed (List's, or before Retry) is revealed once the view has its size.
-    if (!this.placed && this.width > 1) { this.placed = true; this.moveCamera(this.home()); if (this.options.selected >= 0) this.reveal(this.options.selected) }
+    if (!this.placed && this.width > 1) {
+      this.placed = true
+      this.moveCamera(this.options.camera ?? this.home())
+      if (this.options.selected >= 0 && (this.options.revealSelected ?? true)) this.reveal(this.options.selected)
+    }
     this.invalidate()
   }
   private home(): Camera {
-    const { width } = this.options.model.layout
+    const { x, width } = this.bounds()
     // Narrowed to the width only (a long job scrolls), from the top as at 100 %, so the Start step stays where the eye starts.
-    if (width > this.width) { const scale = Math.max(this.minScale(), (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2), y: 0 } }
-    return { scale: 1, x: Math.round((this.width - width) / 2), y: 0 }
+    if (width > this.width) { const scale = Math.max(this.minScale(), (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2 - x * scale), y: 0 } }
+    return { scale: 1, x: Math.round((this.width - width) / 2 - x), y: 0 }
   }
   private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
   /** The least zoom: 25 %, or less where Fit needs it to show the whole graph (a 50-step job). */
-  private minScale(): number {
+  private minScale(): number { return Math.min(0.25, fit(this.bounds(), this.width, this.height).scale) }
+  /** What the graph draws over: the layout, and the chips beside its lanes, whose text can reach past the layout's left edge. */
+  private bounds(): { x: number; y: number; width: number; height: number } {
     const { width, height } = this.options.model.layout
-    return Math.min(0.25, fit({ x: 0, y: 0, width, height }, this.width, this.height).scale)
+    let left = 0, right = width
+    for (const chip of this.chipBoxes()) { left = Math.min(left, chip.x - 8); right = Math.max(right, chip.x + chip.width + 8) }
+    return { x: left, y: 0, width: right - left, height }
   }
   /** A zoom about a point, its scale kept within the limits before the camera is moved, so the point stays put. */
   private zoomAbout(x: number, y: number, factor: number): void {
@@ -243,7 +256,7 @@ export class FlowCanvas {
     this.invalidate()
   }
   colors(colors: FlowCanvasColors): void { this.options.colors = colors; this.invalidate() }
-  fit(): void { const { width, height } = this.options.model.layout; this.moveCamera(fit({ x: 0, y: 0, width, height }, this.width, this.height)) }
+  fit(): void { this.moveCamera(fit(this.bounds(), this.width, this.height)) }
   /** Back to where the graph first showed (100 %, centred, or Fit when wider than the view), once the view has its new size: the docked editor opening or closing. */
   recenter(): void { this.owner.requestAnimationFrame(() => { if (!this.disposed && this.ready) { this.resize(); this.rehome() } }) }
   /** For a new width: x and the scale as placed first, the scroll kept, and the selected step (the one being edited) still in view. */
@@ -252,13 +265,14 @@ export class FlowCanvas {
     if (this.options.selected >= 0) this.reveal(this.options.selected)
   }
   zoom(factor: number): void { this.zoomAbout(this.width / 2, this.height / 2, factor) }
-  /** Scrolls a step into view (the keyboard's selection). */
+  /** Scrolls a step into view on both axes (the keyboard's selection, and its menu's anchor); a step wider than the view shows its left. */
   reveal(index: number): void {
     const node = this.options.model.layout.nodes[index]
     if (!node) return
-    const top = this.camera.y + node.y * this.camera.scale, bottom = top + node.height * this.camera.scale
-    if (top < 8) this.moveCamera({ ...this.camera, y: this.camera.y - top + 8 })
-    else if (bottom > this.height - 8) this.moveCamera({ ...this.camera, y: this.camera.y - (bottom - this.height + 8) })
+    const into = (start: number, size: number, view: number) => start < 8 || size > view - 16 ? 8 - start : start + size > view - 8 ? view - 8 - (start + size) : 0
+    const { x, y, scale } = this.camera
+    const dx = into(x + node.x * scale, node.width * scale, this.width), dy = into(y + node.y * scale, node.height * scale, this.height)
+    if (dx || dy) this.moveCamera({ ...this.camera, x: x + dx, y: y + dy })
   }
   /** The step a pointer menu opened on: the node under the press that opened it, or -1 for empty canvas, an edge or a pill. */
   pressedNode(): number { return this.pressed }
@@ -275,6 +289,11 @@ export class FlowCanvas {
   private world2(event: { clientX: number; clientY: number }): FlowPoint {
     const rect = this.options.root.getBoundingClientRect()
     return [(event.clientX - rect.left - this.camera.x) / this.camera.scale, (event.clientY - rect.top - this.camera.y) / this.camera.scale]
+  }
+  /** The pointer is over the canvas: pointer capture keeps reporting a drag that left it, where no step or empty space is under it. */
+  private inside(event: { clientX: number; clientY: number }): boolean {
+    const rect = this.options.root.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top
+    return x >= 0 && y >= 0 && x < this.width && y < this.height
   }
   private nodeAt([x, y]: FlowPoint): number {
     return this.options.model.layout.nodes.findIndex(node => x >= node.x && x <= node.x + node.width && y >= node.y && y <= node.y + node.height + portRadius)
@@ -310,7 +329,7 @@ export class FlowCanvas {
   private move = (event: PointerEvent) => {
     if (this.connecting?.id === event.pointerId) {
       const point = this.world2(event)
-      const over = this.nodeAt(point)
+      const over = this.inside(event) ? this.nodeAt(point) : -1
       Object.assign(this.connecting, { x: point[0], y: point[1], over: over === this.connecting.from ? -1 : over })
       this.invalidate()
       return
@@ -336,8 +355,8 @@ export class FlowCanvas {
       this.connecting = undefined
       this.invalidate()
       const [px, py] = this.options.model.layout.ports[connecting.from]![connecting.which === 'success' ? 0 : 1]
-      // A press without a drag is a click on the port: nothing to connect.
-      if (Math.hypot(connecting.x - px, connecting.y - py) < 6) return
+      // A press without a drag is a click on the port, and a release off the canvas is no drop (the step there may be scrolled away).
+      if (Math.hypot(connecting.x - px, connecting.y - py) < 6 || !this.inside(event)) return
       if (connecting.over >= 0) this.options.connect(connecting.from, connecting.which, connecting.over)
       else if (this.nodeAt([connecting.x, connecting.y]) !== connecting.from) this.options.dropped(connecting.from, connecting.which, event.clientX, event.clientY)
       return
@@ -441,13 +460,7 @@ export class FlowCanvas {
       if (sprite.resolution !== resolution) sprite.resolution = resolution
       sprite.position.set(Math.round(x - (anchorX ? this.measure(text, style) * anchorX : 0)), Math.round(y)); sprite.visible = true
     }
-    // Every text style is shared by its sprites, so a sprite's fill is set on a style of its own: one per tone.
-    const styled = (base: TextStyle, fill: string) => {
-      const key = `${base.fontSize}:${base.fontWeight}:${fill}`
-      let style = this.toned.get(key)
-      if (!style) { style = base.clone(); style.fill = fill; this.toned.set(key, style) }
-      return style
-    }
+    const styled = (base: TextStyle, fill: string) => this.styled(base, fill)
     const pill = (key: string, text: string, cx: number, top: number, stroke: string, fill: string, color: string, alpha = 1, center = true) => {
       const style = styled(this.styles.small, color)
       const width = this.measure(text, style) + 14, left = center ? cx - width / 2 : cx
@@ -507,17 +520,7 @@ export class FlowCanvas {
     }
     // Chips beside lanes (the loop tag, "changed") and the overlay's sequence badges.
     // A lane's chips sit past the lanes on its side, one after another; a straight edge's or a Quit's beside its port, clear of the pill.
-    const used = new Map<string, number>()
-    for (const chip of model.chips) {
-      const item = layout.edges.find(edge => flowEdgeKey(edge.edge.from, edge.edge.which) === chip.edge)
-      if (!item) continue
-      const right = item.edge.which === 'fail', color = this.tone(chip.tone ?? 'muted')
-      const style = styled(this.styles.small, color), width = this.measure(chip.text, style) + 12
-      const before = used.get(chip.edge) ?? 0
-      used.set(chip.edge, before + width + 4)
-      const pilled = item.points.length === 0, gap = item.lane !== undefined ? 8 : pilled ? 44 : 10
-      const anchor = item.lane !== undefined ? (right ? layout.chipRight : layout.chipLeft) : item.mid[0] - (pilled ? 0 : 13)
-      const x = right ? anchor + gap + before : anchor - gap - before - width, y = item.mid[1] + (pilled ? 10 : 0) - 8
+    for (const { chip, x, y, width, style, color } of this.chipBoxes()) {
       this.cards.roundRect(x, y, width, 16, 3).fill(colors.card).stroke({ color: chip.tone === 'accent' ? colors.accent : colors.border, width: 1 })
       label(`chip:${chip.edge}:${chip.text}`, chip.text, x + 6, y + 2, style, color)
     }
@@ -594,6 +597,30 @@ export class FlowCanvas {
     void flow
   }
   private readonly toned = new Map<string, TextStyle>()
+  /** Each chip's box: past the lanes on its edge's side, one after another; a straight edge's or a Quit's beside its port, clear of the pill. */
+  private chipBoxes(): ChipBox[] {
+    const { layout, chips } = this.options.model
+    const used = new Map<string, number>(), boxes: ChipBox[] = []
+    for (const chip of chips) {
+      const item = layout.edges.find(edge => flowEdgeKey(edge.edge.from, edge.edge.which) === chip.edge)
+      if (!item) continue
+      const right = item.edge.which === 'fail', color = this.tone(chip.tone ?? 'muted')
+      const style = this.styled(this.styles.small, color), width = this.measure(chip.text, style) + 12
+      const before = used.get(chip.edge) ?? 0
+      used.set(chip.edge, before + width + 4)
+      const pilled = item.points.length === 0, gap = item.lane !== undefined ? 8 : pilled ? 44 : 10
+      const anchor = item.lane !== undefined ? (right ? layout.chipRight : layout.chipLeft) : item.mid[0] - (pilled ? 0 : 13)
+      boxes.push({ chip, x: right ? anchor + gap + before : anchor - gap - before - width, y: item.mid[1] + (pilled ? 10 : 0) - 8, width, style, color })
+    }
+    return boxes
+  }
+  // Every text style is shared by its sprites, so a sprite's fill is set on a style of its own: one per tone.
+  private styled(base: TextStyle, fill: string): TextStyle {
+    const key = `${base.fontSize}:${base.fontWeight}:${fill}`
+    let style = this.toned.get(key)
+    if (!style) { style = base.clone(); style.fill = fill; this.toned.set(key, style) }
+    return style
+  }
   /** A step that never runs: a dashed outline. */
   private polylineRect(graphics: Graphics, x: number, y: number, width: number, height: number, color: string): void {
     this.polyline(graphics, [[x, y], [x + width, y], [x + width, y + height], [x, y + height], [x, y]], true)

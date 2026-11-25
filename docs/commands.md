@@ -468,17 +468,17 @@ keys it uses are listed below.
 | Start Job at Step… | `agentJob.startAtStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Stop Job | `agentJob.stop` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Reload Job | `agentJob.reload` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
-| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Move up |
-| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Move down |
-| Edit Step (not in the palette) | `agentJob.editStep` | Enter (`activeDocumentIsAgentJob && agentFlowFocus`) | Enter (`activeDocumentIsAgentJob && agentFlowFocus`) | ↩ (`activeDocumentIsAgentJob && agentFlowFocus`) | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Edit step |
+| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Move up |
+| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Move down |
+| Edit Step (not in the palette) | `agentJob.editStep` | Enter (`activeDocumentIsAgentJob && agentFlowFocus`) | Enter (`activeDocumentIsAgentJob && agentFlowFocus`) | ↩ (`activeDocumentIsAgentJob && agentFlowFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Edit step |
 | Start Job at This Step (not in the palette) | `agentJob.startAtThisStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Start job at this step |
-| Make Start Step (not in the palette) | `agentJob.makeStartStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Make Start step |
-| Set Step Action (not in the palette) | `agentJob.setStepAction` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
-| On Success… (not in the palette) | `agentJob.pickStepOnSuccess` | — | — | — | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On success… (macOS only) |
-| On Failure… (not in the palette) | `agentJob.pickStepOnFailure` | — | — | — | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On failure… (macOS only) |
-| Add Step After (not in the palette) | `agentJob.addStepAfter` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
-| Add Step After… (not in the palette) | `agentJob.pickStepToAdd` | — | — | — | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Add step after… (macOS only) |
-| Delete Step (not in the palette) | `agentJob.deleteStep` | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | ⌦ (`activeDocumentIsAgentJob && agentFlowFocus`) | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Delete step |
+| Make Start Step (not in the palette) | `agentJob.makeStartStep` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Make Start step |
+| Set Step Action (not in the palette) | `agentJob.setStepAction` | — | — | — | `activeDocumentIsAgentJob` | — |
+| On Success… (not in the palette) | `agentJob.pickStepOnSuccess` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On success… (macOS only) |
+| On Failure… (not in the palette) | `agentJob.pickStepOnFailure` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On failure… (macOS only) |
+| Add Step After (not in the palette) | `agentJob.addStepAfter` | — | — | — | `activeDocumentIsAgentJob` | — |
+| Add Step After… (not in the palette) | `agentJob.pickStepToAdd` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Add step after… (macOS only) |
+| Delete Step (not in the palette) | `agentJob.deleteStep` | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | ⌦ (`activeDocumentIsAgentJob && agentFlowFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Delete step |
 | New Alert… | `agent.newAlert` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Alert… |
 | Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
 | Open Alert… | `agent.openAlert` | — | — | — | `backendReady && hasConnection` | — |

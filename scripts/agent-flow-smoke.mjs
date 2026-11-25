@@ -98,13 +98,26 @@ try {
 
   step = 'drag'
   // A ✗ port dragged onto a step sets Go to step: step 3's failure port (70 % across, at the node's foot) onto step 1. The tree items sit
-  // over their nodes, so their boxes say where the canvas drew them.
+  // over their nodes, so their boxes say where the canvas drew them, once closing the editor has placed the graph again (a frame later).
+  let last
+  await expect.poll(async () => { const box = JSON.stringify(await item(3).boundingBox()), same = box === last; last = box; return same }).toBe(true)
   const from = await item(3).boundingBox(), to = await item(1).boundingBox()
   await page.mouse.move(from.x + from.width * 0.7, from.y + from.height)
   await page.mouse.down()
   await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 8 })
   await page.mouse.up()
   await expect(item(3)).toHaveAccessibleName(/On failure, go to step 1, loop\./)
+
+  step = 'offscreen'
+  // Scrolled to History, the graph releases its canvas (and GPU context); back on Steps a new one draws it where it was.
+  const before = await item(1).boundingBox()
+  await job.getByRole('button', { name: 'History', exact: true }).click()
+  await expect(tree).not.toBeInViewport()
+  await expect(tree.locator('canvas')).toHaveCount(0)
+  await tree.scrollIntoViewIfNeeded()
+  await expect(tree.locator('canvas')).toBeVisible()
+  const after = await item(1).boundingBox()
+  expect([Math.round(after.x - before.x), after.width]).toEqual([0, before.width])
 
   step = 'list'
   // List shows the same draft: step 3's failure goes to step 1.

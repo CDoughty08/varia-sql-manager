@@ -650,6 +650,14 @@ describe("the job document's Steps page", () => {
     const items = fixture.menus.resolve('agent.steps.context', { kind: 'agentStep', tabId: 'none', key: 's1' })
     expect(items.map(item => item.kind === 'separator' ? '-' : item.title)).toEqual(['Edit step', 'Start job at this step', 'Make Start step', '-', 'On success…', 'On failure…', '-', 'Add step after…', 'Move up', 'Move down', '-', 'Delete step'])
   })
+  it('keeps the step menu\'s edits, Enter and the drop picker with the backend lost; Start job at this step needs it', () => {
+    const local = ['agentJob.editStep', 'agentJob.makeStartStep', 'agentJob.setStepAction', 'agentJob.pickStepOnSuccess', 'agentJob.pickStepOnFailure',
+      'agentJob.addStepAfter', 'agentJob.pickStepToAdd', 'agentJob.deleteStep', 'agentJob.moveStepUp', 'agentJob.moveStepDown'] as const
+    const lost = { activeDocumentIsAgentJob: true, backendReady: false }
+    for (const command of local) expect(evaluateWhen(compileWhen(commandDescriptor(command).precondition!), lost), command).toBe(true)
+    for (const command of ['agentJob.startAtThisStep', 'agentJob.start', 'agentJob.save', 'agentJob.reload'] as const)
+      expect(evaluateWhen(compileWhen(commandDescriptor(command).precondition!), lost), command).toBe(false)
+  })
   it('lists the steps of a job with more than Varia reads read-only, with no problems', async () => {
     const { jobDocuments } = opened({ ...stepped(), stepsTruncated: true })
     const id = jobDocuments.openJob('c1', 'Nightly load')

@@ -518,6 +518,9 @@ export interface AgentJobCommandEntry {
   readonly menus?: readonly { readonly menu: 'explorer.context' | 'agent.jobs.context' | 'agent.steps.context'; readonly title?: string; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string; readonly platforms?: readonly ('darwin' | 'win32' | 'linux')[] }[]
 }
 const inJob = 'backendReady && activeDocumentIsAgentJob'
+/** Edits to the open draft (its steps' order, actions, Start step) and opening a step's editor need no backend, so they stay available when it
+ *  is lost; their handlers still check that the job can be changed. Start, Stop and Reload talk to the server and keep `inJob`. */
+const inDraft = 'activeDocumentIsAgentJob'
 const openJobFirst = 'Open a job first (SQL Server Agent: Open Job…, or Properties on a job in Object Explorer).'
 const stepToMove = 'Select a step of a job you can change, with a step above or below it to swap with.'
 const stepKeys = 'activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus'
@@ -568,13 +571,13 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
     // step's command editor, where the keys open a list or move lines.
     'agentJob.moveStepUp': {
       title: 'Move Step Up', category: 'SQL Server Agent', icon: 'arrow-up', keywords: ['agent', 'job', 'step', 'order', 'reorder', 'move', 'earlier'],
-      precondition: inJob, unavailableHint: stepToMove,
+      precondition: inDraft, unavailableHint: stepToMove,
       keybindings: [{ key: 'alt+up', when: stepKeys }],
       menus: [{ menu: 'agent.steps.context', group: '3_order', order: 2, title: 'Move up', mnemonic: 'u' }]
     },
     'agentJob.moveStepDown': {
       title: 'Move Step Down', category: 'SQL Server Agent', icon: 'arrow-down', keywords: ['agent', 'job', 'step', 'order', 'reorder', 'move', 'later'],
-      precondition: inJob, unavailableHint: stepToMove,
+      precondition: inDraft, unavailableHint: stepToMove,
       keybindings: [{ key: 'alt+down', when: stepKeys }],
       menus: [{ menu: 'agent.steps.context', group: '3_order', order: 3, title: 'Move down', mnemonic: 'w' }]
     },
@@ -582,7 +585,7 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
     // (right-click selects it first), so none is in the palette, where the List editor's buttons and Alt+Up/Down already serve.
     'agentJob.editStep': {
       title: 'Edit Step', category: 'SQL Server Agent', icon: 'edit', palette: false, keywords: ['agent', 'job', 'step', 'edit', 'open'],
-      precondition: inJob, unavailableHint: stepMenuHint,
+      precondition: inDraft, unavailableHint: stepMenuHint,
       keybindings: [{ key: 'enter', when: flowKeys }],
       menus: [{ menu: 'agent.steps.context', group: '1_edit', order: 1, title: 'Edit step', mnemonic: 'e' }]
     },
@@ -593,37 +596,37 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
     },
     'agentJob.makeStartStep': {
       title: 'Make Start Step', category: 'SQL Server Agent', icon: 'pin', palette: false, keywords: ['agent', 'job', 'step', 'start', 'first'],
-      precondition: inJob, unavailableHint: 'Select a step that is not the Start step, of a job you can change.',
+      precondition: inDraft, unavailableHint: 'Select a step that is not the Start step, of a job you can change.',
       menus: [{ menu: 'agent.steps.context', group: '1_edit', order: 3, title: 'Make Start step', mnemonic: 'k' }]
     },
     // On success › and On failure › list their items from the draft (src/renderer/src/agent/step-menus.ts), each running this command with its
     // action. macOS's native menus show no such items, so there On success… and On failure… pick from the same list.
     'agentJob.setStepAction': {
       title: 'Set Step Action', category: 'SQL Server Agent', icon: 'type-hierarchy', palette: false, keywords: ['agent', 'job', 'step', 'success', 'failure', 'goto', 'quit'],
-      precondition: inJob, unavailableHint: changeStep
+      precondition: inDraft, unavailableHint: changeStep
     },
     'agentJob.pickStepOnSuccess': {
       title: 'On Success…', category: 'SQL Server Agent', icon: 'type-hierarchy', palette: false, keywords: ['agent', 'job', 'step', 'success', 'goto', 'quit'],
-      precondition: inJob, unavailableHint: changeStep,
+      precondition: inDraft, unavailableHint: changeStep,
       menus: [{ menu: 'agent.steps.context', group: '2_actions', order: 1, title: 'On success…', mnemonic: 'o', platforms: ['darwin'] }]
     },
     'agentJob.pickStepOnFailure': {
       title: 'On Failure…', category: 'SQL Server Agent', icon: 'type-hierarchy', palette: false, keywords: ['agent', 'job', 'step', 'failure', 'goto', 'quit'],
-      precondition: inJob, unavailableHint: changeStep,
+      precondition: inDraft, unavailableHint: changeStep,
       menus: [{ menu: 'agent.steps.context', group: '2_actions', order: 2, title: 'On failure…', mnemonic: 'f', platforms: ['darwin'] }]
     },
     'agentJob.addStepAfter': {
       title: 'Add Step After', category: 'SQL Server Agent', icon: 'add', palette: false, keywords: ['agent', 'job', 'step', 'add', 'insert', 'new'],
-      precondition: inJob, unavailableHint: changeStep
+      precondition: inDraft, unavailableHint: changeStep
     },
     'agentJob.pickStepToAdd': {
       title: 'Add Step After…', category: 'SQL Server Agent', icon: 'add', palette: false, keywords: ['agent', 'job', 'step', 'add', 'insert', 'new'],
-      precondition: inJob, unavailableHint: changeStep,
+      precondition: inDraft, unavailableHint: changeStep,
       menus: [{ menu: 'agent.steps.context', group: '3_order', order: 1, title: 'Add step after…', mnemonic: 'a', platforms: ['darwin'] }]
     },
     'agentJob.deleteStep': {
       title: 'Delete Step', category: 'SQL Server Agent', icon: 'trash', palette: false, keywords: ['agent', 'job', 'step', 'delete', 'remove'],
-      precondition: inJob, unavailableHint: changeStep,
+      precondition: inDraft, unavailableHint: changeStep,
       keybindings: [{ key: 'delete', when: flowKeys }],
       menus: [{ menu: 'agent.steps.context', group: '4_delete', order: 1, title: 'Delete step', mnemonic: 'd' }]
     }
