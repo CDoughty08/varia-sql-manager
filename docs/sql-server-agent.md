@@ -199,7 +199,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   `src/shared/agent/flow.ts`) draws the same draft as a graph with Pixi, as the execution plan viewer does (`FlowCanvas.ts`, sharing its
   camera, zoom and label pool), on a dot grid that pans with the graph (theme key `charts.canvasDots`). Steps stay in step order, top to bottom; each has its number, name, type and icon, and its key field
   (database, package, run as, retries or command). Its ✓ and ✗ ports lead to the next step (straight), to a Quit pill, to an
-  **End · job fails** node (the last step's Go to the next step), or along a lane beside the column (success on the left, failure on
+  **End · job fails** node (the last step's Go to the next step; one under each port when both actions do), to a **Step N · not read** pill
+  (in a job with more steps than Varia reads, a go-to past them or the last read step's next step), or along a lane beside the column (success on the left, failure on
   the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow, a loop is tagged
   ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs, and an action changed since the job was read is drawn in the
   accent and tagged "changed". Beside the graph: the selected step's summary (with **Reached from**), the **Flow checks** and the key.
@@ -212,7 +213,10 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list. Steps are reordered in List or with Move
   up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
   visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
-  readers have the whole graph; arrows move the selection. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
+  readers have the whole graph; arrows move the selection, and a keyboard menu brings its step into view by moving the graph. A pointer menu is
+  the menu of the step under the pointer; empty canvas, an edge or a pill has none. Fit goes below 25 % when a long job needs it. A pane too
+  narrow for the graph beside its panel (a split editor) puts the panel under the graph. History's and the copy review's Edit step links open
+  Flow's docked editor when Flow shows. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
   Flow's toolbar **Show** switch (Targets only | Last run | Live run; `FlowRunPanel.tsx`, the rules in `src/shared/agent/flow-run.ts`)
   draws a run over the graph from History's own `agent.history` view, which runs while an overlay shows even with History closed.
   **Last run** draws the run picked in the run box beside the switch, which is History's selected run (picking one picks it in both;

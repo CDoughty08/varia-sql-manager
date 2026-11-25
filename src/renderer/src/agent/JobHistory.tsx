@@ -161,7 +161,7 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
       <pre className="agent-history-message-text">{text}</pre>
       {view.notice && <p className="document-status" role="status">{view.notice}</p>}
       {current && <p className="agent-history-actions">
-        <button type="button" onClick={() => { service.selectStep(state.id, `s${current.id}`); document.getElementById(`agent-job-${state.id}-section-steps`)?.scrollIntoView({ block: 'start' }) }}><Icon name="edit" />Edit step {current.id}</button>
+        <button type="button" onClick={() => { service.editStep(state.id, `s${current.id}`); document.getElementById(`agent-job-${state.id}-section-steps`)?.scrollIntoView({ block: 'start' }) }}><Icon name="edit" />Edit step {current.id}</button>
         <button type="button" disabled={!service.canStart(state.id)} onClick={() => void service.start(state.id, current.name)}><Icon name="play" />Start at step {current.id}</button>
       </p>}
     </section>}

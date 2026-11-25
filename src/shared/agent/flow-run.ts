@@ -68,8 +68,10 @@ export interface FlowRunDrawing {
 }
 
 const whichOf = (pass: FlowPass): FlowWhich | undefined => pass.tone === 'ok' ? 'success' : pass.tone === 'bad' ? 'fail' : undefined
+// A cut job's go-to past the steps Varia reads leads to a next pass that no read step is (-1), the step it names when the go-to names one.
 const leadsTo = (target: FlowTarget | undefined, next: FlowPass | undefined): boolean =>
-  next ? target?.kind === 'step' && target.index === next.at : target?.kind === 'quit' || target?.kind === 'end'
+  target?.kind === 'unread' ? !!next && next.at < 0 && (target.stepId === undefined || target.stepId === next.stepId)
+    : next ? target?.kind === 'step' && target.index === next.at : target?.kind === 'quit' || target?.kind === 'end'
 const glyph = { ok: '✓', bad: '✗', muted: '–' } as const
 
 /**
@@ -160,6 +162,7 @@ export function nextWords(flow: StepsFlow, at: number, which: FlowWhich): string
   if (target.kind === 'step') return `step ${target.index + 1}`
   if (target.kind === 'quit') return target.success ? 'quit reporting success' : 'quit reporting failure'
   if (target.kind === 'end') return 'the end (the job fails)'
+  if (target.kind === 'unread') return `${target.stepId !== undefined ? `step ${target.stepId}` : 'the next step'}, past the steps Varia reads`
   return 'a step that no longer exists'
 }
 

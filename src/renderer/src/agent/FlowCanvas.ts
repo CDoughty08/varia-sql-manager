@@ -108,6 +108,8 @@ export class FlowCanvas {
   private height = 1
   private hover = -1
   private drag?: { readonly id: number; x: number; y: number; moved: boolean }
+  /** The node under the last press (-1 for none): a pointer menu is the menu of the step it opened on, never the selected one. */
+  private pressed = -1
   private connecting?: { readonly from: number; readonly which: FlowWhich; readonly id: number; x: number; y: number; over: number }
   private owner: Window
   private ownerDocument: Document
@@ -201,22 +203,33 @@ export class FlowCanvas {
       if (!(resolution > 0) || !this.backed(gl)) { this.cancelFrame(); this.options.failed(); return }
     }
     // The first size places the graph at 100 %, centred, from the top (Fit when it is wider than the view).
-    if (!this.placed && this.width > 1) { this.placed = true; this.moveCamera(this.home()) }
+    // The selection made before the canvas existed (List's, or before Retry) is revealed once the view has its size.
+    if (!this.placed && this.width > 1) { this.placed = true; this.moveCamera(this.home()); if (this.options.selected >= 0) this.reveal(this.options.selected) }
     this.invalidate()
   }
   private home(): Camera {
     const { width } = this.options.model.layout
     // Narrowed to the width only (a long job scrolls), from the top as at 100 %, so the Start step stays where the eye starts.
-    if (width > this.width) { const scale = Math.max(0.25, (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2), y: 0 } }
+    if (width > this.width) { const scale = Math.max(this.minScale(), (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2), y: 0 } }
     return { scale: 1, x: Math.round((this.width - width) / 2), y: 0 }
   }
   private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
+  /** The least zoom: 25 %, or less where Fit needs it to show the whole graph (a 50-step job). */
+  private minScale(): number {
+    const { width, height } = this.options.model.layout
+    return Math.min(0.25, fit({ x: 0, y: 0, width, height }, this.width, this.height).scale)
+  }
+  /** A zoom about a point, its scale kept within the limits before the camera is moved, so the point stays put. */
+  private zoomAbout(x: number, y: number, factor: number): void {
+    const scale = Math.max(this.minScale(), Math.min(3, this.camera.scale * factor))
+    this.moveCamera(zoomAt(this.camera, x, y, scale / this.camera.scale))
+  }
   private moveCamera(camera: Camera): void {
     if (![camera.x, camera.y, camera.scale].every(Number.isFinite) || camera.scale <= 0) return
-    this.camera = { ...camera, scale: Math.max(0.25, Math.min(3, camera.scale)) }
+    this.camera = { ...camera, scale: Math.max(this.minScale(), Math.min(3, camera.scale)) }
     this.options.cameraChanged({ ...this.camera })
     this.invalidate()
   }
@@ -225,6 +238,8 @@ export class FlowCanvas {
 
   update(model: FlowCanvasModel, selected: number, focused: boolean, editable: boolean): void {
     const grew = model.layout.width !== this.options.model.layout.width
+    // A connect drag names its step by index: once the steps change under it (Delete, Alt+Up) that index may be another step, or none.
+    if (this.connecting && model.flow !== this.options.model.flow) this.cancelConnect()
     Object.assign(this.options, { model, selected, focused, editable })
     if (grew && this.placed && this.camera.scale === 1) this.rehome()
     this.invalidate()
@@ -238,7 +253,7 @@ export class FlowCanvas {
     this.moveCamera({ ...this.home(), y: this.camera.y })
     if (this.options.selected >= 0) this.reveal(this.options.selected)
   }
-  zoom(factor: number): void { this.moveCamera(zoomAt(this.camera, this.width / 2, this.height / 2, factor)) }
+  zoom(factor: number): void { this.zoomAbout(this.width / 2, this.height / 2, factor) }
   /** Scrolls a step into view (the keyboard's selection). */
   reveal(index: number): void {
     const node = this.options.model.layout.nodes[index]
@@ -247,6 +262,8 @@ export class FlowCanvas {
     if (top < 8) this.moveCamera({ ...this.camera, y: this.camera.y - top + 8 })
     else if (bottom > this.height - 8) this.moveCamera({ ...this.camera, y: this.camera.y - (bottom - this.height + 8) })
   }
+  /** The step a pointer menu opened on: the node under the press that opened it, or -1 for empty canvas, an edge or a pill. */
+  pressedNode(): number { return this.pressed }
   /** A step's box on screen, for a menu opened from the keyboard. */
   anchor(index: number): DOMRect | undefined {
     const node = this.options.model.layout.nodes[index]
@@ -276,12 +293,13 @@ export class FlowCanvas {
     event.preventDefault()
     const bounds = this.options.root.getBoundingClientRect()
     const multiplier = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? this.height : 1
-    if (event.ctrlKey || event.metaKey) this.moveCamera(zoomAt(this.camera, event.clientX - bounds.left, event.clientY - bounds.top, Math.exp(-event.deltaY * multiplier * 0.005)))
+    if (event.ctrlKey || event.metaKey) this.zoomAbout(event.clientX - bounds.left, event.clientY - bounds.top, Math.exp(-event.deltaY * multiplier * 0.005))
     else this.moveCamera({ ...this.camera, x: this.camera.x - (event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX) * multiplier, y: this.camera.y - (event.shiftKey ? 0 : event.deltaY) * multiplier })
   }
   private down = (event: PointerEvent) => {
     if (this.drag || this.connecting) return
     const point = this.world2(event)
+    this.pressed = this.nodeAt(point)
     if (event.button === 2) { const node = this.nodeAt(point); if (node >= 0) this.options.select(node); return }
     if (event.button !== 0 && event.button !== 1) return
     const port = event.button === 0 && this.options.editable ? this.portAt(point) : undefined
@@ -480,13 +498,14 @@ export class FlowCanvas {
       const key = flowEdgeKey(quit.edge.from, quit.edge.which)
       const alpha = model.hot.has(key) || model.lit?.has(key) ? 1 : model.fadeRest || nodes[quit.edge.from]?.never ? 0.35 : 1
       const target = quit.edge.target
+      if (target.kind === 'unread') { pill(`quit:${key}`, target.stepId !== undefined ? `Step ${target.stepId} · not read` : 'Not read', quit.at[0], quit.at[1], colors.muted, colors.background, colors.muted, alpha); continue }
       if (target.kind === 'missing') { pill(`quit:${key}`, 'Step missing', quit.at[0], quit.at[1], colors.warning, colors.background, colors.warning, alpha); continue }
       const success = target.kind === 'quit' && target.success
       pill(`quit:${key}`, `Quit · ${success ? 'success' : 'failure'}`, quit.at[0], quit.at[1], success ? colors.success : colors.error, colors.background, success ? colors.success : colors.error, alpha)
     }
-    if (layout.end) {
-      const key = flowEdgeKey(layout.end.edge.from, layout.end.edge.which)
-      pill(`end:${key}`, '⚠ End · job fails', layout.end.at[0], layout.end.at[1], colors.warning, colors.background, colors.text, model.fadeRest && !model.hot.has(key) ? 0.35 : 1)
+    for (const end of layout.ends) {
+      const key = flowEdgeKey(end.edge.from, end.edge.which)
+      pill(`end:${key}`, '⚠ End · job fails', end.at[0], end.at[1], colors.warning, colors.background, colors.text, model.fadeRest && !model.hot.has(key) ? 0.35 : 1)
     }
     // Chips beside lanes (the loop tag, "changed") and the overlay's sequence badges.
     // A lane's chips sit past the lanes on its side, one after another; a straight edge's or a Quit's beside its port, clear of the pill.

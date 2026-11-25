@@ -45,6 +45,7 @@ import { decodeKeptState, encodeKeptState, keptAgentText, sameShape } from '../.
 import type { KeptCustomDocument } from '../services/documents'
 import type { QueryDocument } from '../documents'
 import { liveConnectionOn } from './kept-documents'
+import { disposeStepModels } from './step-models'
 import {
   applyReplace, copiedScheduleKey, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
   type CopyCompareRow, type CopyScheduleChoice, type JobCopySource, type ReplaceMatch
@@ -517,6 +518,12 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.draft?.steps.steps.some(step => step.key === key)) return
     this.selectStep(id, key)
     if (!state.stepEditor) this.patch(id, { stepEditor: true })
+  }
+  /** An Edit step link from elsewhere in the document (History's failed step, the copy review): the step with its editor, which List always
+   *  shows and Flow docks beside the graph. */
+  editStep(id: string, key: string): void {
+    if (this.get(id)?.stepsView === 'flow') this.openStepEditor(id, key)
+    else this.selectStep(id, key)
   }
   closeStepEditor(id: string): void { if (this.get(id)?.stepEditor) this.patch(id, { stepEditor: undefined }) }
   /** Start job at this step: once, from a saved step (sp_start_job takes its saved name), while the job is not running. */
@@ -1102,6 +1109,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.previews.delete(id)
     this.clearPreviewTimer(id)
     this.history.closed(id)
+    disposeStepModels(id)
     this.contexts.delete(id)
     this.views.get(id)?.stop()
     this.views.delete(id)

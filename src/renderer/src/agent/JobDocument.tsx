@@ -295,7 +295,7 @@ export default function JobDocument({ documentId }: { documentId: string }) {
   // Create Job Like This (AG-6e): Changes from source leads the sections, and its links go to Steps or Schedules.
   const frameId = `agent-job-${state.id}`
   const goTo = (section: 'steps' | 'schedules', key?: string) => {
-    if (key) jobDocuments.selectStep(state.id, key)
+    if (key) jobDocuments.editStep(state.id, key)
     jobDocuments.setFrame(state.id, selectSection(state.frame, sections, section))
     document.getElementById(sectionDomId(frameId, section))?.scrollIntoView({ block: 'start' })
   }

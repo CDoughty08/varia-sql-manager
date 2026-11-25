@@ -115,13 +115,32 @@ describe('the flow layout', () => {
     expect(jump(1, 'success').points).toEqual([[layout.x + 102, 132 + 50], [layout.x + 102, 206]])
     expect(layout.quits.map(quit => `${quit.edge.from}${quit.edge.which}`)).toEqual(['1fail', '5success', '5fail', '6success'])
     expect(layout.start).toEqual({ from: [82, 149], to: [layout.x - 2, 149] })
-    expect(layout.end).toBeUndefined()
+    expect(layout.ends).toEqual([])
   })
   it('spreads entries into one side of a step and places the End node', () => {
     const layout = flowLayout(stepsFlow(job([['A', 'next', 4], ['B', 'next', 4], ['C', 'next', 'next'], ['D', 'qs', 'qf']])), metrics)
     const entry = (from: number) => layout.edges.find(item => item.edge.from === from && item.edge.which === 'fail')!.points.at(-1)![1]
     expect([entry(0), entry(1)]).toEqual([layout.nodes[3]!.y + 50 / 3, layout.nodes[3]!.y + 100 / 3])
     const ended = flowLayout(stepsFlow(job([['A', 'next', 'qf'], ['B', 'next', 'qf']])), metrics)
-    expect(ended.end).toMatchObject({ edge: { from: 1, which: 'success' } })
+    expect(ended.ends).toMatchObject([{ edge: { from: 1, which: 'success' } }])
+    // Both of the last step's actions going to the next step: an End node under each port, so neither arrow ends in empty space.
+    const both = flowLayout(stepsFlow(job([['A', 'next', 'qf'], ['B', 'next', 'next']])), metrics)
+    expect(both.ends.map(end => end.edge.which)).toEqual(['success', 'fail'])
+    expect(both.ends[0]!.at[0]).toBe(both.ports[1]![0][0])
+    expect(both.ends[1]!.at[0]).toBe(both.ports[1]![1][0])
+  })
+  it('draws a cut job\'s go-tos past the steps read, and its last read step\'s next step, as steps not read', () => {
+    // A 51-step job read to step 50 (as here, to step 2): step 2 goes on to step 3 and jumps to step 9, both unread, neither End nor missing.
+    const cut = job([['A', 'next', 'qf'], ['B', 'next', 9]])
+    const flow = stepsFlow(cut, true)
+    expect(flow.edges[2]!.target).toEqual({ kind: 'unread', stepId: 3 })
+    expect(flow.edges[3]!.target).toEqual({ kind: 'unread', stepId: 9 })
+    expect(flowActionWords(flow.edges[2]!)).toBe('go to the next step 3, past the steps Varia reads')
+    expect(flowActionWords(flow.edges[3]!)).toBe('go to step 9, past the steps Varia reads')
+    const layout = flowLayout(flow, metrics)
+    expect(layout.ends).toEqual([])
+    expect(layout.quits.map(quit => `${quit.edge.from}${quit.edge.which}`)).toEqual(['0fail', '1success', '1fail'])
+    // The whole job read: the same steps end and miss.
+    expect(stepsFlow(cut).edges.slice(2).map(edge => edge.target.kind)).toEqual(['end', 'missing'])
   })
 })

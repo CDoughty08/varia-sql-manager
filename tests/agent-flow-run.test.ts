@@ -69,6 +69,19 @@ describe('the Flow view\'s run overlays', () => {
     expect(drawing.steps[3]).toMatchObject({ fade: true, right: [{ text: 'Not run' }] })
     expect(drawing.unplaced).toBe(1)
   })
+  it("draws a cut job's path on to its Step N · not read pill, and says where the last read step goes next", () => {
+    // Varia reads two of this job's steps: step 2's Go to the next step leads past them, to step 3.
+    const cut = job([['Extract', 'next', 'qf'], ['Load', 'next', 'qf']])
+    const flow = stepsFlow(cut, true)
+    const rows = [row(1, 'Extract', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Load', 'Succeeded', '2026-11-09 02:00:01', 1), row(3, 'Publish', 'Succeeded', '2026-11-09 02:00:02', 1)]
+    const drawing = lastRunDrawing(flow, runPasses(rows, cut.steps), true)
+    expect([...drawing.hot].sort()).toEqual(['0:success', '1:success'])
+    expect(Object.fromEntries(drawing.sequence)).toEqual({ '0:success': '1', '1:success': '2' })
+    expect(nextWords(flow, 1, 'success')).toBe('step 3, past the steps Varia reads')
+    // A run whose next step was some other unread step did not take that go-to.
+    const other = lastRunDrawing(flow, runPasses([...rows.slice(0, 2), row(9, 'Archive', 'Succeeded', '2026-11-09 02:00:02', 1)], cut.steps), true)
+    expect(other.hot.has('1:success')).toBe(false)
+  })
   it('draws Live run: the current step ringed with its time, usual and bar, both its edges lit, the rest Waiting or On failure only', () => {
     const flow = stepsFlow(nightly())
     const passes = runPasses([row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 4)], nightly().steps)

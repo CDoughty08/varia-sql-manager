@@ -3,7 +3,7 @@
 // T-SQL commands are edited in the query editor with the step's database (completion, Parse, Open in query window); an SSIS step is one
 // scroll with an inline SSISDB picker; SSMS's Advanced page is the More options fold. JobDocumentService keeps every state.
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
-import type { editor } from 'monaco-editor'
+import { pruneStepModels, stepModels } from './step-models'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
   serverSubsystems, stepFlagChoices, stepOutputSubsystems, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
@@ -58,32 +58,33 @@ interface StepCommandHandle { replace(key: string, text: string): boolean }
 /** The command's editor: the query editor (Tools › Options, Find) on a model per step, served by the language service with the step's
  *  connection and database when it is T-SQL. */
 /** `epoch` changes each time the job is read: a save renumbers steps, so `s1` may then be another step, and a model (with its undo stack)
- *  is never carried from one read to the next. */
-function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
-  readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
+ *  is never carried from one read to the next. The models belong to the document (`step-models.ts`), so switching List and Flow or closing
+ *  Flow's docked editor keeps each step's undo. */
+function StepCommandEditor({ owner, epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
+  readonly owner: string; readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
   readonly label: string; readonly onChange: (value: string) => void; readonly handle?: RefObject<StepCommandHandle | null>
 }) {
   const workbench = useWorkbench()
   const stepKey = `${epoch}|${key}`
   const host = useRef<HTMLDivElement>(null)
   const instance = useRef<QueryEditorInstance | undefined>(undefined)
-  const models = useRef(new Map<string, { model: editor.ITextModel; documentId: string }>())
+  const models = useRef(stepModels(owner))
+  models.current = stepModels(owner)
   const changed = useRef(onChange)
   changed.current = onChange
   useEffect(() => {
     const element = host.current
     if (!element) return
     instance.current = createQueryEditor(workbench, element, { compact: true, ariaLabel: label, contextKey: stepEditorContextKey, inEditorPane: false })
-    const owned = models.current
-    return () => { instance.current?.dispose(); instance.current = undefined; for (const entry of owned.values()) entry.model.dispose(); owned.clear() }
-  // The editor lives as long as the section; each step gets its own model below.
+    return () => { instance.current?.dispose(); instance.current = undefined }
+  // The editor lives as long as the section; each step gets its own model below, which outlives it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
     const view = instance.current
     if (!view) return
     let entry = models.current.get(stepKey)
-    for (const [cached, stale] of models.current) if (!cached.startsWith(`${epoch}|`)) { stale.model.dispose(); models.current.delete(cached) }
+    pruneStepModels(owner, epoch)
     if (!entry || entry.model.isDisposed()) {
       const documentId = crypto.randomUUID()
       const model = workbench.monaco.editor.createModel(value, stepLanguage(subsystem), workbench.monaco.Uri.parse(`varia-sql://step/${documentId}`))
@@ -98,7 +99,7 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
     return () => listener.dispose()
   // `value` is applied by the effect below, so typing does not reset the model.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepKey, subsystem, connectionId, database, workbench])
+  }, [owner, stepKey, subsystem, connectionId, database, workbench])
   useEffect(() => {
     const model = models.current.get(stepKey)?.model
     if (model && !model.isDisposed() && model.getValue() !== value) model.setValue(value)
@@ -414,7 +415,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
           {isStepScriptSubsystem(step.subsystem) && <button type="button" disabled={!editable || state.stepFile?.running} onClick={() => void loadFile()}><Icon name="file" />{stepScriptText.load}</button>}
         </span>
       </div>
-      <StepCommandEditor epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
+      <StepCommandEditor owner={state.id} epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
         readOnly={!editable} label={`Step ${position + 1} command`} onChange={value => update({ command: value })} handle={commandEditor} />
       <FieldMessages text={command} id={`${id}-command`} />
       {stepFile?.failure && <p className="property-field-error" role="alert"><Icon name="error" />{stepFile.failure}</p>}
