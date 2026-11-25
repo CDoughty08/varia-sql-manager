@@ -6,9 +6,9 @@ import { environmentSchema } from './environments'
 
 /**
  * BigQuery's saved connections (`bigquery-connections.json`, docs/bigquery.md, Saved connections). The file is BigQuery's
- * own, so 0.9.0 never reads it (decision 24). A profile's `keyFile` is the opaque reference the renderer names its key or
+ * own, so 0.9.0, which predates it, never reads it. A profile's `keyFile` is the opaque reference the renderer names its key or
  * configuration file by; the path behind it (`keyPath`) is main's only and never reaches the renderer, which sees the
- * file's name (decisions 2 and 47).
+ * file's name, so a compromised page learns no paths.
  */
 export const bigQueryLibraryLimits = { profiles: 200, recent: 30, path: 4096, confirmedSources: 64, keptKeyFiles: 48 } as const
 // Absolute on any platform main writes it from (a drive or UNC path on Windows, a rooted path elsewhere): a file with a
@@ -21,7 +21,7 @@ export const bigQueryStoredProfileSchema = z.object({
   autoReconnect: connectionAutoReconnectSchema.optional(), keyPath: absolutePath.optional()
 }).strict().refine(value => (value.options.keyFile !== undefined) === (value.keyPath !== undefined), 'A saved key file reference needs its path.')
   .refine(value => value.options.costThreshold !== 0, 'A saved cost threshold is at least 1 GiB.')
-/** A federation configuration's `credential_source.file` the user confirmed in the Connect dialog (decision 49), by the
+/** A federation configuration's `credential_source.file` the user confirmed in the Connect dialog, by the
  *  configuration's path: a changed source path asks again. */
 export const confirmedSourceSchema = z.object({ keyPath: absolutePath, source: absolutePath }).strict()
 /** The key file of a history entry pruned past the 30 most recent, by its reference: a connection still open or restored
@@ -61,7 +61,7 @@ export const bigQueryCostThresholdInputSchema = z.object({ options: savedOptions
 export type BigQueryCostPromptInput = z.infer<typeof bigQueryCostPromptInputSchema>
 
 /** connections.pickKeyFile's answer: the reference to name the file by from now on, its name, and for a federation
- *  configuration with a file source, the source's resolved path and whether the user already confirmed it (decision 49). */
+ *  configuration with a file source, the source's resolved path and whether the user already confirmed it. */
 export interface PickedKeyFile { readonly keyFile: string; readonly name: string; readonly source?: string; readonly sourceConfirmed?: boolean }
 export const pickKeyFileParamsSchema = z.object({ authentication: z.enum(['serviceAccountKey', 'externalAccount']) }).strict()
 export const confirmSourceParamsSchema = z.object({ keyFile: z.uuid(), source: absolutePath }).strict()

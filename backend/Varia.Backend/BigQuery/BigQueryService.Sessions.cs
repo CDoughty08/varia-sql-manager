@@ -97,7 +97,7 @@ internal sealed partial class BigQueryService
     internal int ChildPollMs { get; set; } = 2000;
     /// <summary>The wait between jobs.get calls on a job Varia waits to reach DONE.</summary>
     internal TimeSpan DonePoll { get; set; } = TimeSpan.FromSeconds(1);
-    /// <summary>A close's budgets inside query.session.close's deadlines (60 s for a commit, 30 s otherwise; decision 54): a
+    /// <summary>A close's budgets inside query.session.close's deadlines (60 s for a commit, 30 s otherwise): a
     /// cancelled job's DONE and listing, the commit's insert and lookups, and the abort.</summary>
     internal TimeSpan CloseWaitLimit { get; set; } = TimeSpan.FromSeconds(20);
     internal TimeSpan CommitWaitLimit { get; set; } = TimeSpan.FromSeconds(25);
@@ -361,6 +361,12 @@ internal sealed partial class BigQueryService
         error is not BigQueryJobMayExist && (NotSent(error) || error is GoogleApiException api && (int)api.HttpStatusCode is >= 400 and < 500
             && api.HttpStatusCode is not (HttpStatusCode.Conflict or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests));
 
+    /// <summary>The byte cap on Varia's own session jobs (COMMIT TRANSACTION and ABORT_SESSION), which bill nothing: BigQuery's
+    /// 10 MiB minimum for a billed query, or the connection's own cap when that is lower, so no job Varia submits is uncapped.</summary>
+    internal const long SessionControlCap = 10L << 20;
+
+    internal static long SessionControlCapFor(BigQueryConnection connection) => Math.Min(connection.Options.MaximumBytesBilled ?? SessionControlCap, SessionControlCap);
+
     Job SessionJob(BigQueryTabSession session, string sql, string jobId) => new()
     {
         JobReference = new JobReference { ProjectId = session.Connection.Options.Project, JobId = jobId, Location = session.Location },
@@ -369,7 +375,7 @@ internal sealed partial class BigQueryService
             Labels = new Dictionary<string, string>(Labels),
             Query = new JobConfigurationQuery
             {
-                Query = sql, UseLegacySql = false,
+                Query = sql, UseLegacySql = false, MaximumBytesBilled = SessionControlCapFor(session.Connection),
                 ConnectionProperties = [new ConnectionProperty { Key = "session_id", Value = session.Id }]
             }
         }
@@ -393,7 +399,7 @@ internal sealed partial class BigQueryService
                 Labels = new Dictionary<string, string>(Labels),
                 Query = new JobConfigurationQuery
                 {
-                    Query = BigQuerySql.AbortSession, UseLegacySql = false, ParameterMode = "NAMED",
+                    Query = BigQuerySql.AbortSession, UseLegacySql = false, ParameterMode = "NAMED", MaximumBytesBilled = SessionControlCapFor(connection),
                     QueryParameters = [new QueryParameter
                     {
                         Name = BigQuerySql.AbortSessionParameter, ParameterType = new QueryParameterType { Type = "STRING" },
@@ -476,7 +482,7 @@ internal sealed partial class BigQueryService
     }
 
     /// <summary>
-    /// query.session.close for a BigQuery tab (docs/bigquery.md, Sessions; decision 54). Commit runs COMMIT TRANSACTION in
+    /// query.session.close for a BigQuery tab (docs/bigquery.md, Sessions). Commit runs COMMIT TRANSACTION in
     /// the session, then ends it; rollback and a plain close end it (ABORT_SESSION, which ends the transaction with it).
     /// A session holding a running job is never aborted: a commit or rollback close is refused with JOB_RUNNING, and a
     /// plain close leaves the session. A job Varia cancelled is waited for (20 s, or 25 s for a commit) so the abort never

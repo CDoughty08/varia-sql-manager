@@ -977,7 +977,7 @@ export interface VariaApi {
   /** connections.pickKeyFile: main's open dialog for a service account key or federation configuration. Resolves the
    *  reference to name it by and its file name (never the path), or null when the user cancelled. */
   pickKeyFile(authentication: 'serviceAccountKey' | 'externalAccount'): Promise<ApiResult<PickedKeyFile | null>>
-  /** Decision 49: the user confirmed the token file a picked federation configuration reads. */
+  /** The user confirmed the token file a picked federation configuration reads. */
   confirmFederationSource(keyFile: string, source: string): Promise<ApiResult<void>>
   /** agentStepScript.open (AG-11): Load from file… on a CmdExec or PowerShell job step. Main shows its open dialog, filtered to the step
    *  type's scripts plus All files, and reads the chosen file under the step command's limit. Resolves its text only (never its path), or

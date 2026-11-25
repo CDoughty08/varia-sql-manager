@@ -507,7 +507,7 @@ internal sealed class BigQueryColumnPlan
         return !(negative && whole.SequenceEqual("0"u8) && fraction.Length == 0) && whole.Length + fraction.Length <= 100;
     }
 
-    /// <summary>TIMESTAMP in UTC at microsecond precision, fixed width: <c>2026-11-15 09:30:00.000000 UTC</c> (decision 14).
+    /// <summary>TIMESTAMP in UTC at microsecond precision, fixed width: <c>2026-11-15 09:30:00.000000 UTC</c>, so a column's values line up.
     /// REST sends microseconds since the epoch (formatOptions.useInt64Timestamp), or seconds with a fraction without it.</summary>
     internal static int WriteTimestamp(ReadOnlySpan<byte> text, Span<byte> destination)
     {

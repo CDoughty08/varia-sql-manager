@@ -16,7 +16,7 @@ const principal = { provider: 'bigquery' as const, project: 'varia-alpha', princ
 const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta'], authentication: 'gcloud' },
   details: { autoReconnect: 'inherit', environment: 'Production' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal })
 
-describe('BigQuery connections in the workbench (BQ-2)', () => {
+describe('BigQuery connections in the workbench', () => {
   // The comma commands read GoogleSQL by its own tokens (editing-commands.test.ts runs them). A command that targets a SQL Server
   // object still edits the bound GoogleSQL model by GoogleSQL's rules, so both stay enabled in either engine's query.
   it('offers Move Commas in a GoogleSQL query, from its own tab or a command that targets a SQL Server object', () => {

@@ -157,9 +157,9 @@ npm run test:smoke:wsl -- --all
     public dataset's `INFORMATION_SCHEMA.TABLES`, the run's own result tables and, for the checks that make them, its
     own temp tables, checked in the text and in the dry run's referenced tables;
   - the connection and every query job carry `maximumBytesBilled` of at most 100 MiB, and after each step the run lists
-    the jobs it created (and Varia's jobs in its sessions, never another tool's or window's) and fails if one billed bytes without that cap or past it (a script: its cap for each statement, within 100 MiB), or was never counted; each job is counted before the next is admitted, and one still running after its wait stops the run; it prints
-    each job's bytes billed and the total. Varia's own `CALL BQ.ABORT_SESSION` job carries no cap; it runs outside the
-    session and bills nothing, so the run does not count it. A comment unique to the run keeps the query cache from answering a rerun.
+    the jobs it created (and Varia's jobs in its sessions, never another tool's or window's) and fails if one carried no cap within 100 MiB or billed past it (a script: its cap for each statement, within 100 MiB), or was never counted; each job is counted before the next is admitted, and one still running after its wait stops the run; it prints
+    each job's bytes billed and the total. Varia's own `CALL BQ.ABORT_SESSION` job carries the 10 MiB session-job cap; it
+    runs outside the session and bills nothing, so the run does not count it. A comment unique to the run keeps the query cache from answering a rerun.
 
   Before the first run, set a custom "Query usage per day" quota of 10–50 GiB on the project and a budget alert (a
   lowered quota takes minutes to apply; a budget only alerts). Neither limits Storage Read bytes, so the group reads no

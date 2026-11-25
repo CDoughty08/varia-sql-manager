@@ -1,4 +1,4 @@
-// BigQuery's Job History (BQ-9, docs/bigquery.md, Job History): one document per BigQuery connection showing the jobs of its
+// BigQuery's Job History (docs/bigquery.md, Job History): one document per BigQuery connection showing the jobs of its
 // billing project live. The backend lists them (the bigquery.jobs source, free jobs.list and jobs.get calls); this service owns
 // each document's scope and filters, the filter box, the expanded scripts, the grid's kept state and selection, the details
 // pane (bigquery.jobs.get), the cancel prompt (bigquery.jobs.cancel), what BigQuery refused on the connection, and the row

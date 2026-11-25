@@ -1004,7 +1004,7 @@ const SCENES = [
       u.mark(pal, 'Palette command')
     } },
   { group: 'Job history', id: 'close-running', base: 'workbench', title: 'Closing a tab while a job runs',
-    note: 'Closing a query tab or its results while a BigQuery job runs asks first (decision 52), through the same prompt SQL Server tabs use, so a tab sees one prompt. <b>Leave it running</b> detaches the job: a notification shows its id, and Job History finds it later (marked Varia). Remember my choice sets <i>Query Execution › BigQuery › When closing a running job</i>. Quitting Varia with hot exit on leaves jobs running and re-attaches at the next start.',
+    note: 'Closing a query tab or its results while a BigQuery job runs asks first, through the same prompt SQL Server tabs use, so a tab sees one prompt. <b>Leave it running</b> detaches the job: a notification shows its id, and Job History finds it later (marked Varia). Remember my choice sets <i>Query Execution › BigQuery › When closing a running job</i>. Quitting Varia with hot exit on leaves jobs running and re-attaches at the next start.',
     patch(u) {
       bqWorkbench(u, { status: { est: 'Processes ≈ 640 GiB' }, tab: { name: 'daily_revenue.sql' } })
       running(u)
@@ -1029,9 +1029,9 @@ const SCENES = [
       u.mark(OUT + ' .messages', 'Re-attached, not re-run', 'inside')
       u.mark(OUT + ' .output-status', 'Running again, with Stop')
     } },
-  // Sessions and transactions (decision 54) and the dialogs re-attach adds
+  // Sessions and transactions and the dialogs re-attach adds
   { group: 'Sessions & transactions', id: 'close-transaction', base: 'workbench', title: 'Closing an idle tab with an open transaction',
-    note: 'Decision 54: an idle BigQuery tab whose session holds an open transaction asks exactly as a SQL Server tab does, in the same <b>Uncommitted transactions</b> box: <b>Yes</b> runs <code>COMMIT TRANSACTION</code> then ends the session, <b>No</b> ends the session (which rolls the transaction back), <b>Cancel</b> keeps the tab. Varia tracks the transaction from the statement types of the tab\'s own jobs, so asking reads nothing and costs nothing. When a statement failed inside the transaction, the box says it <i>may</i> be open and gives the BigQuery reason.',
+    note: 'An idle BigQuery tab whose session holds an open transaction asks exactly as a SQL Server tab does, in the same <b>Uncommitted transactions</b> box: <b>Yes</b> runs <code>COMMIT TRANSACTION</code> then ends the session, <b>No</b> ends the session (which rolls the transaction back), <b>Cancel</b> keeps the tab. Varia tracks the transaction from the statement types of the tab\'s own jobs, so asking reads nothing and costs nothing. When a statement failed inside the transaction, the box says it <i>may</i> be open and gives the BigQuery reason.',
     patch(u) {
       bqWorkbench(u, { lines: ['BEGIN TRANSACTION;', 'UPDATE `acme-analytics.sales.orders`', "SET status = 'refunded'", "WHERE order_id IN (SELECT order_id FROM `acme-analytics.staging.refunds`);"], status: { est: 'Processed 3.20 GB' }, tab: { name: 'refunds.sql' } })
       outputStatus(u, '<strong>Completed</strong><span>· 2 statements</span><span>· 1,204 rows modified</span><span>· 3.20 GB processed</span><span>· $0.02</span>')
@@ -1066,7 +1066,7 @@ const SCENES = [
       f.querySelector('.primary').after(u.h('<button type="button">Cancel Jobs</button>'))
     } },
   { group: 'Sessions & transactions', id: 'location-switch', base: 'workbench', title: 'Switching a tab to a dataset in another location',
-    note: 'Decision 18: a tab\'s session lives in one location, so choosing a dataset in another location asks first. Switching ends the old session (its temp tables and variables) and starts a new one on the next Execute. When the old session holds an open transaction, the Uncommitted transactions box asks Commit or Roll Back before the switch (decision 54); when it holds a running job, the three choices come first.',
+    note: 'A tab\'s session lives in one location, so choosing a dataset in another location asks first. Switching ends the old session (its temp tables and variables) and starts a new one on the next Execute. When the old session holds an open transaction, the Uncommitted transactions box asks Commit or Roll Back before the switch; when it holds a running job, the three choices come first.',
     patch(u) {
       bqWorkbench(u, { status: { est: 'Processes ≈ 1.24 GB' }, bar: { dataset: 'eu_sales', datasets: ['sales', 'marketing', 'staging', 'eu_sales'] } })
       subDialog(u, { title: 'Switch this tab to EU?', ok: 'Switch', cancel: "Don't Switch", width: 500, tag: 'Location prompt',

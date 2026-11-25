@@ -139,7 +139,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
   private readonly subscription: Disposable
-  /** Each BigQuery query's session location, from its last job: a dataset in another location ends the session (decision 18). */
+  /** Each BigQuery query's session location, from its last job: a dataset in another location ends the session. */
   private readonly locations = new Map<string, string>()
   /** Shows a note whose query has closed, as a notification. Set once the workbench is built. */
   notify?: (text: string) => void
@@ -190,7 +190,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (document) this.addSessionMessage(tabId, text, note.code === 'sessionExpired' ? 'info' : 'error')
     else this.notify?.(text)
   }
-  /** Asks decision 18's question before a BigQuery query's dataset moves its session to another location: true for Switch. */
+  /** Asks before a BigQuery query's dataset moves its session to another location: true for Switch. */
   async confirmLocationSwitch(tabId: string, location: SessionLocationSwitch): Promise<boolean> {
     const document = this.documents.get(tabId)
     if (!document || this.disposed) return false

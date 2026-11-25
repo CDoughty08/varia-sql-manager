@@ -331,7 +331,7 @@ export function scriptCommandEntries(): { readonly [K in ScriptCommandId]: Scrip
     const entry: ScriptCommandEntry = {
       title: scriptCommandTitle(verb, destination), category: 'Object Explorer', icon: target.icon, keywords: ['script'],
       precondition: `backendReady && ${scriptVerbContextKey(verb)} == 'enabled'` + (target.documentTask ? ' && !documentBusy' : ''), unavailableHint: scriptUnavailableHint, palette: false,
-      // Both engines script (BigQuery's kinds since BQ-5); the selection's kind says which verbs show.
+      // Both engines script; the selection's kind says which verbs show.
       providers: scriptProviders,
       menus: [{ menu: scriptVerbSubmenuId(verb), group: '1_destination', order: target.order, title: target.title, mnemonic: target.mnemonic }]
     }

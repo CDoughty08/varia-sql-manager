@@ -294,13 +294,14 @@ internal static partial class BigQuerySessionChecks
             BigQuery.HeldPoll = TimeSpan.FromMilliseconds(20);
         }
 
-        public async Task ConnectAsync(JsonObject key)
+        public async Task ConnectAsync(JsonObject key, Action<JsonObject>? configure = null)
         {
             var options = new JsonObject
             {
                 ["provider"] = "bigquery", ["project"] = "varia-alpha", ["authentication"] = "serviceAccountKey", ["dataset"] = "sales", ["location"] = "US",
                 ["credential"] = new JsonObject { ["source"] = "file", ["json"] = key.ToJsonString() }, ["keyFile"] = Guid.NewGuid().ToString()
             };
+            configure?.Invoke(options);
             var (code, result, message) = await Call("connections.connect", options);
             if (code != "ok") throw new InvalidOperationException("connect: " + code + " " + message);
             ConnectionId = ((ConnectionInfo)result!).Id;
@@ -527,6 +528,22 @@ internal static partial class BigQuerySessionChecks
         var ended = await harness.Close(plain);
         check(ended is { Code: "ok", Result: { Closed: true, Note: null } } && bq.Aborts.Last() == "sess-2", $"a plain close ends the session: {ended.Code} {string.Join(",", bq.Aborts)}");
         check(harness.Fake.Unmatched.IsEmpty, "sessions send nothing the scripted BigQuery does not answer: " + string.Join(", ", harness.Fake.Unmatched.Select(request => request.Method + " " + request.Url)));
+
+        // Varia's own session jobs bill nothing, but none goes out uncapped: 10 MiB, or the connection's lower cap.
+        var own = bq.Inserts.Where(body => body["configuration"]!["query"]!["query"]!.GetValue<string>() is BigQuerySql.Commit or BigQuerySql.AbortSession).ToArray();
+        check(own.Length == 3 && own.All(body => Cap(body) == "10485760"),
+            "COMMIT TRANSACTION and ABORT_SESSION carry a 10 MiB maximumBytesBilled: " + string.Join(", ", own.Select(Cap)));
+        var lowBq = new Bq();
+        lowBq.Statements["BEGIN TRANSACTION"] = "BEGIN_TRANSACTION";
+        using var low = new Harness(lowBq);
+        await low.ConnectAsync(key, options => options["maximumBytesBilled"] = 1000);
+        var capped = Tab();
+        await low.Execute(capped, "BEGIN TRANSACTION");
+        await low.Close(capped, "commit");
+        var lowOwn = lowBq.Inserts.Where(body => body["configuration"]!["query"]!["query"]!.GetValue<string>() is BigQuerySql.Commit or BigQuerySql.AbortSession).ToArray();
+        check(lowOwn.Length == 2 && lowOwn.All(body => Cap(body) == "1000"),
+            "a connection's cap below 10 MiB caps its session jobs too: " + string.Join(", ", lowOwn.Select(Cap)));
+        static string? Cap(JsonNode body) => body["configuration"]!["query"]!["maximumBytesBilled"]?.ToString();
     }
 
     /// <summary>Scripts: children listed between polls and read in statement order, DML counts and DDL sentences, a failing

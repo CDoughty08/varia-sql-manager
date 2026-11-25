@@ -238,7 +238,7 @@ export class BigQueryConnectionStore {
     return { library: changed.library, removed: changed.value }
   }
 
-  /** Whether the user confirmed `source` for the configuration at `keyPath` (decision 49). */
+  /** Whether the user confirmed `source` for the configuration at `keyPath`, so its token file goes to Google's STS only after a yes. */
   async sourceConfirmed(keyPath: string, source: string): Promise<boolean> {
     const { library } = await this.load()
     return !!library.confirmedSources?.some(item => item.keyPath === keyPath && item.source === source)

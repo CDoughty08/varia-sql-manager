@@ -215,7 +215,6 @@ internal static partial class BigQueryRealProjectChecks
         var budget = new Budget();
         var started = DateTimeOffset.UtcNow.AddMinutes(-10);
         var skipped = new List<string>();
-        var uncapped = new List<string>();
         var destinations = new Dictionary<string, TableReference>(StringComparer.Ordinal);
         // The jobs this run created, the ones Reconcile counted, and each counted job's BigQuery session.
         var created = new HashSet<string>(StringComparer.Ordinal);
@@ -288,9 +287,7 @@ internal static partial class BigQueryRealProjectChecks
                 var cap = job.Configuration?.Query?.MaximumBytesBilled;
                 if (job.Configuration?.Query is { Query: { } text, DestinationTable: { } destination }) destinations[text] = destination;
                 Note($"{step}: job {job.JobReference!.JobId} ({job.Statistics?.Query?.StatementType}) billed {billed:N0} bytes under a cap of {cap?.ToString("N0") ?? "none"}.");
-                // Varia's own session bookkeeping (CALL BQ.ABORT_SESSION) carries no cap and bills nothing: listed, not failed.
-                // Any job without the cap that billed bytes fails the run in Record.
-                if (cap is null && billed == 0) { uncapped.Add($"{job.JobReference.JobId} ({job.Statistics?.Query?.StatementType})"); continue; }
+                // Every job fails the run in Record without the cap, Varia's own COMMIT and ABORT_SESSION included (10 MiB).
                 budget.Record(step + " " + job.JobReference.JobId, cap, billed, scripts.GetValueOrDefault(job.JobReference.JobId, 1));
             }
         }
@@ -628,7 +625,7 @@ internal static partial class BigQueryRealProjectChecks
         catch (Exception error) { Later(false, $"real project: the checks ended early: {error.GetType().Name}: {error.Message}"); }
         finally
         {
-            // Ending the tab's session runs ABORT_SESSION, outside the session and billing nothing: the run does not count it.
+            // Ending the tab's session runs ABORT_SESSION, outside the session, capped and billing nothing: the run does not count it.
             if (sessionOpen)
             {
                 var closed = await Call("query.session.close", new JsonObject { ["sessionId"] = session });
@@ -658,7 +655,6 @@ internal static partial class BigQueryRealProjectChecks
             Later(missed.Count == 0, $"real project: every job the run created was counted against its caps (not counted, perhaps still running: {string.Join(", ", missed)})");
             Later(budget.Billed <= RunCapBytes, $"real project: the run billed at most 1 GiB: {budget.Billed:N0} bytes");
             Note($"billed {budget.Billed:N0} bytes in all; skipped {skipped.Count} check(s){(skipped.Count > 0 ? ": " + string.Join(" | ", skipped) : "")}.");
-            if (uncapped.Count > 0) Note("jobs of this run without maximumBytesBilled, billing nothing: " + string.Join(", ", uncapped) + ".");
             foreach (var failure in failures) Note("FAILED " + failure);
             if (failures.Count > 0) check(false, failures[0]);
         }

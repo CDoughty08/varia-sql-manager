@@ -265,7 +265,8 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
   get sortable(): boolean { return this.spec.mode === 'snapshot' }
   /** This table's sort as its header shows it: shown column indexes, in order. */
   headerSort(sort: readonly LiveSort[] | undefined = this.getSnapshot().sort): HeaderSortKey[] {
-    return (sort ?? []).flatMap(key => { const column = this.spec.columns.findIndex(item => item.id === key.column); return column < 0 ? [] : [{ column, descending: key.descending }] })
+    // A hidden column has no header to mark, so a key on it (or on the tone) shows nowhere.
+    return (sort ?? []).flatMap(key => { const column = this.spec.columns.findIndex(item => item.id === key.column); return column < 0 || !isDataColumn(this.spec.columns[column]!) ? [] : [{ column, descending: key.descending }] })
   }
   /** A shown column index or catalogue id as a sortable column's id (never the tone or a hidden column). */
   private sortColumn(column: number | string): string | undefined {

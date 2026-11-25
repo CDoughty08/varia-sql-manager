@@ -616,7 +616,8 @@ Messages).
   the chip and the marker for the old text. Emulator mode's faked estimates never ask.
 - **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
   `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
-  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
+  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only). Varia's own session jobs
+  (`COMMIT TRANSACTION` and `ABORT_SESSION`) bill nothing but still carry a cap: 10 MiB, or the connection's when lower.
 
 ## Object Explorer
 

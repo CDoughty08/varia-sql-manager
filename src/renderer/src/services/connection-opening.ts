@@ -101,7 +101,7 @@ export async function executePendingQuery({ tabId, opened, connections, document
   if (attached?.connectionId === opened.id && attached.targetId === opened.targetId && attached.attachWanted
     && connection?.id === opened.id && connection.generation === opened.generation && connections.isLive(opened.id)
     && connections.bindingRevision(connection) === opened.bindingRevision
-    // The tab follows a BigQuery connection, but BigQuery's queries do not run yet (BQ-3): it is left to edit.
+    // A BigQuery tab only attaches: a job may bill, so one never starts from a connect alone.
     && !isBigQueryConnection(connection)
     && !documents.getSnapshot().busy && !queries.isRunning(tabId)) void queries.execute(tabId)
 }
