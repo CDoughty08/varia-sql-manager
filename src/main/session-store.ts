@@ -211,7 +211,14 @@ export class SessionStore {
   private kept: number | undefined
   /** A take handed out files no page has acknowledged reopening (`restored`). */
   private unrestored = false
-  constructor(private readonly dir: string, private readonly options: SessionStoreOptions = {}) {}
+  private legacyBigQueryHandler: SessionStoreOptions['onLegacyBigQueryExtraProjects']
+  constructor(private readonly dir: string, private readonly options: SessionStoreOptions = {}) {
+    this.legacyBigQueryHandler = options.onLegacyBigQueryExtraProjects
+  }
+  /** Registers a handler for legacy BigQuery `extraProjects` stripped from pre-upgrade session files on disk. */
+  setLegacyBigQueryExtraProjectsHandler(handler: SessionStoreOptions['onLegacyBigQueryExtraProjects']): void {
+    this.legacyBigQueryHandler = handler
+  }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
     const next = this.queue.then(task)
@@ -333,8 +340,8 @@ export class SessionStore {
     const migrated = read.kind === 'ok' ? migrateLegacySession(read.value) : undefined
     const parsed = migrated ? storedSessionSchema.safeParse(migrated.value) : undefined
     if (parsed?.success) {
-      if (migrated?.legacy && this.options.onLegacyBigQueryExtraProjects) {
-        try { await this.options.onLegacyBigQueryExtraProjects(migrated.legacy) } catch { /* Migration never blocks session restore. */ }
+      if (migrated?.legacy && this.legacyBigQueryHandler) {
+        try { await this.legacyBigQueryHandler(migrated.legacy) } catch { /* Migration never blocks session restore. */ }
       }
       return this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
     }

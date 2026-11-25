@@ -657,6 +657,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events,
+    starredProjects: connectionId => {
+      const connection = connections.get(connectionId)
+      const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
+      return principal ? bigQueryStarred.starredFor(principal) : []
+    },
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })

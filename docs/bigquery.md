@@ -29,7 +29,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
+| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -49,7 +49,7 @@ BigQuery entries live in `bigquery-connections.json` beside SQL Server's library
 most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
 [Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
 saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. A
-target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
+target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files and per-principal Starred Projects (up to 64 principals, 200 projects each; separate from connection identity, so starring projects never creates duplicate connections; legacy `extraProjects` from earlier files migrate into Starred Projects automatically). The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
 default dataset and the sign-in (with the key file's name). Object Explorer, tabs, the query bar and the status bar show
 the project where SQL Server shows the server; the query tab's **Dataset** box, and the palette's Change Database, list the
@@ -604,8 +604,15 @@ Messages).
 A BigQuery connection's tree loads through `explorer.children`, the method SQL Server's uses, from BigQuery's free REST
 listers; nothing in it runs a job.
 
-- **Shape.** The connection node lists the billing project (sublabel "billing project"), then the extra projects. A project
-  lists its datasets (`datasets.list`, sublabel the location). A dataset has six folders: Tables, Views, Materialized Views,
+- **Shape & Starred Projects.** The connection node lists the billing project (sublabel "billing project"), then the
+  principal's **Starred projects** (persisted per verified Google principal in `bigquery-connections.json`, mirroring
+  BigQuery Studio's explorer starring UX without altering connection identity), then **session-only (unstarred) projects**
+  added when Search Objects' Reveal navigates to an unstarred project or when an open BigQuery query tab references another
+  project. Right-click a connection node (or use the palette's **BigQuery: Star a Project…**) to star any accessible
+  project (`bigquery.connectionProjects`) or type any public/dataset-ACL project id such as `bigquery-public-data`. Click a
+  non-billing project row's star button (or right-click **Star Project** / **Unstar Project**) to toggle persistence;
+  unstarred session projects offer **Remove from Explorer** and clear on restart unless starred or referenced by an open
+  query tab. A project lists its datasets (`datasets.list`, sublabel the location). A dataset has six folders: Tables, Views, Materialized Views,
   External Tables (`tables.list` filtered by type; a snapshot is a table with the snapshot icon, a clone is a table),
   Routines (`routines.list`, icon by routine type, sublabel a non-SQL language) and Models (`models.list`, sublabel the model
   type). A table-like object has Columns (`tables.get`'s schema, sublabel the type, `ARRAY<…>` for a repeated column and

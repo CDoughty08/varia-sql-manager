@@ -834,14 +834,14 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_query` | Previe**w** Rows | `explorer.previewRows` | `explorerNode == 'bqTable' && !explorerServerLost` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
-| `1_query` | Star a **P**roject… | `bigquery.starProjectPrompt` | `explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost` |
-| `1_query` | **S**tar Project | `bigquery.toggleStarProject` | `explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' \|\| explorerBigQueryProjectRole == 'starred') && !explorerServerLost` |
-| `1_query` | Remove from **E**xplorer | `bigquery.removeSessionProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
-| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
+| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `((explorerNode == 'server' \|\| explorerNode == 'bqProject' \|\| explorerNode == 'bqDataset') && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
+| `1_query` | Star a **P**roject… | `bigquery.starProjectPrompt` | `explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost` |
+| `1_query` | **S**tar Project | `bigquery.toggleStarProject` | `explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' \|\| explorerBigQueryProjectRole == 'starred') && !explorerServerLost` |
+| `1_query` | Remove from **E**xplorer | `bigquery.removeSessionProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
 | `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background'` |
 | `2_job` | Stop **J**ob | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |

@@ -29,7 +29,7 @@ const bigQueryPrincipalOf = (connection: LiveConnection | undefined): string | u
  */
 export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch, quickInput, bigQueryStarred }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
   & { queries?: Pick<Workbench['queries'], 'execute'>; bigQueryProperties?: Pick<Workbench['bigQueryProperties'], 'canOpen' | 'open'> }
-  & { objectSearch?: Pick<Workbench['objectSearch'], 'refreshNode'> }
+  & { objectSearch?: Pick<Workbench['objectSearch'], 'refreshNode'> & Partial<Pick<Workbench['objectSearch'], 'refreshBigQuery'>> }
   & { quickInput?: Pick<Workbench['quickInput'], 'show' | 'setAnswer'>; bigQueryStarred?: Pick<Workbench['bigQueryStarred'], 'starredFor' | 'isStarred' | 'setStarred'> }
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
@@ -215,6 +215,7 @@ export function explorerContribution({ commands, documents, connections, explore
             onDidAccept: async item => {
               const result = await bigQueryStarred.setStarred(principal, item.id, true)
               if (!result.ok) commands.reportError(result.error)
+              else objectSearch?.refreshBigQuery?.(connection.id, { scope: { project: item.id } })
             }
           })
         }
@@ -245,6 +246,7 @@ export function explorerContribution({ commands, documents, connections, explore
         if (starred) explorer.removeBigQuerySessionProject(node.connectionId, project)
         const result = await bigQueryStarred.setStarred(principal, project, !starred)
         if (!result.ok) commands.reportError(result.error)
+        else if (!starred) objectSearch?.refreshBigQuery?.(node.connectionId, { scope: { project } })
       }
     }),
     commands.register('bigquery.removeSessionProject', {

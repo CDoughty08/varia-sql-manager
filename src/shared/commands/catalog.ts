@@ -620,19 +620,19 @@ export const commandCatalog = {
   'bigquery.starProjectPrompt': {
     title: 'Star a Project…', category: 'BigQuery', icon: 'star-empty', keywords: ['bigquery', 'star', 'project', 'explorer', 'pin', 'add'],
     precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to BigQuery first.', providers: ['bigquery'], methods: ['bigquery.connectionProjects'], providerContext: 'own',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, title: 'Star a Project…', mnemonic: 'p', when: "explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 8, title: 'Star a Project…', mnemonic: 'p', when: "explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost" }]
   },
   'bigquery.toggleStarProject': {
     title: 'Star Project', category: 'Object Explorer', icon: 'star-full', keywords: ['bigquery', 'star', 'unstar', 'project', 'explorer', 'pin'],
     precondition: 'hasConnection',
     unavailableHint: 'Select a non-billing BigQuery project in Object Explorer.', providers: ['bigquery'],
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, title: 'Star Project', mnemonic: 's', when: "explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' || explorerBigQueryProjectRole == 'starred') && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 9, title: 'Star Project', mnemonic: 's', when: "explorerNode == 'bqProject' && (explorerBigQueryProjectRole == 'session' || explorerBigQueryProjectRole == 'starred') && !explorerServerLost" }]
   },
   'bigquery.removeSessionProject': {
     title: 'Remove Project from Explorer', category: 'Object Explorer', icon: 'close', keywords: ['bigquery', 'remove', 'session', 'project', 'explorer', 'hide'],
     precondition: 'hasConnection',
     unavailableHint: 'Select an unstarred session BigQuery project in Object Explorer.', providers: ['bigquery'],
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 3, title: 'Remove from Explorer', mnemonic: 'e', when: "explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 10, title: 'Remove from Explorer', mnemonic: 'e', when: "explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost" }]
   },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.', providers: both,
@@ -1532,7 +1532,7 @@ export const commandCatalog = {
     precondition: 'hasConnection', unavailableHint: noServer,
     menus: [
       { menu: 'view', group: '0_palette', order: 4, mnemonic: 'j' },
-      { menu: 'explorer.context', group: '1_query', order: 6, mnemonic: 'h', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }
+      { menu: 'explorer.context', group: '1_query', order: 6, mnemonic: 'h', when: "((explorerNode == 'server' || explorerNode == 'bqProject' || explorerNode == 'bqDataset') && !explorerServerLost) || explorerNode == 'database'" }
     ]
   },
   'explorer.rebuildIndex': {
