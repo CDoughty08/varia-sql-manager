@@ -1231,6 +1231,16 @@ describe('ObjectSearchService', () => {
     order.length = 0
     expect(await service.reveal(host, 'a', hit)).toEqual({ ok: true, nodeId: 7 })
     expect(order).toEqual(['seek:a:2'])
+    // When the 50-project session cap blocks ensureBigQueryProject, reveal returns a clear cap message without seeking.
+    const cappedHost: RevealHost = {
+      ensureBigQueryProject: () => false,
+      seek: vi.fn(async () => ({ ok: true as const, nodeId: 7 }))
+    }
+    expect(await service.reveal(cappedHost, 'bq', bigQueryHit)).toEqual({
+      ok: false,
+      message: 'Object Explorer shows at most 50 session projects per connection. Star or remove one, then try again.'
+    })
+    expect(cappedHost.seek).not.toHaveBeenCalled()
     service.dispose()
   })
 

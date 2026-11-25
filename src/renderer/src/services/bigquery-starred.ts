@@ -241,7 +241,11 @@ export function referencedBigQueryProjects(sql: string): string[] {
       continue
     }
 
-    if (token.kind === 'word') {
+    const startsPath = isPunct(toks[index + 1], '.')
+      || (isPunct(toks[index + 1], '-') && toks[index + 1].start === token.end
+        && (toks[index + 2]?.kind === 'word' || toks[index + 2]?.kind === 'number')
+        && toks[index + 2].start === toks[index + 1].end)
+    if (token.kind === 'word' && !startsPath) {
       if (fromStack.length === 0) {
         if (token.upper === 'CREATE') createHeader = 'create'
         else if (createHeader === 'create') createHeader = token.upper === 'TABLE' ? 'table' : createTableModifiers.has(token.upper) ? 'create' : 'none'

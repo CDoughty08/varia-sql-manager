@@ -201,7 +201,10 @@ describe('referencedBigQueryProjects', () => {
       'SELECT * FROM analytics.INFORMATION_SCHEMA.TABLES;',
       'FROM `pipe-project-1.sales.orders` |> EXTEND 1 AS x, pipe-false-pos.address.city AS c;',
       'SELECT * FROM t1 JOIN t2 USING (id), using-comma-proj.sales.orders;',
+      'SELECT * FROM order-service-prod.sales.orders JOIN options.sales.items ON true;',
       'CREATE OR REPLACE TEMP TABLE dst-create-proj.sales.copy LIKE like-src-proj.sales.orders;',
+      'CREATE TABLE cluster-prod.sales.copy LIKE cluster-like-src.sales.orders;',
+      'CREATE TABLE options-prod.sales.copy LIKE options-like-src.sales.orders;',
       'DELETE del-direct-proj.sales.orders WHERE id = 1;'
     ].join('\n')
     expect(referencedBigQueryProjects(sql)).toEqual([
@@ -209,8 +212,14 @@ describe('referencedBigQueryProjects', () => {
       'real-project-2',
       'pipe-project-1',
       'using-comma-proj',
+      'order-service-prod',
+      'options',
       'dst-create-proj',
       'like-src-proj',
+      'cluster-prod',
+      'cluster-like-src',
+      'options-prod',
+      'options-like-src',
       'del-direct-proj'
     ])
   })

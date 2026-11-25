@@ -676,17 +676,18 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * adds it to `sessionProjects` when it is neither the billing project nor already starred, and reconciles the server node's
    * children immediately so `seek` can walk right into it.
    */
-  ensureBigQueryProject(connectionId: string, project: string): void {
+  ensureBigQueryProject(connectionId: string, project: string): boolean {
     const connection = this.connectionOf(connectionId)
-    if (!connection || connection.options.provider !== 'bigquery' || !bigQueryProjectSchema.safeParse(project).success) return
+    if (!connection || connection.options.provider !== 'bigquery' || !bigQueryProjectSchema.safeParse(project).success) return true
     this.pruneBigQuerySessionProjects(connectionId)
-    if (project === connection.options.project || this.isBigQueryProjectStarred(connectionId, project)) return
+    if (project === connection.options.project || this.isBigQueryProjectStarred(connectionId, project)) return true
     let set = this.sessionProjects.get(connectionId)
-    if (set?.has(project)) { this.reconcileBigQueryProjects(connectionId); return }
+    if (set?.has(project)) { this.reconcileBigQueryProjects(connectionId); return true }
     if (!set) { set = new Set(); this.sessionProjects.set(connectionId, set) }
-    if (set.size >= maxSessionProjectsPerConnection) return
+    if (set.size >= maxSessionProjectsPerConnection) return false
     set.add(project)
     this.reconcileBigQueryProjects(connectionId)
+    return true
   }
   /** Removes an ephemeral session-only project from a BigQuery server node immediately. */
   removeBigQuerySessionProject(connectionId: string, project: string): void {
@@ -1441,7 +1442,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
-    const deferBigQueryRestore = node.kind === 'server' && this.bigQueryStarred?.loaded === false && this.connectionOf(node.connectionId)?.options.provider === 'bigquery'
+    const deferBigQueryRestore = node.kind === 'server' && node.children !== undefined && this.bigQueryStarred?.loaded === false && this.connectionOf(node.connectionId)?.options.provider === 'bigquery'
     if (this.restoring.size && (!node.cursor || node.more !== 'auto') && !deferBigQueryRestore) this.restoreLoaded(node)
     // The page may have detached nodes a restore waits on (a reconcile dropping rows, Group by Schema moving folders), whose
     // aborted loads never settle.

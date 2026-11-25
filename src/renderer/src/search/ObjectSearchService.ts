@@ -99,7 +99,7 @@ export interface ObjectSearchSnapshot {
 /** Object Explorer as Reveal uses it: its seek, whether it groups objects by schema (the paths differ), and ensuring a BigQuery session project before seeking. */
 export interface RevealHost {
   seek(connectionId: string, paths: readonly RevealPath[]): Promise<SeekOutcome>
-  ensureBigQueryProject?(connectionId: string, project: string): void
+  ensureBigQueryProject?(connectionId: string, project: string): boolean | void
   readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
@@ -728,7 +728,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   reveal(host: RevealHost, connectionId: string, hit: ObjectSearchHit): Promise<SeekOutcome> {
     const paths = revealPaths(hit, !!host.groupBySchema)
     if (!paths.length) return Promise.resolve({ ok: false, message: unknownKindReveal })
-    if (hit.object.project !== undefined) host.ensureBigQueryProject?.(connectionId, hit.object.project)
+    if (hit.object.project !== undefined && host.ensureBigQueryProject?.(connectionId, hit.object.project) === false) {
+      return Promise.resolve({ ok: false, message: 'Object Explorer shows at most 50 session projects per connection. Star or remove one, then try again.' })
+    }
     return host.seek(connectionId, paths)
   }
 

@@ -818,6 +818,46 @@ internal static partial class BigQueryIndexChecks
                 && missingInfo is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" }
                 && result.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }),
                 $"mid-project Wave 2 memory early-stop reports Partial project state ({lookup.ProjectState("disc-mid")}) and Skipped for unheld dataset {missing} ({missingInfo?.State})");
+
+            // Promoting disc-mid to starred and cleanly refreshing it clears Partial even if AccessibleProjectsAsync fails.
+            source.CustomDatasets["disc-mid"] = ["ds1", "ds2"];
+            source.TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 1 };
+            source.FailDiscovery = true;
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: ["disc-mid"]), source, CancellationToken.None);
+            var promotedLookup = search.LookupBigQuery(id, "varia-alpha");
+            check(promotedLookup.ProjectState("disc-mid") == LookupState.Ready,
+                $"clean starred rebuild clears PartialProjects even when discovery fails ({promotedLookup.ProjectState("disc-mid")})");
+        }
+
+        // 12. Wave 2 budget-stop does not conflate NOT_FOUND or PERMISSION_DENIED on earlier projects with budget cuts.
+        {
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c"], tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+                {
+                    ["disc-a"] = ["ds_ok", "ds_gone"],
+                    ["disc-b"] = ["ds_denied"],
+                    ["disc-c"] = ["ds_huge1", "ds_huge2"]
+                },
+                TablesPerDataset = new Dictionary<(string, string), int>
+                {
+                    [("disc-a", "ds_ok")] = 1,
+                    [("disc-c", "ds_huge1")] = 200,
+                    [("disc-c", "ds_huge2")] = 200
+                },
+                FailObjectsForDataset = new Dictionary<(string, string), string>
+                {
+                    [("disc-a", "ds_gone")] = "NOT_FOUND",
+                    [("disc-b", "ds_denied")] = "PERMISSION_DENIED"
+                }
+            };
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var lookup = search.LookupBigQuery(id, "varia-alpha");
+            check(lookup.ProjectState("disc-a") == LookupState.Ready
+                && lookup.Dataset("disc-b", "ds_denied") is { State: LookupState.Skipped, Skip.Code: "PERMISSION_DENIED" },
+                $"Wave 2 budget-stop keeps NOT_FOUND project Ready ({lookup.ProjectState("disc-a")}) and preserves PERMISSION_DENIED dataset skip ({lookup.Dataset("disc-b", "ds_denied").State}/{lookup.Dataset("disc-b", "ds_denied").Skip?.Code})");
         }
     }
 
@@ -834,17 +874,22 @@ internal static partial class BigQueryIndexChecks
         public int DiscoveredObjectCalls => Volatile.Read(ref discoveredObjectCalls);
         public int DiscoveredDetailCalls => Volatile.Read(ref discoveredDetailCalls);
         public int ColumnsPerTable { get; set; } = columnsPerTable;
+        public bool FailDiscovery { get; set; }
         public string? FailTableForProject { get; set; }
         public (string Project, string Code)? FailDatasetsForProject { get; set; }
         public (string Project, string Code)? FailObjectsForProject { get; set; }
+        public Dictionary<(string Project, string Dataset), string>? FailObjectsForDataset { get; set; }
         public string? ThrowOnCancelObjectsProject { get; set; }
         public Dictionary<string, IReadOnlyList<string>>? CustomDatasets { get; set; }
         public Dictionary<(string Project, string Dataset), int>? TablesPerDataset { get; set; }
         public Func<string, CancellationToken, Task>? OnObjectsAsync { get; set; }
 
         public string BillingProject(string connectionId) => "varia-alpha";
-        public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token) =>
-            Task.FromResult(new BigQueryProjectDiscovery([.. discoveredProjects.Take(maxProjects)], discoveredProjects.Count > maxProjects));
+        public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token)
+        {
+            if (FailDiscovery) throw new RequestException("TIMEOUT", "Simulated discovery failure.");
+            return Task.FromResult(new BigQueryProjectDiscovery([.. discoveredProjects.Take(maxProjects)], discoveredProjects.Count > maxProjects));
+        }
         public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token)
         {
             if (FailDatasetsForProject is { } fail && fail.Project == project)
@@ -858,6 +903,8 @@ internal static partial class BigQueryIndexChecks
             if (OnObjectsAsync is not null) await OnObjectsAsync(project, token);
             if (FailObjectsForProject is { } failObjects && failObjects.Project == project)
                 throw new RequestException(failObjects.Code, "Simulated objects failure.");
+            if (FailObjectsForDataset is not null && FailObjectsForDataset.TryGetValue((project, dataset), out var datasetFail))
+                throw new RequestException(datasetFail, "Simulated dataset objects failure.");
             if (project == ThrowOnCancelObjectsProject)
             {
                 var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
