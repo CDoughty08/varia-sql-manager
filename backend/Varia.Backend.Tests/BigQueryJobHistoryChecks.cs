@@ -652,6 +652,38 @@ internal static class BigQueryJobHistoryChecks
         check(first.Samples.Count == 0 && first.Errors is [{ Code: "QUOTA" } quota] && quota.Message.Contains("rate limit", StringComparison.Ordinal)
             && second.Errors is [{ Code: "QUOTA" }] && limited.Listings().Count > 2 && sizes is ["100"],
             $"a rate limit retried until the budget ran out is the probe's QUOTA error from the first sample, at the same page size: {string.Join(",", first.Errors.Select(item => item.Code))} {string.Join(",", sizes)}");
+
+        // A QUOTA sample breaks a run of stalls: BigQuery answered it, so stall, stall, QUOTA, stall is one stall, not TIMEOUT.
+        using var mixed = new Harness();
+        await mixed.ConnectAsync(key);
+        var throttle = false;
+        mixed.Fake.Hang = request => !Volatile.Read(ref throttle) && request.Uri.AbsolutePath.EndsWith("/jobs", StringComparison.Ordinal);
+        mixed.Fake.On("GET", Jobs, _ => new BigQueryFake.Reply(429, """{"error":{"code":429,"message":"Exceeded rate limits: too many api requests per user per method","errors":[{"reason":"rateLimitExceeded"}]}}"""));
+        using var broken = mixed.Sampler(new("mine", Hours: 24));
+        var codes = new List<string>();
+        for (var n = 0; n < 4; n++)
+        {
+            Volatile.Write(ref throttle, n == 2);
+            var batch = await broken.SampleAsync([Due(1000)], CancellationToken.None);
+            codes.Add(batch.Errors is [{ } error] ? error.Code : "none");
+        }
+        check(codes is ["none", "none", "QUOTA", "none"], "a QUOTA sample ends a run of stalled samples, so the stall after it is not TIMEOUT: " + string.Join(",", codes));
+
+        // So does a refusal BigQuery answered at once (403 PERMISSION_DENIED).
+        using var refusing = new Harness();
+        await refusing.ConnectAsync(key);
+        var refuse = false;
+        refusing.Fake.Hang = request => !Volatile.Read(ref refuse) && request.Uri.AbsolutePath.EndsWith("/jobs", StringComparison.Ordinal);
+        refusing.Fake.On("GET", Jobs, BigQueryFake.Fixture("error-access-denied", 403));
+        using var denied = refusing.Sampler(new("mine", Hours: 24));
+        codes.Clear();
+        for (var n = 0; n < 4; n++)
+        {
+            Volatile.Write(ref refuse, n == 2);
+            var batch = await denied.SampleAsync([Due(1000)], CancellationToken.None);
+            codes.Add(batch.Errors is [{ } error] ? error.Code : "none");
+        }
+        check(codes is ["none", "none", "PERMISSION_DENIED", "none"], "a refusal BigQuery answered ends a run of stalled samples too: " + string.Join(",", codes));
     }
 
     /// <summary>bigquery.jobs.get: the job's details and a script's children in statement order; a refused children listing
@@ -743,7 +775,7 @@ internal static class BigQueryJobHistoryChecks
 
     static LiveDue ExplorerDue(int budgetMs = 10_000) => new(new LiveProbeState(LiveCatalog.Current.Probes[BigQueryExplorerSampler.Probe], 10_000), null, null, null, null, new Dictionary<int, LiveTrackArgs>(), BudgetMs: budgetMs);
 
-    /// <summary>bigquery.explorer (BQ-12): Object Explorer's chip counts the principal's own open top-level jobs with minimal jobs.list
+    /// <summary>bigquery.explorer: Object Explorer's chip counts the principal's own open top-level jobs with minimal jobs.list
     /// pages filtered to pending and running and without allUsers, stops at its cap with more = 1, and maps refusals as Job History does.</summary>
     static async Task ExplorerAsync(Action<bool, string> check, JsonObject key)
     {

@@ -123,7 +123,7 @@ export const errorCodes = [
   // Backend: Preview Rows of a BigQuery table with row access policies, which tabledata.list cannot apply (docs/bigquery.md).
   'ROW_ACCESS',
   // Backend: a BigQuery commit or rollback close on a session whose job is still running (or, for a commit, a cancelled
-  // job not yet DONE); the tab stays (decision 54).
+  // job not yet DONE); the tab stays, so its transaction is never lost unasked.
   'JOB_RUNNING',
   // Backend: Leave it running asked of a session whose job finished meanwhile with its transaction still open; the tab
   // asks about the transaction instead (docs/bigquery.md, Re-attaching to jobs).

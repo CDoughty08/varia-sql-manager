@@ -160,8 +160,10 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
                 if (answers == answered && Volatile.Read(ref throttled) is { } limited)
                 {
                     // The client's retries absorbed BigQuery's rate limit until the budget ran out: say so, and fail, so the
-                    // schedule backs off. A refusal says nothing about the page size, so it is kept and no stall counted.
+                    // schedule backs off. A refusal says nothing about the page size, so it is kept; BigQuery did answer, so the
+                    // run of stalls ends.
                     failure = Failure(limited, connection.Options.Project);
+                    stalls = 0;
                 }
                 else
                 {
@@ -178,6 +180,8 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             catch (Exception error) when (!token.IsCancellationRequested)
             {
                 failure = Failure(error, connection.Options.Project);
+                // A refusal BigQuery sent (a Google API answer, not a lost transport) ends a run of stalls too.
+                if (error is Google.GoogleApiException) stalls = 0;
             }
             if (failure is not null)
             {

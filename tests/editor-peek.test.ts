@@ -59,6 +59,27 @@ describe('Peek anchored in a query editor', () => {
     expect(service.getSnapshot().open?.anchor).toBeUndefined()
     expect(service.getSnapshot().open?.rowId).toBe(4)
   })
+  it('switches a BigQuery card already open at the editor to the asked tab, while a hover keeps the chosen tab', async () => {
+    const bigQueryProperties = vi.fn(async () => ({ ok: true as const, value: { name: 'daily', type: 'view', elapsedMs: 1, definition: 'SELECT 1', groups: [] } }))
+    const service = new PeekService({
+      api: { explorerPeek: vi.fn(), explorerCancel: vi.fn(async () => ({ ok: true, value: { cancelled: 1 } })), scriptObjects: vi.fn(), cancelScripting: vi.fn(), bigQueryProperties } as never,
+      connections: { getSnapshot: () => [{ id: connectionId }], subscribe: () => () => {} },
+      scriptingOptions: { getSnapshot: () => ({ options: {} as ScriptingOptions }), subscribe: () => () => {} },
+      timers: { setTimeout: () => 1, clearTimeout: () => {} }, newId: () => 'id', platform: 'win32'
+    })
+    const view: ExplorerMenuNode = { id: -1, connectionId, kind: 'bqView', label: 'daily', lost: false, ref: { type: 'object', object: { kind: 'bqView', project: 'varia-alpha', dataset: 'sales', name: 'daily' } } } as never
+    const at = anchor()
+    expect(service.peekAt(view, at, 'keyboard', 'definition')).toBe(true)
+    await vi.waitFor(() => expect(service.getSnapshot().open?.bigQuery?.value).toBeDefined())
+    expect(service.getSnapshot().open).toMatchObject({ tab: 'definition', bigQuery: { activeTab: 'definition' } })
+    service.selectTab('overview')
+    // Ctrl+hover on the same name keeps Overview; Alt+F12 switches back to Definition without reading again.
+    expect(service.peekAt(view, at, 'hover', 'definition')).toBe(true)
+    expect(service.getSnapshot().open).toMatchObject({ tab: 'overview', bigQuery: { activeTab: 'overview' } })
+    expect(service.peekAt(view, at, 'keyboard', 'definition')).toBe(true)
+    expect(service.getSnapshot().open).toMatchObject({ tab: 'definition', bigQuery: { activeTab: 'definition' } })
+    expect(bigQueryProperties).toHaveBeenCalledTimes(1)
+  })
   it('refuses an object Peek cannot describe, or one on a server that is gone', () => {
     const { service } = setup()
     expect(service.peekAt({ ...node('table'), id: -1, connectionId: 'other' }, anchor(), 'keyboard')).toBe(false)

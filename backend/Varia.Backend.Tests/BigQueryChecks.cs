@@ -90,8 +90,8 @@ internal static partial class BigQueryChecks
         finally { temp.Delete(recursive: true); }
     }
 
-    /// <summary>The rules a federation file source is read under on every exchange (the owner's option A, with decision 49's
-    /// guards): a regular file of at most 64 KiB, none of Varia's own files, no known credential file. A refusal names the
+    /// <summary>The rules a federation file source is read under on every exchange (with the Connect dialog's confirmation
+    /// as the first guard): a regular file of at most 64 KiB, none of Varia's own files, no known credential file. A refusal names the
     /// rule, never the path or the content.</summary>
     static void FileGuards(Action<bool, string> check, string temp, JsonObject key)
     {

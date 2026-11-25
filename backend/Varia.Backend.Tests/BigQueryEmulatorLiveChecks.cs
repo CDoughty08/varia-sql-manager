@@ -74,7 +74,7 @@ internal static class BigQueryEmulatorLiveChecks
             }));
             var api = client.Service;
 
-            // A query job with a client job id (BQ-3a): insert, look it up by id, then page its results.
+            // A query job with a client job id: insert, look it up by id, then page its results.
             var jobId = "varia_" + Guid.NewGuid().ToString("N");
             var inserted = await api.Jobs.Insert(new Job
             {

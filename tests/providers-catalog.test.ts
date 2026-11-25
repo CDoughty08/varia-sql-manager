@@ -64,9 +64,9 @@ describe('catalogue providers', () => {
     const problems = entries.filter(entry => entry.providers.includes('bigquery'))
       .flatMap(entry => entry.methods.filter(method => !methodProviders(method).includes('bigquery')).map(method => `${entry.name} declares bigquery but runs ${method}`))
     expect(problems).toEqual([])
-    // Job History's live source (BQ-9) and Object Explorer's BigQuery chip (BQ-12) are BigQuery's alone, and no other live source or
+    // Job History's live source and Object Explorer's BigQuery chip are BigQuery's alone, and no other live source or
     // action is declared for BigQuery yet;
-    // Object Explorer's and Script As' BigQuery kinds (BQ-5) are BigQuery's alone, and the connection node serves both engines.
+    // Object Explorer's and Script As' BigQuery kinds are BigQuery's alone, and the connection node serves both engines.
     for (const entry of entries.filter(entry => /^(live source|object action|server action) /.test(entry.name))) expect(entry.providers, entry.name).toEqual(['live source bigquery.jobs', 'live source bigquery.explorer'].includes(entry.name) ? ['bigquery'] : ['sqlserver'])
     for (const entry of entries.filter(entry => /^(Script As kind|Explorer kind) /.test(entry.name)))
       expect(entry.providers, entry.name).toEqual(/ bq[A-Z]/.test(entry.name) ? ['bigquery'] : entry.name === 'Explorer kind server' ? ['sqlserver', 'bigquery'] : ['sqlserver'])
@@ -78,7 +78,7 @@ describe('catalogue providers', () => {
     const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.execute', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll',
       'explorer.refresh', 'explorer.scriptAs', 'explorer.scriptCreateToNewQuery', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab', 'edit.commasToFront', 'edit.commasToEnd']
     const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.toggleBrackets', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
-    // BigQuery's own Object Explorer commands (BQ-5).
+    // BigQuery's own Object Explorer commands.
     for (const id of ['explorer.previewRows', 'explorer.bigQueryProperties'] as const) expect(commandProviders(id), id).toEqual(['bigquery'])
     for (const id of both) expect(commandProviders(id), id).toEqual(['sqlserver', 'bigquery'])
     for (const id of sqlServer) expect(commandProviders(id), id).toEqual(['sqlserver'])
@@ -106,7 +106,7 @@ describe('catalogue providers', () => {
     expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'))).toBe(false)
     expect(commandAllowsProvider('activity.open', keys('bigquery', 'sqlserver'), true)).toBe(true)
     expect(commandAllowsProvider('activity.open', keys('sqlserver', 'bigquery'), true)).toBe(false)
-    // Disconnect, New Query and the dataset box serve a BigQuery connection too (BQ-2).
+    // Disconnect, New Query and the dataset box serve a BigQuery connection too.
     for (const id of ['connection.disconnect', 'connection.reconnect', 'explorer.newQuery', 'query.changeDatabase', 'query.disconnect'] as const) expect(commandAllowsProvider(id, keys('bigquery', 'bigquery'), true), id).toBe(true)
     // The comma commands read either language's tokens, so they serve both engines' queries; Toggle Brackets reads T-SQL's only.
     for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
@@ -168,7 +168,7 @@ describe('catalogue providers', () => {
     expect(sqlServer).toContain('explorer.refresh')
     expect(sqlServer).toEqual(shown(''))
     const bigQuery = shown('bigquery')
-    // Refresh reloads a BigQuery tree too (BQ-5); Activity Monitor is SQL Server's.
+    // Refresh reloads a BigQuery tree too; Activity Monitor is SQL Server's.
     expect(bigQuery).toContain('explorer.refresh')
     expect(sqlServer).toContain('activity.open')
     expect(bigQuery).not.toContain('activity.open')

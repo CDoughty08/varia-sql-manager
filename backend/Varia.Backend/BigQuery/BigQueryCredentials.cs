@@ -8,7 +8,7 @@ namespace Varia.Backend.BigQuery;
 /// <summary>
 /// Loads the credential main read (a key file, a federation configuration or the ADC file) the only ways Varia allows:
 /// its <c>type</c> checked against the authentication mode, every URL it names pinned to Google's documented endpoints
-/// (decision 48), federation sources limited to the shapes decision 23 lists, then a typed load (never the untyped
+/// (so a crafted file cannot send tokens elsewhere), federation sources limited to the file, AWS and Azure shapes, then a typed load (never the untyped
 /// <c>GoogleCredential.FromJson</c>, which accepts any type). Every HTTP call the credential makes goes through
 /// <paramref name="http"/>, so the offline checks' fake answers all of them. A refusal is AUTH_KEY_FILE naming the field,
 /// never the file's content.
@@ -190,9 +190,9 @@ internal static partial class BigQueryCredentials
         return account.Length <= BigQueryLimits.ServiceAccount && BigQueryLimits.Email().IsMatch(account) ? account : null;
     }
 
-    /// <summary>credential_source: a file (read by Varia, decision 49), AWS at its documented metadata URLs (the signed
+    /// <summary>credential_source: a file (read by Varia, after the user confirmed it), AWS at its documented metadata URLs (the signed
     /// verification URL is never called), or Azure's instance metadata token URL. Executable sources and any other host are
-    /// refused, naming the field (decision 23).</summary>
+    /// refused, naming the field: Varia never runs a configuration's program.</summary>
     static void CredentialSource(JsonElement root, string prefix)
     {
         var field = prefix + "credential_source";

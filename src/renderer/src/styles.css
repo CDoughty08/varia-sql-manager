@@ -2819,7 +2819,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @media (forced-colors: active) {
   .ssis-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }
 }
-/* BigQuery Job History (BQ-9): Job Activity Monitor's layout, SSIS Operations' filters, a status line and the details pane beside the grid. */
+/* BigQuery Job History: Job Activity Monitor's layout, SSIS Operations' filters, a status line and the details pane beside the grid. */
 .bq-jobs-status { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .bq-jobs-body { display: flex; flex: 1; gap: var(--varia-space-2); min-height: 0; }
 .bq-jobs-body > .agent-jobs-grid { min-width: 0; }

@@ -202,7 +202,7 @@ describe('object action catalogue', () => {
     // A login's Disable and Enable have their own group between Copy Name and Rename.
     expect(ids.slice(at('explorer.copyName') + 1, at('explorer.rename'))).toEqual(['---', 'explorer.disable', 'explorer.enable', 'explorer.unlock', '---'])
     // Properties is the last item, after Refresh in its own group, as in SSMS; an SSIS Catalog object's Properties takes its place.
-    // A BigQuery table's or view's Properties (BQ-5) after SQL Server's.
+    // A BigQuery table's or view's Properties after SQL Server's.
     expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'explorer.bigQueryProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {

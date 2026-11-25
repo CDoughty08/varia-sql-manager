@@ -123,7 +123,7 @@ internal sealed class RemoteResult : IDisposable
     public const int MinBlockRows = 256;
     public const int MaxBlockRows = 16_384;
     public const long DefaultCacheBytes = 64L << 20;
-    /// <summary>The grid addresses rows with 32-bit indexes: a windowed result shows this many at most (decision 31).</summary>
+    /// <summary>The grid addresses rows with 32-bit indexes: a windowed result shows this many at most.</summary>
     public const long MaxRows = int.MaxValue;
     /// <summary>Fetches of one result at once; the connection's lane allows more across its results.</summary>
     public const int FetchesPerResult = 2;

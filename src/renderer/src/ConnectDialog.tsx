@@ -242,7 +242,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   const [bigQuerySelectedId, setBigQuerySelectedId] = useState<string>()
   // The picked key file's name; a saved profile's comes with the library.
   const [pickedKeyName, setPickedKeyName] = useState<{ keyFile: string; name: string }>()
-  // Decision 49: a federation configuration whose token file the user has not confirmed yet.
+  // A federation configuration whose token file the user has not confirmed yet.
   const [sourcePrompt, setSourcePrompt] = useState<PickedKeyFile>()
   const bigQueryEdited = useRef(false)
   // The form as editing began; its shape is taken when compared, against the saved choices as they are then.
@@ -914,7 +914,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     setBigQueryReconnect(profile.autoReconnect ?? 'inherit'); bigQuerySettled()
     setError(''); setNotice(''); setBusyNotice(''); setLastRemoved(undefined); setTested(undefined); setFailure(undefined)
   }
-  /** Browse…: main's open dialog. A federation configuration that reads a token file not confirmed yet asks first (decision 49). */
+  /** Browse…: main's open dialog. A federation configuration that reads a token file not confirmed yet asks first, before its content reaches Google. */
   async function pickKeyFile() {
     const mode = currentBigQuery.current.authentication
     if (mode === 'gcloud') return

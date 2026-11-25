@@ -53,7 +53,7 @@ describe('Object Explorer status chips', () => {
     expect(databaseChips(row({ state: 1 }))[0].value).toBeUndefined()
     expect(serverChips(1200, [{ name: 'AG1', health: 2, role: 1 }]).map(chip => chip.value)).toEqual(['1,200', undefined])
   })
-  it('gives a BigQuery connection\'s node a chip for the principal\'s running jobs, none while none runs (BQ-12)', () => {
+  it('gives a BigQuery connection\'s node a chip for the principal\'s running jobs, none while none runs', () => {
     expect(bigQueryChips(undefined)).toEqual([])
     expect(bigQueryChips(null)).toEqual([])
     expect(bigQueryChips(0)).toEqual([])
@@ -401,7 +401,7 @@ describe('ExplorerStatusService', () => {
     expect(client.streams).toHaveLength(2)
   })
 
-  it('opens a BigQuery connection\'s own view of bigquery.explorer, whose running jobs become its node\'s chip (BQ-12)', async () => {
+  it('opens a BigQuery connection\'s own view of bigquery.explorer, whose running jobs become its node\'s chip', async () => {
     connections.add({ ...info(first), providerId: 'bigquery' } as ConnectionInfo, { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as never)
     connections.add(info(second), { server: 'b' } as never)
     expect(client.streams.map(stream => [stream.params.connectionId, stream.params.source, stream.params.probes.map(probe => [probe.probe, probe.intervalMs])])).toEqual([

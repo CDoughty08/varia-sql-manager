@@ -139,7 +139,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Source versions, without SQL text, so an old error never points into a query edited or re-executed since. */
   private readonly sources = new Map<string, { readonly queryId: string; readonly revision: number }>()
   private readonly subscription: Disposable
-  /** Each BigQuery query's session location, from its last job: a dataset in another location ends the session (decision 18). */
+  /** Each BigQuery query's session location, from its last job: a dataset in another location ends the session. */
   private readonly locations = new Map<string, string>()
   /** Shows a note whose query has closed, as a notification. Set once the workbench is built. */
   notify?: (text: string) => void
@@ -190,7 +190,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (document) this.addSessionMessage(tabId, text, note.code === 'sessionExpired' ? 'info' : 'error')
     else this.notify?.(text)
   }
-  /** Asks decision 18's question before a BigQuery query's dataset moves its session to another location: true for Switch. */
+  /** Asks before a BigQuery query's dataset moves its session to another location: true for Switch. */
   async confirmLocationSwitch(tabId: string, location: SessionLocationSwitch): Promise<boolean> {
     const document = this.documents.get(tabId)
     if (!document || this.disposed) return false
@@ -294,6 +294,17 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       this.runs.set(tabId, run)
       void run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
     }
+  }
+  /** Whether the tab holds a job `reattach` would still take over on its BigQuery connection (one not tried there, not
+   *  passed over): a new run first would have its results and session replaced once that job re-attaches. */
+  holdsUnattachedJobs(tabId: string): boolean {
+    // Without an attach, reattach() never takes a job over, so none may hold Execute back.
+    if (!this.api.attach) return false
+    const state = this.getSnapshot()[tabId], document = this.documents.get(tabId)
+    const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
+    if (!state?.jobs?.length || !connection || connection.providerId !== 'bigquery') return false
+    const tried = this.attachTried.get(tabId), passed = this.passedOver.get(tabId)
+    return state.jobs.some(job => !tried?.has(this.attachKey(job, connection)) && !passed?.has(job.jobId))
   }
   /** Idle BigQuery sessions whose end failed: a notification, since their tabs may be gone. */
   failedAborts(count: number, retried = true): void { if (!this.disposed && count > 0) this.notify?.(failedAbortsText(count, retried)) }

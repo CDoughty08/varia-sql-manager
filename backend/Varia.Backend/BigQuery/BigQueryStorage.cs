@@ -20,7 +20,7 @@ internal interface IBigQueryStorageRead : IDisposable
 
 /// <summary>
 /// The Storage Read API over gRPC on a channel Varia owns: HTTP/2 through <see cref="SocketsHttpHandler"/> with the system
-/// proxy (CONNECT for TLS) and certificate store (decision 19), the connection's pinned credential on every call, and a
+/// proxy (CONNECT for TLS) and certificate store, as REST calls use, the connection's pinned credential on every call, and a
 /// bounded message size. The emulator's plaintext port gets an insecure channel, in emulator mode only.
 /// </summary>
 internal sealed class GrpcStorageRead : IBigQueryStorageRead

@@ -301,7 +301,7 @@ internal sealed partial class SqlService
                 // The job already exists: after the identity check its session (when adopted) and state are taken over, and the
                 // poll below follows it as it would a job this request inserted.
                 Job own;
-                // The checked job's location and, when adopted, its session (with the record's transaction, decision 54).
+                // The checked job's location and, when adopted, its session (with the record's transaction).
                 void Adopt(Job checkedJob)
                 {
                     location = KnownLocation(checkedJob.JobReference?.Location) ?? location;
@@ -347,7 +347,7 @@ internal sealed partial class SqlService
                 sent = created = true;
                 // A Stop between the check and here found nothing sent to cancel: it is asked again now.
                 if (token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
-                // The adopted session's transaction starts from the job record's (decision 54), not from a listing.
+                // The adopted session's transaction starts from the job record's, not from a listing.
                 Adopt(own);
                 // Set before the tail is cleared, so a close in between still sees a job to leave running; only a job in the
                 // tab's own session holds it.
@@ -682,8 +682,8 @@ internal sealed partial class SqlService
     /// <summary>
     /// Where the tab's job runs: its session's location once it has one; otherwise, when the connection's location is
     /// Automatic, its dataset's (datasets.get, free, kept per connection), else the connection's. A dataset in another
-    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first
-    /// (decision 18), which the tab's Dataset box asks about.
+    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first,
+    /// which the tab's Dataset box asks about.
     /// </summary>
     private async Task<string?> TabLocationAsync(BigQueryTabSession session, BigQueryConnection connection, string? dataset, CancellationToken token)
     {

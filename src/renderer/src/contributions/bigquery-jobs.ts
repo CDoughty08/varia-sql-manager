@@ -4,7 +4,7 @@ import { explorerNodeOf, jobHistoryRowOf } from '../menus/targets'
 import { serverItems } from './query'
 
 /**
- * BigQuery Job History's commands (BQ-9, docs/bigquery.md, Job History). Job History opens one document per BigQuery
+ * BigQuery Job History's commands (docs/bigquery.md, Job History). Job History opens one document per BigQuery
  * connection: the connection of the Object Explorer node its menu runs on (the server node, or the billing project's: an
  * extra project's history is not offered, since jobs belong to the billing project), a Messages job id's tab or the records
  * dialog (`bigQueryJobs`, filtered to those jobs), else the active document's, else the selected node's, else the one live

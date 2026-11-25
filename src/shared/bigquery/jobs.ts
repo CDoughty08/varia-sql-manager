@@ -41,7 +41,7 @@ export type QueryAttachParams = z.infer<typeof queryAttachParamsSchema>
  * One record in WorkbenchSession/jobs.json: a BigQuery request's top-level job under its tab's job key, with the saved
  * profile it ran on (absent for an ad-hoc connection), when main first heard of it, whether it is still running, auxiliary
  * (reserved: no job event sets it yet) or detached (Leave it running on Close Results), and the session's tracked transaction as
- * it started (decision 54). No secrets and no SQL text: a job id is useless without the principal's credentials.
+ * it started, which a re-attached tab restores. No secrets and no SQL text: a job id is useless without the principal's credentials.
  */
 export const jobRecordSchema = z.object({
   jobKey: jobKeySchema, jobId: jobIdSchema, project: jobProjectSchema, location: jobLocationSchema.optional(), profileId: z.string().min(1).max(128).optional(),

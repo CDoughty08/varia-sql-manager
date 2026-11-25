@@ -130,7 +130,7 @@ describe('connection association checkpoints', () => {
         if (!ready) return
         value.targets.coalesceTarget(id(1), id(2), opened.id)
         value.connectionTargets.removeFromExplorer(id(1))
-        await executePendingQuery({ tabId: value.query.id, opened, ...value, queries: { isRunning: () => false, execute } })
+        await executePendingQuery({ tabId: value.query.id, opened, ...value, queries: { isRunning: () => false, execute, holdsUnattachedJobs: () => false } })
         opened.association!.complete()
       })
       first.resolve()

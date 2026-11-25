@@ -546,7 +546,7 @@ internal static class SearchChecks
         check(new[] { "CR", "CP", "AU", "SA", "BD", "LS" }.All(code => DatabaseReader.ServerNamed(code) is { } named && ObjectSearchService.Kinds.Contains(named.Kind) && ObjectSearchSql.Server(true, false).Contains("'" + code + "'", StringComparison.Ordinal)),
             "every named server object code the batch writes maps to a kind the index holds");
         var catalog = ExplorerCatalog.Current;
-        // BigQuery's kinds join the index with Search Objects for BigQuery (BQ-6a).
+        // BigQuery's kinds join the index, for Search Objects over BigQuery connections.
         var served = catalog.Kinds.Where(kind => kind.Scope is not ("server" or "childUnnamed") && !kind.Scope.StartsWith("ssis", StringComparison.Ordinal) && !kind.BigQuery && !ObjectSearchService.Unindexed.Contains(kind.Kind))
             .Select(kind => kind.Kind).ToHashSet();
         check(served.SetEquals(ObjectSearchService.Kinds), "the index holds every kind Object Explorer lists but the server, return values and the SSIS Catalog's: "

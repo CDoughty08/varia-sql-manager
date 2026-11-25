@@ -109,7 +109,7 @@ internal sealed partial class SqlService
         }
     }
 
-    /// <summary>The row cap's note (decision 31): the grid's 32-bit row indexes show this many, and the rest are a filter away.</summary>
+    /// <summary>The row cap's note: the grid's 32-bit row indexes show this many, and the rest are a filter away.</summary>
     internal static string CapNote(long total) => "The grid shows the first " + RemoteResult.MaxRows.ToString("N0", CultureInfo.InvariantCulture) + " of "
         + total.ToString("N0", CultureInfo.InvariantCulture) + " rows, the most it can address. Add a WHERE clause to the query, or LIMIT with OFFSET, to see the rest.";
 
