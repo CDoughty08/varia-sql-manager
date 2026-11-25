@@ -271,7 +271,7 @@ try {
 
   // Peek from the editor, as from an Object Explorer row: Ctrl+hover (⌘ on macOS) on a name opens Peek's card beside it without
   // taking focus, a press elsewhere or Esc closes it, Alt+F12 opens it at the caret with focus (Esc returns to the editor), and
-  // Ctrl+click opens a Peek tab.
+  // Ctrl+click on a table opens its unified Table Properties document.
   await setText(page, page, 'SELECT * FROM dbo.Orders')
   const card = peekCard(page, 'dbo.Orders'), queryText = page.getByRole('textbox', { name: 'Editor content', exact: true })
   await expect.poll(() => text(page)).toBe('SELECT * FROM dbo.Orders')
@@ -318,11 +318,11 @@ try {
   await page.keyboard.down(mod)
   await page.mouse.click(orders.x, orders.y)
   await page.keyboard.up(mod)
-  await expect(documentTab(page, 'dbo.Orders')).toBeVisible()
+  await expect(documentTab(page, 'Table Properties - dbo.Orders')).toBeVisible()
   await expect(card).toHaveCount(0)
   await page.keyboard.press(`${mod}+W`)
   await expect.poll(() => activeDocumentName(page)).toBe(tabA)
-  console.log('Language checks: Ctrl+hover peeks a name in a card beside it, Alt+F12 opens that card at the caret, and Ctrl+click opens a Peek tab.')
+  console.log('Language checks: Ctrl+hover peeks a name in a card beside it, Alt+F12 opens that card at the caret, and Ctrl+click on a table opens Table Properties.')
 
   const idB = await connect('language-server-b')
   expect(idB).not.toBe(idA)

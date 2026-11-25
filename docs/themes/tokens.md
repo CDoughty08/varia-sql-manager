@@ -35,8 +35,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `borderSubtle` | Section headers and grid lines. | `#1f2228` | `#eceef2` |
 | `borderStrong` | Dock splitters. | `#2e323a` | `#d4d8df` |
 | `separator` | Toolbar, menu, and dialog separators; the keyboard shortcut outline. | `#30343c` | `#dcdfe5` |
-| `controlBorder` | Outlined buttons, the Dark dialog border, result splitters, and docking compass borders. | `#6b7286` | `#878e9b` |
-| `inputBorder` | Input borders. | `#6a7184` | `#878e9b` |
+| `controlBorder` | Outlined buttons, the Dark dialog border, command centre, chips, and docking compass borders. | `#3a404d` | `#c2c8d4` |
+| `inputBorder` | Input borders. | `#3a404d` | `#c2c8d4` |
 | `accent` | Primary button, active indicators, the brand icon, and the docking compass. | `#8f9cff` | `#4453d0` |
 | `accentHover` | Primary button hover. | `#a8b2ff` | `#3744b8` |
 | `onAccent` | Text on the accent color. | `#0e1230` | `#ffffff` |
@@ -95,7 +95,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `focusBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Focus ring around the focused control. |
 | `icon.foreground` | VS Code | `$icon` | `#a3a9b5` | `#4d5461` | Default glyph color. |
 | `widget.shadow` | VS Code | `$shadow` | `#00000085` | `#10182824` | Shadow of dialogs, floating dock groups, and editor widgets. |
-| `widget.border` | VS Code | `@editorWidget.border` | `#6b7286` | `#d4d8df` | Border of floating dock groups and widgets. |
+| `widget.border` | VS Code | `@editorWidget.border` | `#3a404d` | `#d4d8df` | Border of floating dock groups and widgets. |
 | `textPreformat.foreground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Preformatted text in the editor. |
 | `sash.hoverBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Dock splitter while it is hovered or dragged. |
 | `scrollbarSlider.background` | VS Code | `$textMuted/40` | `#9298a466` | `#5c637066` | Scrollbar thumb. |
@@ -116,7 +116,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `commandCenter.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Search box in the title bar (the command centre). |
 | `commandCenter.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Search box text, icon and key. |
 | `commandCenter.activeBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Search box while hovered. |
-| `commandCenter.border` | VS Code | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of the search box. |
+| `commandCenter.border` | VS Code | `$controlBorder` | `#3a404d` | `#c2c8d4` | Outline of the search box. |
 | `menubar.selectionBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Open title-bar menu. |
 | `menubar.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the open title-bar menu. |
 | `menubar.selectionBorder` | VS Code | `$accent/0` | `#8f9cff00` | `#4453d000` | Outline of the open, hovered, or focused title-bar menu; none by default. |
@@ -126,7 +126,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `menu.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Highlighted item in title-bar and context menus. |
 | `menu.selectionBorder` | VS Code | `$accent/0` | `#8f9cff00` | `#4453d000` | Outline of the highlighted menu item; none by default. |
 | `menu.separatorBackground` | VS Code | `$separator` | `#30343c` | `#dcdfe5` | Menu separators. |
-| `menu.border` | VS Code | `@editorWidget.border` | `#6b7286` | `#d4d8df` | Menu border. |
+| `menu.border` | VS Code | `@editorWidget.border` | `#3a404d` | `#d4d8df` | Menu border. |
 | `toolbar.background` | Varia | `@titleBar.activeBackground` | `#111317` | `#f7f8fa` | Main toolbar. |
 | `toolbar.border` | Varia | `@titleBar.border` | `#262a31` | `#e3e6eb` | Line below the main toolbar. |
 | `toolbar.hoverBackground` | VS Code | `$text/12` | `#d9dce31f` | `#1c1f261f` | Icon actions when hovered, such as the close button of dock tabs. Translucent, so it shows on every tab color. |
@@ -142,13 +142,13 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `button.background` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Primary button; also the checkbox accent. |
 | `button.foreground` | VS Code | `$onAccent` | `#0e1230` | `#ffffff` | Primary button text. |
 | `button.hoverBackground` | VS Code | `$accentHover` | `#a8b2ff` | `#3744b8` | Primary button when hovered. |
-| `button.border` | VS Code | `$controlBorder` | `#6b7286` | `#878e9b` | Outline of secondary buttons. |
+| `button.border` | VS Code | `$controlBorder` | `#3a404d` | `#c2c8d4` | Outline of secondary buttons. |
 | `button.secondaryForeground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text of secondary and toolbar buttons. |
 | `button.secondaryHoverBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Secondary and toolbar buttons when hovered. |
 | `button.secondaryHoverForeground` | Varia | `$textStrong` | `#f5f6f8` | `#0a0c10` | Secondary button text when hovered. |
 | `input.background` | VS Code | `$input` | `#101216` | `#ffffff` | Inputs and selects. |
 | `input.foreground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Input and select text. |
-| `input.border` | VS Code | `$inputBorder` | `#6a7184` | `#878e9b` | Input and select border. |
+| `input.border` | VS Code | `$inputBorder` | `#3a404d` | `#c2c8d4` | Input and select border. |
 | `input.placeholderForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Placeholder text. |
 | `inputValidation.errorBackground` | VS Code | `$errorSurface` | `#3a1d22` | `#fdecec` | Connection error message. |
 | `inputValidation.errorForeground` | VS Code | `$errorSurfaceText` | `#f6bcc1` | `#8f1d24` | Connection error message text. |
@@ -169,7 +169,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `list.highlightForeground` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Characters that match a filter, such as in the command palette. |
 | `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9dce3` | `#1c1f26` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8f9cff33` | `#4453d033` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
-| `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
+| `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides in Object Explorer. |
 | `objectExplorer.activeConnectionBackground` | Varia | `$sideBar` | `#111317` | `#f7f8fa` | Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). |
 | `objectExplorer.activeConnectionForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Glyph at the end of the active query's server row. |
 | `objectExplorer.headingForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Folder row labels. |
@@ -213,7 +213,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `dock.background` | Varia | `@editor.background` | `#16181d` | `#ffffff` | Dock groups. |
 | `dock.guideBackground` | Varia | `$overlay` | `#1d2026` | `#ffffff` | Docking compass cells. |
 | `dock.guideForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Docking compass arrows. |
-| `dock.guideBorder` | Varia | `$controlBorder` | `#6b7286` | `#878e9b` | Border of docking compass cells. |
+| `dock.guideBorder` | Varia | `$controlBorder` | `#3a404d` | `#c2c8d4` | Border of docking compass cells. |
 | `dock.guideShadow` | Varia | `$shadow` | `#00000085` | `#10182824` | Shadow of docking compass cells. |
 | `dock.guideActiveBackground` | Varia | `$selectionStrong` | `#29314f` | `#d9e0fb` | Docking compass cell under the pointer. |
 | `dock.guideActiveBorder` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Border of the docking compass cell under the pointer. |
@@ -258,7 +258,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `editorBracketHighlight.unexpectedBracket.foreground` | VS Code | `$error` | `#f39a9a` | `#b42229` | A closing bracket without a matching opening one. |
 | `editorWidget.background` | VS Code | `$overlay` | `#1d2026` | `#ffffff` | Dialogs and editor widgets such as find, suggest, and hover. |
 | `editorWidget.foreground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of dialogs and editor widgets. |
-| `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#6b7286` | `#d4d8df` | Border of dialogs and editor widgets. |
+| `editorWidget.border` | VS Code | Dark `$controlBorder`, Light `$borderStrong` | `#3a404d` | `#d4d8df` | Border of dialogs and editor widgets. |
 | `emptyState.foreground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Text of empty views (no query, no results, empty dock). |
 | `emptyState.titleForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Heading of empty views. |
 | `emptyState.iconForeground` | Varia | `$iconMuted/60` | `#7f869499` | `#6b728099` | Decorative glyph of empty views. |
@@ -325,7 +325,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.headerSelectionBackground` | Varia | `$selection` | `#21273b` | `#e7ebfc` | Column and row headers of selected cells. |
 | `resultsGrid.headerSelectionForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Text of the headers of selected cells. |
 | `resultsGrid.linkForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | XML, JSON and plan values that open in a new tab. |
-| `resultsGrid.splitterBackground` | Varia | `$controlBorder` | `#6b7286` | `#878e9b` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
+| `resultsGrid.splitterBackground` | Varia | `$iconMuted` | `#7f8694` | `#6b7280` | Splitters between stacked result grids; hovered or dragged, they take sash.hoverBorder. |
 | `resultsMessages.foreground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Text of the Messages tab. |
 
 ### Status bar
@@ -366,7 +366,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `settings.headerForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Section headings in dialogs. |
 | `notifications.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Notification toasts, above the status bar at the bottom right. |
 | `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Notification text. |
-| `notifications.border` | VS Code | `@widget.border` | `#6b7286` | `#d4d8df` | Notification border. |
+| `notifications.border` | VS Code | `@widget.border` | `#3a404d` | `#d4d8df` | Notification border. |
 | `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39a9a` | `#b42229` | Error notification icon. |
 | `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#e4bb6a` | `#875800` | Warning notification icon. |
 | `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8f9cff` | `#4453d0` | Information notification icon. |
@@ -400,7 +400,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `memoryPanel.packedForeground` | Varia | `$purple` | `#ab95ea` | `#7a4bbf` | Text of the Packed state in the Memory panel. |
 | `chip.background` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default. |
 | `chip.foreground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Label of a filter chip while off. |
-| `chip.border` | Varia | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of a filter chip while off. |
+| `chip.border` | Varia | `$controlBorder` | `#3a404d` | `#c2c8d4` | Outline of a filter chip while off. |
 | `chip.activeBackground` | Varia | `$selection` | `#21273b` | `#e7ebfc` | A filter chip while on. |
 | `chip.activeForeground` | Varia | `$textAccent` | `#bcc5ff` | `#3240b0` | Label and check mark of a filter chip while on. |
 | `chip.activeBorder` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on. |

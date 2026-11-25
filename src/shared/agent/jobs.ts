@@ -81,7 +81,7 @@ export const serviceStates = { stopped: 1, running: 4 } as const
 export const startupDisabled = 4
 
 /** What agent.jobs.service's last sample says (undefined members: not read, so unknown). */
-export interface AgentServiceSample { readonly agentXps?: number; readonly serviceState?: number; readonly startupType?: number }
+export interface AgentServiceSample { readonly agentXps?: number; readonly serviceState?: number; readonly startupType?: number; readonly clustered?: number }
 /**
  * Whether Agent can run jobs now, by agent.jobs.service: `running` (XPs on and the service running or unreadable), `stopped`
  * (the service reads stopped), `xpsOff` (XPs 0 while the service runs), `unknown` (XPs 0 and the service state unreadable,
@@ -262,7 +262,7 @@ export const jobActivityTitle = 'Job Activity Monitor'
 /** The document's tab: the monitor and its server, as SSMS names its window. */
 export const jobActivityTabName = (server: string): string => `${jobActivityTitle} - ${server}`
 
-export type JobActivityCommandId = 'agent.jobActivity' | 'agent.refreshJobs' | 'agent.startJobs' | 'agent.stopJobs' | 'agent.enableJobs' | 'agent.disableJobs'
+export type JobActivityCommandId = 'agent.jobActivity' | 'agent.refreshJobs' | 'agent.startJobs' | 'agent.stopJobs' | 'agent.enableJobs' | 'agent.disableJobs' | 'agent.scriptJob'
   | 'agent.changeJobOwner' | 'agent.attachJobSchedule'
 /** Each bulk verb's command. */
 export const agentBulkCommands: { readonly [V in AgentBulkVerb | AgentBulkFormVerb]: JobActivityCommandId } = {
@@ -272,11 +272,12 @@ export const agentBulkCommands: { readonly [V in AgentBulkVerb | AgentBulkFormVe
 export interface JobActivityCommandEntry {
   readonly title: string
   readonly category: 'SQL Server Agent'
-  readonly icon: 'agent-activity' | 'refresh' | 'play' | 'debug-stop' | 'pass' | 'circle-slash' | 'person' | 'agent-schedule'
+  readonly icon: 'agent-activity' | 'refresh' | 'play' | 'debug-stop' | 'pass' | 'circle-slash' | 'person' | 'agent-schedule' | 'code'
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
-  readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
+  readonly menus?: readonly { readonly menu: 'explorer.context' | 'view' | 'agent.jobs.context'; readonly title?: string; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string }[]
+  readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
 }
 const openJobActivity = 'Open Job Activity Monitor first (SQL Server Agent: Job Activity Monitor).'
 /**
@@ -285,24 +286,39 @@ const openJobActivity = 'Open Job Activity Monitor first (SQL Server Agent: Job 
  * which act on the jobs selected in the active monitor.
  */
 export function jobActivityCommandEntries(): { readonly [K in JobActivityCommandId]: JobActivityCommandEntry } {
-  const bulk = (verb: AgentBulkVerb | AgentBulkFormVerb, icon: JobActivityCommandEntry['icon'], keywords: readonly string[]): JobActivityCommandEntry => ({
+  const bulk = (verb: AgentBulkVerb | AgentBulkFormVerb, icon: JobActivityCommandEntry['icon'], keywords: readonly string[], row?: { readonly title: string; readonly group: string; readonly order: number; readonly mnemonic: string }): JobActivityCommandEntry => ({
     title: agentBulkTitles[verb].dialog, category: 'SQL Server Agent', icon, keywords: ['agent', 'job', 'jobs', ...keywords],
-    precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.'
+    precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select jobs in Job Activity Monitor first.',
+    // AG-10: the list's row menu runs the bar's verb on the selected jobs, in SSMS's words for its Job Activity Monitor menu.
+    ...row ? { menus: [{ menu: 'agent.jobs.context' as const, ...row }] } : {}
   })
   return {
     'agent.jobActivity': {
       title: jobActivityTitle, category: 'SQL Server Agent', icon: 'agent-activity', keywords: ['agent', 'jobs', 'activity', 'monitor', 'running', 'sqlserveragent', 'live'],
       precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to a SQL Server whose SQL Server Agent you can see first.',
-      menus: [{ menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" }]
+      menus: [
+        { menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "(explorerNode == 'agent' || explorerNode == 'agentJobActivity') && !explorerServerLost" },
+        // View beside Activity Monitor and Integration Services Operations (AG-10), on the active tab's or Object Explorer's server, else asking which.
+        { menu: 'view', group: '2_monitor', order: 3, mnemonic: 'b' }
+      ]
     },
+    // F5 refreshes the active monitor (AG-10), as in SSMS's Job Activity Monitor and Varia's other live documents; Refresh ends the row menu.
     'agent.refreshJobs': {
       title: 'Refresh Jobs', category: 'SQL Server Agent', icon: 'refresh', keywords: ['agent', 'jobs', 'activity', 'reload', 'now'],
-      precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: openJobActivity
+      precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: openJobActivity,
+      keybindings: [{ key: 'f5', when: "activeDocumentIsJobActivity && !activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus" }],
+      menus: [{ menu: 'agent.jobs.context', group: '9_view', order: 1, title: 'Refresh', mnemonic: 'f' }]
     },
-    'agent.startJobs': bulk('startJob', 'play', ['start', 'run', 'execute']),
-    'agent.stopJobs': bulk('stopJob', 'debug-stop', ['stop', 'cancel']),
-    'agent.enableJobs': bulk('enable', 'pass', ['enable']),
-    'agent.disableJobs': bulk('disable', 'circle-slash', ['disable']),
+    'agent.startJobs': bulk('startJob', 'play', ['start', 'run', 'execute'], { title: 'Start Job', group: '2_run', order: 1, mnemonic: 's' }),
+    'agent.stopJobs': bulk('stopJob', 'debug-stop', ['stop', 'cancel'], { title: 'Stop Job', group: '2_run', order: 2, mnemonic: 't' }),
+    'agent.enableJobs': bulk('enable', 'pass', ['enable'], { title: 'Enable Job', group: '3_state', order: 1, mnemonic: 'e' }),
+    'agent.disableJobs': bulk('disable', 'circle-slash', ['disable'], { title: 'Disable Job', group: '3_state', order: 2, mnemonic: 'd' }),
+    // AG-10: the one job selected in the monitor, scripted as Object Explorer's Script Job as › CREATE To › New Query Editor Window does.
+    'agent.scriptJob': {
+      title: 'Script Job as CREATE', category: 'SQL Server Agent', icon: 'code', keywords: ['agent', 'job', 'script', 'create', 'sql', 'tsql'],
+      precondition: 'backendReady && activeDocumentIsJobActivity', unavailableHint: 'Select one job in Job Activity Monitor first.',
+      menus: [{ menu: 'agent.jobs.context', group: '4_script', order: 1, mnemonic: 'r' }]
+    },
     // AG-3b: each asks for its value in the monitor, then sends one request per job.
     'agent.changeJobOwner': { ...bulk('changeOwner', 'person', ['owner', 'login', 'change', 'bulk']), title: 'Change Job Owner…' },
     'agent.attachJobSchedule': { ...bulk('attachSchedule', 'agent-schedule', ['schedule', 'attach', 'shared', 'bulk']), title: 'Attach Schedule to Jobs…' }

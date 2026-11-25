@@ -11,7 +11,7 @@ import { agentLimits } from '../src/shared/agent/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -136,7 +136,7 @@ describe('the proxy document', () => {
     expect(holds(proxyDocuments.getSnapshot(), secret)).toBe(false)
     expect(holds(documents.getSnapshot(), secret)).toBe(false)
     proxyDocuments.setFrame(id, { ...proxyDocuments.get(id)!.frame, scriptOpen: true })
-    await settled()
+    await vi.waitFor(() => expect(api.scriptObjectAction).toHaveBeenCalled())
     const scripted = api.scriptObjectAction.mock.calls.map(([sent]) => sent as ActionScriptRequest)
     expect(scripted.length).toBeGreaterThan(0)
     expect(scripted.every(sent => !holds(sent, secret) && !('secrets' in sent))).toBe(true)

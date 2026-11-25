@@ -67,7 +67,9 @@ export const liveArgsSchemas = {
   'agent.overview': z.never(),
   // BigQuery's Job History (BQ-9): the scope, filters, pinned jobs, expanded scripts and price setting. Each args replaces the last
   // whole, and a new scope or filter lists again from scratch.
-  'bigquery.jobs': jobHistoryArgsSchema
+  'bigquery.jobs': jobHistoryArgsSchema,
+  // SQL Server Agent's tree (AG-12): its probe fingerprints all of the Agent node the login may see, so it takes no args.
+  'agent.tree': z.never()
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

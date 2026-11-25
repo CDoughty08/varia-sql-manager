@@ -14,7 +14,7 @@ import { jobCopySection } from '../src/renderer/src/agent/JobDocumentService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -144,7 +144,7 @@ describe('Create Job Like This: the copy', () => {
   it('puts Create Job Like This on a job\'s menu after New Job, with no release gate (AG-9)', () => {
     const entry = createFromCommandEntries()['agent.createJobLike']
     expect(entry.precondition).not.toContain('agentEnabled')
-    expect(commandDescriptor('agent.createJobLike')).toMatchObject({ title: 'Create Job Like This…', menus: [{ menu: 'explorer.context', group: '0_new', order: 2, when: "explorerNode == 'agentJob' && !explorerServerLost" }] })
+    expect(commandDescriptor('agent.createJobLike')).toMatchObject({ title: 'Create Job Like This…', menus: [{ menu: 'explorer.context', group: '0_new', order: 2, when: "explorerNode == 'agentJob' && !explorerServerLost" }, { menu: 'agent.jobs.context', group: '1_open', order: 2 }] })
     expect(entry.keywords).toContain('existing')
   })
 })

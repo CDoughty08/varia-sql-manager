@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import { electron, expect, within } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
 import { crashRendererAndAwaitLoss } from './dialog-lifecycle.mjs'
-import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, connectDialogWindow, documentTabs, executingMark, explorerToolbar, queryBarButton, queryServer, querySession, submitConnect, toolbarButton } from './ui.mjs'
+import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, connectDialogWindow, documentTabs, executingMark, paneMenuButton, queryBarButton, queryServer, querySession, submitConnect, toolbarButton } from './ui.mjs'
 import { parseCalls } from './call-log.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -179,8 +179,11 @@ export async function sessionPrompts(launchOptions) {
     const fifth = await activeName()
     const fifthConnection = await server.inputValue(), tabsBeforeDisconnect = await tabs.count()
     await (await explorerRow(page, 'server-a')).click()
-    const disconnect = explorerToolbar(page).getByRole('button', { name: 'Disconnect', exact: true })
-    await disconnect.click()
+    const clickDisconnect = async () => {
+      await paneMenuButton(page, 'explorer').click()
+      await page.getByRole('menu', { name: 'Object Explorer menu', exact: true }).getByRole('menuitem', { name: 'Disconnect', exact: true }).click()
+    }
+    await clickDisconnect()
     const disconnectPrompt = page.getByRole('dialog', { name: 'Disconnect server-a?', exact: true })
     await expect(disconnectPrompt).toBeVisible()
     await disconnectPrompt.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
@@ -191,7 +194,7 @@ export async function sessionPrompts(launchOptions) {
     await expect(server).toHaveValue(fifthConnection)
     expect(await calls(control, 'connections.disconnect')).toEqual([])
     await answerNext(application, 'Yes')
-    await disconnect.click()
+    await clickDisconnect()
     await expect(disconnectPrompt).toBeVisible()
     await disconnectPrompt.getByRole('button', { name: 'Disconnect and Keep Tabs', exact: true }).click()
     await expect(disconnectPrompt).toHaveCount(0)

@@ -214,9 +214,10 @@ bidirectional-text characters are removed from names, and the window chrome only
   is used.
 - To add a key, add it to the registry with a default, a description, and its consumers, give text and indicator colors
   a pair in `contrast-pairs.ts`, then regenerate the docs with `npx vitest run tests/theme-schema.test.ts -u`.
-- `tests/theme-contrast.test.ts` holds both built-ins to WCAG AA (4.5:1 for text, 3:1 for indicators) on every
-  surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule sets a text color
-  and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` holds the
+- `tests/theme-contrast.test.ts` holds both built-ins to WCAG AA (4.5:1 for text, 3:1 for focus rings, icons, and
+  indicators, and 1.5:1 for resting 1 px input/button outlines so they do not alias harshly while focus and hover borders
+  stay ≥ 3:1) on every surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule
+  sets a text color and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` holds the
   built-ins to the design language: graphite neutrals, one accent hue with status colors far from it, chart colors that
   stay apart for protanopia, deuteranopia and tritanopia and reach 3:1 on the editor, widget and panel backgrounds, NULL
   as muted italics, and a status bar tinted only while a query runs or the backend is down.

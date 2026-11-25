@@ -16,7 +16,7 @@ import { activeFilters, bulkLine, jobActivityArgs, jobActivityText, listProblems
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -447,5 +447,161 @@ describe("The status bar's running job", () => {
     expect(view.disposed).toBe(true)
     expect(agentJobs.getSnapshot().jobs).toMatchObject([{ phase: { phase: 'unknown', reason: 'gone' } }])
     expect(handles().at(-1)).toBe(view)
+  })
+})
+
+describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
+  const stopped = { type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.service', costMs: 1, effectiveIntervalMs: 10_000, status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 2 }] }] } as const
+  it('offers Start Agent through the Agent node\'s Start, greyed with its rule\'s reason, and opens its dialog where the rules allow', async () => {
+    const off = monitor()
+    const id = off.jobActivity.open('c1')
+    off.handle().deliver(stopped as never)
+    // Varia off Windows: the verb is greyed with the client rule's reason, so the banner shows Start disabled with it.
+    const greyed = off.jobActivity.startAgentTarget(id)!
+    expect(greyed.reason).toBe('Starting and stopping SQL Server Agent needs Varia on Windows.')
+    expect(off.commands.isEnabled('explorer.startAgent', greyed.args)).toBe(false)
+    expect(agentBanner('stopped', off.jobActivity.get(id)?.service, !!greyed.reason, false)?.start).toBe(true)
+
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const on = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver(stopped as never)
+    const start = fixture.jobActivity.startAgentTarget(on)!
+    // The monitor's own reading stands in for a state the tree has not sampled: stopped, so Start is enabled and Stop greyed.
+    expect(start).toMatchObject({ args: { target: { kind: 'explorer', node: { kind: 'agent', connectionId: 'c1', agent: { windowsClient: true, state: 1, startup: 2 } } }, state: { explorerActionStartAgent: 'enabled', explorerActionStopAgent: 'disabled' } } })
+    expect(start.reason).toBeUndefined()
+    expect(fixture.commands.isEnabled('explorer.startAgent', start.args)).toBe(true)
+    expect(await fixture.commands.execute('explorer.startAgent', start.args, 'toolbar')).toBe(true)
+    expect(fixture.dialogs.current).toMatchObject({ dialog: 'startAgent', connectionId: 'c1', target: { kind: 'agent' } })
+  })
+  it('follows the Agent node only while the banner offers Start', () => {
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver({ ...stopped, samples: [{ ...stopped.samples[0], status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }] }] } as never)
+    expect(fixture.jobActivity.startAgentOffered(id)).toBe(false)
+    handle.deliver({ ...stopped, seq: 2 } as never)
+    expect(fixture.jobActivity.startAgentOffered(id)).toBe(true)
+    // Disabled: the banner says so and offers no Start.
+    handle.deliver({ ...stopped, seq: 3, samples: [{ ...stopped.samples[0], status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 1 }, { id: 'startupType', value: 4 }] }] } as never)
+    expect(fixture.jobActivity.startAgentOffered(id)).toBe(false)
+  })
+  it("greys Start Agent on a failover cluster instance from the monitor's own service probe, with no Object Explorer sample", () => {
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver({ ...stopped, samples: [{ ...stopped.samples[0], status: [...stopped.samples[0].status, { id: 'clustered', value: 1 }] }] } as never)
+    const start = fixture.jobActivity.startAgentTarget(id)!
+    expect(start.args).toMatchObject({ target: { node: { agent: { clustered: true } } } })
+    expect(start.reason).toMatch(/cluster/i)
+    expect(fixture.commands.isEnabled('explorer.startAgent', start.args)).toBe(false)
+  })
+  it('binds F5 to Refresh Jobs in the monitor and leaves the View menu to the release (AG-9), as a menubar item cannot be gated', () => {
+    const refresh = commandDescriptor('agent.refreshJobs')
+    const f5 = refresh.keybindings?.find(binding => 'key' in binding && binding.key === 'f5')
+    expect(f5).toBeDefined()
+    const when = compileWhen(f5!.when!)
+    expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'editor', liveGridFocus: true } as never)).toBe(true)
+    // Object Explorer's own F5 and the query editor's keep theirs.
+    expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'explorer' } as never)).toBe(false)
+    expect(evaluateWhen(when, { activeDocumentIsJobActivity: true, activePanel: 'editor', editorFocus: true } as never)).toBe(false)
+    // View › Job Activity Monitor sits with the other monitors.
+    expect(commandDescriptor('agent.jobActivity').menus?.find(menu => menu.menu === 'view')).toMatchObject({ group: '2_monitor', order: 3 })
+    // Enter opens the selected job in the list, which carries no Query Output menu now (its row menu is the job's).
+    expect(commandDescriptor('agent.openJob').keybindings?.[0]?.when).toBe('activeDocumentIsJobActivity && liveGridFocus')
+  })
+  it('scripts the one job selected in the monitor from its row menu, and greys Script with several', async () => {
+    const { jobActivity, api, commands } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select([row(nightly, 'Nightly'), row(backup, 'Backup')])
+    await settled()
+    expect(commands.isEnabled('agent.scriptJob', { tabId: id })).toBe(false)
+    expect(commands.unavailableReason('agent.scriptJob', { tabId: id })).toBe('Select one job to script it.')
+    grid.select([row(nightly, 'Nightly')])
+    await settled()
+    expect(await commands.execute('agent.scriptJob', { target: { kind: 'jobActivity', tabId: id }, tabId: id }, 'menu')).toBe(true)
+    await vi.waitFor(() => expect(api.scriptObjects).toHaveBeenCalled())
+    expect(api.scriptObjects.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c1', verb: 'create', targets: [{ kind: 'agentJob', name: 'Nightly' }] })
+  })
+  it('greys Open and Create Job Like This in the monitor unless one job is selected', async () => {
+    const { jobActivity, commands } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select([row(nightly, 'Nightly'), row(backup, 'Backup')])
+    await settled()
+    for (const command of ['agent.openJob', 'agent.createJobLike'] as const) expect(commands.isEnabled(command, { tabId: id })).toBe(false)
+    expect(commands.unavailableReason('agent.openJob', { tabId: id })).toBe('Select one job to open it.')
+    grid.select([row(nightly, 'Nightly')])
+    await settled()
+    for (const command of ['agent.openJob', 'agent.createJobLike'] as const) expect(commands.isEnabled(command, { tabId: id })).toBe(true)
+  })
+  it("decides the row menu's items from the grid's selection at once, before its rows are read", async () => {
+    const { jobActivity, commands } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    grid.select([row(nightly, 'Nightly'), row(backup, 'Backup')])
+    await settled()
+    // A right-click on one row selects it just before its menu opens, while the rows are still being read.
+    grid.select([row(nightly, 'Nightly')])
+    expect(jobActivity.get(id)!.selected).toHaveLength(2)
+    expect(jobActivity.selectedCount(id)).toBe(1)
+    for (const command of ['agent.openJob', 'agent.createJobLike', 'agent.scriptJob'] as const) expect(commands.isEnabled(command, { tabId: id })).toBe(true)
+    grid.clear()
+    expect(jobActivity.selectedCount(id)).toBe(0)
+    expect(commands.isEnabled('agent.openJob', { tabId: id })).toBe(false)
+  })
+  it("opens View History from the row menu on the rows a right-click selected, greyed as the bar's button is", async () => {
+    const { jobActivity, commands, logViewer } = monitor()
+    const id = jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+    jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+    expect(commands.unavailableReason('agent.viewHistory', { tabId: id })).toBe('Select one or more jobs to view their history.')
+    // The palette names no tab: over a monitor with nothing selected it still opens every job.
+    const fromPalette = vi.spyOn(logViewer, 'open')
+    expect(commands.isEnabled('agent.viewHistory')).toBe(true)
+    expect(await commands.execute('agent.viewHistory', undefined, 'palette')).toBe(true)
+    await vi.waitFor(() => expect(fromPalette).toHaveBeenCalled())
+    expect(fromPalette.mock.calls.at(-1)![1]).toEqual({})
+    fromPalette.mockRestore()
+    grid.select([row(nightly, 'Nightly')])
+    await settled()
+    // A right-click on Backup selects it just before the menu's View History runs: the viewer opens on Backup, not Nightly.
+    const opened = vi.spyOn(logViewer, 'open')
+    grid.select([row(backup, 'Backup')])
+    expect(await commands.execute('agent.viewHistory', { target: { kind: 'jobActivity', tabId: id }, tabId: id }, 'menu')).toBe(true)
+    await vi.waitFor(() => expect(opened).toHaveBeenCalled())
+    expect(opened.mock.calls.at(-1)![1]).toEqual({ jobs: [backup] })
+    // More than the cap: its rows are not all read, so View History is greyed with the bar's reason.
+    grid.select(Array.from({ length: agentLimits.startJobs + 1 }, (_, at) => row(`00000000-0000-0000-0000-${String(at).padStart(12, '0')}`, `Job ${at}`)))
+    expect(commands.isEnabled('agent.viewHistory', { tabId: id })).toBe(false)
+    expect(commands.unavailableReason('agent.viewHistory', { tabId: id })).toBe(bulkUnavailable(agentLimits.startJobs + 1))
+  })
+  it("lets the monitor's own service reading win for Start, and reads again at once when a start of Agent ends on its connection", () => {
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    handle.deliver(stopped as never)
+    expect(fixture.jobActivity.startAgentTarget(id)?.args).toMatchObject({ target: { node: { agent: { state: 1 } } } })
+    const refreshes = vi.spyOn(handle, 'refresh')
+    const run = fixture.longRuns.begin({ kind: 'startAgent', connectionId: 'c1', server: 'c1' })
+    expect(refreshes).not.toHaveBeenCalled()
+    run.dispose()
+    expect(refreshes).toHaveBeenCalledTimes(1)
   })
 })

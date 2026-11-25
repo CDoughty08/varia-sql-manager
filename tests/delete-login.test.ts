@@ -178,7 +178,7 @@ describe('ObjectDialogService on a login\'s Delete (D4c)', () => {
     }
     const dialogs = new ObjectDialogService({ api, connections, explorer, documents: { newQuery: vi.fn() }, files: { saveCopy: vi.fn() }, newId: () => 'id' })
     cleanups.push(() => dialogs.dispose())
-    const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+    const settle = () => new Promise(resolve => setImmediate(resolve))
     return { dialogs, api, explorer, execute, settle }
   }
 

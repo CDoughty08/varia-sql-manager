@@ -348,8 +348,10 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   useEffect(() => {
     const key = focusSetting.current
     if (!key || !formElement) return
+    const target = formElement.ownerDocument.getElementById(controlId(key))
+    if (!target) return
     focusSetting.current = undefined
-    formElement.ownerDocument.getElementById(controlId(key))?.focus()
+    target.focus()
   })
   useEffect(() => {
     if (!formElement) return

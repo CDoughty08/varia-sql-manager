@@ -14,15 +14,19 @@ static class OfflineSuites
     // Google's and AWS's environment variables.
     public static readonly string[] Alone = ["Entra", "ConnectionPrincipal", "Store", "Scripting", "SessionDisconnect", "BigQuery"];
 
-    // Measured seconds per suite, from a serial run's 'Offline suite' lines (VARIA_TEST_OFFLINE_LANES=1, Windows, 2026-11-08, after the timing checks were hardened for starved runners);
-    // suites under 0.3 s are left out and count as 0.1 s. Refresh it when a suite moves by more than a second. Text is CPU-bound,
-    // so it carries its contended CI time (9.6 to 20 s, 2.3 s alone): weighed alone it padded the slowest lane on every OS.
+    // Measured seconds per suite on CI (PR #723, 2026-11-24; suites under 0.3 s count as 0.1 s). Refresh when a suite moves
+    // by more than a few seconds. Heavy CPU-bound suites carry their contended CI times so no two land on the same lane.
     public static readonly Dictionary<string, double> Weights = new()
     {
-        ["Host"] = 12.5, ["Ssis"] = 7.7, ["Explorer"] = 7.1, ["ActivityAction"] = 6.2, ["LiveScheduler"] = 5.5, ["Restore"] = 5.1,
-        ["Live"] = 4.4, ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4, ["Text"] = 12.0,
-        ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["ActionProgress"] = 1.8, ["LspTransport"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
-        ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["SqlLanguage"] = 6.0, ["SqlLanguageDiagnostics"] = 1.0, ["SqlCompletion"] = 1.0, ["Page"] = 0.4, ["ParallelResult"] = 3.5, ["FusedRead"] = 5.8, ["FusedWhole"] = 11.8, ["ActivitySource"] = 0.4, ["OperationProgress"] = 0.5, ["Packer"] = 0.7, ["IdlePacker"] = 1.2, ["SealPacking"] = 0.7, ["SearchFold"] = 6.0, ["SearchNarrowing"] = 5.5, ["PageFilter"] = 3.7, ["TypedForm"] = 2.0, ["RoomPool"] = 2.0,
+        ["ParallelResult"] = 82.0, ["SearchNarrowing"] = 60.0, ["FusedRead"] = 58.0, ["Text"] = 58.0,
+        ["FusedWhole.Diffs"] = 40.0, ["FusedWhole.DistinctsSearch"] = 35.0, ["FusedWhole.MixedServices"] = 35.0, ["FusedWhole.Faults"] = 25.0,
+        ["BigQueryExecution.Residence"] = 25.0, ["BigQueryExecution.ViewsCopySave"] = 20.0, ["BigQueryExecution.Core"] = 15.0, ["BigQueryExecution.Storage"] = 15.0,
+        ["PageFilter"] = 33.0, ["SearchFold"] = 29.0, ["Packing"] = 27.0, ["Host"] = 27.0, ["Explorer"] = 23.0, ["View"] = 20.0,
+        ["BigQuerySession"] = 20.0, ["IdlePacker"] = 20.0, ["BigQueryJobHistory"] = 17.0, ["Profile"] = 15.0,
+        ["Live"] = 12.0, ["Ssis"] = 7.7, ["ActivityAction"] = 6.2, ["SqlLanguage"] = 6.0, ["LiveScheduler"] = 5.5, ["Restore"] = 5.1,
+        ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4,
+        ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["TypedForm"] = 2.0, ["RoomPool"] = 2.0, ["ActionProgress"] = 1.8, ["LspTransport"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
+        ["SqlLanguageDiagnostics"] = 1.0, ["SqlCompletion"] = 1.0, ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["Packer"] = 0.7, ["SealPacking"] = 0.7, ["OperationProgress"] = 0.5, ["Page"] = 0.4, ["ActivitySource"] = 0.4,
     };
 
     // Six lanes. The lanes mostly wait, so more lanes than CI's 3 to 4 vCPUs still help: locally, 1 lane took 65 s, 4 took
@@ -112,6 +116,10 @@ static class OfflineSuites
             }
             else
             {
+                // Synchronous lanes occupy ThreadPool workers; on 3-vCPU CI runners the default min-threads (3) leaves zero
+                // spare threads for async continuations and timers until hill-climbing injects them slowly.
+                ThreadPool.GetMinThreads(out var minWorker, out var minIo);
+                ThreadPool.SetMinThreads(Math.Max(minWorker, lanes + 4), Math.Max(minIo, 8));
                 foreach (var name in suites.Select(suite => suite.Name).Where(name => Alone.Contains(Base(name)))) await Timed(name);
                 var rest = suites.Select(suite => suite.Name).Where(name => !Alone.Contains(Base(name)));
                 await Task.WhenAll(Assign(rest, lanes).Select(lane => Task.Run(async () => { foreach (var name in lane) await Timed(name); })));

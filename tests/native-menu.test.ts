@@ -26,7 +26,7 @@ function fakeMain() {
   const choose = (command: unknown) => listener?.(command as ContextMenuCommand)
   return { api, requests, choose, subscribed: () => listener !== undefined }
 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+const settle = () => new Promise(resolve => setImmediate(resolve))
 const handlers = (): NativeMenuHandlers & { calls: string[] } => {
   const calls: string[] = []
   return { calls, closed: () => calls.push('closed'), failed: () => calls.push('failed') }

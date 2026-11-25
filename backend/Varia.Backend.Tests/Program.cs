@@ -170,6 +170,14 @@ if (args is ["--bigquery-emulator-live"])
     Console.WriteLine("Passed " + passed + " BigQuery emulator checks.");
     return;
 }
+// The guarded real-project checks (docs/testing.md, Real BigQuery project): bills the project VARIA_TEST_BIGQUERY_PROJECT
+// names, only with VARIA_TEST_BIGQUERY_CONFIRM repeating it; run by hand, never in CI or a live group.
+if (args is [BigQueryRealProjectChecks.Argument])
+{
+    await BigQueryRealProjectChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery real-project checks.");
+    return;
+}
 if (args is ["--sql-language-live"])
 {
     await SqlLanguageLiveChecks.RunAsync(Check);
@@ -495,7 +503,11 @@ if (liveGroup is null)
         ("Provider", () => ProviderChecks.RunAsync(Check)),
         ("BigQuery", () => BigQueryChecks.RunAsync(Check)),
         ("BigQueryCredential", () => { BigQueryCredentialChecks.Run(Check); return Task.CompletedTask; }),
-        ("BigQueryExecution", () => BigQueryExecutionChecks.RunAsync(Check)),
+        ("BigQueryRealProjectGuard", () => { BigQueryRealProjectChecks.RunOffline(Check); return Task.CompletedTask; }),
+        ("BigQueryExecution.Core", () => BigQueryExecutionChecks.RunCoreAsync(Check)),
+        ("BigQueryExecution.Residence", () => BigQueryExecutionChecks.RunResidenceAsync(Check)),
+        ("BigQueryExecution.ViewsCopySave", () => BigQueryExecutionChecks.RunViewsCopySaveAsync(Check)),
+        ("BigQueryExecution.Storage", () => BigQueryExecutionChecks.RunStorageAsync(Check)),
         ("BigQuerySession", () => BigQuerySessionChecks.RunAsync(Check)),
         ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("BigQueryIndex", () => BigQueryIndexChecks.RunAsync(Check)),
@@ -514,7 +526,10 @@ if (liveGroup is null)
         ("IdlePacker", Sync(() => IdlePackerChecks.Run(Check))),
         ("SealPacking", Sync(() => SealPackingChecks.Run(Check))),
         ("FusedRead", Sync(() => FusedReadChecks.Run(Check))),
-        ("FusedWhole", Sync(() => FusedReadChecks.RunWhole(Check))),
+        ("FusedWhole.Diffs", Sync(() => FusedReadChecks.RunWholeDiffs(Check))),
+        ("FusedWhole.DistinctsSearch", Sync(() => FusedReadChecks.RunWholeDistinctsSearch(Check))),
+        ("FusedWhole.MixedServices", Sync(() => FusedReadChecks.RunWholeMixedServices(Check))),
+        ("FusedWhole.Faults", Sync(() => FusedReadChecks.RunWholeFaults(Check))),
         ("Text", () => TextChecks.RunAsync(Check)),
         ("TransposedText", () => TransposedTextChecks.RunAsync(Check)),
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
@@ -556,6 +571,7 @@ if (liveGroup is null)
         ("AgentErrorLog", () => AgentErrorLogChecks.RunAsync(Check)),
         ("AgentObject", () => AgentObjectChecks.RunAsync(Check)),
         ("AgentSchedule", () => AgentScheduleChecks.RunAsync(Check)),
+        ("AgentTree", () => AgentTreeChecks.RunAsync(Check)),
         ("AgentOverview", () => AgentOverviewChecks.RunAsync(Check)),
         ("Discard", () => DiscardChecks.RunAsync(Check))
     ];

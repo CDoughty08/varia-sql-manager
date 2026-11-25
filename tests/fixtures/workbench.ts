@@ -78,6 +78,7 @@ import { actionsContribution } from '../../src/renderer/src/contributions/action
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
+import { SsisPlacesService } from '../../src/renderer/src/ssis/SsisPlacesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { TablePropertiesService } from '../../src/renderer/src/properties/TablePropertiesService'
@@ -283,7 +284,7 @@ export function updatesApi(initial: UpdateState = { status: 'idle', currentVersi
  * The renderer's services and every command contribution, wired as createWorkbench does but with fake IPC and a fake
  * shell host, so command enablement can be tested in Node.
  */
-export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; activeElement?: () => Element | null } = {}) {
+export function workbenchFixture(options: { platform?: Platform; modal?: () => boolean; storage?: HistoryStorage; timers?: Timers; settings?: Partial<SettingsValues>; recovery?: RecoveryEntry[]; helpFocus?: (id: string) => void; startupReady?: Promise<void>; activeElement?: () => Element | null; windowsClient?: boolean } = {}) {
   // Settings apply to documents as createWorkbench applies them; `settings` exists before the first document does.
   const doc = documentFixture({ ...settingsDocumentOptions(() => settings.getSnapshot().values), target: id => targets.targetForConnection(id), server: id => connections.get(id)?.server,
     provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
@@ -345,6 +346,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     revealSqlFile: vi.fn<VariaApi['revealSqlFile']>(async () => ({ ok: true, value: undefined })),
     tableColumns: vi.fn<VariaApi['tableColumns']>(async () => ({ ok: true, value: { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false } })),
     explorerChildren: vi.fn<VariaApi['explorerChildren']>(async params => ({ ok: true, value: explorerAnswer(params) })),
+    explorerPeek: vi.fn<VariaApi['explorerPeek']>(async () => ({ ok: true, value: { facts: {}, elapsedMs: 1 } })),
+    explorerPeekDependencies: vi.fn<VariaApi['explorerPeekDependencies']>(async () => ({ ok: true, value: { uses: [], usedBy: [], elapsedMs: 1 } })),
     explorerCancel: vi.fn<VariaApi['explorerCancel']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // A script naming the object and verb, from the object's database (master for databases and server objects).
     scriptObjects: vi.fn<VariaApi['scriptObjects']>(async params => {
@@ -370,6 +373,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       backupFile: 'C:\\SSIS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf' }, elapsedMs: 1 } })),
     executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Restore the catalog database' }], elapsedMs: 1 } })),
     // No catalog unless a test says otherwise.
+    executionSsis: vi.fn<VariaApi['executionSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
+    packageRunsSsis: vi.fn<VariaApi['packageRunsSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
     describeSsis: vi.fn<VariaApi['describeSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
     cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
@@ -392,7 +397,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
   const explorer = new ExplorerService({
     api, connections, events, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}),
-    groupBySchema: { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe }
+    groupBySchema: { get: () => settings.get('objectExplorer.groupBySchema'), subscribe: settings.subscribe },
+    // The Agent node's service verbs need Varia on Windows (AG-2); a test asks for it.
+    ...(options.windowsClient ? { windowsClient: true } : {})
   })
   const databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
@@ -441,6 +448,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
+  const explorerLongRuns = explorer.useLongRuns(longRuns)
   const disconnectPrompts = new DisconnectPromptService()
   const disconnectCoordinator = createDisconnectCoordinator({
     connectionTargets, documents, queries, files, longRuns, api, prompts: disconnectPrompts,
@@ -451,7 +459,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer, targetIdOf })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, targetIdOf })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, targetIdOf, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
-  const tableProperties = new TablePropertiesService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
+  const tableProperties = new TablePropertiesService({ api, documents, files, connections, targetIdOf, scriptingOptions, results, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const actionProgress = new ActionProgressService(api)
   const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, targetIdOf, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
@@ -459,11 +467,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
-  const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings, targetIdOf })
+  const ssisPlaces = new SsisPlacesService({ api })
+  const operations = new SsisOperationsService({ api, documents, panes, live, places: ssisPlaces, connections, settings, targetIdOf })
   const jobHistory = new JobHistoryService({ api, documents, panes, live, connections, settings, queries, targetIdOf })
   const agentJobs = new AgentJobStatusService({ api, live, connections })
-  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
-  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, ...(options.timers ? { timers: options.timers } : {}) })
+  const jobActivity = new JobActivityService({ api, documents, panes, live, connections, targetIdOf, explorer, longRuns, started: (connectionId, job, sentAt) => agentJobs.watch(connectionId, job, sentAt) })
+  const jobDocuments = new JobDocumentService({ api, documents, files, connections, live, targetIdOf, openQuery: (sql, name, connectionId, database) => { documents.newQuery(sql, name, connectionId, database) }, openSsisExecution: (connectionId, executionId) => { operations.openExecution(connectionId, executionId) }, ...(options.timers ? { timers: options.timers } : {}) })
   const agentObjectOptions = { api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) }
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, agentObjectOptions)
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, agentObjectOptions)
@@ -600,6 +609,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     longRuns,
     designers,
     ssisProperties,
+    ssisPlaces,
     properties,
     tableProperties,
     newDatabase,
@@ -712,6 +722,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     ssisCatalog.dispose()
+    explorerLongRuns.dispose()
     longRuns.dispose()
     designers.dispose()
     ssisProperties.dispose()
@@ -721,6 +732,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     newDatabase.dispose()
     restore.dispose()
     operations.dispose()
+    ssisPlaces.dispose()
     jobHistory.dispose()
     jobActivity.dispose()
     logViewer.dispose()
@@ -778,6 +790,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     longRuns,
     designers,
     ssisProperties,
+    ssisPlaces,
     properties,
     tableProperties,
     newDatabase,

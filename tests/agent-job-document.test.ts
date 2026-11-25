@@ -8,12 +8,13 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionRequest } from '.
 import { agentLimits } from '../src/shared/agent/catalog'
 import { createFromDraft } from '../src/shared/agent/create-from'
 import { commandDescriptor } from '../src/shared/commands/catalog'
+import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import type { ApiResult } from '../src/shared/contracts'
 import { jobDocumentText, jobLive } from '../src/renderer/src/agent/JobDocumentService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -374,6 +375,136 @@ describe("the job document's Steps page", () => {
     jobDocuments.openStepInQuery(id, 's2')
     expect(documents.active).toMatchObject({ name: 'Load.sql', connectionId: 'c1', database: 'Sales' })
   })
+  it('loads a CmdExec or PowerShell command from main\'s open dialog, naming only the step type, and says why a file was refused', async () => {
+    const fixture = opened(stepped()), { jobDocuments } = fixture
+    const open = vi.fn<(subsystem: 'PowerShell' | 'CmdExec') => Promise<ApiResult<string | null>>>(async () => ({ ok: true, value: 'robocopy D:\\a \\\\fs\\b' }))
+    let answer!: (value: ApiResult<string | null>) => void
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    // Without the API (a test workbench) the step says so; a T-SQL step never asks.
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', failure: 'Load from file is not available here.' })
+    Object.assign(fixture.api, { openAgentStepScript: open })
+    expect(await jobDocuments.loadStepScript(id, 's2')).toBeUndefined()
+    expect(open).not.toHaveBeenCalled()
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBe('robocopy D:\\a \\\\fs\\b')
+    expect(open).toHaveBeenCalledWith('CmdExec')
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    // Cancel loads nothing; a refusal is shown under the command until the command changes.
+    open.mockResolvedValueOnce({ ok: true, value: null })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    open.mockResolvedValueOnce({ ok: false, error: 'The file is longer than a step\'s command may be (100,000 characters).' })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: false, failure: expect.stringContaining('100,000') })
+    jobDocuments.updateStep(id, 's1', { command: 'dir' })
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    // A refusal's message also goes with a type change or another step's selection, and does not come back with the step.
+    open.mockResolvedValueOnce({ ok: false, error: 'This file is not a text file Varia can read. Use UTF-8 or UTF-16.' })
+    jobDocuments.selectStep(id, 's1')
+    await jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.updateStep(id, 's1', { subsystem: 'PowerShell' })
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    open.mockResolvedValueOnce({ ok: false, error: 'The file does not exist.' })
+    await jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', failure: 'The file does not exist.' })
+    jobDocuments.selectStep(id, 's2')
+    jobDocuments.selectStep(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    // A refusal that answers after another step was selected, or after the type changed, is not kept for the step either.
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const refusedAway = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.selectStep(id, 's2')
+    answer({ ok: false, error: 'The file does not exist.' })
+    await refusedAway
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.selectStep(id, 's1')
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const refusedRetyped = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.updateStep(id, 's1', { subsystem: 'PowerShell' })
+    answer({ ok: false, error: 'The file does not exist.' })
+    await refusedRetyped
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    // Deleting or adding a step drops a refusal, so a new step that reuses a key never inherits it.
+    open.mockResolvedValueOnce({ ok: false, error: 'The file does not exist.' })
+    await jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toBeDefined()
+    jobDocuments.addStepOf(id, 'CmdExec')
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.deleteStepOf(id, jobDocuments.selectedStep(id)!.key)
+    jobDocuments.dismissDeletion(id)
+    jobDocuments.selectStep(id, 's1')
+    // The type changed while the dialog was up: the text is not for this step any more.
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const pending = jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBeUndefined()
+    expect(open).toHaveBeenCalledTimes(9)
+    jobDocuments.updateStep(id, 's1', { subsystem: 'PowerShell' })
+    answer({ ok: true, value: 'Get-Date' })
+    expect(await pending).toBeUndefined()
+    expect(await jobDocuments.loadStepScript(id, 's1')).toBe('robocopy D:\\a \\\\fs\\b')
+    expect(open).toHaveBeenLastCalledWith('PowerShell')
+    // Another step selected while the dialog was up (a popout's dialog is not modal to it): the text lands nowhere.
+    jobDocuments.selectStep(id, 's1')
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const moved = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.selectStep(id, 's2')
+    answer({ ok: true, value: 'Get-Date' })
+    expect(await moved).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    // The job read again while the dialog was up: its steps may be other steps now.
+    jobDocuments.selectStep(id, 's1')
+    open.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    const reread = jobDocuments.loadStepScript(id, 's1')
+    jobDocuments.reload(id)
+    await settled()
+    answer({ ok: true, value: 'Get-Date' })
+    expect(await reread).toBeUndefined()
+  })
+  it('says so when the step can no longer be edited by the time a step script is chosen', async () => {
+    const fixture = opened(stepped()), { jobDocuments, answers, setModel } = fixture
+    let answer!: (value: ApiResult<string | null>) => void
+    Object.assign(fixture.api, { openAgentStepScript: vi.fn(() => new Promise<ApiResult<string | null>>(resolve => { answer = resolve })) })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    const pending = jobDocuments.loadStepScript(id, 's1')
+    // A save that loses the race leaves the document stale (read-only until Reload) while the dialog is still up.
+    setModel({ ...stepped(), job: record({ version: 8 }) })
+    answers.push({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'STALE', message: 'stale', retryable: false } } })
+    expect(await jobDocuments.save(id)).toBe(false)
+    expect(jobDocuments.canEditSteps(id)).toBe(false)
+    answer({ ok: true, value: 'dir' })
+    expect(await pending).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: false, failure: 'The step could not be edited when the file was chosen, so it was not loaded.' })
+  })
+  it('lets a newer load of the same step survive an older dialog answering after a re-read', async () => {
+    const fixture = opened(stepped()), { jobDocuments } = fixture
+    const answers: ((value: ApiResult<string | null>) => void)[] = []
+    Object.assign(fixture.api, { openAgentStepScript: vi.fn(() => new Promise<ApiResult<string | null>>(resolve => { answers.push(resolve) })) })
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    jobDocuments.selectStep(id, 's1')
+    const first = jobDocuments.loadStepScript(id, 's1')
+    // Reload re-reads the job: the first load's entry goes, so Load from file can be clicked again (a popout's dialogs
+    // queue in main behind the first).
+    jobDocuments.reload(id)
+    await settled()
+    expect(jobDocuments.get(id)?.stepFile).toBeUndefined()
+    jobDocuments.updateStep(id, 's1', { subsystem: 'CmdExec' })
+    jobDocuments.selectStep(id, 's1')
+    const second = jobDocuments.loadStepScript(id, 's1')
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
+    answers[0]!({ ok: true, value: 'old' })
+    expect(await first).toBeUndefined()
+    expect(jobDocuments.get(id)?.stepFile).toMatchObject({ key: 's1', running: true })
+    answers[1]!({ ok: true, value: 'echo new' })
+    expect(await second).toBe('echo new')
+  })
   it('drops a pending delete when Reload and keep my changes rebases the steps', async () => {
     const { jobDocuments, answers, setModel } = opened(stepped())
     const id = jobDocuments.openJob('c1', 'Nightly load')
@@ -404,6 +535,28 @@ describe("the job document's Steps page", () => {
     const state = jobDocuments.get(id)!
     expect(state.parse).toBeUndefined()
     expect(state.draft?.steps.steps.find(step => step.key === state.step)?.name).toBe('Notify')
+  })
+  it('moves the selected step with Alt+Up and Alt+Down in the Steps section, not in a field or the step\'s editor (AG-10)', async () => {
+    const { jobDocuments, commands } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    for (const [command, key] of [['agentJob.moveStepUp', 'alt+up'], ['agentJob.moveStepDown', 'alt+down']] as const) {
+      const binding = commandDescriptor(command).keybindings?.[0]
+      expect(binding?.key).toBe(key)
+      const when = compileWhen(binding!.when!)
+      expect(evaluateWhen(when, { activeDocumentIsAgentJob: true, agentStepsFocus: true, textInputFocus: false })).toBe(true)
+      expect(evaluateWhen(when, { activeDocumentIsAgentJob: true, agentStepsFocus: true, textInputFocus: true })).toBe(false)
+      expect(evaluateWhen(when, { activeDocumentIsAgentJob: true, agentStepsFocus: false, textInputFocus: false })).toBe(false)
+    }
+    // The first step selected: it cannot move up; down swaps it with the next, go-to targets following.
+    expect(commands.isEnabled('agentJob.moveStepUp', { tabId: id })).toBe(false)
+    await commands.execute('agentJob.moveStepDown', { tabId: id }, 'keybinding')
+    expect(keys(jobDocuments, id)).toEqual(['s2', 's1', 's3'])
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    jobDocuments.selectStep(id, 's3')
+    expect(commands.isEnabled('agentJob.moveStepDown', { tabId: id })).toBe(false)
+    await commands.execute('agentJob.moveStepUp', { tabId: id }, 'keybinding')
+    expect(keys(jobDocuments, id)).toEqual(['s2', 's3', 's1'])
   })
   it('lists the steps of a job with more than Varia reads read-only, with no problems', async () => {
     const { jobDocuments } = opened({ ...stepped(), stepsTruncated: true })

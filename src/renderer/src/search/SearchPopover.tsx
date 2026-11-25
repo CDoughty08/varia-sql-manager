@@ -23,8 +23,10 @@ export default function SearchPopover({ label, title, icon, active, compact, chi
     const invoker = button.current, popover = panel.current
     const query = invoker?.closest<HTMLElement>('.object-search-query')
     if (!invoker || !popover || !query) return
+    // Align to the control's own row when inside the pane (whose query container has 0 padding so the bar's border runs edge-to-edge).
+    const anchor = invoker.closest<HTMLElement>('.object-search-bar, .object-search-pane-filters, .object-search-pane-status') ?? query
     // Its own window's: the pane may be in a popout.
-    const own = invoker.ownerDocument, box = invoker.getBoundingClientRect(), bounds = query.getBoundingClientRect(), style = (own.defaultView ?? window).getComputedStyle(query)
+    const own = invoker.ownerDocument, box = invoker.getBoundingClientRect(), bounds = anchor.getBoundingClientRect(), style = (own.defaultView ?? window).getComputedStyle(anchor)
     if (!box.width || !bounds.width) { popover.hidePopover(); return }
     const inset = 8, gap = 4, viewport = own.documentElement
     const width = Math.min(bounds.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), compact ? 280 : 360, viewport.clientWidth - inset * 2)

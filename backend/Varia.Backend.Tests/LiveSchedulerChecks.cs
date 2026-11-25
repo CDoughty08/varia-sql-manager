@@ -156,12 +156,12 @@ internal static class LiveSchedulerChecks
             .Concat(queries.Where(query => query.Probe == LiveSql.CatalogProbe).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.CommittedPrologue))).Select(problem => "catalog probe, read committed: " + problem))
             .Concat(queries.Where(query => query.Restricted is not null).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue, admin: false))
                 .Concat(LiveSql.Lint(query.Text(LiveSql.CommittedPrologue, admin: false))).Select(problem => query.Probe + " band " + query.Band + ", restricted: " + problem))).ToList();
-        // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's and the
+        // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe and the Agent tree's (agent.treeProbe); the Activity Monitor's and the
         // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints, and
         // agent.jobs, agent.history, agent.errorLog and agent.overview run msdb's and master's procedures through AgentReader (AgentSql.LintRead) and explorer.agentService's text. The bigquery scope's sources run no SQL (BigQuery's REST jobs API).
         var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope is not ("none" or "bigquery") && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe && probe.Id != Plans.LivePlanSampler.Probe
             && probe.Source != Agent.AgentJobsReader.Source && probe.Source != Agent.AgentHistoryReader.Source && probe.Source != Agent.AgentErrorLogReader.Source && probe.Source != Agent.AgentOverviewReader.Source).ToList();
-        check(oneBatch.Count == 6 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
+        check(oneBatch.Count == 7 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every one-batch SQL probe's text passes the live lint at every band, with the session probe, the catalog state read and the catalog probe's restricted and read-committed texts (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is
         // theirs to read (the clock names the monitor's session, and Active Expensive Queries leaves it out).

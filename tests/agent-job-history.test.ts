@@ -4,8 +4,8 @@ import { uncategorizedCategory } from '../src/shared/actions/agent-job'
 import { agentLimits } from '../src/shared/agent/catalog'
 import { agentHistoryArgsSchema } from '../src/shared/agent/history'
 import {
-  durationSeconds, durationText, durationWords, elapsedSeconds, failedStep, invokedBy, jobHistoryArgs, lastStepOf, runningSteps, runProgress, runSummary, sparkBars, ssisExecutionId,
-  ssisExecutionQuery, type JobHistoryRun, type JobHistoryStep
+  durationSeconds, durationText, durationWords, elapsedSeconds, failedStep, invokedBy, jobHistoryArgs, lastStepOf, runningSteps, runProgress, runSummary, sparkSamples, sparkStepMs, ssisExecutionId,
+  type JobHistoryRun, type JobHistoryStep
 } from '../src/shared/agent/job-history'
 import { liveProbes } from '../src/shared/live/catalog'
 import { jobLive } from '../src/renderer/src/agent/JobDocumentService'
@@ -14,7 +14,7 @@ import type { LiveTable } from '../src/renderer/src/live/LiveService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import { fakeLive, type FakeLiveHandle } from './fixtures/live-handle'
 
-const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
+const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
@@ -55,17 +55,16 @@ describe("the job document's History rules", () => {
     expect(ssisExecutionId(ssis)).toBe(48213)
     expect(ssisExecutionId('Execution ID: 0')).toBeUndefined()
     expect(ssisExecutionId('The step succeeded.')).toBeUndefined()
-    const query = ssisExecutionQuery(48213)
-    expect(query).toContain('FROM SSISDB.catalog.event_messages')
-    expect(query).toContain('WHERE operation_id = 48213')
-    expect(() => ssisExecutionQuery(1.5)).toThrow()
   })
-  it('draws the newest finished runs oldest first against the tallest, with the usual time as a line', () => {
+  it('samples the newest finished runs oldest first for ChartView, evenly spaced, with the usual time as a second series (AG-10)', () => {
     const runs = [run(5, { tone: 'running', outcome: 'In progress', seconds: undefined, duration: '' }), run(4, { seconds: 120, tone: 'error' }), run(3, { seconds: 60 }), run(2, { seconds: undefined })]
-    const { bars, usualAt } = sparkBars(runs, 90)
-    expect(bars.map(bar => [bar.key.endsWith(':3'), bar.height, bar.failed])).toEqual([[true, 0.5, false], [false, 1, true]])
-    expect(usualAt).toBe(0.75)
-    expect(sparkBars(Array.from({ length: 30 }, (_, at) => run(at + 1))).bars).toHaveLength(14)
+    const { samples, top, label } = sparkSamples(runs, 90)
+    expect(samples).toEqual([{ time: 0, values: [60, 90] }, { time: sparkStepMs, values: [120, 90] }])
+    expect(top).toBe(120)
+    expect(label).toBe(`Durations of the last 2 runs, 1 failed; usual ${durationWords(90)}`)
+    expect(sparkSamples(runs).samples.map(sample => sample.values)).toEqual([[60, null], [120, null]])
+    expect(sparkSamples(Array.from({ length: 30 }, (_, at) => run(at + 1))).samples).toHaveLength(14)
+    expect(sparkSamples([])).toEqual({ samples: [], top: 1, label: '' })
   })
   it("opens a run's detail on its last failed step", () => {
     expect(failedStep([step(1, 0, { tone: 'error' }), step(2, 1, { tone: 'error' }), step(3, 2, { tone: 'error' }), step(4, 3)])?.instance).toBe(3)
@@ -189,7 +188,7 @@ describe("the job document's History section", () => {
     expect(jobDocuments.history.messageText(id)).toBe('ok')
   })
   it('keeps a picked run, sends the Failed filter, and opens an SSIS execution in a query window', async () => {
-    const { jobDocuments, history, deliver, documents } = opened()
+    const { jobDocuments, history, deliver, documents, operations } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     jobDocuments.history.attach(id, job)
@@ -212,8 +211,10 @@ describe("the job document's History section", () => {
     await deliver({ 0: table(0, [runRow(18, { runOutcome: 'Failed', runTone: 'error' })]) })
     expect(jobDocuments.history.get(id)).toMatchObject({ selected: { instance: 18 }, pinned: false })
     expect(jobDocuments.history.get(id)?.spark.map(item => item.key.instance)).toEqual([21, 20, 19])
+    // The step's SSIS execution link opens its run page in the connection's Integration Services document, not a query window.
     jobDocuments.history.openSsisExecution(id, 48213)
-    expect(documents.active).toMatchObject({ connectionId: 'c1', name: 'SSIS execution 48213.sql', database: 'SSISDB' })
+    expect(documents.active).toMatchObject({ connectionId: 'c1', kind: 'ssisOperations', database: 'SSISDB' })
+    expect(operations.place(documents.active!.id)).toMatchObject({ kind: 'execution', executionId: 48213 })
   })
   it('says why the history cannot be read, and closes its view with the document', async () => {
     const { jobDocuments, history, documents } = opened()

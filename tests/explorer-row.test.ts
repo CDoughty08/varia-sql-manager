@@ -2,9 +2,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import ExplorerRow, { rowClick, changedSentence, connectionState, itemCount, Label, liveDatabase, recoveryLabel, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
+import ExplorerRow, { rowClick, changedSentence, connectionState, itemCount, Label, liveDatabase, liveJob, recoveryLabel, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
 import { onlineStatus, type RowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
-import { agentChips, databaseChips, serverChips } from '../src/shared/explorer/status'
+import { agentChips, agentJobChips, databaseChips, serverChips } from '../src/shared/explorer/status'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -226,6 +226,31 @@ describe('Object Explorer row visuals', () => {
     // Without a status (no sample, unknown state) the row is as listed.
     expect(render(agent)).not.toMatch(/oe-chips|oe-sublabel/)
   })
+  it('show a job\'s live state chip, say it in its accessible name and tooltip, and dim it as the read finds it disabled (AG-12)', () => {
+    const job = (fields: Partial<TreeNode> = {}) => node({ kind: 'agentJob', label: 'Index maintenance', lower: 'index maintenance', ref: { type: 'object', object: { kind: 'agentJob', name: 'Index maintenance' } }, icon: 'agent-job', level: 4, parent: 9, hasChildren: false, jobId: 'a', ...fields })
+    const running = agentJobChips({ enabled: 'Yes', status: 'Executing', step: 'Step 2 of 4 · Rebuild', lastOutcome: 'Succeeded' }, true)
+    const markup = render(job(), { status: { chips: running.chips, live: true, words: 'Running, step 2 of 4', enabled: true } })
+    expect(markup).toContain('aria-label="Index maintenance, Running, step 2 of 4"')
+    expect(markup).toContain('Running, step 2 of 4"')
+    expect(markup).toContain('<span class="status-pill-label">Running · step 2/4</span>')
+    expect(markup).not.toContain('dimmed')
+    // Listed enabled, read disabled: dimmed and badged as disabled, and says so; listed disabled, read enabled: neither.
+    const disabled = render(job(), { status: { chips: [], live: true, words: '', enabled: false } })
+    expect(disabled).toContain('dimmed')
+    expect(disabled).toContain('aria-label="Index maintenance, disabled"')
+    const enabled = render(job({ status: 'disabled' }), { status: { chips: [], live: true, words: '', enabled: true } })
+    expect(enabled).not.toContain('dimmed')
+    expect(liveJob(job({ status: 'disabled' }), { chips: [], live: true, words: '' }).status).toBe('disabled')
+    const listed = job()
+    expect(liveJob(listed, { chips: [], live: true, words: '', enabled: true })).toBe(listed)
+    // A row listed after the read (a Disable re-lists it at once) keeps its listing's state until a newer read.
+    const relisted = job({ status: 'disabled', listedAt: 2000 })
+    expect(liveJob(relisted, { chips: [], live: true, words: '', enabled: true, enabledAt: 1000 })).toBe(relisted)
+    expect(liveJob(relisted, { chips: [], live: true, words: '', enabled: true, enabledAt: 3000 }).status).toBeUndefined()
+    expect(liveJob(job({ listedAt: 2000 }), { chips: [], live: true, words: '', enabled: false, enabledAt: 1000 }).status).toBeUndefined()
+    // Without a status (Jobs folder's view not sampling) the row is as listed.
+    expect(render(job())).not.toMatch(/oe-chips/)
+  })
   it('show a login\'s Disabled or Connect denied as a static chip beside its badge, and say it in words', () => {
     const login = (name: string, fields: Partial<TreeNode> = {}) => node({ kind: 'login', label: name, lower: name.toLowerCase(), ref: { type: 'object', object: { kind: 'login', name } }, icon: 'login', level: 4, hasChildren: false, subtype: 'sql', ...fields })
     const sa = login('sa', { subtype: 'sa', status: 'disabled', detail: 'SQL Server authentication · Disabled · Password policy enforced' })
@@ -277,6 +302,34 @@ describe('Object Explorer row visuals', () => {
   it('shows the label whole, with markers for hidden characters', () => {
     expect(render(node())).toContain('<bdi class="oe-label">dbo.Orders</bdi>')
     expect(renderToStaticMarkup(createElement(Label, { text: 'dbo.a\u202eorders' }))).toBe('<bdi class="oe-label">dbo.a⟨U+202E⟩orders</bdi>')
+  })
+  it('renders flush 2-line server bands with line 1 identity/ENV/dot and line 2 sublabel/chips/active glyph', () => {
+    const chips = serverChips(2, [])
+    const status: RowStatus = { chips, live: true, words: chips.map(chip => chip.words).join(', ') }
+    const markup = render(server({ label: 'Production ERP', brief: 'prod-sql-01 · 16.0 · sa' }), { active: true, environment: 'Production', status })
+    expect(markup).toContain('<span class="oe-server-top">')
+    expect(markup).toContain('<span class="oe-server-sub">')
+    expect(markup).not.toContain('oe-accent')
+    expect(markup).toContain('<bdi class="oe-label">Production ERP</bdi>')
+    expect(markup).toContain('<span class="status-pill-label">PROD</span>')
+    expect(markup).toContain('<span class="oe-sublabel">prod-sql-01 · 16.0 · sa</span>')
+    expect(markup).toContain('<span class="oe-active" title="Server of the active query"')
+    expect(markup).toContain('Agent jobs running')
+  })
+  it('renders a compact PK badge on primary-key columns and marks column rows and static system folders', () => {
+    const pkCol = node({ kind: 'column', label: 'OrderId', icon: 'key', sublabel: '(PK, int, not null)', level: 6, hasChildren: false })
+    const plainCol = node({ kind: 'column', label: 'CustomerName', icon: 'symbol-field', sublabel: '(nvarchar(50), null)', level: 6, hasChildren: false })
+    const sysFolder = node({ kind: 'folder', folder: 'systemTables', label: 'System Tables', icon: 'folder', level: 5 })
+    const pkHtml = render(pkCol)
+    expect(pkHtml).toContain('class="explorer-row column"')
+    expect(pkHtml).toContain('<span class="oe-pk-badge" aria-hidden="true">PK</span>')
+    expect(pkHtml).toContain('<span class="oe-sublabel">(int, not null)</span>')
+    expect(pkHtml).toContain('aria-label="OrderId (PK, int, not null)"')
+    const plainHtml = render(plainCol)
+    expect(plainHtml).toContain('class="explorer-row column"')
+    expect(plainHtml).not.toContain('oe-pk-badge')
+    expect(plainHtml).toContain('<span class="oe-sublabel">(nvarchar(50), null)</span>')
+    expect(render(sysFolder)).toContain('class="explorer-row folder system-folder"')
   })
 })
 

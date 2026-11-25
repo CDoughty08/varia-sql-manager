@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { join, resolve } from 'node:path'
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -23,9 +23,14 @@ import { languageStatusSchema } from '../src/shared/language-service'
 const dll = resolve('backend/Varia.Backend/bin/Release/net11.0/Varia.Backend.dll')
 const connections: BackendConnection[] = []
 const processes: ChildProcessWithoutNullStreams[] = []
+let sharedConnection: BackendConnection | undefined
+/** Reuses one warm default sidecar across stateless tests to avoid spawning a fresh .NET process per test. */
+function sharedBackend(): BackendConnection {
+  return (sharedConnection ??= new BackendConnection({ command: 'dotnet', args: [dll], cwd: process.cwd(), packaged: false }, 1))
+}
 
 it('parses compressed Showplan through the real protocol, including inputs beyond the XML cell cap', async () => {
-  const connection = backend()
+  const connection = sharedBackend()
   const fixture = readFileSync('tests/fixtures/plans/multiple.sqlplan', 'utf8')
   const result = planDocumentSchema.parse(await call(connection, 'plans.parse', await preparePlan(fixture)))
   expect(result.statements).toHaveLength(2)
@@ -39,6 +44,10 @@ it('parses compressed Showplan through the real protocol, including inputs beyon
 afterEach(async () => {
   processes.splice(0).forEach(child => child.kill())
   await Promise.all(connections.splice(0).map(connection => connection.close()))
+})
+afterAll(async () => {
+  await sharedConnection?.close()
+  sharedConnection = undefined
 })
 
 /** `env` adds variables for the backend, such as its test hooks. */
@@ -112,7 +121,7 @@ describe('real .NET sidecar over protocol v2', () => {
     expect(await call(connection, 'system.health', {})).toMatchObject({ protocolVersion: 2 })
   })
   it('announces itself in HELLO with every method main may call', async () => {
-    const hello = await backend().ready
+    const hello = await sharedBackend().ready
     expect(hello).toMatchObject({ version: 2, generation: 1, maxFrameBytes: 4 * 1024 * 1024, sqlClientVersion: expect.stringMatching(/^\d+\./) })
     expect(hello.runtime).toMatch(/\.NET 11\./)
     expect(hello.methods).toEqual(expect.arrayContaining([...backendMethods]))
@@ -120,7 +129,7 @@ describe('real .NET sidecar over protocol v2', () => {
     expect(hello.resultBudget!.queryBytes).toBe(hello.resultBudget!.globalBytes / 2)
   })
   it('previews the effective provider string without exposing passwords', async () => {
-    const value = await call(backend(), 'connections.preview', { server: 'localhost', database: '', authentication: 'sql', username: 'reader', password: 'super-secret', trustServerCertificate: true, encrypt: 'strict', advanced: { commandTimeout: 0, networkProtocol: 'tcp', applicationIntent: 'ReadOnly' } })
+    const value = await call(sharedBackend(), 'connections.preview', { server: 'localhost', database: '', authentication: 'sql', username: 'reader', password: 'super-secret', trustServerCertificate: true, encrypt: 'strict', advanced: { commandTimeout: 0, networkProtocol: 'tcp', applicationIntent: 'ReadOnly' } })
     expect(value.connectionString).toContain('tcp:localhost')
     expect(value.connectionString).toContain('ReadOnly')
     expect(value.connectionString).toContain('Encrypt=Strict')
@@ -128,33 +137,33 @@ describe('real .NET sidecar over protocol v2', () => {
     expect(value.connectionString).toContain('Trust Server Certificate=False')
   })
   it('takes a connection environment label with the options, bounds it, and keeps it out of the connection string', async () => {
-    const connection = backend(), options = { server: 'localhost', database: '', authentication: 'windows' as const, trustServerCertificate: false }
+    const connection = sharedBackend(), options = { server: 'localhost', database: '', authentication: 'windows' as const, trustServerCertificate: false }
     const value = await call(connection, 'connections.preview', { ...options, environment: 'Production' })
     expect(value.connectionString).not.toContain('Production')
     await expect(call(connection, 'connections.preview', { ...options, environment: 'P'.repeat(33) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   })
   it('rejects invalid enclave and discovery settings before connecting', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     await expect(call(connection, 'connections.preview', { server: 'localhost', database: '', authentication: 'windows', trustServerCertificate: false, advanced: { columnEncryption: false, secureEnclaves: true } })).rejects.toThrow('Secure enclaves require Always Encrypted')
     await expect(call(connection, 'connections.discover', { scope: 'bad' as 'local' })).rejects.toMatchObject({ code: 'INVALID_PARAMS', message: 'Unsupported server discovery scope.' })
   })
   it('loads the runtime, SMO, and SqlClient without a SQL Server', async () => {
-    const health = await call(backend(), 'system.health', {})
+    const health = await call(sharedBackend(), 'system.health', {})
     expect(health.protocolVersion).toBe(2)
     expect(health.runtime).toMatch(/\.NET 11\./)
     expect(health.smoVersion).toMatch(/^\d+\./)
     expect(health.sqlClientVersion).toMatch(/^\d+\./)
   })
   it('correlates concurrent requests', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     const responses = await Promise.all(Array.from({ length: 4 }, () => call(connection, 'system.health', {})))
     expect(responses.every(health => health.protocolVersion === 2)).toBe(true)
   })
   it('returns a connection error when no connection exists', async () => {
-    await expect(call(backend(), 'databases.list', { connectionId: crypto.randomUUID() })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(sharedBackend(), 'databases.list', { connectionId: crypto.randomUUID() })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
   })
   it('validates authentication without attempting a connection', async () => {
-    await expect(call(backend(), 'connections.connect', { server: 'localhost', database: 'master', authentication: 'invalid' as 'sql', trustServerCertificate: false })).rejects.toThrow('Unsupported authentication mode.')
+    await expect(call(sharedBackend(), 'connections.connect', { server: 'localhost', database: 'master', authentication: 'invalid' as 'sql', trustServerCertificate: false })).rejects.toThrow('Unsupported authentication mode.')
   })
   it('no longer offers the v1 catalog and table script methods that explorer.children and scripting.script replaced', async () => {
     const backend = raw()
@@ -167,14 +176,14 @@ describe('real .NET sidecar over protocol v2', () => {
     for (let index = 0; index < 3; index++) expect(body(await backend.next(FrameKind.RESPONSE))).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } })
   })
   it('reads a table\'s columns on the metadata lane, checking names before the connection', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     const table = { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo' }
     await expect(call(connection, 'tables.columns', { ...table, name: 'x'.repeat(129) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(call(connection, 'tables.columns', { ...table, name: 'Orders' })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('tables.columns', { ...table, name: 'Orders' })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
   })
   it('checks Object Explorer refs against the catalogue before the connection', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     const base = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
     const folder = { type: 'folder', owner: { kind: 'database', name: 'master' }, folder: 'tables' } as const
     // Shapes zod would also refuse reach the backend only through tests; it re-checks them on its own.
@@ -187,7 +196,7 @@ describe('real .NET sidecar over protocol v2', () => {
     expect(deadlineFor('explorer.children', { ...base, node: folder })).toEqual({ deadlineMs: 45_000, backstopMs: 50_000 })
   })
   it('checks scripting requests against the catalogue before the connection', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     const valid = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), targets: [{ kind: 'table', database: 'master', schema: 'dbo', name: 'Orders' }], verb: 'create', options: defaultScriptingOptions } as const
     // Requests zod would also refuse reach the backend only through tests; it re-checks them on its own.
     for (const patch of [
@@ -204,7 +213,7 @@ describe('real .NET sidecar over protocol v2', () => {
   it('offers the object actions in HELLO and checks them before the connection', async () => {
     const hello = await raw().hello()
     expect(hello.methods).toEqual(expect.arrayContaining(['actions.describe', 'actions.script', 'actions.execute']))
-    const connection = backend()
+    const connection = sharedBackend()
     const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }, target = { kind: 'table', database: 'master', schema: 'dbo', name: 'Orders' } as const
     for (const [method, params] of [
       ['actions.execute', { action: 'rename', ...ids, target, newName: 'Orders' }], ['actions.execute', { action: 'rename', ...ids, target, newName: 'a\u0000b' }],
@@ -268,7 +277,7 @@ describe('real .NET sidecar over protocol v2', () => {
   it('offers the Activity Monitor session actions in HELLO and checks them before the connection', async () => {
     const hello = await raw().hello()
     expect(hello.methods).toEqual(expect.arrayContaining(['activity.details', 'activity.kill']))
-    const connection = backend()
+    const connection = sharedBackend()
     const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }, loginTime = '2026-10-22T06:50:12.347'
     for (const params of [{ ...ids, sessionId: 0, loginTime }, { ...ids, sessionId: 32_768, loginTime }, { ...ids, sessionId: 69, loginTime: '2026-10-22 06:50:12' },
       { ...ids, sessionId: 69, loginTime: '2026-10-22T06:50:12Z' }, { ...ids, sessionId: 69, loginTime, text: 'plan' }, { ...ids, sessionId: 69, loginTime, text: 'batch', locks: true },
@@ -283,31 +292,31 @@ describe('real .NET sidecar over protocol v2', () => {
     await expect(call(connection, 'activity.kill', { connectionId: ids.connectionId, sessions: [session] })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
   })
   it('handles cancellation of a completed or unknown query', async () => {
-    await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
+    await expect(call(sharedBackend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
   })
   it('closes an unused tab session and validates its ID', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     await expect(call(connection, 'query.session.close', { sessionId: crypto.randomUUID() })).resolves.toEqual({ closed: false })
     await expect(call(connection, 'query.session.close', { sessionId: 'invalid' })).rejects.toThrow('A valid session ID is required.')
   })
   it('answers an unknown session\'s transaction state as an error value, at once', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     await expect(call(connection, 'query.session.state', { sessionId: crypto.randomUUID() })).rejects.toMatchObject({ code: 'SESSION_CLOSED', message: 'This query has no open SQL session.' })
     await expect(call(connection, 'query.session.state', { sessionId: 'invalid' })).rejects.toThrow('A valid session ID is required.')
   })
   it('rejects malformed GO with the selected source line before connection lookup', async () => {
-    await expect(call(backend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1;\nGO 0', startLine: 20, queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 })).rejects.toThrow('Line 21:')
+    await expect(call(sharedBackend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1;\nGO 0', startLine: 20, queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 })).rejects.toThrow('Line 21:')
   })
   it('accepts stopOnError as a known member of query.execute', async () => {
     const query = { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', queryId: crypto.randomUUID(), maxRows: 1000, timeoutSeconds: 30 }
-    await expect(call(backend(), 'query.execute', { ...query, stopOnError: true })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
-    await expect(call(backend(), 'query.execute', { ...query, stopOnError: 'yes' } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    await expect(call(sharedBackend(), 'query.execute', { ...query, stopOnError: true })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    await expect(call(sharedBackend(), 'query.execute', { ...query, stopOnError: 'yes' } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   })
   it('rejects an invalid query before it reaches SQL Server', async () => {
-    await expect(call(backend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', queryId: crypto.randomUUID(), maxRows: -1, timeoutSeconds: 30 })).rejects.toThrow('Query text, ID, session, timeout, or row limit is invalid.')
+    await expect(call(sharedBackend(), 'query.execute', { connectionId: crypto.randomUUID(), sessionId: crypto.randomUUID(), database: 'master', sql: 'SELECT 1', queryId: crypto.randomUUID(), maxRows: -1, timeoutSeconds: 30 })).rejects.toThrow('Query text, ID, session, timeout, or row limit is invalid.')
   })
   it('rejects unknown parameters as INVALID_PARAMS without failing the process', async () => {
-    const connection = backend()
+    const connection = sharedBackend()
     await expect(call(connection, 'query.cancel', { queryId: crypto.randomUUID(), extra: 1 } as never)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     await expect(call(connection, 'system.health', {})).resolves.toMatchObject({ protocolVersion: 2 })
   })
@@ -445,7 +454,7 @@ describe('real .NET sidecar frame handling', () => {
     expect(await backend.exit).toBe(0)
   })
   it('surfaces backend error codes on BackendError', async () => {
-    const error = await call(backend(), 'tables.columns', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
+    const error = await call(sharedBackend(), 'tables.columns', { connectionId: crypto.randomUUID(), database: 'master', schema: 'dbo', name: 'Orders' }).catch(value => value)
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: 'NOT_CONNECTED' })
   })

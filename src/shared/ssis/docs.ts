@@ -1,7 +1,7 @@
 // Renders the generated part of docs/integration-services.md from the catalogue: everything after `generatedMarker`.
 // tests/ssis-catalog.test.ts keeps the file in sync and leaves the hand-written part above the marker as it is.
 import {
-  catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
+  catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypeOrder, messageTypes, problemMessageTypes, runCountTypes, succeededStatus, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
   valueTypes, finalStatuses, ssisActions, ssisActionVerbs, ssisCommandEntries, ssisDocumentKinds, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, stoppableOperationTypes, operationKinds, operationKindSpecs, groupedOperationTypes, validationStatuses, createCatalog, type CodeLabel, type SsisActionSpec
 } from './catalog.ts'
@@ -58,7 +58,13 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   operationsWindowHours: 'The longest window, in hours (`windowHours`)',
   operationsDefaultWindowHours: 'The window unless told otherwise, in hours',
   operationsCountMs: 'How often the 24-hour counts are read, in ms',
-  operationsRebaseMs: 'How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms'
+  operationsRebaseMs: 'How often the counts read every operation again instead of from their watermarks, and the window from scratch instead of above its settled id, in ms',
+  executionMessages: 'The newest messages of the chosen types one execution read holds (`ssis.execution`); more set `truncated`',
+  executionMessageChars: 'Characters of one message, execution path, task name or parameter value an execution read keeps; a longer one ends in "…"',
+  executionTasks: 'Executables one execution read holds for the task timeline; more set `tasksTruncated`',
+  executionParameters: 'Parameter values one execution read holds',
+  executionRuns: 'Runs in the run strip (this one and those before it), and the succeeded runs the usual durations come from',
+  packageRuns: 'Runs the package step lists (`ssis.packageRuns`); more set `truncated`'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -289,6 +295,31 @@ export function renderSsisDocs(): string {
     '',
     table(['Status', 'Meaning', 'Tone'], operationStatuses.map(item => [code(item.code), item.label, item.tone ?? '—'])),
     '',
+    '### Run page reads (`ssis.execution`, `ssis.packageRuns`)',
+    '',
+    'The Integration Services document\'s run page reads one execution with `ssis.execution { connectionId, requestId, executionId, types?, source? }`:',
+    'one batch on the SSIS read pool, under the read gates, the read prologue and the describe budget',
+    `(${ssisLimits.describeMs / 1000} s, then \`TIMEOUT\`). It holds:`,
+    '',
+    '- the execution\'s row in `catalog.executions`, and every message of the execution counted by type (the counts ignore the filters);',
+    `- the newest messages of the chosen types, and of one task when \`source\` names it (\`message_source_name\`), from \`catalog.event_messages\`, newest first: at most ${ssisLimits.executionMessages.toLocaleString('en-US')}, and fewer past the answer\'s size estimate, which set \`truncated\`;`,
+    `- the task timeline: each of \`catalog.executables\`, its \`catalog.executable_statistics\` rows summed (a task in a loop runs more than once), in the order they started, at most ${ssisLimits.executionTasks.toLocaleString('en-US')};`,
+    `- the parameter values the run used (\`catalog.execution_parameter_values\`, at most ${ssisLimits.executionParameters.toLocaleString('en-US')}); a sensitive one\'s value is never read;`,
+    `- this run and the package\'s ${ssisLimits.executionRuns - 1} runs before it (the run strip), and the package\'s next run (Newer run);`,
+    `- each task\'s usual duration: the median of its successful runs in the package\'s last ${ssisLimits.executionRuns} succeeded runs (status ${succeededStatus}) before this one.`,
+    '',
+    `A message, path, task name or parameter value keeps ${ssisLimits.executionMessageChars.toLocaleString('en-US')} characters (read one past, so a longer one ends in "…"). The type filter is one`,
+    'bit parameter per message type, from the catalogue, so the text is constant; Unknown (`-1`) also keeps every type the catalogue does not name.',
+    'An execution the catalog no longer has (its retention cleanup removed it) or the login may not read (the catalog views\' row-level security)',
+    'answers `NOT_FOUND`, a server without SSISDB `CATALOG_MISSING`, and a login without access `NO_DB_ACCESS` or `PERMISSION_DENIED`, all as values.',
+    '',
+    `\`ssis.packageRuns { connectionId, requestId, folder, project, package }\` lists one package\'s newest runs for the package step (at most ${ssisLimits.packageRuns.toLocaleString('en-US')},`,
+    `then \`truncated\`), each with its error (${runCountTypes.errors.map(code).join(', ')}) and warning (${runCountTypes.warnings.map(code).join(', ')}) message counts. No runs is an empty list.`,
+    '',
+    'The event chips, in the order a run logs them; Problems is ' + problemMessageTypes.map(code).join(', ') + ':',
+    '',
+    table(['Chip', 'Message type', 'Logged by'], messageTypeOrder.map(type => { const spec = messageTypes.find(item => item.code === type)!; return [spec.event, code(type), spec.label] })),
+    '',
     '### Code tables',
     '',
     `Operation types (\`catalog.operations.operation_type\`):`,
@@ -301,7 +332,7 @@ export function renderSsisDocs(): string {
     '',
     'Message types, with the tone a log row takes:',
     '',
-    table(['Code', 'Meaning', 'Tone'], messageTypes.map(item => [code(item.code), item.label, item.tone])),
+    table(['Code', 'Meaning', 'Event', 'Tone'], messageTypes.map(item => [code(item.code), item.label, item.event, item.tone])),
     '',
     'Message source types:',
     '',

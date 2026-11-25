@@ -1,4 +1,5 @@
-import { agentBulkCommands, agentBulkFormVerbs, agentBulkVerbs } from '../../../shared/agent/jobs'
+import { agentLimits } from '../../../shared/agent/catalog'
+import { agentBulkCommands, agentBulkFormVerbs, agentBulkVerbs, bulkUnavailable } from '../../../shared/agent/jobs'
 import type { LogViewerOpen } from '../agent/LogViewerService'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
@@ -17,7 +18,7 @@ import { serverItems } from './query'
  * (AG-5b) opens the viewer on that log (Current from the folder) with no job checked, and their Recycle opens it on Current with Recycle's
  * confirmation; Recycle from the palette or the viewer's header asks in the viewer it runs on.
  */
-export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules, agentOverview }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules' | 'agentOverview'>): Disposable {
+export function agentContribution({ commands, jobActivity, logViewer, documents, connections, explorer, quickInput, jobDocuments, schedules, scripting, agentOverview }: Pick<Workbench, 'commands' | 'jobActivity' | 'logViewer' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'jobDocuments' | 'schedules' | 'agentOverview'> & Partial<Pick<Workbench, 'scripting'>>): Disposable {
   const live = (id: string | undefined) => id !== undefined && connections.isLiveSqlServer(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
     const node = explorerNodeOf(args)
@@ -31,11 +32,21 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     try { logViewer.open(connectionId, where) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'The Log File Viewer could not open.') }
   }
   /** Which jobs View History checks: a job node's, else Job Activity Monitor's selection (its tab given or active), else all. */
-  const historyWhere = (args?: CommandArgs): LogViewerOpen => {
+  const historyWhere = async (args?: CommandArgs): Promise<LogViewerOpen> => {
     const node = explorerNodeOf(args)
     if (node) return node.kind === 'agentJob' ? { jobName: node.label } : {}
-    const monitor = jobActivity.get(args?.tabId ?? documents.getSnapshot().activeId)
-    return monitor?.selected.length ? { jobs: monitor.selected.map(job => job.id) } : {}
+    const monitor = monitorOf(args)
+    // The rows a click just before selected (a right-click on another job) are read first.
+    const selected = monitor ? await jobActivity.settledSelection(monitor) : []
+    return selected.length ? { jobs: selected.map(job => job.id) } : {}
+  }
+  /** From Job Activity Monitor's own bar and row menu (which name its tab), View History needs its selection: one job up to the bulk
+   *  cap (the over-cap rows are not all read). The palette keeps opening every job when none is selected. */
+  const historyUnavailable = (args?: CommandArgs): string | undefined => {
+    const id = explorerNodeOf(args) || !args?.tabId ? undefined : monitorOf(args)
+    if (!id) return undefined
+    const count = jobActivity.selectedCount(id)
+    return count === 0 ? 'Select one or more jobs to view their history.' : count > agentLimits.startJobs ? bulkUnavailable(count) : undefined
   }
   const viewerOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return logViewer.get(id) ? id : undefined }
   /** The error log an Error Logs menu names: a log node's archive number, else Current (the folder). */
@@ -45,6 +56,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     return Number.isInteger(archive) && archive >= 0 ? archive : 0
   }
   const monitorOf = (args?: CommandArgs): string | undefined => { const id = args?.tabId ?? documents.getSnapshot().activeId; return jobActivity.get(id) ? id : undefined }
+  // Run from Job Activity Monitor, a one-job verb (Open, Create Job Like This) needs exactly one job selected there (AG-10, its row menu).
+  const oneInMonitor = (args?: CommandArgs): boolean => { const id = explorerNodeOf(args) ? undefined : monitorOf(args); return !id || jobActivity.selectedCount(id) === 1 }
   // The job document (AG-6a): Open Job and New Job on a server picked as Job Activity Monitor's is, and the document's verbs on the
   // job document whose header runs them, else the active one.
   const withServer = (args: CommandArgs | undefined, title: string, then: (connectionId: string) => void) => {
@@ -108,9 +121,10 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       }
     }),
     commands.register('agent.viewHistory', {
-      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
-      run: args => {
-        const where = historyWhere(args)
+      when: args => { const node = explorerNodeOf(args); return (!node || (!node.lost && connections.isLiveSqlServer(node.connectionId))) && !historyUnavailable(args) },
+      unavailable: historyUnavailable,
+      run: async args => {
+        const where = await historyWhere(args)
         const connectionId = target(args)
         if (connectionId) return openHistory(connectionId, where)
         const choices = connections.liveSqlServer()
@@ -163,7 +177,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     }))
     ,
     commands.register('agent.openJob', {
-      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return (!node || (!node.lost && connections.isLiveSqlServer(node.connectionId))) && oneInMonitor(args) },
+      unavailable: args => oneInMonitor(args) ? undefined : 'Select one job to open it.',
       run: async args => {
         // From Job Activity Monitor (its Open, a double-click or Enter): the one job selected there.
         const monitor = monitorOf(args)
@@ -180,6 +195,20 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
         withServer(args, 'Open Job', pickJob)
       }
     }),
+    // Script Job as CREATE (AG-10, the monitor's row menu): the one job selected there, through Object Explorer's Script As (ScriptingService), which
+    // need not have loaded the job's node; it opens a new query window, as Script Job as › CREATE To › New Query Editor Window does.
+    commands.register('agent.scriptJob', {
+      when: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return !!scripting && !!state?.connectionId && connections.isLiveSqlServer(state.connectionId) && !!id && jobActivity.selectedCount(id) === 1 },
+      unavailable: args => { const id = monitorOf(args), state = id ? jobActivity.get(id) : undefined; return id && state && jobActivity.selectedCount(id) !== 1 ? 'Select one job to script it.' : undefined },
+      run: async args => {
+        const monitor = monitorOf(args)
+        if (!monitor || !scripting) return
+        const selected = await jobActivity.settledSelection(monitor)
+        const state = jobActivity.get(monitor), job = selected.length === 1 ? selected[0] : undefined
+        if (!state?.connectionId || !job) { commands.reportError('Select one job to script it.'); return }
+        await scripting.run('create', 'newQuery', explorer.objectNode(state.connectionId, { kind: 'agentJob', name: job.name }, job.name))
+      }
+    }),
     ...(['agent.newJob', 'agent.newJobOnAgent'] as const).map(id => commands.register(id, {
       when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
       run: args => withServer(args, 'New Job', connectionId => report(() => jobDocuments.newJob(connectionId), 'New Job could not open.'))
@@ -187,7 +216,8 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     // Create Job Like This (AG-6e): the job of the menu's node, of Job Activity Monitor's one selected row, or of the active job document;
     // else the palette asks for a server and a job.
     commands.register('agent.createJobLike', {
-      when: args => { const node = explorerNodeOf(args); return !node || (!node.lost && connections.isLiveSqlServer(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return (!node || (!node.lost && connections.isLiveSqlServer(node.connectionId))) && oneInMonitor(args) },
+      unavailable: args => oneInMonitor(args) ? undefined : 'Select one job to create a job like it.',
       run: async args => {
         const like = (connectionId: string, name: string) => report(() => jobDocuments.createLike(connectionId, name), 'Create Job Like This could not open.')
         // A job's menu names its job, whichever document is active.
@@ -220,7 +250,9 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
       })
     })),
     commands.register('agentJob.stop', onJob(id => jobDocuments.canStop(id), id => jobDocuments.stop(id))),
-    commands.register('agentJob.reload', onJob(id => jobDocuments.canReload(id), id => jobDocuments.reload(id)))
+    commands.register('agentJob.reload', onJob(id => jobDocuments.canReload(id), id => jobDocuments.reload(id))),
+    commands.register('agentJob.moveStepUp', onJob(id => jobDocuments.canMoveSelectedStep(id, -1), id => jobDocuments.moveSelectedStep(id, -1))),
+    commands.register('agentJob.moveStepDown', onJob(id => jobDocuments.canMoveSelectedStep(id, 1), id => jobDocuments.moveSelectedStep(id, 1)))
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

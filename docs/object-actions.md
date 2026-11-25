@@ -556,16 +556,33 @@ asks: it always writes WITH NO_WAIT, as SSMS does.
 
 ## Table Properties
 
-A table's Properties opens Table Properties as a document tab, on every table (SQL Server's own and the special kinds
-included, as in SSMS), from Object Explorer and from a table's Peek tab (Open as Tab). Its pages are SSMS's: General (name, schema,
-dates, system object, ANSI NULLs, replicated, memory optimized, FileTable, external and graph kinds, Lock escalation, and
-the temporal and ledger facts of a table that is either), Permissions (each grant or deny on the table and its columns, by
-principal, at most 1,024 rows), Change Tracking, Storage (compression, filegroups, partitioning, rows and
-space, at most 1,000 partitions), Security Predicates (only when a row-level security policy names the table, SQL
-Server 2016 and later) and Extended Properties (at most 256 read). SSMS's Quoted identifier is not shown: only
-`OBJECTPROPERTY` reports it, and the catalog lint refuses metadata functions. Permissions, Partitions (a partitioned
-table's) and Security Predicates are results grids: select, copy with headers, sort and Save Results As as in query
-results, each as tall as its rows up to 12 before it scrolls, with the page's own words when it is empty.
+A table's Properties opens Table Properties as a unified inspector document tab (`ObjectInspectorFrame`), on every table
+(SQL Server's own and the special kinds included, as in SSMS), from Object Explorer or by promoting a table's Peek Card
+(`Open as Tab`, `Ctrl+Enter`, or `Ctrl+click`, which opens or focuses Table Properties on the matching canonical tab
+rather than opening a second competing Peek tab). Its header shows breadcrumbs (`server › database › Tables`), a
+`SQL Server` tag, semantic status pills (`System-versioned`, `Partitioned`, `Memory-optimized`, `Ledger`, `Change tracking`,
+`Read-only`), a Hero KPI strip (Rows, Total Space with an inline Data vs. Index bar, Columns and Indexes & Keys counts once
+loaded, and Partitions), a collapsible/resizable right **Vitals** rail with flat Data vs. Index storage breakdown, and
+`Refresh`, `Discard`, and `Apply` (`Apply · n` with pending edits) header verbs.
+
+Its canonical tabs appear in unified order, with read-only catalog tabs lazy-loaded only on tab activation so opening
+Table Properties adds zero extra SQL round-trips:
+
+- **Overview**: Identity & Lifecycle (`FactGrid` with click-to-copy), signal-first Capabilities & Flags (`CapabilityChips`
+  with `Notable (n/m) ↔ All`), Temporal and Ledger facts when applicable, and Editable Options (Lock escalation, Change
+  Tracking and Track Columns Updated, aligned on the same label rail with `FieldHintStrip` in a zero-height overlay dock).
+  SSMS's Quoted identifier is not shown: only `OBJECTPROPERTY` reports it, and the catalog lint refuses metadata functions.
+- **Definition**: Lazy-loaded read-only Monaco SQL editor (`ScriptPipeline` CREATE script) with `Copy` and `Open in New Query`.
+- **Storage & Layout**: Data vs. Index `RatioBar`, compression, filegroups, partitioning and space facts, plus a
+  natural-height **Partitions** results grid (at most 1,000 partitions, zero nested vertical scrolling) on partitioned tables.
+- **Columns**: Lazy-loaded full-bleed `Columns` results grid (`explorer.peek`).
+- **Indexes & Keys**: Lazy-loaded full-bleed `Indexes & keys` results grid (`explorer.peek` `tableObjects`).
+- **Dependencies**: Lazy-loaded `Uses` and `Used by` clickable links (`explorer.peekDependencies`).
+- **Permissions & RLS**: Natural-height **Permissions** (at most 1,024 rows) and **Row-level security predicates** (SQL Server
+  2016 and later) results grids with select, copy with headers, sort and Save Results As and zero nested vertical scrolling.
+- **Extended Properties**: Editable Extended Properties table (at most 256 read) with row copy, validation errors and
+  tab-level modified/problem indicators.
+- **Preview Rows**: Lazy-loaded Top N rows (`ResultsStack`), queried only when activated.
 
 Apply changes only what differs from what was read, in one transaction (`SET XACT_ABORT ON`), with Script showing the
 same statements: Lock escalation (Table = `TABLE`, Auto = `AUTO`, Disable = `DISABLE`; not on a

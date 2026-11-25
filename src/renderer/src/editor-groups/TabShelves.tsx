@@ -8,7 +8,7 @@ import type { Workbench } from '../core/workbench'
 import type { QueryTab } from '../documents'
 import { afterPointer } from './pointer'
 
-const tabWidth = 232
+const tabWidth = 196
 const wheelGestureMs = 220
 const feedbackMs = 1400
 

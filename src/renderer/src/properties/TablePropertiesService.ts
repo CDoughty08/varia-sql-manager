@@ -1,17 +1,22 @@
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
-import { actionLimits, dialogSpecs, dialogTitle } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogTitle } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
 import type { TablePropertiesModel } from '../../../shared/actions/tables.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import type { NodeSubtype } from '../../../shared/explorer/catalog.ts'
+import { peekLimits, type PeekList } from '../../../shared/explorer/peek.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
-import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
+import { scriptMenuState, type ScriptDestination } from '../../../shared/scripting/catalog.ts'
+import { defaultScriptingOptions, type ScriptingOptions } from '../../../shared/scripting/options.ts'
+import { selectTopRowsScript } from '../../../shared/sql/identifiers'
 import { addPropertyRow, initialTableDraft, patchPropertyRow, tableChanged, tableConfirmation, tableErrors, tableRequest, type ExtendedPropertyRow, type TableDraft } from '../dialogs/table-properties'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { PropertiesContextState, PropertiesKeys } from '../core/contextkeys'
 import type { Disposable, ExternalStore } from '../core/types'
+import { copyableDefinition, peekMessages, type PeekDefinition, type PeekDependencies, type PeekPart, type PeekResults, type PeekRows } from '../explorer/PeekService'
 import { initialFrameState, type FrameState } from '../kit/document-frame'
 import type { ScriptContent } from '../kit/ScriptDrawer'
 import type { ExplorerMenuNode } from '../menus/targets'
@@ -20,10 +25,17 @@ import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import { previewDelayMs, type PropertiesPhase } from './DatabasePropertiesService'
+import { isTableInspectorTab, type TableInspectorTabId } from './table-fields'
+
+export interface TableCatalogLists {
+  readonly columns?: PeekList
+  readonly tableObjects?: PeekList
+}
 
 export interface TablePropertiesState {
   readonly id: string
   readonly target: ObjectRef
+  readonly subtype?: NodeSubtype
   /** The table as Object Explorer shows it (schema.name). */
   readonly label: string
   readonly server: string
@@ -42,6 +54,13 @@ export interface TablePropertiesState {
   readonly notice?: string
   readonly steps?: readonly ActionStep[]
   readonly frame: FrameState
+  /** Active canonical inspector tab; lazy-loaded tabs only query SQL Server when activated. */
+  readonly activeTab: TableInspectorTabId
+  readonly definition?: PeekPart<PeekDefinition>
+  readonly definitionEpoch: number
+  readonly catalog?: PeekPart<TableCatalogLists>
+  readonly dependencies?: PeekPart<PeekDependencies>
+  readonly preview?: PeekPart<PeekRows>
   readonly script: ScriptContent
   readonly scriptRevision?: number
   readonly scriptDatabase?: string
@@ -49,12 +68,19 @@ export interface TablePropertiesState {
 }
 export interface TablePropertiesSnapshot { readonly documents: Readonly<Record<string, TablePropertiesState>> }
 
+type LazyApi = Partial<Pick<VariaApi,
+  'explorerPeek' | 'explorerPeekDependencies' | 'explorerCancel' | 'scriptObjects' | 'cancelScripting' | 'tableColumns' | 'execute' | 'closeQuerySession'
+>>
+
 export interface TablePropertiesServiceOptions extends CustomDocumentTargetOptions {
-  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmAction'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
+  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmAction'> & LazyApi
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe' | 'newQuery'>
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
+  readonly scriptingOptions?: ExternalStore<{ readonly options: ScriptingOptions }>
+  readonly results?: PeekResults
   readonly focus?: (id: string) => void
+  readonly focusEditor?: () => void
   readonly timers?: Timers
   readonly newId?: () => string
 }
@@ -70,14 +96,27 @@ export const tablePropertiesMessages = {
   applying: 'The changes are being applied. Stop them, or wait for them to finish.',
   readFailed: 'The table could not be read.'
 } as const
-const sections = dialogSpecs.tableProperties.pages
+
 const error = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: true })
 
+interface LazyRequests {
+  definition?: string
+  catalog?: string
+  dependencies?: string
+}
+
+interface PreviewRun {
+  readonly key: string
+  readonly queryId: string
+  session: boolean
+}
+
 /**
- * Table Properties as a document: one tab per table and connection, SSMS's pages as sections. Apply runs only what changed, in
- * one transaction (the backend's), after a native question when it turns change tracking off; a failure or Stop rolls it all
- * back, so nothing is left half done unless the outcome itself is unknown. Then it reads the table again. The Script drawer
- * previews the script. It is the DocumentService's provider for 'tableProperties' documents: Save applies.
+ * Table Properties as a unified inspector document: one tab per table and connection, canonical tabs (Overview, Definition,
+ * Storage & Layout, Columns, Indexes & Keys, Dependencies, Permissions & RLS, Extended Properties, Preview Rows), with
+ * lazy-loaded read-only tabs so opening Table Properties adds zero extra SQL round-trips. Apply runs only what changed in
+ * one transaction, after a native question when turning change tracking off. It is DocumentService's provider for
+ * 'tableProperties' documents: Save applies.
  */
 export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'tableProperties' as const
@@ -88,6 +127,8 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
   private readonly unsubscribe: (() => void)[]
   private readonly contextStore = new (class extends SnapshotStore<PropertiesContextState> { set(value: PropertiesContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   private readonly requests = new Map<string, { readonly id: string; readonly kind: 'describe' | 'apply'; readonly connectionId?: string; dropped: boolean }>()
+  private readonly lazyRequests = new Map<string, LazyRequests>()
+  private readonly previewRuns = new Map<string, PreviewRun>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   private readonly applies = new Map<string, Promise<boolean>>()
@@ -103,15 +144,26 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     this.registration = options.documents.registerProvider(this)
     this.unsubscribe = [
       options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } }),
-      options.documents.subscribe(() => { try { this.publishContext() } catch (failure) { onUnexpectedError(failure) } })
+      options.documents.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
     ]
+    if (options.scriptingOptions) {
+      let optionsKey = JSON.stringify(options.scriptingOptions.getSnapshot().options)
+      this.unsubscribe.push(options.scriptingOptions.subscribe(() => {
+        try {
+          const next = JSON.stringify(options.scriptingOptions!.getSnapshot().options)
+          if (next === optionsKey) return
+          optionsKey = next
+          this.scriptingOptionsChanged()
+        } catch (failure) { onUnexpectedError(failure) }
+      }))
+    }
   }
 
   get context(): ExternalStore<PropertiesContextState> { return this.contextStore }
   get(id: string): TablePropertiesState | undefined { return this.getSnapshot().documents[id] }
 
-  /** Properties on a table node: its document comes forward if open, otherwise a tab opens at once, loading. */
-  open(node: ExplorerMenuNode): string {
+  /** Properties on a table node: its document comes forward if open (switching to `tab` if specified), otherwise opens at once. */
+  open(node: ExplorerMenuNode, tab?: TableInspectorTabId): string {
     if (this.disposed) throw new Error('Table Properties is not available.')
     const target = node.ref.type === 'object' && node.ref.object.kind === 'table' ? node.ref.object : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost && (!item.lifecycle || item.lifecycle.state === 'connected'))
@@ -121,19 +173,70 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     const documents = Object.values(this.getSnapshot().documents).filter(same)
     // Only a document bound to this connection's exact target is this table's; a handle id alone never proves it.
     const existing = documents.find(state => this.connectionOf(state.id) === node.connectionId && this.targetBindings.matchesConnection(state.id, node.connectionId))
-    if (existing) { this.options.documents.activate(existing.id); return existing.id }
+    if (existing) {
+      this.options.documents.activate(existing.id)
+      if (tab) this.selectTab(existing.id, tab)
+      return existing.id
+    }
     // Reopening Properties can reuse a disconnected draft only after the registry proves the exact original target.
     const orphan = documents.find(state => !this.live(state.id) && this.targetBindings.matchesConnection(state.id, connection.id))
-    if (orphan) { this.rebind(orphan.id, connection); return orphan.id }
+    if (orphan) {
+      this.rebind(orphan.id, connection, tab)
+      return orphan.id
+    }
     const label = scriptObjectLabel(target)
+    const initialTab: TableInspectorTabId = tab ?? 'overview'
     const document = this.options.documents.openCustom('tableProperties', dialogTitle('tableProperties', label), connection.id, target.database ?? 'master')
     this.targetBindings.bind(document.id, connection.id)
     this.put({
-      id: document.id, target, label, server: connection.server, ...connection.login ? { login: connection.login } : {},
-      phase: 'loading', revision: 0, edits: 0, changed: false, stale: false, frame: initialFrameState(sections), script: { state: 'idle', message: noScriptNotice }
+      id: document.id, target, ...(node.subtype !== undefined ? { subtype: node.subtype } : {}), label, server: connection.server, ...connection.login ? { login: connection.login } : {},
+      phase: 'loading', revision: 0, edits: 0, changed: false, stale: false,
+      frame: initialFrameState([{ id: initialTab }]), activeTab: initialTab, definitionEpoch: 0,
+      script: { state: 'idle', message: noScriptNotice }
     })
     void this.describe(document.id)
+    // Only load a read-only catalog tab immediately when promoted directly onto it; opening Overview adds zero extra SQL round-trips.
+    if (isLazyTab(initialTab)) this.ensureTabLoaded(document.id, initialTab)
     return document.id
+  }
+
+  // --- Tabs & lazy read-only catalog loading -------------------------------------------------------------------------
+
+  /** Selects an inspector tab, triggering its lazy catalog/script/preview query only on activation. */
+  selectTab(id: string, tab: TableInspectorTabId): void {
+    const state = this.get(id)
+    if (!state || !isTableInspectorTab(tab)) return
+    if (state.activeTab !== tab || state.frame.section !== tab) {
+      this.patch(id, { activeTab: tab, frame: { ...state.frame, section: tab } })
+    }
+    if (isLazyTab(tab)) this.ensureTabLoaded(id, tab)
+  }
+
+  /** Retries a failed lazy tab read (or loads it if unloaded). */
+  retryTab(id: string, tab: TableInspectorTabId): void {
+    if (!this.get(id) || !isLazyTab(tab)) return
+    this.ensureTabLoaded(id, tab)
+  }
+
+  /** Whether the document is currently bound to a live connection. */
+  isConnected(id: string): boolean { return this.live(id) }
+
+  /** Copies the loaded CREATE TABLE definition script to the clipboard; returns true when written. */
+  async copyDefinition(id: string): Promise<boolean> {
+    const definition = this.get(id)?.definition
+    if (definition?.status !== 'ready' || !copyableDefinition(definition.value.text)) return false
+    const result = await this.options.api.writeClipboardText(definition.value.text)
+    if (!result.ok) throw new Error(result.error)
+    return true
+  }
+
+  /** Opens the loaded CREATE TABLE definition script in a new query tab (unconnected if the server disconnected). */
+  openDefinitionInQuery(id: string): void {
+    const state = this.get(id), connectionId = this.live(id) ? this.connectionOf(id) : undefined
+    const text = state?.definition?.status === 'ready' ? state.definition.value.text : undefined
+    if (!state || text === undefined) return
+    this.options.documents.newQuery(text, undefined, connectionId, state.target.database ?? 'master', false)
+    this.options.focusEditor?.()
   }
 
   // --- Editing -------------------------------------------------------------------------------------------------------
@@ -183,7 +286,8 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     const state = this.get(id)
     if (!state || state.frame === frame) return
     const opened = frame.scriptOpen && !state.frame.scriptOpen
-    this.patch(id, { frame })
+    const nextTab = isTableInspectorTab(frame.section) ? frame.section : state.activeTab
+    this.patch(id, { frame, activeTab: nextTab })
     if (opened) this.schedulePreview(id, 0)
   }
   errors(id: string): Map<string, string> {
@@ -195,8 +299,11 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
 
   refresh(id: string): void {
     if (!this.canRefresh(id)) return
+    this.resetLazyTabs(id, false)
     this.patch(id, { phase: 'loading', error: undefined, notice: undefined, steps: undefined })
     void this.describe(id)
+    const state = this.get(id)
+    if (state && isLazyTab(state.activeTab)) this.ensureTabLoaded(id, state.activeTab)
   }
   canRefresh(id: string): boolean {
     const state = this.get(id)
@@ -216,9 +323,20 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
       return
     }
     const current = this.get(id)!
+    const nonScriptable = model.ledger?.dropped || model.ledger?.type === 'LEDGER_HISTORY_TABLE'
+    if (nonScriptable && (current.definition?.status === 'loading' || current.definition?.status === 'error')) {
+      const lazy = this.lazyRequests.get(id)
+      if (lazy?.definition) {
+        const scriptId = lazy.definition
+        delete lazy.definition
+        this.cancelScript([scriptId])
+      }
+    }
     this.patch(id, {
       phase: 'ready', model, draft: initialTableDraft(model), changed: false, stale: false, revision: current.revision + 1, error: undefined,
-      ...notice ? { notice } : {}, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined
+      ...notice ? { notice } : {}, script: { state: 'idle', message: noScriptNotice }, scriptRevision: undefined,
+      ...(nonScriptable && (current.definition?.status === 'loading' || current.definition?.status === 'error')
+        ? { definition: { status: 'ready', value: {} }, definitionEpoch: current.definitionEpoch + 1 } : {})
     })
     this.options.documents.setDirty(id, false)
     this.schedulePreview(id, 0)
@@ -270,9 +388,11 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     state = this.get(id)!
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
+      this.invalidateDefinition(id)
       this.patch(id, { phase: 'loading', steps: value.steps, changed: false })
       this.options.documents.setDirty(id, false)
       await this.describe(id, tablePropertiesMessages.applied)
+      if (this.get(id)?.activeTab === 'definition' && this.live(id)) this.loadDefinition(id)
       return true
     }
     // One transaction: a failure or a Stop that SQL Server confirmed rolled every statement back, so the table is as it was read.
@@ -367,6 +487,8 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     this.targetBindings.forget(id)
     const request = this.requests.get(id), preview = this.previews.get(id)
     this.cancel([request?.id, preview].filter((value): value is string => !!value))
+    this.cancelLazyRequests(id)
+    this.releasePreview(id)
     this.requests.delete(id)
     this.previews.delete(id)
     this.clearPreviewTimer(id)
@@ -378,6 +500,8 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     this.disposed = true
     this.targetBindings.clear()
     this.cancel([...this.requests.values()].map(request => request.id).concat([...this.previews.values()]))
+    for (const id of [...this.lazyRequests.keys()]) this.cancelLazyRequests(id)
+    for (const id of [...this.previewRuns.keys()]) this.releasePreview(id)
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     this.requests.clear()
     this.previews.clear()
@@ -386,6 +510,256 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     this.unsubscribe.forEach(unsubscribe => unsubscribe())
     this.clearListeners()
     this.contextStore.clear()
+  }
+
+  // --- Lazy read-only tab internals ----------------------------------------------------------------------------------
+
+  private ensureTabLoaded(id: string, tab: LazyTab): void {
+    if (this.disposed) return
+    switch (tab) {
+      case 'definition': this.loadDefinition(id); break
+      case 'columns':
+      case 'indexes': this.loadCatalog(id); break
+      case 'dependencies': this.loadDependencies(id); break
+      case 'preview': this.loadPreviewRows(id); break
+    }
+  }
+
+  private lazyOf(id: string): LazyRequests {
+    let entry = this.lazyRequests.get(id)
+    if (!entry) { entry = {}; this.lazyRequests.set(id, entry) }
+    return entry
+  }
+
+  private isScriptableTable(state: TablePropertiesState): boolean {
+    if (state.model?.ledger?.dropped || state.model?.ledger?.type === 'LEDGER_HISTORY_TABLE') return false
+    return scriptMenuState({ kind: 'table', ...(state.subtype !== undefined ? { subtype: state.subtype } : {}) }).verbs.create === 'enabled'
+  }
+
+  private loadDefinition(id: string): void {
+    const state = this.get(id)
+    if (!state || (state.definition && state.definition.status !== 'error')) return
+    if (!this.isScriptableTable(state)) {
+      this.patch(id, { definition: { status: 'ready', value: {} }, definitionEpoch: state.definitionEpoch + 1 })
+      return
+    }
+    const connectionId = this.connectionOf(id)
+    if (!connectionId || !this.live(id)) {
+      this.patch(id, { definition: { status: 'error', message: peekMessages.notConnected } })
+      return
+    }
+    const scriptObjects = this.options.api.scriptObjects
+    if (!scriptObjects) {
+      this.patch(id, { definition: { status: 'error', message: 'Definition scripting is unavailable.' } })
+      return
+    }
+    const lazy = this.lazyOf(id)
+    if (lazy.definition) this.cancelScript([lazy.definition])
+    const requestId = this.newId()
+    lazy.definition = requestId
+    this.patch(id, { definition: { status: 'loading' } })
+    const options = this.options.scriptingOptions?.getSnapshot().options ?? defaultScriptingOptions
+    void this.call(() => scriptObjects({ connectionId, requestId, targets: [state.target], verb: 'create', options })).then(result => {
+      if (this.lazyRequests.get(id)?.definition !== requestId) return
+      delete this.lazyRequests.get(id)!.definition
+      if (this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return
+      const current = this.get(id)!
+      if (!result.ok || result.value.error) {
+        const message = result.ok ? result.value.error?.message ?? 'Could not script the table.' : result.error
+        this.patch(id, { definition: { status: 'error', message } })
+        return
+      }
+      this.patch(id, {
+        definition: { status: 'ready', value: result.value.text === undefined ? {} : { text: result.value.text } },
+        definitionEpoch: current.definitionEpoch + 1
+      })
+    }).catch(onUnexpectedError)
+  }
+
+  private loadCatalog(id: string): void {
+    const state = this.get(id)
+    if (!state || (state.catalog && state.catalog.status !== 'error')) return
+    const connectionId = this.connectionOf(id)
+    if (!connectionId || !this.live(id)) {
+      this.patch(id, { catalog: { status: 'error', message: peekMessages.notConnected } })
+      return
+    }
+    const explorerPeek = this.options.api.explorerPeek
+    if (!explorerPeek) {
+      this.patch(id, { catalog: { status: 'error', message: 'Catalog details are unavailable.' } })
+      return
+    }
+    const lazy = this.lazyOf(id)
+    if (lazy.catalog) this.cancelExplorer([lazy.catalog])
+    const requestId = this.newId()
+    lazy.catalog = requestId
+    this.patch(id, { catalog: { status: 'loading' } })
+    void this.call(() => explorerPeek({ connectionId, requestId, target: state.target })).then(result => {
+      if (this.lazyRequests.get(id)?.catalog !== requestId) return
+      delete this.lazyRequests.get(id)!.catalog
+      if (this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return
+      if (!result.ok || result.value.error) {
+        const message = result.ok ? result.value.error?.message ?? 'Could not read catalog details.' : result.error
+        this.patch(id, { catalog: { status: 'error', message } })
+        return
+      }
+      this.patch(id, {
+        catalog: { status: 'ready', value: { columns: result.value.lists?.columns, tableObjects: result.value.lists?.tableObjects } }
+      })
+    }).catch(onUnexpectedError)
+  }
+
+  private loadDependencies(id: string): void {
+    const state = this.get(id)
+    if (!state || (state.dependencies && state.dependencies.status !== 'error')) return
+    const connectionId = this.connectionOf(id)
+    if (!connectionId || !this.live(id)) {
+      this.patch(id, { dependencies: { status: 'error', message: peekMessages.notConnected } })
+      return
+    }
+    const explorerPeekDependencies = this.options.api.explorerPeekDependencies
+    if (!explorerPeekDependencies) {
+      this.patch(id, { dependencies: { status: 'error', message: 'Dependencies are unavailable.' } })
+      return
+    }
+    const lazy = this.lazyOf(id)
+    if (lazy.dependencies) this.cancelExplorer([lazy.dependencies])
+    const requestId = this.newId()
+    lazy.dependencies = requestId
+    this.patch(id, { dependencies: { status: 'loading' } })
+    void this.call(() => explorerPeekDependencies({ connectionId, requestId, target: state.target })).then(result => {
+      if (this.lazyRequests.get(id)?.dependencies !== requestId) return
+      delete this.lazyRequests.get(id)!.dependencies
+      if (this.disposed || !this.get(id) || this.connectionOf(id) !== connectionId || !this.live(id)) return
+      if (!result.ok || result.value.error) {
+        const message = result.ok ? result.value.error?.message ?? 'Could not read dependencies.' : result.error
+        this.patch(id, { dependencies: { status: 'error', message } })
+        return
+      }
+      this.patch(id, {
+        dependencies: {
+          status: 'ready',
+          value: {
+            uses: result.value.uses, usesTruncated: !!result.value.usesTruncated,
+            usedBy: result.value.usedBy, usedByTruncated: !!result.value.usedByTruncated
+          }
+        }
+      })
+    }).catch(onUnexpectedError)
+  }
+
+  private loadPreviewRows(id: string): void {
+    const state = this.get(id)
+    if (!state || (state.preview && state.preview.status !== 'error')) return
+    const connectionId = this.connectionOf(id)
+    if (!connectionId || !this.live(id)) {
+      this.patch(id, { preview: { status: 'error', message: peekMessages.notConnected } })
+      return
+    }
+    const { results, api } = this.options
+    const { database, schema, name } = state.target
+    if (!results || !api.tableColumns || !api.execute || database === undefined || schema === undefined || name === undefined) {
+      this.patch(id, { preview: { status: 'error', message: peekMessages.rowsUnavailable } })
+      return
+    }
+    this.releasePreview(id)
+    const run: PreviewRun = { key: this.newId(), queryId: this.newId(), session: false }
+    this.previewRuns.set(id, run)
+    this.patch(id, { preview: { status: 'loading' } })
+    results.begin(run.key, run.queryId, undefined, { bare: true })
+    void (async () => {
+      const columns = await this.call(() => api.tableColumns!(connectionId, database, schema, name))
+      if (this.previewRuns.get(id) !== run || this.disposed) return
+      if (this.connectionOf(id) !== connectionId || !this.live(id)) {
+        this.releasePreview(id)
+        this.patch(id, { preview: { status: 'error', message: peekMessages.notConnected } })
+        return
+      }
+      const listed = columns.ok ? columns.value : { columns: [], truncated: true }
+      const sql = selectTopRowsScript({ database, schema, name, columns: listed.columns, truncated: listed.truncated }, peekLimits.rows)
+      run.session = true
+      const response = await this.call(() => api.execute!({
+        connectionId, sessionId: run.key, database, sql, queryId: run.queryId, maxRows: peekLimits.rows,
+        timeoutSeconds: Math.ceil(peekLimits.budgetMs / 1000), maxResultSets: 1
+      }))
+      this.endPreviewSession(run)
+      const summary = response.ok ? response.value : undefined
+      await results.finish(run.key, run.queryId, response.ok ? { summary } : { error: response.error, ...(response.code ? { code: response.code } : {}) })
+      if (this.previewRuns.get(id) !== run || this.disposed) return
+      if (this.connectionOf(id) !== connectionId || !this.live(id)) {
+        this.releasePreview(id)
+        this.patch(id, { preview: { status: 'error', message: peekMessages.notConnected } })
+        return
+      }
+      if (summary?.resultSets.length) {
+        this.patch(id, { preview: { status: 'ready', value: { key: run.key } } })
+        return
+      }
+      this.releasePreview(id)
+      const message = !response.ok ? response.error : summary?.error?.message ?? summary?.messages.find(entry => entry.kind === 'error')?.text ?? peekMessages.noResult
+      this.patch(id, { preview: { status: 'error', message } })
+    })().catch(onUnexpectedError)
+  }
+
+  private invalidateDefinition(id: string): void {
+    const lazy = this.lazyRequests.get(id)
+    if (lazy?.definition) {
+      const requestId = lazy.definition
+      delete lazy.definition
+      this.cancelScript([requestId])
+    }
+    if (this.get(id)?.definition !== undefined) this.patch(id, { definition: undefined })
+  }
+
+  private resetLazyTabs(id: string, reloadActive: boolean): void {
+    this.cancelLazyRequests(id)
+    this.releasePreview(id)
+    this.patch(id, { definition: undefined, catalog: undefined, dependencies: undefined, preview: undefined })
+    const state = this.get(id)
+    if (reloadActive && state && isLazyTab(state.activeTab)) this.ensureTabLoaded(id, state.activeTab)
+  }
+
+  private scriptingOptionsChanged(): void {
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (state.definition === undefined) continue
+      this.invalidateDefinition(state.id)
+      if (state.activeTab === 'definition' && this.live(state.id)) this.loadDefinition(state.id)
+    }
+  }
+
+  private cancelLazyRequests(id: string): void {
+    const lazy = this.lazyRequests.get(id)
+    if (!lazy) return
+    this.lazyRequests.delete(id)
+    const explorer = [lazy.catalog, lazy.dependencies].filter((value): value is string => !!value)
+    if (explorer.length) this.cancelExplorer(explorer)
+    if (lazy.definition) this.cancelScript([lazy.definition])
+  }
+
+  private releasePreview(id: string): void {
+    const run = this.previewRuns.get(id)
+    if (!run) return
+    this.previewRuns.delete(id)
+    this.endPreviewSession(run)
+    try { this.options.results?.release(run.key) } catch (failure) { onUnexpectedError(failure) }
+  }
+
+  private endPreviewSession(run: PreviewRun): void {
+    if (!run.session) return
+    run.session = false
+    if (this.options.api.closeQuerySession) void this.options.api.closeQuerySession(run.key).catch(() => {})
+  }
+
+  private cancelExplorer(ids: readonly string[]): void {
+    const cancel = this.options.api.explorerCancel
+    if (!cancel || !ids.length) return
+    try { void cancel(ids).then(result => { if (!result.ok) onUnexpectedError(new Error(result.error)) }, onUnexpectedError) } catch (failure) { onUnexpectedError(failure) }
+  }
+
+  private cancelScript(ids: readonly string[]): void {
+    const cancel = this.options.api.cancelScripting
+    if (!cancel || !ids.length) return
+    try { void cancel(ids).then(result => { if (!result.ok) onUnexpectedError(new Error(result.error)) }, onUnexpectedError) } catch (failure) { onUnexpectedError(failure) }
   }
 
   // --- Internals -----------------------------------------------------------------------------------------------------
@@ -414,13 +788,19 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     })
     if (!same) this.contextStore.set({ byDocument })
   }
-  private rebind(id: string, connection: LiveConnection): void {
+  private rebind(id: string, connection: LiveConnection, tab?: TableInspectorTabId): void {
     this.options.documents.update(id, { connectionId: connection.id })
     const state = this.get(id)
     if (!state) return
-    this.patch(id, { login: connection.login, ...!state.stale && state.error?.code === 'CONNECTION_LOST' ? { error: undefined } : {} })
+    const nextTab = tab && isTableInspectorTab(tab) ? tab : state.activeTab
+    this.patch(id, {
+      login: connection.login,
+      ...(nextTab !== state.activeTab || state.frame.section !== nextTab ? { activeTab: nextTab, frame: { ...state.frame, section: nextTab } } : {}),
+      ...!state.stale && state.error?.code === 'CONNECTION_LOST' ? { error: undefined } : {}
+    })
     this.options.documents.activate(id)
     if (this.canRefresh(id)) this.refresh(id)
+    else if (isLazyTab(nextTab)) this.ensureTabLoaded(id, nextTab)
   }
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
@@ -441,8 +821,18 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }
   }
   private connectionsChanged(): void {
+    const gone = <T>(part: PeekPart<T> | undefined): PeekPart<T> | undefined => part && part.status === 'loading' ? { status: 'error', message: peekMessages.notConnected } : part
     for (const state of Object.values(this.getSnapshot().documents)) {
       if (this.live(state.id)) continue
+      this.cancelLazyRequests(state.id)
+      this.releasePreview(state.id)
+      const lazyPatch: Partial<TablePropertiesState> = {
+        ...(state.definition?.status === 'loading' ? { definition: gone(state.definition) } : {}),
+        ...(state.catalog?.status === 'loading' ? { catalog: gone(state.catalog) } : {}),
+        ...(state.dependencies?.status === 'loading' ? { dependencies: gone(state.dependencies) } : {}),
+        ...(state.preview && (state.preview.status !== 'error' || state.preview.message !== peekMessages.notConnected) ? { preview: { status: 'error', message: peekMessages.notConnected } } : {})
+      }
+      if (Object.keys(lazyPatch).length > 0) this.patch(state.id, lazyPatch)
       const request = this.requests.get(state.id), preview = this.previews.get(state.id)
       if (preview) { this.previews.delete(state.id); this.cancel([preview]); this.patch(state.id, { script: { state: 'failed', error: { message: tablePropertiesMessages.disconnected, code: 'CONNECTION_LOST' } } }) }
       if (state.phase === 'confirming') this.patch(state.id, { phase: 'ready' })
@@ -461,3 +851,7 @@ export class TablePropertiesService extends SnapshotStore<TablePropertiesSnapsho
     }
   }
 }
+
+type LazyTab = 'definition' | 'columns' | 'indexes' | 'dependencies' | 'preview'
+const isLazyTab = (tab: TableInspectorTabId): tab is LazyTab =>
+  tab === 'definition' || tab === 'columns' || tab === 'indexes' || tab === 'dependencies' || tab === 'preview'

@@ -50,6 +50,7 @@ internal static partial class BigQuerySessionChecks
 
         public readonly ConcurrentDictionary<string, FakeJob> Jobs = new();
         public readonly ConcurrentQueue<JsonNode> Inserts = new();
+        public readonly ConcurrentQueue<JsonNode> DryRuns = new();
         public readonly ConcurrentQueue<string> Cancels = new();
         public readonly ConcurrentQueue<string> Aborts = new();
         public readonly ConcurrentQueue<string> Lists = new();
@@ -159,7 +160,13 @@ internal static partial class BigQuerySessionChecks
         BigQueryFake.Reply Insert(BigQueryFake.Request request)
         {
             var body = JsonNode.Parse(request.Body)!;
-            if (body["configuration"]?["dryRun"]?.GetValue<bool>() == true) return BigQueryFake.Fixture("dry-run");
+            if (body["configuration"]?["dryRun"]?.GetValue<bool>() == true)
+            {
+                DryRuns.Enqueue(body);
+                var asked = body["configuration"]!["query"]!["connectionProperties"]?.AsArray().FirstOrDefault(item => item?["key"]?.GetValue<string>() == "session_id")?["value"]?.GetValue<string>();
+                if (asked is not null && Expired.Contains(asked)) return new(400, Error(400, Gone(asked)["message"]!.GetValue<string>(), "invalidQuery"));
+                return BigQueryFake.Fixture("dry-run");
+            }
             Inserts.Enqueue(body);
             var id = body["jobReference"]!["jobId"]!.GetValue<string>();
             if (Jobs.TryGetValue(id, out var existing)) return new(409, Error(409, "Already Exists: Job varia-alpha:US." + existing.Id));
@@ -377,6 +384,7 @@ internal static partial class BigQuerySessionChecks
         await RefusalsAsync(check, key);
         await UnknownOutcomeAsync(check, key);
         await ExpiryAsync(check, key);
+        await DryRunsAsync(check, key);
         await StopAsync(check, key);
         await StopWhileDecidingAsync(check, key);
         await DetachAsync(check, key);
@@ -917,6 +925,40 @@ internal static partial class BigQuerySessionChecks
         var lost = await harness.Close(committing, "commit");
         check(lost.Code == "SESSION_LOST" && lost.Message == BigQueryService.ExpiredCommit && (await harness.State(committing)).Code == "SESSION_CLOSED",
             $"a commit on an expired session answers SESSION_LOST, and the session is gone: {lost.Code} {lost.Message}");
+    }
+
+    /// <summary>Dry runs in a tab's session (docs/bigquery.md, Cost): a tab with a BigQuery session estimates in it (its id and
+    /// location), so temp tables and variables resolve; a tab without one estimates outside any session and no session is
+    /// created for it; another tab's id, or an expired session, estimate without a session.</summary>
+    static async Task DryRunsAsync(Action<bool, string> check, JsonObject key)
+    {
+        var bq = new Bq();
+        using var harness = new Harness(bq);
+        await harness.ConnectAsync(key);
+        JsonObject Args(string tab) => new() { ["connectionId"] = harness.ConnectionId, ["sql"] = "SELECT * FROM _SESSION.t", ["sessionId"] = tab };
+
+        var fresh = Tab();
+        var before = await harness.Call("bigquery.dryRun", Args(fresh));
+        var first = bq.DryRuns.Last();
+        check(before.Code == "ok" && SessionOf(first) is null && first["configuration"]!["query"]!["createSession"] is null && !harness.BigQuery.OwnsSession(fresh) && bq.UserInserts.Count() == 0,
+            $"a dry run for a tab with no session runs outside any session and creates none: {before.Code} {before.Message} {first.ToJsonString()}");
+
+        var tab = Tab();
+        await harness.Execute(tab, "CREATE TEMP TABLE t AS SELECT 1 AS n");
+        var inSession = await harness.Call("bigquery.dryRun", Args(tab));
+        var second = bq.DryRuns.Last();
+        check(inSession.Code == "ok" && SessionOf(second) == "sess-1" && second["jobReference"]?["location"]?.GetValue<string>() == "US" && second["configuration"]!["query"]!["createSession"] is null,
+            $"a dry run for a tab with a session runs in it, in its location: {inSession.Code} {inSession.Message} {second.ToJsonString()}");
+
+        var other = await harness.Call("bigquery.dryRun", Args(fresh));
+        check(other.Code == "ok" && SessionOf(bq.DryRuns.Last()) is null, "another tab's dry run does not use this tab's session");
+
+        bq.Expired.Add("sess-1");
+        var count = bq.DryRuns.Count;
+        var expired = await harness.Call("bigquery.dryRun", Args(tab));
+        var tried = bq.DryRuns.Skip(count).ToArray();
+        check(expired.Code == "ok" && tried.Length == 2 && SessionOf(tried[0]) == "sess-1" && SessionOf(tried[1]) is null && bq.UserInserts.Count() == 1,
+            $"a dry run refused for an expired session estimates once more outside it, starting nothing: {expired.Code} {expired.Message} {tried.Length}");
     }
 
     /// <summary>Stop and running jobs: JOB_RUNNING for a commit or rollback close while a job runs, jobs.cancel on Stop, a

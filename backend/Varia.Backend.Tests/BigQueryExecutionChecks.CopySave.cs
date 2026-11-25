@@ -105,7 +105,7 @@ internal static partial class BigQueryExecutionChecks
             var id = result!.ResultSets.Single().ResultId;
             harness.Jobs.TableDataGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
             var copying = Copy(harness, CopyRequest(id, 0, 2999, 1, 1L << 20));
-            SpinWait.SpinUntil(() => !harness.Jobs.TableReads.IsEmpty, 15_000);
+            await WaitUntilAsync(() => !harness.Jobs.TableReads.IsEmpty, 15_000);
             harness.Service.Results.Release([id]);
             harness.Jobs.TableDataGate.TrySetResult();
             var (code, _, _, message, _) = await copying;
@@ -175,7 +175,7 @@ internal static partial class BigQueryExecutionChecks
             var reads = harness.Jobs.TableReads.Count;
             // On its own thread: the fake answers on the caller's, so a Save started here would wait out the gate itself.
             var saving = Task.Run(() => Save(harness, id));
-            var streaming = SpinWait.SpinUntil(() => harness.Jobs.TableReads.Count > reads, 15_000) && !saving.IsCompleted;
+            var streaming = await WaitUntilAsync(() => harness.Jobs.TableReads.Count > reads, 15_000) && !saving.IsCompleted;
             var leasesWhileSaving = set.Leases;
             harness.Jobs.TableDataGate.TrySetResult();
             (code, _, saved, message) = await saving;

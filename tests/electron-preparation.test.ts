@@ -97,8 +97,10 @@ describe('verified Electron preparation', () => {
 
   it('prepares host smoke binaries and exact packaging targets before normal builder extraction', async () => {
     const pkg = JSON.parse(await readFile('package.json', 'utf8')), hook = await readFile('build/sqltools-service-check.cjs', 'utf8')
+    const { steps } = await import('../scripts/check.mjs')
     expect(pkg.scripts['electron:prepare']).toBe('node scripts/prepare-electron.mjs')
-    expect(pkg.scripts['build:smoke']).toMatch(/^npm run electron:prepare -- --install && /)
+    expect(pkg.scripts['build:smoke']).toBe('node scripts/check.mjs --build')
+    expect(steps['Prepare Electron']).toBe('npm run electron:prepare -- --install')
     expect(hook).toContain('await prepareElectron({ projectRoot: context.packager.projectDir, platform: context.electronPlatformName, arch: Arch[context.arch] })')
     expect(hook).toContain('context.packager.config.electronDownload = { cache: electron.cacheRoot }')
     expect(hook).not.toContain('electronDist')
