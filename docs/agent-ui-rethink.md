@@ -232,7 +232,7 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
      to fit. Close editor goes back to the summary.
    - Right-click or Shift+F10 opens the step's menu: Edit step, Start job at this step, Make Start step, On success ›,
      On failure ›, Add step after ›, Move up, Move down, Delete step. The On success and On failure submenus list SSMS's four
-     actions, with "Go to step N · name" for every other step and the current choice checked.
+     actions, with "Go to step N: name" (the List editor's wording) for every other step and the current choice checked.
    - Delete and Move work as in List: targets follow the move, and rx-step-delete's banner offers Undo.
 4. **Overlays**: a Show switch with Targets only, Last run and Live run.
    - **Last run** draws one run from the History section over the graph. A box picks the run. The path is bold, with the
@@ -244,11 +244,17 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
 5. **Data**: no new backend method is expected. The view is drawn in the renderer from what the job document already holds:
    - the step fields from its describe (`start_step_id`, `on_success_action`, `on_success_step_id`, `on_fail_action`,
      `on_fail_step_id`);
-   - the History section's `agent.history` read, whose step rows are kept per history row, so a step that ran twice has two
+   - the History section's `agent.history` read, whose step rows are kept per history row. A pass is a step's rows up to and
+     including its first row that is not a Retry. Earlier Retry rows count as that pass's retries, so ×N counts passes, not
      rows;
    - the live run state the header and History's live run already receive, with no polling.
 
-   Confirm all three when the view is built.
+   Confirm all three when the view is built. Two rules need work there:
+   - **The failed step**: the header and the Last run panel name the step that failed (step 5 in the mock), not the last step
+     to run. History's run summary takes the step from the outcome message's "last step to run", which for a job with a
+     notify step is the notify step (step 6). Both should use the failed step, so they agree.
+   - **Usual time per pass**: the usual time adds up all of a step's rows in a run, so a step that a loop ran twice gets a
+     doubled usual time. Live run's bar needs the usual time of one pass.
 6. **Flow checks** (principle 6: they warn, they never block Save):
    - Never runs: a warning, with Make Start step as its fix.
    - Loop: information only, because a loop is a normal retry pattern.
