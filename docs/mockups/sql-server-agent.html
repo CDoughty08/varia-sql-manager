@@ -318,6 +318,54 @@ table.g td.c, table.dtable td.c, table.dtable th.c, table.g th.c { text-align: c
 .rx-card .t { color: var(--strong); font-weight: 600; display: flex; gap: 6px; align-items: center }
 .rx-card .d { color: var(--muted); line-height: 16px }
 .rx-card.sel { border-color: var(--accent); background: var(--sel) }
+/* Flow view of a job's steps (later tier): rx-flow* scenes */
+.rx-body.flow { grid-template-columns: minmax(0, 1fr) 380px; position: relative }
+.rx-body.flow.wide { grid-template-columns: minmax(0, 1fr) 560px }
+.rx-body.flow .rx-seg span { white-space: nowrap }
+.rx-body.flow > .rx-edit { border-left: 1px solid var(--border) }
+.fl-canvas { overflow: auto; position: relative; background-color: var(--panel); background-image: radial-gradient(var(--borderStrong) 1px, transparent 1px); background-size: 16px 16px; min-width: 0 }
+.fl-draw { position: relative; width: 700px; height: 680px; margin: 0 auto }
+.fl-draw > svg { position: absolute; left: 0; top: 0; overflow: visible }
+.fe { fill: none }
+.fe .halo { stroke: var(--panel); stroke-width: 6 }
+.fe .ln { stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round }
+.fe.ok .ln { stroke: var(--success) }
+.fe.bad .ln { stroke: var(--error); stroke-dasharray: 5 3 }
+.fe.acc .ln { stroke: var(--accent) }
+.fe.hot .ln { stroke-width: 2.5 }
+.fe.dim { opacity: .4 } .fe.faded { opacity: .18 }
+.fl-node { position: absolute; border: 1px solid var(--borderStrong); border-radius: 6px; background: var(--raised); padding: 5px 10px 0 8px; font-size: 12px; display: flex; flex-direction: column; gap: 2px; box-sizing: border-box }
+.fl-node .l1 { display: flex; align-items: center; gap: 6px; min-width: 0; height: 18px }
+.fl-node .no { width: 18px; height: 18px; border-radius: 50%; background: var(--canvas); border: 1px solid var(--border); color: var(--text3); font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none }
+.fl-node .t { color: var(--strong); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0 }
+.fl-node .ty { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; color: var(--text3); font-size: 11px; flex: none }
+.fl-node .l2 { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 11px; padding-left: 24px; white-space: nowrap; height: 16px; min-width: 0 }
+.fl-node .l2 .s { overflow: hidden; text-overflow: ellipsis; min-width: 0 }
+.fl-node .l2 .r { margin-left: auto; display: inline-flex; gap: 5px; align-items: center; flex: none }
+.fl-node.sel { border-color: var(--accent); background: var(--sel); box-shadow: 0 0 0 1px var(--accent) }
+.fl-node.dim { border-style: dashed; background: var(--panel) } .fl-node.dim .t { color: var(--text3); font-weight: 400 }
+.fl-node.cur { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent) }
+.fl-node.faded { opacity: .5 }
+.fl-node .bar { position: absolute; left: -1px; bottom: -1px; height: 3px; background: var(--accent); border-radius: 0 0 0 6px }
+.fl-port { position: absolute; bottom: -8px; width: 15px; height: 15px; margin-left: -7.5px; border-radius: 50%; background: var(--canvas); border: 1px solid; font-size: 9px; line-height: 13px; text-align: center; font-weight: 700 }
+.fl-port.ok { color: var(--success); border-color: var(--success) } .fl-port.bad { color: var(--error); border-color: var(--error); border-style: dashed }
+.fl-quit { position: absolute; height: 18px; line-height: 16px; padding: 0 7px; border-radius: 9px; font-size: 10px; border: 1px solid; white-space: nowrap; transform: translateX(-50%); background: var(--canvas) }
+.fl-quit.ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 55%, transparent) }
+.fl-quit.bad { color: var(--errorSurfaceText); background: var(--errorSurface); border-color: transparent }
+.fl-quit.hot { box-shadow: 0 0 0 2px var(--error) } .fl-quit.faded { opacity: .25 } .fl-quit.dim { opacity: .45 }
+.fl-legend .fl-quit { position: static; transform: none; display: inline-block }
+.fl-chip { position: absolute; font-size: 10px; line-height: 16px; padding: 0 6px; border-radius: 3px; background: var(--overlay); border: 1px solid var(--border); color: var(--text2); white-space: nowrap; transform: translateY(-50%); display: inline-flex; gap: 4px; align-items: center }
+.fl-chip.acc { color: var(--textAccent); border-color: var(--accent) }
+.fl-chip.fl-dimchip { opacity: .4 }
+.fl-start { position: absolute; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11px; background: var(--sel); color: var(--textAccent); border: 1px solid var(--accent); display: inline-flex; gap: 4px; align-items: center; transform: translateY(-50%) }
+.fl-seq { position: absolute; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--text); color: var(--canvas); font-size: 10px; line-height: 16px; text-align: center; transform: translate(-50%, -50%); font-weight: 600; white-space: nowrap }
+.fl-end { position: absolute; height: 20px; padding: 0 9px; border-radius: 10px; font-size: 11px; background: var(--canvas); color: var(--text2); border: 1px solid var(--warning); display: inline-flex; gap: 4px; align-items: center; transform: translateX(-50%) }
+.fl-legend .fl-end { position: static; transform: none }
+.fl-sname { display: flex; gap: 8px; align-items: center; font-size: 13px; font-weight: 600; color: var(--strong); margin-bottom: 8px }
+.fl-sname .no { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border); color: var(--text3); font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: 400 }
+.fl-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; font-size: 11px; color: var(--text3) }
+.fl-legend > span { display: inline-flex; gap: 6px; align-items: center }
+.rx-seg span.dis { color: var(--muted); opacity: .6 }
 </style>
 </head>
 <body>
@@ -343,6 +391,14 @@ table.g td.c, table.dtable td.c, table.dtable th.c, table.g th.c { text-align: c
       <option value="rx-job-stale">Job document · save refused, changed by someone else</option>
       <option value="rx-job-denied">Job document · save refused, permission denied</option>
       <option value="rx-job-new">New Job · start from blank, a copy or a template</option>
+    </optgroup>
+    <optgroup label="Rethink · steps flow (later)">
+      <option value="rx-flow">Job document · Steps › Flow (targets, Start step, loop, never runs)</option>
+      <option value="rx-flow-menu">Job document · Steps › Flow, step menu (On failure)</option>
+      <option value="rx-flow-edit">Job document · Steps › Flow, step editor open (double-click)</option>
+      <option value="rx-flow-lastrun">Job document · Steps › Flow, last run overlay</option>
+      <option value="rx-flow-running">Job document · Steps › Flow, running job</option>
+      <option value="rx-flow-end">Job document · Steps › Flow, last step goes to the next step (End)</option>
     </optgroup>
     <optgroup label="Rethink · create from">
       <option value="rx-create-from">Create Job Like This… (Changes from source)</option>
@@ -1337,6 +1393,156 @@ Object.assign(RXN, {
   'rx-operator-delete': 'Rethink of Delete Object · operator: the grid\'s side pane lists what the operator is notified by and offers Move to (sp_delete_operator @reassign_to_operator) or Drop them. It warns when an alert would be left notifying no one. Deletes immediately, not with Save.',
   'rx-credential': 'Rethink of Credential Properties: a document showing what uses the credential (proxies, then their steps). The password is never read back; changing it or the identity sends both together, as the plan requires.',
   'rx-agent-props': 'Rethink of SQL Server Agent Properties (General, History) and the purge confirmation: a document. A new aid: what the retention settings keep for each job, from the last 7 days of history. Delete old history now confirms inline and runs separately from Save.'
+})
+// ---------- Flow view of a job's steps (later tier; design note in docs/agent-ui-rethink.md › Flow view) ----------
+Object.assign(P, {
+  list: '<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.5M2.5 8h.5M2.5 12h.5"/>',
+  flow: '<rect x="5.5" y="1.5" width="5" height="3.5" rx=".8"/><rect x="1.5" y="11" width="5" height="3.5" rx=".8"/><rect x="9.5" y="11" width="5" height="3.5" rx=".8"/><path d="M8 5v3M4 11V8h8v3"/>',
+  ps: '<rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6l2.5 2-2.5 2M8.5 10.5h3"/>',
+  cmd: '<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M1.5 5.5h13M4 8.5l2 1.5-2 1.5M7.5 11.5h3"/>',
+  pkg: '<path d="M8 1.5l6 3v7l-6 3-6-3v-7z"/><path d="M2 4.5l6 3 6-3M8 7.5v7"/>',
+  olap: '<rect x="2" y="9" width="3" height="5"/><rect x="6.5" y="5.5" width="3" height="8.5"/><rect x="11" y="2" width="3" height="12"/>',
+  minus: '<path d="M3 8h10"/>',
+  fit: '<path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5"/>',
+  loop: '<path d="M12.5 6A5 5 0 004 4.5M3.5 10a5 5 0 008.5 1.5M4 2v2.5h2.5M12 14v-2.5H9.5"/>'
+})
+// ok and fail: 'next', 'qs' (quit reporting success), 'qf' (quit reporting failure) or a step number (go to step N).
+const rxFin = [
+  { n: 'Archive old extracts', type: 'CmdExec', sub: 'D:\\Scripts\\ArchiveExtracts.cmd', ok: 'next', fail: 'next' },
+  { n: 'Wait for source files', type: 'PowerShell', sub: 'Retry 3 times, 1 minute apart', ok: 'next', fail: 'qf', start: 1 },
+  { n: 'Load staging package', type: 'SSIS', sub: 'Finance › LoadStagingFinance.dtsx', ok: 'next', fail: 6 },
+  { n: 'Validate row counts', type: 'T-SQL', sub: 'StagingDW', ok: 'next', fail: 3 },
+  { n: 'Merge facts', type: 'T-SQL', sub: 'FinanceDW', ok: 7, fail: 6 },
+  { n: 'Notify on failure', type: 'PowerShell', sub: 'Run as FileShareWriter', ok: 'qf', fail: 'qf' },
+  { n: 'Process finance cube', type: 'Analysis Services', sub: 'Command · FinanceOLAP', ok: 'qs', fail: 6 }]
+const flType = { 'T-SQL': 'code', PowerShell: 'ps', CmdExec: 'cmd', SSIS: 'pkg', 'Analysis Services': 'olap' }
+const FL = { x0: 190, w: 340, h: 50, top: 40, pitch: 84 }
+const flTop = i => FL.top + i * FL.pitch
+const flPort = kind => FL.x0 + FL.w * (kind === 'ok' ? 0.3 : 0.7)
+// Lanes: success jumps run left of the column, failure jumps right; each jump has a lane and an entry height on its target.
+const flLanes = { '5ok': [0, 16], '3fail': [1, 12], '4fail': [0, 30], '7fail': [0, 34] }
+// o: { steps, sel, unreach: [n], edge: { '4fail': 'hot' }, seq: { '4fail': '3' }, chips: [[key, html, cls]], state: { n: [cls, html] }, quit: { '6ok': 'hot' }, zoom }
+function rxFlowDraw(o) {
+  const steps = o.steps || rxFin, lanes = { ...flLanes, ...o.lanes }
+  let svg = '', html = ''
+  const mid = {}
+  steps.forEach((s, i) => {
+    for (const kind of ['ok', 'fail']) {
+      const key = `${i + 1}${kind}`, to = s[kind], x = flPort(kind), y0 = flTop(i) + FL.h + 8, cls = `${kind === 'ok' ? 'ok' : 'bad'} ${o.edge?.[key] || (o.unreach?.includes(i + 1) ? 'dim' : o.rest || '')}`
+      if (to === 'qs' || to === 'qf') { html += `<span class="fl-quit ${to === 'qs' ? 'ok' : 'bad'} ${o.quit?.[key] || o.edge?.[key] || o.rest || ''}" style="left:${x}px;top:${y0 + 1}px">Quit · ${to === 'qs' ? 'success' : 'failure'}</span>`; continue }
+      const t = to === 'next' ? i + 1 : to - 1
+      let d
+      if (t === steps.length) {
+        // The last step's Go to the next step: msdb accepts it, but Agent then fails the job ("tried to run a non-existent step"), so it is drawn to an End node and warned.
+        d = `M${x} ${y0}V${y0 + 22}`; mid[key] = [x + 13, y0 + 11]
+        html += `<span class="fl-end" style="left:${x}px;top:${y0 + 24}px">${ic('warn', 11)}End · job fails</span>`
+      }
+      else if (t === i + 1) {
+        d = `M${x} ${y0}V${flTop(t) - 2}`; mid[key] = [x + 13, y0 + 13]
+        // A go-to whose target is the step below is drawn straight but marked: it follows that step if steps move, a next step does not.
+        if (to !== 'next') html += `<span class="fl-chip ${/faded|dim/.test(cls) ? 'fl-dimchip' : ''}" style="left:${x - 10}px;top:${y0 + 13}px;transform:translate(-100%, -50%)">→ ${to}</span>`
+      }
+      else {
+        const [lane, entry] = lanes[key] || [0, 20], lx = kind === 'ok' ? FL.x0 - 26 - 18 * lane : FL.x0 + FL.w + 26 + 18 * lane, ye = flTop(t) + entry
+        d = `M${x} ${y0}V${y0 + 9}H${lx}V${ye}H${kind === 'ok' ? FL.x0 - 2 : FL.x0 + FL.w + 2}`; mid[key] = [lx, (y0 + 9 + ye) / 2]
+      }
+      const mk = /acc/.test(cls) ? 'acc' : kind === 'ok' ? 'ok' : 'bad'
+      svg += `<g class="fe ${cls}"><path class="halo" d="${d}"/><path class="ln" d="${d}" marker-end="url(#fa-${mk})"/></g>`
+    }
+  })
+  const start = steps.findIndex(s => s.start), sy = flTop(start) + FL.h / 2 - 4
+  svg += `<g class="fe acc ${o.startHot ? 'hot' : ''}"><path class="ln" d="M112 ${sy}H${FL.x0 - 2}" marker-end="url(#fa-acc)"/></g>`
+  html += `<span class="fl-start" style="left:52px;top:${sy}px">${ic('play', 10)}Start</span>`
+  for (const [key, text] of Object.entries(o.seq || {})) html += `<span class="fl-seq" style="left:${mid[key][0]}px;top:${mid[key][1]}px">${text}</span>`
+  for (const [key, text, cls] of o.chips || []) html += `<span class="fl-chip ${cls || ''}" style="left:${FL.x0 + FL.w + 26 + 18 * 2}px;top:${mid[key][1]}px">${text}</span>`
+  const nodes = steps.map((s, i) => {
+    const n = i + 1, st = o.state?.[n], never = o.unreach?.includes(n)
+    const cls = [o.sel === n ? 'sel' : '', never ? 'dim' : '', st?.[0] || ''].join(' ')
+    const act = (to, cyc) => to === 'next' ? (n === steps.length ? 'go to the next step, which fails the job' : 'go to the next step') : to === 'qs' ? 'quit reporting success' : to === 'qf' ? 'quit reporting failure' : `go to step ${to}${cyc ? ', loop' : ''}`
+    const name = `Step ${n}, ${s.n}, ${s.type}${s.start ? ', Start step' : ''}${never ? ', never runs' : ''}. On success, ${act(s.ok, (o.loops || []).includes(`${n}ok`))}. On failure, ${act(s.fail, (o.loops || []).includes(`${n}fail`))}.`
+    return `<div class="fl-node ${cls}" role="treeitem" aria-label="${name}" style="left:${FL.x0}px;top:${flTop(i)}px;width:${FL.w}px;height:${FL.h}px">
+      <div class="l1"><span class="no">${n}</span><span class="t">${s.n}</span>${never ? '<span class="rx-tag warn">Never runs</span>' : ''}${s.changed ? '<span class="rx-diff">changed</span>' : ''}<span class="ty">${ic(flType[s.type], 12)}${s.type}</span></div>
+      <div class="l2"><span class="s">${s.sub}</span>${st?.[1] ? `<span class="r">${st[1]}</span>` : ''}</div>${st?.[2] ? `<i class="bar" style="width:${st[2]}"></i>` : ''}
+      <span class="fl-port ok" style="left:30%" aria-hidden="true">✓</span><span class="fl-port bad" style="left:70%" aria-hidden="true">✗</span></div>`
+  }).join('')
+  const defs = ['ok:var(--success)', 'bad:var(--error)', 'acc:var(--accent)'].map(m => { const [k, c] = m.split(/:(.*)/s); return `<marker id="fa-${k}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L8 4L0 8z" style="fill:${c}"/></marker>` }).join('')
+  return `<div class="fl-canvas" role="tree" aria-label="Steps flow, in step order"><div class="fl-draw" style="${o.zoom ? `zoom:${o.zoom}` : ''}"><svg width="700" height="680" aria-hidden="true"><defs>${defs}</defs>${svg}</svg>${nodes}${html}</div></div>`
+}
+const rxFinTabs = dirty => rxDoc([rxJam, { i: 'job', n: 'Finance nightly load', s: 'sql-prod-01 · Jobs', on: 1, dirty }])
+const rxFinHead = o => rxJobHead('Finance nightly load', { fail: 'today 02:30', next: 'tomorrow 02:30', probs: '2 problems', ...o })
+const rxFinCounts = { Steps: '!7', Schedules: 1, Alerts: 1 }
+const rxFlowBar = (show, extra = '', zoom = '100%') => `<div class="toolbar"><span class="rx-seg" role="radiogroup" aria-label="Steps view"><span>${ic('list', 12)}&nbsp;List</span><span class="on">${ic('flow', 12)}&nbsp;Flow</span></span><span class="vsep"></span><span style="color:var(--text3);margin:0 4px">Show</span><span class="rx-seg" role="radiogroup" aria-label="Overlay"><span class="${show === 'none' ? 'on' : ''}">Targets only</span><span class="${show === 'last' ? 'on' : ''}">Last run</span><span class="${show === 'run' ? 'on' : 'dis'}" ${show === 'run' ? '' : 'title="Only while the job runs"'}>${show === 'run' ? '<i style="width:7px;height:7px;border-radius:50%;background:var(--accent);margin-right:6px;display:inline-block"></i>' : ''}Live run</span></span>${extra}<span class="vsep"></span><span class="tb">${ic('plus', 14)}Add step ▾</span><span style="margin-left:auto"></span><span class="tb" aria-label="Zoom out">${ic('minus', 14)}</span><span class="mono" style="font-size:11px;color:var(--text3);min-width:34px;text-align:center">${zoom}</span><span class="tb" aria-label="Zoom in">${ic('plus', 14)}</span><span class="tb">${ic('fit', 14)}Fit</span></div>`
+const rxFlowLegend = () => `<div class="rx-sec"><div class="h">Key</div><div class="fl-legend">
+  <span><svg width="28" height="10"><path d="M1 5H27" style="stroke:var(--success);stroke-width:1.5"/></svg>✓ On success</span>
+  <span><svg width="28" height="10"><path d="M1 5H27" style="stroke:var(--error);stroke-width:1.5;stroke-dasharray:5 3"/></svg>✗ On failure</span>
+  <span><span class="fl-quit ok">Quit · success</span></span><span><span class="fl-quit bad">Quit · failure</span></span>
+  <span><span class="fl-start" style="position:static;transform:none">${ic('play', 10)}Start</span>Start step</span><span><span class="rx-tag warn">Never runs</span>nothing reaches it</span><span><span class="fl-end">${ic('warn', 11)}End · job fails</span>last step goes to the next step</span>
+  <span style="grid-column:1/-1">Steps stay in step order, top to bottom, as in List and History. Jumps run beside the column: success on the left, failure on the right. A go-to to the step just below is straight, marked → N.</span></div></div>`
+const rxFlowChecks = (loop = true, end = false) => `<div class="rx-sec"><div class="h">Flow checks<span class="r">${1 + loop + end} problems</span></div>
+  <div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 1 never runs</span><span class="a"><span class="btn">Make Start step</span></span><span class="d">The Start step is 2 and no step goes to step 1, so Archive old extracts is skipped on every scheduled run. Start at step can still run it.</span></div>
+  ${loop ? `<div class="rx-check"><span class="i rx-warn">${ic('loop', 14)}</span><span class="t">Steps 3 and 4 can repeat</span><span class="a"></span><span class="d">A failed row count goes back to the load. Agent does not count passes: the loop ends when step 3 fails (to step 6) or step 4 succeeds.</span></div>` : ''}
+  ${end ? `<div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 7 goes to the next step, but it is the last step</span><span class="a"><span class="btn">Quit reporting success</span></span><span class="d">So Agent reports every run as failed, even when step 7 succeeds ("tried to run a non-existent step (8)"). Pick a Quit action to say how the job should end.</span></div>` : ''}
+  <div class="rx-check"><span class="i rx-ok">${ic('check', 14)}</span><span class="t">Every go-to target exists</span><span class="a"></span><span class="d">No step goes to a step that no longer exists.</span></div></div>`
+const rxFlowSel = () => `<div class="rx-sec"><div class="h">Selected step<span class="r">${ic('code', 12)}T-SQL</span></div>
+  <div class="fl-sname"><span class="no">4</span>Validate row counts</div>
+  <dl class="rx-kv"><dt>Database</dt><dd>StagingDW</dd><dt>Retries</dt><dd>None</dd><dt>On success</dt><dd><span class="rx-ok">✓</span> Go to the next step · 5 Merge facts</dd><dt>On failure</dt><dd><span class="rx-bad">✗</span> Go to step 3 · Load staging package <span class="rx-tag warn">Loop</span></dd><dt>Reached from</dt><dd>Step 3 on success</dd></dl>
+  <div class="hstack" style="margin-top:10px"><span class="btn">${ic('edit', 14)}Edit step</span><span class="btn">${ic('play', 14)}Start at step 4</span></div>
+  <div class="rx-hint" style="margin-top:8px;padding:0">Double-click a step, or press Enter, to edit it here. Right-click it, or press Shift+F10, for its actions. Drag a ✓ or ✗ port onto a step to go to it.</div></div>`
+const rxFlowMenu = () => {
+  const mi = (g, t, k = '', cls = '') => `<div class="mi ${cls}"><span class="g">${g ? ic(g, 14) : ''}</span>${t}<span class="k">${k}</span></div>`
+  const main = [mi('edit', 'Edit step', 'Enter'), mi('play', 'Start job at this step'), mi('', 'Make Start step'), '<hr>', mi('', '<span class="rx-ok">✓</span>&nbsp;On success', '›'), mi('', '<span class="rx-bad">✗</span>&nbsp;On failure', '›', 'hl'), '<hr>', mi('plus', 'Add step after', '›'), mi('up', 'Move up'), mi('down', 'Move down'), '<hr>', mi('trash', 'Delete step', 'Del')].join('')
+  const sub = [mi('', 'Go to the next step (5 · Merge facts)'), '<hr>', ...rxFin.map((s, i) => i === 3 ? '' : mi(i === 2 ? 'check' : '', `Go to step ${i + 1}: ${s.n}`)), '<hr>', mi('', 'Quit the job reporting success'), mi('', 'Quit the job reporting failure')].join('')
+  // Placed in the body, not the canvas, so the canvas's scrolling never clips it; shifted up to fit, as menus do near the window's foot.
+  return `<div class="menu" role="menu" aria-label="Step 4 actions" style="left:460px;top:210px">${main}</div><div class="menu" role="menu" aria-label="On failure" style="left:698px;top:${210 + 4 + 26 * 4 + 9}px;min-width:290px">${sub}</div>`
+}
+Object.assign(RX, {
+  'rx-flow': () => rxFinTabs(false) + rxFinHead() + rxSections('Steps', rxFinCounts) + rxFlowBar('none') + `<div class="rx-body flow">${rxFlowDraw({ sel: 4, unreach: [1], loops: ['4fail'], chips: [['4fail', `${ic('loop', 10)}Loop · 3 ⇄ 4`]] })}<div class="rx-edit">${rxFlowSel()}${rxFlowChecks()}${rxFlowLegend()}</div></div>`,
+  'rx-flow-menu': () => rxFinTabs(false) + rxFinHead() + rxSections('Steps', rxFinCounts) + rxFlowBar('none') + `<div class="rx-body flow">${rxFlowDraw({ sel: 4, unreach: [1], loops: ['4fail'], chips: [['4fail', `${ic('loop', 10)}Loop · 3 ⇄ 4`]] })}<div class="rx-edit">${rxFlowSel()}${rxFlowChecks()}</div>${rxFlowMenu()}</div>`,
+  'rx-flow-edit': () => {
+    const steps = rxFin.map((s, i) => i === 3 ? { ...s, fail: 6, changed: 1 } : s)
+    return rxFinTabs(true) + rxFinHead({ changes: '1 change', probs: '1 problem' }) + rxSections('Steps', rxFinCounts) + rxFlowBar('none', '', '86%') + `<div class="rx-body flow wide">${rxFlowDraw({ steps, sel: 4, unreach: [1], zoom: .86, lanes: { '4fail': [0, 12], '3fail': [1, 26], '7fail': [0, 38] }, edge: { '4fail': 'acc hot' }, chips: [['4fail', 'changed', 'acc']] })}<div class="rx-edit">
+      <div class="rx-h" style="margin-bottom:0">Step 4 of 7<span class="r"><span class="tb">${ic('x', 12)}Close editor</span></span></div>
+      <div class="rx-form"><label>Step name</label><div class="inp">Validate row counts</div><label>Type</label><div><span class="rx-seg sm"><span class="on">Transact-SQL (T-SQL)</span><span>PowerShell</span><span>CmdExec</span><span>SSIS package</span><span>More ▾</span></span></div><label>Database</label><div class="inp sel" style="width:220px">StagingDW</div></div>
+      <div><div class="rx-h">Command<span class="r"><span class="tb">${ic('check', 12)}Parse</span><span class="tb">${ic('file', 12)}Open in query window</span></span></div>${rxCode(['<span class="k">IF</span> (<span class="k">SELECT</span> <span class="k">COUNT</span>(*) <span class="k">FROM</span> stg.Ledger)', '   &lt; (<span class="k">SELECT</span> ExpectedRows <span class="k">FROM</span> stg.Manifest)', '    <span class="k">THROW</span> 50001, <span class="s">N\'Row count below manifest\'</span>, 1;'])}</div>
+      <div class="rx-form"><label>On success</label><div class="inp sel">Go to the next step</div><label>On failure</label><div class="inp sel">Go to step 6: Notify on failure <span class="rx-diff">changed</span></div></div>
+      <div class="rx-more">${ic('chevR', 12)}More options<span class="sum">No retries · no output file · run as dbo</span></div>
+      <div class="rx-hint" style="padding:0">The graph follows the draft as you edit: the failure edge now goes to step 6, so the loop and its check are gone. Undo (Ctrl+Z) and Save work as in List.</div>
+    </div></div>`
+  },
+  'rx-flow-lastrun': () => {
+    const st = { 1: ['faded', '<span class="rx-mut">Not run</span>'], 2: ['', '<span class="rx-ok">✓ 00:04:10</span><span class="rx-tag">1 retry</span>'], 3: ['', '<span class="rx-tag">×2</span><span class="rx-ok">✓ 00:16:31 · 00:15:58</span>'], 4: ['', '<span class="rx-tag">×2</span><span class="rx-bad">✗ 00:00:41</span><span class="rx-ok">✓ 00:00:39</span>'], 5: ['', '<span class="rx-bad">✗ 00:02:09</span>'], 6: ['', '<span class="rx-ok">✓ 00:00:03</span>'], 7: ['faded', '<span class="rx-mut">Not run</span>'] }
+    const hot = ['2ok', '3ok', '4fail', '4ok', '5fail', '6ok']
+    return rxFinTabs(false) + rxFinHead() + rxSections('Steps', rxFinCounts) + rxFlowBar('last', `<span class="inp sel" style="height:24px;width:230px;margin-left:6px;font-size:12px">today 02:30 · Failed · 00:41:11</span>`) + `<div class="rx-body flow">${rxFlowDraw({ sel: 5, unreach: [1], loops: ['4fail'], rest: 'faded', startHot: 1, state: st, edge: Object.fromEntries(hot.map(k => [k, 'hot'])), quit: { '6ok': 'hot' }, seq: { '2ok': '1', '3ok': '2 · 4', '4fail': '3', '4ok': '5', '5fail': '6' } })}<div class="rx-edit">
+      <div class="rx-sec"><div class="h">Run<span class="r">${ic('history', 12)}<span class="rx-more">Open in History</span></span></div>
+        <dl class="rx-kv"><dt>Started</dt><dd>15/11/2026 02:30:00 (server time)</dd><dt>Duration</dt><dd>00:41:11 · usual 00:37:00 (includes a 1-minute retry wait)</dd><dt>Invoked by</dt><dd>Schedule 9 (Finance 02:30)</dd><dt>Outcome</dt><dd><span class="rx-bad">Failed at step 5 (Merge facts)</span><div class="rx-mut" style="font-size:11px">Agent: The job failed.  The Job was invoked by Schedule 9 (Finance 02:30).  The last step to run was step 6 (Notify on failure).</div></dd></dl></div>
+      <table class="dtable" style="margin-top:0"><thead><tr><th class="c" style="width:28px">#</th><th>Step</th><th>Outcome</th><th>Duration</th></tr></thead><tbody>
+        ${[['2 · Wait for source files', 'ok:Succeeded, 1 retry', '00:04:10'], ['3 · Load staging package', 'ok:Succeeded', '00:16:31'], ['4 · Validate row counts', 'bad:Failed', '00:00:41'], ['3 · Load staging package', 'ok:Succeeded', '00:15:58'], ['4 · Validate row counts', 'ok:Succeeded', '00:00:39'], ['5 · Merge facts', 'bad:Failed', '00:02:09'], ['6 · Notify on failure', 'ok:Succeeded', '00:00:03']].map((r, i) => { const [k, t] = r[1].split(':'); return `<tr class="${i === 5 ? 'sel' : ''}"><td class="c">${i + 1}</td><td>${r[0]}</td><td class="rx-${k}">${t}</td><td class="mono">${r[2]}</td></tr>` }).join('')}</tbody></table>
+      <div class="rx-sec"><div class="h">Step 5 message<span class="r"><span class="tb">${ic('copy', 12)}Copy</span></span></div><div class="mono" style="font-size:12px;line-height:18px;white-space:pre-wrap;color:var(--text)">Executed as user: NT SERVICE\\SQLSERVERAGENT. Violation of PRIMARY KEY constraint 'PK_FactLedger'. Cannot insert duplicate key in object 'dbo.FactLedger'. [SQLSTATE 23000] (Error 2627). The step failed.</div></div>
+      <div class="rx-hint" style="padding:0">Numbers on the edges are the order the run took them; a step that ran twice shows ×2 and each pass. The box above the graph and History's list share one selected run.</div>
+    </div></div>`
+  },
+  'rx-flow-end': () => {
+    const steps = rxFin.map((s, i) => i === 6 ? { ...s, ok: 'next' } : s)
+    return rxFinTabs(false) + rxFinHead({ probs: '3 problems' }) + rxSections('Steps', rxFinCounts) + rxFlowBar('none', '', '80%') + `<div class="rx-body flow">${rxFlowDraw({ steps, sel: 7, zoom: .8, unreach: [1], loops: ['4fail'], chips: [['4fail', `${ic('loop', 10)}Loop · 3 ⇄ 4`]] })}<div class="rx-edit">${rxFlowChecks(true, true)}${rxFlowLegend()}</div></div>`
+  },
+  'rx-flow-running': () => {
+    const st = { 1: ['', ''], 2: ['', '<span class="rx-ok">✓ 00:04:02</span>'], 3: ['cur', `<span class="rx-run">${ic('play', 10)} 09:54</span><span class="rx-mut">usual 16 min</span>`, '60%'], 4: ['faded', '<span class="rx-mut">Waiting</span>'], 5: ['faded', '<span class="rx-mut">Waiting</span>'], 6: ['faded', '<span class="rx-mut">On failure only</span>'], 7: ['faded', '<span class="rx-mut">Waiting</span>'] }
+    return rxFinTabs(false) + rxFinHead({ run: 'step 3 of 7, 13:56' }) + `<div class="rx-banner">${ic('play', 14)}Running since 14:16, started by CONTOSO\\dana. You can keep editing: saved changes apply from the next run.</div>` + rxSections('Steps', rxFinCounts) + rxFlowBar('run') + `<div class="rx-body flow">${rxFlowDraw({ sel: 3, unreach: [1], loops: ['4fail'], rest: 'dim', startHot: 1, state: st, edge: { '2ok': 'hot', '3ok': 'on', '3fail': 'on' } })}<div class="rx-edit">
+      <div class="rx-sec"><div class="h">This run<span class="r">13:56 elapsed · usual 37 min</span></div><div class="rx-prog" aria-label="14 of about 37 minutes"><i style="width:38%"></i><b style="left:100%"></b></div></div>
+      <div class="rx-sec"><div class="h">Current step</div><div class="fl-sname"><span class="no">3</span>Load staging package</div>
+        <dl class="rx-kv"><dt>State</dt><dd class="rx-run">Executing · 00:09:54 of usual 00:16:20</dd><dt>Next</dt><dd><span class="rx-ok">✓</span> step 4 on success · <span class="rx-bad">✗</span> step 6 on failure</dd></dl></div>
+      <div class="hstack"><span class="btn">${ic('stop', 14)}Stop job</span><span class="rx-hint">Stop sends sp_stop_job; the run is recorded as Canceled.</span></div>
+      <div class="rx-hint" style="padding:0">Live run turns on by itself when the job starts and goes back to the view you had when it ends. The current step comes from the job header's live state; finished steps from History's rows of this run, so this run is History's selected run while Live run shows.</div>
+    </div></div>`
+  }
+})
+Object.assign(RXN, {
+  'rx-flow': 'Aid (later tier): Steps › Flow, the same steps as a graph. Steps stay in step order; ✓ success edges are solid and run left, ✗ failure edges are dashed and run right, Quit ends are pills. The Start step has an entry arrow, a step nothing reaches is dashed and tagged Never runs (a Problem), a cycle is tagged Loop (also a Problem). Select a step to see it beside the graph; the side panel lists the flow checks. Each job document opens on List.',
+  'rx-flow-end': 'Aid (later tier): msdb lets the last step go to the next step, but Agent then fails every run with "JobManager tried to run a non-existent step (8)", even when step 7 succeeds (checked on SQL Server 2025). Flow draws that edge to an End · job fails node and flow checks warn, with Quit reporting success as the fix.',
+  'rx-flow-menu': 'Aid (later tier): right-click (or Shift+F10) on a step gives its actions. Dragging a ✓ or ✗ port onto a step sets Go to step N, as a shortcut; dropping it on empty space opens this submenu. On success and On failure list SSMS\'s four actions with every step by number and name, the current one checked; picking one edits the draft, as the List editor does. The menu is MenuService\'s (native on macOS).',
+  'rx-flow-edit': 'Aid (later tier): double-click (or Enter) opens the same step editor as List, docked beside the graph, which zooms to fit. The changed edge is drawn in the accent with a changed tag; the dirty dot, Save · 1 change and Undo are the document\'s own.',
+  'rx-flow-lastrun': 'Aid (later tier): Last run draws a run from History over the graph: the path it took in bold with the order on each edge, each step\'s outcome and duration (×2 for a step a loop ran twice), steps it never reached faded. The run box and History share one selected run. Drawn from the History section\'s own read, which runs while an overlay shows; no new backend method.',
+  'rx-flow-running': 'Aid (later tier): while the job runs, Live run marks the current step with a ring and a bar against its usual time, done steps with their outcome, and the two ways it can go next. Current step from the header\'s live state, finished steps from History\'s rows of this run; the graph never polls.'
 })
 function searchOverlay() {
   return `<div class="menu" style="left:560px;top:44px;width:480px;padding:6px 0"><div style="padding:2px 10px 6px;font-size:11px;color:var(--text3)">Objects</div>
