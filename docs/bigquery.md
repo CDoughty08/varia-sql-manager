@@ -224,7 +224,7 @@ lists the parent's new children (`jobs.list` with `parentJobId`, newest first, s
 read) and reads each finished one in statement order. The listing uses `projection=full`: the minimal projection leaves
 out `statistics.query`, so it names no statement type, rows affected or DDL target. Full jobs carry each statement's SQL,
 so each page is read under 16 MiB: the final listing asks for 200 jobs a page and a poll for 20, a page that fits doubles
-the next (up to 200, and never back to a size that was too large) and a larger one is asked again with a quarter. Only
+the next (up to 200, and to at most half a size that was too large) and a larger one is asked again with a quarter. Only
 the statistics are decoded and the SQL is never kept. A statement too large to read alone leaves the listing incomplete:
 a poll's incomplete listing reads nothing and stops the early reads, so statements keep their order, and an incomplete
 final listing says that earlier statements' results may be missing and leaves the transaction unknown. A SELECT's rows become the next result set, a DML statement's affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
