@@ -46,7 +46,9 @@ export interface FlowCanvasModel {
   /** Edges by `${from}:${which}`: drawn in the accent (changed in the draft), bold (an overlay's path) or faded. */
   readonly accent: ReadonlySet<string>
   readonly hot: ReadonlySet<string>
-  /** Everything not hot is faded: an overlay draws its path over the rest. */
+  /** Edges at full strength without being on the path (Live run's two ways the current step can go next). */
+  readonly lit?: ReadonlySet<string>
+  /** Everything not hot or lit is faded: an overlay draws its path over the rest. */
   readonly fadeRest: boolean
   /** Chips beside an edge's lane: the loop tag, "changed"; and the order an overlay's run took each edge. */
   readonly chips: readonly { readonly edge: string; readonly text: string; readonly tone?: FlowTone }[]
@@ -442,7 +444,7 @@ export class FlowCanvas {
       if (item.points.length < 2) continue
       const key = flowEdgeKey(item.edge.from, item.edge.which)
       const accent = model.accent.has(key), hot = model.hot.has(key)
-      const dim = !hot && (model.fadeRest || nodes[item.edge.from]?.never)
+      const dim = !hot && !model.lit?.has(key) && (model.fadeRest || nodes[item.edge.from]?.never)
       const color = accent ? colors.accent : item.edge.which === 'success' ? colors.success : colors.error
       const width = hot || accent ? 2.25 : 1.25
       this.polyline(this.edges, item.points, false)
@@ -476,7 +478,7 @@ export class FlowCanvas {
     // Quit pills and the End node.
     for (const quit of layout.quits) {
       const key = flowEdgeKey(quit.edge.from, quit.edge.which)
-      const alpha = model.hot.has(key) ? 1 : model.fadeRest || nodes[quit.edge.from]?.never ? 0.35 : 1
+      const alpha = model.hot.has(key) || model.lit?.has(key) ? 1 : model.fadeRest || nodes[quit.edge.from]?.never ? 0.35 : 1
       const target = quit.edge.target
       if (target.kind === 'missing') { pill(`quit:${key}`, 'Step missing', quit.at[0], quit.at[1], colors.warning, colors.background, colors.warning, alpha); continue }
       const success = target.kind === 'quit' && target.success
@@ -506,7 +508,7 @@ export class FlowCanvas {
       const item = layout.edges.find(edge => flowEdgeKey(edge.edge.from, edge.edge.which) === key)
       if (!item) continue
       const style = styled(this.styles.badge, colors.background), width = Math.max(16, this.measure(text, style) + 8)
-      this.front.roundRect(item.mid[0] - width / 2, item.mid[1] - 8, width, 16, 8).fill(colors.text)
+      this.cards.roundRect(item.mid[0] - width / 2, item.mid[1] - 8, width, 16, 8).fill(colors.text)
       label(`seq:${key}`, text, item.mid[0], item.mid[1] - 6, style, colors.background, 0.5)
     }
     // Nodes.

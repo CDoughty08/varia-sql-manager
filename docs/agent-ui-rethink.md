@@ -158,7 +158,6 @@ After the first release, in docs/agent-plan.md's lanes:
 Later:
 - Copy to another server (a write on a second connection).
 - New Job templates.
-- The Flow view's Last run and Live run overlays and History's Show in Flow (the Targets view is built; see [Flow view (Later)](#flow-view-later)).
 
 ## Every changed view has a rethink scene
 
@@ -194,8 +193,8 @@ chip.
 
 ## Flow view (Later)
 
-Status: **the Targets view is built** (docs/sql-server-agent.md › Steps describes it). The Last run and Live run overlays and History's
-Show in Flow stay Later, with no lane or release.
+Status: **built**: the Targets view, the Last run and Live run overlays and History's Show in Flow (docs/sql-server-agent.md › Steps
+describes them). Per-pass usual time stays open (below).
 Mocks: the "Rethink · steps flow (later)" group in `docs/mockups/sql-server-agent.html` (`rx-flow`, `rx-flow-menu`,
 `rx-flow-edit`, `rx-flow-lastrun`, `rx-flow-running`, `rx-flow-end`), in Dark and Light through the page's Theme box. The
 fictional job is "Finance nightly load": seven steps of five types, with a step that never runs, a loop, a forward jump that skips a step and a

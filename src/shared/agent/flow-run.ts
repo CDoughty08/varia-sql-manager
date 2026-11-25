@@ -1,0 +1,181 @@
+// The Flow view's run overlays (docs/sql-server-agent.md › Steps › Flow; docs/agent-ui-rethink.md › Flow view, decisions 4 and 5): a run's
+// history rows as passes over the steps, and what the graph draws for them. Last run draws one finished (or running) run: the path it took
+// in bold with the order on each edge, each step's outcome and duration (×N and each pass for a step a loop ran more than once), and the
+// steps it never reached faded. Live run adds the current step, from the job header's live state, and the two ways it can go next.
+import { flowEdgeKey, type FlowTarget, type FlowWhich, type StepsFlow } from './flow.ts'
+import { durationText, stampSeconds, type JobHistoryStep } from './job-history.ts'
+
+/** One pass of a step: its rows up to and including its first row that is not a Retry, so ×N counts passes, not rows. */
+export interface FlowPass {
+  /** The step's index in the draft, or -1 when no step of the draft is the one history names (deleted since). */
+  readonly at: number
+  readonly stepId: number
+  readonly name: string
+  /** Its last row: how the pass ended. */
+  readonly outcome: string
+  readonly tone: 'ok' | 'bad' | 'muted'
+  /** The rows' seconds added up (its retries' too), where every row has one. */
+  readonly seconds?: number
+  readonly retries: number
+  readonly rows: readonly JobHistoryStep[]
+}
+
+/** A draft step as history is matched to it: its saved id (`from`) and name. */
+export interface FlowRunStep { readonly from?: number; readonly name: string }
+const retryOutcome = 'Retry'
+const toneOf = (row: JobHistoryStep): FlowPass['tone'] => row.tone === 'error' ? 'bad' : row.tone === 'muted' ? 'muted' : 'ok'
+
+/**
+ * The draft step a history row names. History records the step's id and name as they were when it ran, and a reorder since moves ids, so a
+ * name that one step of the draft has wins (as History's Edit step finds it); else the saved step with that id.
+ */
+export function runStepIndex(steps: readonly FlowRunStep[], row: { readonly stepId: number; readonly name: string }): number {
+  const named = steps.flatMap((step, at) => step.name === row.name ? [at] : [])
+  if (named.length === 1) return named[0]!
+  return steps.findIndex(step => step.from === row.stepId)
+}
+
+/**
+ * A run's step rows (the job outcome row, step 0, is left out) as passes, in the order they ran. A run that is still going can end with
+ * Retry rows of a step that has not finished: they are left out, since that pass has no outcome yet.
+ */
+export function runPasses(rows: readonly JobHistoryStep[], steps: readonly FlowRunStep[]): FlowPass[] {
+  const ordered = rows.filter(row => row.stepId > 0).sort((a, b) => a.instance - b.instance)
+  const passes: FlowPass[] = []
+  let pending: JobHistoryStep[] = []
+  for (const row of ordered) {
+    // Retries belong to the pass of the step they retried; a Retry row of another step starts that step's pass afresh.
+    if (pending.length && pending[0]!.stepId !== row.stepId) pending = []
+    pending.push(row)
+    if (row.outcome === retryOutcome) continue
+    const own = pending
+    pending = []
+    const seconds = own.every(item => item.seconds !== undefined) ? own.reduce((sum, item) => sum + item.seconds!, 0) : undefined
+    passes.push({ at: runStepIndex(steps, row), stepId: row.stepId, name: row.name, outcome: row.outcome, tone: toneOf(row), ...seconds !== undefined ? { seconds } : {}, retries: own.length - 1, rows: own })
+  }
+  return passes
+}
+
+/** What the canvas draws for a run: per step its state words, faded or current; the path's edges bold, with the order each was taken. */
+export interface FlowRunDrawing {
+  readonly steps: readonly { readonly fade: boolean; readonly current?: boolean; readonly bar?: number; readonly right: readonly { readonly text: string; readonly tone: 'ok' | 'bad' | 'muted' | 'run' }[] }[]
+  readonly hot: ReadonlySet<string>
+  /** Edges shown at full strength without being on the path: Live run's two ways the current step can go next. */
+  readonly lit: ReadonlySet<string>
+  readonly sequence: ReadonlyMap<string, string>
+  /** Passes whose step the draft no longer has (deleted since the run): the panel lists them, the graph cannot. */
+  readonly unplaced: number
+}
+
+const whichOf = (pass: FlowPass): FlowWhich | undefined => pass.tone === 'ok' ? 'success' : pass.tone === 'bad' ? 'fail' : undefined
+const leadsTo = (target: FlowTarget | undefined, next: FlowPass | undefined): boolean =>
+  next ? target?.kind === 'step' && target.index === next.at : target?.kind === 'quit' || target?.kind === 'end'
+const glyph = { ok: '✓', bad: '✗', muted: '–' } as const
+
+/**
+ * The path a run took over the graph. Each pass's edge (success after a success, failure after a failure) is on the path when it leads to the
+ * next pass's step, or, for the run's last pass, to a Quit or the End; the order badges number those edges, joined for an edge taken twice.
+ * An edge the draft has changed since the run, so it no longer leads where the run went, is left off rather than drawn wrong.
+ */
+function runPath(flow: StepsFlow, passes: readonly FlowPass[], finished: boolean): { hot: Set<string>; sequence: Map<string, string> } {
+  const hot = new Set<string>(), order = new Map<string, number[]>()
+  passes.forEach((pass, index) => {
+    const which = whichOf(pass), next = passes[index + 1]
+    if (pass.at < 0 || !which || (!next && !finished)) return
+    const key = flowEdgeKey(pass.at, which), edge = flow.edges[pass.at * 2 + (which === 'success' ? 0 : 1)]
+    if (!leadsTo(edge?.target, next)) return
+    hot.add(key)
+    if (next) (order.get(key) ?? order.set(key, []).get(key)!).push(index + 1)
+  })
+  return { hot, sequence: new Map([...order].map(([key, numbers]) => [key, numbers.join(' · ')])) }
+}
+
+/** Each step's words for a run: ×N for more than one pass, each pass's glyph and duration, and its retries. */
+function stepWords(passes: readonly FlowPass[]): FlowRunDrawing['steps'][number]['right'] {
+  const words: { text: string; tone: 'ok' | 'bad' | 'muted' | 'run' }[] = []
+  const retries = passes.reduce((sum, pass) => sum + pass.retries, 0)
+  if (retries) words.push({ text: `${retries} ${retries === 1 ? 'retry' : 'retries'}`, tone: 'muted' })
+  if (passes.length > 1) words.push({ text: `×${passes.length}`, tone: 'muted' })
+  for (const pass of passes) words.push({ text: `${glyph[pass.tone]} ${pass.seconds !== undefined ? durationText(pass.seconds) : pass.outcome}`, tone: pass.tone })
+  return words
+}
+
+/** Last run: the run's passes over the steps; steps it never reached are faded and say Not run. */
+export function lastRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], finished: boolean): FlowRunDrawing {
+  const { hot, sequence } = runPath(flow, passes, finished)
+  const steps = Array.from({ length: flow.count }, (_, at) => {
+    const own = passes.filter(pass => pass.at === at)
+    return own.length ? { fade: false, right: stepWords(own) } : { fade: true, right: [{ text: 'Not run', tone: 'muted' as const }] }
+  })
+  return { steps, hot, lit: new Set(), sequence, unplaced: passes.filter(pass => pass.at < 0).length }
+}
+
+/** The live run's current step, from the header's live state, with how long it has run and its usual time. */
+export interface FlowLiveStep { readonly at: number; readonly retrying: boolean; readonly seconds?: number; readonly usual?: number }
+
+/**
+ * Live run: finished passes as Last run draws them (the current step's own before its ▶), the current step ringed with a bar against its usual time and both its edges lit, and
+ * the steps still to come faded: Waiting where the steps that ran so far lead, else On failure only (reached only by a failure edge).
+ * Without this run's rows (`known` false) only the current step is known; the rest say nothing rather than Waiting.
+ */
+export function liveRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], current: FlowLiveStep | undefined, known: boolean): FlowRunDrawing {
+  const shown = known ? passes : []
+  const { hot, sequence } = runPath(flow, current && current.at >= 0 ? [...shown, { at: current.at } as FlowPass] : shown, false)
+  const lit = new Set<string>()
+  if (current && current.at >= 0) for (const which of ['success', 'fail'] as const) lit.add(flowEdgeKey(current.at, which))
+  const bySuccess = successReach(flow)
+  const steps = Array.from({ length: flow.count }, (_, at) => {
+    if (current?.at === at) {
+      // A step a loop runs again keeps its finished passes before the running one.
+      const words: { text: string; tone: 'ok' | 'bad' | 'muted' | 'run' }[] = [...stepWords(shown.filter(pass => pass.at === at)), { text: `▶ ${current.seconds !== undefined ? durationText(current.seconds) : current.retrying ? 'Between retries' : 'Executing'}`, tone: 'run' as const }]
+      if (current.usual !== undefined) words.push({ text: `usual ${durationText(current.usual)}`, tone: 'muted' as const })
+      const bar = current.seconds !== undefined && current.usual ? Math.min(1, current.seconds / current.usual) : undefined
+      return { fade: false, current: true, ...bar !== undefined ? { bar } : {}, right: words }
+    }
+    const own = shown.filter(pass => pass.at === at)
+    if (own.length) return { fade: false, right: stepWords(own) }
+    if (!known) return { fade: true, right: [{ text: '—', tone: 'muted' as const }] }
+    return { fade: true, right: [{ text: bySuccess[at] ? 'Waiting' : 'On failure only', tone: 'muted' as const }] }
+  })
+  return { steps, hot, lit, sequence, unplaced: shown.filter(pass => pass.at < 0).length }
+}
+
+/** The steps the Start step reaches through success edges only: a step outside it runs only after a failure. */
+function successReach(flow: StepsFlow): boolean[] {
+  const seen = Array.from({ length: flow.count }, () => false)
+  if (flow.start < 0) return seen
+  const queue = [flow.start]
+  seen[flow.start] = true
+  while (queue.length) {
+    const at = queue.shift()!, target = flow.edges[at * 2]?.target
+    if (target?.kind === 'step' && !seen[target.index]) { seen[target.index] = true; queue.push(target.index) }
+  }
+  return seen
+}
+
+/** Where the current step can go next, in words: "step 4 on success · step 6 on failure", or a Quit or the End. */
+export function nextWords(flow: StepsFlow, at: number, which: FlowWhich): string {
+  const target = flow.edges[at * 2 + (which === 'success' ? 0 : 1)]?.target
+  if (!target) return '—'
+  if (target.kind === 'step') return `step ${target.index + 1}`
+  if (target.kind === 'quit') return target.success ? 'quit reporting success' : 'quit reporting failure'
+  if (target.kind === 'end') return 'the end (the job fails)'
+  return 'a step that no longer exists'
+}
+
+/**
+ * How long the current step has run: the server's clock less the end of this run's last finished row (its start plus its duration), or less the
+ * run's start before any row; undefined where a time is not readable. msdb writes a step's row only when it ends, so this is the one estimate.
+ */
+export function currentStepSeconds(rows: readonly JobHistoryStep[], started: number | undefined, now: number | undefined): number | undefined {
+  const nowSeconds = now ? stampSeconds(now) : undefined
+  if (nowSeconds === undefined) return undefined
+  let from = started ? stampSeconds(started) : undefined
+  for (const row of rows) {
+    if (row.stepId <= 0 || row.seconds === undefined) continue
+    const digits = row.started.replace(/\D/g, '').slice(0, 14)
+    const begun = digits.length === 14 ? stampSeconds(Number(digits)) : undefined
+    if (begun !== undefined && (from === undefined || begun + row.seconds > from)) from = begun + row.seconds
+  }
+  return from === undefined || nowSeconds < from ? undefined : nowSeconds - from
+}

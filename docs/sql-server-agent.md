@@ -213,6 +213,21 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
   visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
   readers have the whole graph; arrows move the selection. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
+  Flow's toolbar **Show** switch (Targets only | Last run | Live run; `FlowRunPanel.tsx`, the rules in `src/shared/agent/flow-run.ts`)
+  draws a run over the graph from History's own `agent.history` view, which runs while an overlay shows even with History closed.
+  **Last run** draws the run picked in the run box beside the switch, which is History's selected run (picking one picks it in both;
+  History's run summary has **Show in Flow**, and the panel's **Open in History** goes back). The path it took is bold with the order
+  on each edge ("1 · 3" for an edge taken twice), each step says how its passes ended and how long they took (×N for a step a loop
+  ran more than once, and its retries; a pass is a step's rows up to its first row that is not a Retry), and steps it never reached
+  fade and say Not run. An edge the draft has changed since the run is left off rather than drawn wrong; a pass of a step the job no
+  longer has is counted in the panel. The panel has the run (started, duration against the usual time, invoked by, the step that
+  failed and Agent's message), every pass in order and the chosen pass's whole message with Copy. **Live run** turns on by itself
+  when the job starts and goes back to the overlay before it when the run ends; it rings the current step (from the header's watched
+  state) with how long it has run on the server's clock, its usual time and a bar, lights both ways it can go next, and fades the
+  steps to come: Waiting where the steps so far lead on success, else On failure only. Finished steps come from History's rows of
+  the in-progress run, so Live run follows the newest run in History (Failed off, unpinned); until those rows are read only the
+  current step is known. Its panel has the run against its usual time, the current step with where it goes next, and Stop job. Each
+  step's accessible name adds the overlay's words ("This run: ×2, ✓ 00:00:15, ✓ 00:00:12"). The usual time is per step, not per pass.
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
@@ -552,7 +567,7 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | An SSIS execution messages view for the job history's SSIS link (a query window today) | AG-13 |
 | Schedules timeline; schedule occurrences across midnight and for every N months; an Agent live suite for schedules | AG-14 |
 | Activity Monitor sessions that link to the job they run | AG-16 |
-| Manage Job Categories; multi-server targets (MSX/TSX); Script Action to Job; output file and table log viewers; SQL Server Logs and Database Mail in the Log File Viewer; Agent Properties' Advanced, Alert System, Job System and Connection pages and the fail-safe operator; the operator's History page; Error Logs' Configure; WMI alert editing; Copy to another server; New Job templates; Flow view; Elastic Jobs | Later |
+| Manage Job Categories; multi-server targets (MSX/TSX); Script Action to Job; output file and table log viewers; SQL Server Logs and Database Mail in the Log File Viewer; Agent Properties' Advanced, Alert System, Job System and Connection pages and the fail-safe operator; the operator's History page; Error Logs' Configure; WMI alert editing; Copy to another server; New Job templates; Elastic Jobs | Later |
 | SSMS's Start PowerShell, Reports and Policies items on Agent nodes | Not planned (Varia has none of them on any node) |
 
 AG-4's Script As output still waits for SSMS goldens from an SSMS run (the owner's); it is compared with SMO's own
@@ -650,7 +665,10 @@ Job Activity Monitor (double-click and Enter), saves an edit and a removed alert
 backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, reorders, parses,
 deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job. The `agent-flow` smoke suite
 switches Steps to Flow, fixes the End warning, sets an action from the step menu (Shift+F10, On failure ›) and by dragging a port,
-docks the editor with Enter, checks List shows the same draft and saves it.
+docks the editor with Enter, checks List shows the same draft and saves it. The `agent-flow-run` smoke suite (the fake backend's
+`agent-flow-runs` control file: four branching steps, a failed run with a loop and a retry) draws Last run, picks an older run in the run
+box, comes back through History's Show in Flow, then starts the job and follows Live run from step to step until the view returns to
+Last run with the new run; `VARIA_SMOKE_RECORD=1` records it.
 
 `AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
 a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror

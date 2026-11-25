@@ -15,6 +15,7 @@ import Icon from '../Icon'
 import type { Camera } from '../plans/geometry'
 import type { FlowCanvas, FlowCanvasColors, FlowCanvasModel, FlowCanvasNode } from './FlowCanvas'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
+import { LastRunPanel, LiveRunPanel, RunPicker, useFlowRun } from './FlowRunPanel'
 
 interface FlowProps {
   readonly state: JobDocumentState
@@ -59,10 +60,12 @@ function changedEdges(draft: AgentStepsDraft, model: AgentJobDocumentModel): Set
   return changed
 }
 /** The accessible name of a step's tree item, which says what the node draws. */
-function stepLabel(flow: StepsFlow, step: AgentStepDraft, at: number): string {
+function stepLabel(flow: StepsFlow, step: AgentStepDraft, at: number, run?: readonly { readonly text: string }[]): string {
   const edge = (which: FlowWhich) => flow.edges[at * 2 + (which === 'success' ? 0 : 1)]!
   return `Step ${at + 1}, ${step.name || 'Unnamed step'}, ${stepTypeShort(step.subsystem)}${flow.start === at ? ', Start step' : ''}${flow.reachable[at] ? '' : ', never runs'}. `
     + `On success, ${flowActionWords(edge('success'))}. On failure, ${flowActionWords(edge('fail'))}.`
+    // An overlay's words for the step, as the node draws them: "This run: ×2, ✓ 00:00:03, ✗ 00:00:02".
+    + (run?.length ? ` This run: ${run.map(part => part.text).join(', ')}.` : '')
 }
 /** "Go to the next step · 5 Merge facts", in the summary. */
 function actionLine(edge: FlowEdge, steps: readonly AgentStepDraft[]): string {
@@ -121,6 +124,10 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   // A job with more steps than Varia reads has go-tos past them that are not problems Varia can fix, so it checks nothing (as List).
   const truncated = !!model.stepsTruncated
   const checks = useMemo(() => truncated ? [] : flowChecks(draft.steps, flow), [draft.steps, flow, truncated])
+  // Show: Targets only, or a run drawn over the graph (Last run, or Live run while the job runs).
+  const run = useFlowRun(state, model, draft.steps, flow, service)
+  const running = !!state.live?.running
+  const shown = run?.overlay ?? 'targets'
   const canvasModel: FlowCanvasModel = useMemo(() => {
     const accent = changedEdges(draft.steps, model)
     const nodes = steps.map((step, at): FlowCanvasNode => ({
@@ -131,8 +138,12 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
       ...flow.loops.map(loop => ({ edge: flowEdgeKey(loop.back.from, loop.back.which), text: `Loop · ${loop.steps.map(step => step + 1).join(loop.steps.length === 2 ? ' \u21C4 ' : ', ')}` })),
       ...[...accent].map(edge => ({ edge, text: 'changed', tone: 'accent' as const }))
     ]
-    return { flow, layout, nodes, accent, hot: new Set(), fadeRest: false, chips, sequence: new Map() }
-  }, [flow, layout, steps, draft.steps, model])
+    if (!run) return { flow, layout, nodes, accent, hot: new Set(), fadeRest: false, chips, sequence: new Map() }
+    // A run over the graph: its path bold and numbered, the rest faded; the draft's own marks (changed, loops) stay.
+    const { drawing } = run
+    const drawn = nodes.map((node, at) => ({ ...node, ...drawing.steps[at] }))
+    return { flow, layout, nodes: drawn, accent, hot: drawing.hot, lit: drawing.lit, fadeRest: true, chips, sequence: drawing.sequence }
+  }, [flow, layout, steps, draft.steps, model, run])
   const palette: FlowCanvasColors = useMemo(() => ({
     background: colors['panel.background'], card: colors['input.background'], text: colors.foreground, muted: colors.descriptionForeground, border: colors['panel.border'],
     accent: colors.focusBorder, selection: colors['list.inactiveSelectionBackground'], success: colors.successForeground, error: colors.errorForeground, warning: colors.warningForeground,
@@ -209,6 +220,22 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
     <div className="agent-flow-toolbar" role="toolbar" aria-label="Steps flow">
       {switcher}
       <span className="agent-flow-sep" />
+      <span className="agent-flow-label" id={`agent-flow-${state.id}-show`}>Show</span>
+      <span className="segmented agent-flow-show" role="radiogroup" aria-labelledby={`agent-flow-${state.id}-show`} onKeyDown={event => {
+        const order: readonly ('targets' | 'last' | 'live')[] = running ? ['targets', 'last', 'live'] : ['targets', 'last']
+        const keys: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+        if (!(event.key in keys) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+        event.preventDefault()
+        const next = order[(order.indexOf(shown) + keys[event.key]! + order.length) % order.length]!
+        service.setFlowOverlay(state.id, next)
+        event.currentTarget.querySelector<HTMLElement>(`[data-show="${next}"]`)?.focus()
+      }}>
+        {([['targets', 'Targets only'], ['last', 'Last run'], ['live', 'Live run']] as const).map(([value, label]) => <button key={value} type="button" role="radio" className="segmented-option" data-show={value}
+          aria-checked={shown === value} tabIndex={shown === value ? 0 : -1} disabled={value === 'live' && !running} title={value === 'live' && !running ? 'Live run shows while the job runs; it turns on by itself when the job starts.' : undefined}
+          onClick={() => service.setFlowOverlay(state.id, value)}>{value === 'live' && running && <Icon name="play" />}{label}</button>)}
+      </span>
+      {shown === 'last' && <RunPicker state={state} service={service} />}
+      <span className="agent-flow-sep" />
       <button type="button" disabled={!editable || steps.length >= agentLimits.stepsPerJob} title={steps.length >= agentLimits.stepsPerJob ? stepText.tooMany : undefined}
         onClick={() => service.addStepOf(state.id, adding)}><Icon name="add" />Add step</button>
       <select className="property-input agent-flow-type" aria-label="Type of the step to add" value={adding} disabled={!editable} onChange={event => setAdding(event.target.value)}>
@@ -238,13 +265,13 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
             const next = steps[at]
             if (next) service.selectStep(state.id, next.key)
           }}>
-          {steps.map((step, at) => <div key={step.key} id={`agent-flow-${state.id}-${step.key}`} role="treeitem" aria-selected={at === selected} aria-label={stepLabel(flow, step, at)}
+          {steps.map((step, at) => <div key={step.key} id={`agent-flow-${state.id}-${step.key}`} role="treeitem" aria-selected={at === selected} aria-label={stepLabel(flow, step, at, run?.drawing.steps[at]?.right)}
             className="agent-flow-item" data-step-key={step.key} ref={element => { if (element) { items.current.set(step.key, element); menuTarget(element) } else items.current.delete(step.key) }} />)}
           <span ref={dropMarker} className="agent-flow-drop" aria-hidden="true" />
         </div>
       </div>
       <div className="agent-flow-side">
-        {editing ? <>
+        {run && !editing ? run.overlay === 'last' ? <LastRunPanel state={state} run={run} service={service} /> : <LiveRunPanel state={state} run={run} flow={flow} service={service} /> : editing ? <>
           <div className="agent-flow-head"><span>{`Step ${selected + 1} of ${steps.length}`}</span>
             <button type="button" onClick={() => service.closeStepEditor(state.id)}><Icon name="close" />Close editor</button></div>
           {editor(selectedStep!, selected)}

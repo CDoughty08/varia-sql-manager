@@ -683,3 +683,57 @@ describe("the job document's Steps page", () => {
     expect(jobDocuments.get(id)?.ssis).toMatchObject({ open: 'F\\P1', projectModels: { 'F\\P2': expect.anything() } })
   })
 })
+
+describe("the job document's Flow overlays", () => {
+  const tick = (handle: FakeLiveHandle, seq: number, status: number, step: number) =>
+    handle.deliver({ type: 'live.tick', seq, sampledAt: seq, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 2000, metrics: [status, step, 2, 0, 1, 0] }] })
+
+  it('reads History for Last run with its section closed, turns Live run on when the job starts and goes back when it ends', async () => {
+    const { jobDocuments, live } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const frame = jobDocuments.get(id)!.frame
+    jobDocuments.setFrame(id, { ...frame, collapsed: [...frame.collapsed.filter(section => section !== 'history'), 'history'] })
+    // The section and Flow's run panels attach the view as they mount; whether it runs is the owner's visible().
+    jobDocuments.history.attach(id, '11111111-1111-1111-1111-111111111111')
+    const historyView = () => (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job-history:' + id && !item.disposed)
+    expect(historyView()?.owner.visible?.()).toBe(false)
+    // Last run, from the toolbar: Flow's overlay keeps History's view running though its section is closed; on List it does not.
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.setFlowOverlay(id, 'last')
+    expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    expect(historyView()?.owner.visible?.()).toBe(true)
+    jobDocuments.setStepsView(id, 'list')
+    expect(historyView()?.owner.visible?.()).toBe(false)
+    jobDocuments.setStepsView(id, 'flow')
+    // Live run needs a running job; when one starts it turns on by itself, and the overlay before it comes back when the run ends.
+    jobDocuments.setFlowOverlay(id, 'live')
+    expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    const watched = (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job:' + id)!
+    tick(watched, 1, 1, 1)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('live')
+    tick(watched, 2, 4, 0)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    jobDocuments.setFlowOverlay(id, 'targets')
+    tick(watched, 3, 1, 1)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('live')
+    tick(watched, 4, 4, 0)
+    expect(jobDocuments.flowOverlayOf(id)).toBeUndefined()
+    expect(historyView()?.owner.visible?.()).toBe(false)
+  })
+  it("shows a History run in Flow: the Steps section, Flow's Last run and that run selected", async () => {
+    const { jobDocuments } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const run = { job: '11111111-1111-1111-1111-111111111111', instance: 7 }
+    jobDocuments.history.attach(id, run.job)
+    jobDocuments.openStepEditor(id, 's1')
+    jobDocuments.showRunInFlow(id, run)
+    expect(jobDocuments.get(id)).toMatchObject({ stepsView: 'flow', flowOverlay: 'last' })
+    expect(jobDocuments.get(id)?.stepEditor).toBeUndefined()
+    expect(jobDocuments.get(id)!.frame).toMatchObject({ section: 'steps' })
+    expect(jobDocuments.history.get(id)?.selected).toEqual(run)
+    jobDocuments.openHistory(id)
+    expect(jobDocuments.get(id)!.frame).toMatchObject({ section: 'history' })
+  })
+})

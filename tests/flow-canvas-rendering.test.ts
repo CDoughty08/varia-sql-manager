@@ -17,8 +17,8 @@ vi.mock('pixi.js', async original => {
   let styles = 0, system: TextSystem
   class Container { position = { set() {} }; scale = { set() {} }; addChild() {} }
   class Graphics extends Container {
-    context = this; visible = true
-    clear() { return this } rect() { return this } roundRect() { return this } circle() { return this } fill() { return this } stroke() { return this }
+    context = this; visible = true; shapes: number[][] = []
+    clear() { this.shapes = []; return this } rect() { return this } roundRect(...box: number[]) { this.shapes.push(box); return this } circle() { return this } fill() { return this } stroke() { return this }
     moveTo() { return this } lineTo() { return this } closePath() { return this } save() { return this } setTransform() { return this } path() { return this } restore() { return this }
   }
   class TextStyle { fill = ''; styleKey = `style${styles++}`; constructor(_options: unknown) {} clone() { return new TextStyle({}) } destroy() {} }
@@ -125,4 +125,20 @@ it('draws again at a new display scale, caps the backing store at what the devic
     gpu.limit = 0; gpu.allocatable = 0
     frames.mockRestore(); media.mockRestore(); pixelRatio.mockRestore()
   }
+})
+
+it("draws the run overlay's order badges under their numbers, not on the layer above the labels", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const root = document.createElement('div')
+  Object.defineProperty(root, 'clientWidth', { value: 900 }); Object.defineProperty(root, 'clientHeight', { value: 600 })
+  const canvas = create(root), rendering = canvas as unknown as Rendering & { front: { shapes: number[][] }; cards: { shapes: number[][] } }
+  try {
+    await Promise.resolve()
+    canvas.update({ ...model(), hot: new Set(['0:success']), fadeRest: true, sequence: new Map([['0:success', '1 · 3']]) }, 0, false, true)
+    rendering.draw()
+    expect(rendering.pool.active.has('seq:0:success')).toBe(true)
+    // The labels layer sits between cards and front (world: back, edges, cards, labels, front): a pill on front hides its number.
+    expect(rendering.front.shapes).toEqual([])
+    expect(rendering.cards.shapes.some(box => box[3] === 16 && box[4] === 8)).toBe(true)
+  } finally { canvas.dispose(); frames.mockRestore() }
 })
