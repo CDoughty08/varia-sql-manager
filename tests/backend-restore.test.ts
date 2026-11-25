@@ -29,6 +29,7 @@ describe('backend restore', () => {
     const rids = /<RuntimeIdentifiers>([^<]+)<\/RuntimeIdentifiers>/.exec(readFileSync(project, 'utf8'))?.[1].split(';')
     const lock = JSON.parse(readFileSync('backend/Varia.Backend/packages.lock.json', 'utf8')) as { dependencies: Record<string, unknown> }
     expect(Object.keys(lock.dependencies).sort()).toEqual(['net11.0', ...rids!.map(rid => `net11.0/${rid}`)].sort())
-    expect(readFileSync('.github/workflows/package.yml', 'utf8')).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj .*-r \$\{\{ inputs\.rid \}\} .*-p:RestoreLockedMode=true/)
+    expect(readFileSync('.github/workflows/package.yml', 'utf8')).toContain('node scripts/package-prepare.mjs --rid ${{ inputs.rid }}')
+    expect(readFileSync('scripts/package-prepare.mjs', 'utf8')).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj .*-r \$\{rid\} .*-p:RestoreLockedMode=true/)
   })
 })

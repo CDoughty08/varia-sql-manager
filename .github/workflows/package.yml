@@ -46,6 +46,8 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - name: Check release version
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -58,36 +60,56 @@ jobs:
       - name: Type check
         if: startsWith(github.ref, 'refs/tags/')
         run: npm run typecheck
-      - name: Build application
-        run: npx electron-vite build
-      - name: Prepare pinned SQL Tools Service
-        run: npm run sqltools:prepare -- --rid ${{ inputs.rid }}
-      # ReadyToRun (the project sets it for a RID-specific publish), restored from packages.lock.json's entry for the RID.
-      - name: Publish self-contained backend
-        run: dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${{ inputs.rid }} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend
-      # One native file (the project sets PublishAot for a RID-specific publish), which electron-builder copies into the
-      # Windows packages' resources (build/updater-check.cjs refuses to package without it). Its compiler comes from
-      # nuget.org at the version of the SDK global.json resolves to, and NuGet's audit is an error there: an SDK whose
-      # compiler has a known advisory, or nuget.org being unreachable, fails this step.
-      - name: Publish update helper
-        if: runner.os == 'Windows'
-        run: dotnet publish backend/Varia.Updater/Varia.Updater.csproj -c Release -r ${{ inputs.rid }} -o artifacts/updater
+      # Build application, prepare pinned SQL Tools Service, publish ReadyToRun backend and (on Windows) NativeAOT update helper concurrently.
+      - name: Prepare application, SQL Tools Service, backend and update helper
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            node scripts/package-prepare.mjs --rid ${{ inputs.rid }} --updater
+          else
+            node scripts/package-prepare.mjs --rid ${{ inputs.rid }}
+          fi
+      # Tags, manual runs and the weekly x64 check build full compressed release artifacts (including macOS DMG/ZIP).
+      # Non-tag main and PR pushes use store compression on Windows (still building and smoke-testing Setup.exe, Portable.exe,
+      # win-x64.zip and the updater) and --mac dir on macOS (still building and smoke-testing the full .app bundle with fuses
+      # and asar integrity while skipping the unused DMG/ZIP compression and hdiutil step).
       - name: Package application
         id: package
-        run: npm run package -- ${{ inputs.target }}
+        shell: bash
+        env:
+          TARGET_ARGS: ${{ inputs.target }}
+          TARGET_RID: ${{ inputs.rid }}
+          FULL_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}
+        run: |
+          if [ "$FULL_RELEASE" = "1" ]; then
+            npm run package -- $TARGET_ARGS
+          elif [ "$TARGET_RID" = "win-x64" ]; then
+            npm run package -- $TARGET_ARGS --config.compression=store
+          elif [ "$TARGET_RID" = "osx-arm64" ]; then
+            npm run package -- --mac dir --arm64
+          elif [ "$TARGET_RID" = "osx-x64" ]; then
+            npm run package -- --mac dir --x64
+          else
+            npm run package -- $TARGET_ARGS
+          fi
       - name: Check release assets
         shell: pwsh
+        env:
+          FULL_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}
         run: |
           $version = (Get-Content package.json | ConvertFrom-Json).version
+          $full = $env:FULL_RELEASE -eq '1'
           $expected = switch ('${{ inputs.rid }}') {
             'win-x64' { @("dist/Varia-SQL-Manager-$version-Windows-x64-Setup.exe", "dist/Varia-SQL-Manager-$version-Windows-x64-Portable.exe", "dist/Varia-SQL-Manager-$version-win-x64.zip", "dist/win-unpacked/resources/updater/Varia.Updater.exe") }
             'linux-x64' { @("dist/Varia-SQL-Manager-$version-linux-x86_64.AppImage") }
-            'osx-arm64' { @("dist/Varia-SQL-Manager-$version-mac-arm64.dmg", "dist/Varia-SQL-Manager-$version-mac-arm64.zip") }
-            'osx-x64' { @("dist/Varia-SQL-Manager-$version-mac-x64.dmg", "dist/Varia-SQL-Manager-$version-mac-x64.zip") }
+            'osx-arm64' { if ($full) { @("dist/Varia-SQL-Manager-$version-mac-arm64.dmg", "dist/Varia-SQL-Manager-$version-mac-arm64.zip") } else { @("${{ inputs.executable }}") } }
+            'osx-x64' { if ($full) { @("dist/Varia-SQL-Manager-$version-mac-x64.dmg", "dist/Varia-SQL-Manager-$version-mac-x64.zip") } else { @("${{ inputs.executable }}") } }
           }
           foreach ($file in $expected) { if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing release asset: $file" } }
       # The packaged names must be ones the update manifest recognises, or this platform's copies could never update.
+      # Non-tag macOS --dir builds produce no DMG/ZIP installers to manifest; tags, manual runs and weekly runs verify them.
       - name: Check update manifest
+        if: runner.os != 'macOS' || startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         shell: bash
         run: node scripts/update-manifest.mjs dist "$(node -p "require('./package.json').version")"
       - name: Prepare Linux display
@@ -101,10 +123,14 @@ jobs:
         shell: bash
         env:
           VARIA_PACKAGED_EXECUTABLE: ${{ inputs.executable }}
+          VARIA_PACKAGED_RID: ${{ inputs.rid }}
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
             xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/packaged-smoke.mjs
           else
+            if [ "$RUNNER_OS" = macOS ] && [ "$(uname -m)" = "arm64" ] && [ "${{ inputs.rid }}" = "osx-x64" ]; then
+              /usr/bin/pgrep -q oahd || /usr/sbin/softwareupdate --install-rosetta --agree-to-license || true
+            fi
             node scripts/packaged-smoke.mjs
           fi
       # The AppImage itself, which the smoke test above (linux-unpacked) never runs: its runtime, squashfs, generated AppRun
