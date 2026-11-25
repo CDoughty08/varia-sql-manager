@@ -151,11 +151,12 @@ internal sealed record MessageEntry(string Text, string Kind, int? Line = null);
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
 /// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.
 /// Spid (SqlConnection.ServerProcessId) and Login (SUSER_SNAME(), read with the SET prologue) are the session's, read once when
-/// it opened; both are present while it is still open after the script.</summary>
+/// it opened; both are present while it is still open after the script. IndexStale (BigQuery) numbers the newest stale mark the
+/// connection's Search Objects index has not spent yet, so the renderer asks one stale-only build per new mark.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
     int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null,
-    BigQuery.BigQueryJobSummary? Job = null);
+    BigQuery.BigQueryJobSummary? Job = null, long? IndexStale = null);
 
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the
@@ -473,9 +474,9 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is projects, names (pass 1) or details (pass 2) while building; NamesOnly lists
 /// projects whose details could not be read due to the memory budget; Bulk is the last full build's billed bulk path, when it ran;
-/// Projects counts the distinct projects held in the index.</summary>
+/// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left).</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>

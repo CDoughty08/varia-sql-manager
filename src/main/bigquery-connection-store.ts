@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { bigQueryProjectSchema, connectionAutoReconnectSchema, connectionKey } from '../shared/connections'
 import {
-  bigQueryCostPromptInputSchema, bigQueryEnvironmentInputSchema, bigQueryLibraryFileSchema, bigQueryLibraryLimits, bigQueryProfileInputSchema,
+  bigQueryCostPromptInputSchema, bigQueryCostThresholdInputSchema, bigQueryEnvironmentInputSchema, bigQueryLibraryFileSchema, bigQueryLibraryLimits, bigQueryProfileInputSchema,
   bigQueryStarProjectInputSchema, bigQueryStarredPrincipalSchema,
   type BigQueryConnectionProfile, type BigQueryLibraryFile, type BigQueryLibraryView, type BigQueryProfileInput, type BigQueryStarredProjectsView, type BigQueryStoredProfile
 } from '../shared/bigquery-connections'
@@ -86,11 +86,36 @@ function setChoice(library: BigQueryLibraryFile, key: string, costPrompt: boolea
   }
 }
 
-/** History keeps the 30 most recent connections; an entry that is not a favourite, saved or recent is dropped. */
+/** The cost-prompt threshold of every entry with these settings, like the choice; 0 (Options' threshold) is not stored. */
+function setThreshold(library: BigQueryLibraryFile, key: string, costThreshold: number) {
+  for (const item of library.profiles) {
+    if (keyOf(item.options) !== key) continue
+    const { costThreshold: _costThreshold, ...next } = item.options
+    item.options = costThreshold ? { ...next, costThreshold } : next
+  }
+}
+/** The threshold entries with these settings share, if any. */
+const sharedThreshold = (library: BigQueryLibraryFile, key: string) => library.profiles.find(item => item.options.costThreshold && keyOf(item.options) === key)?.options.costThreshold
+
+/** History keeps the 30 most recent connections; an entry that is not a favourite, saved or recent is dropped. A dropped
+ *  entry's key file stays known by its reference (`keptKeyFiles`, newest last), so a target restored from it still finds
+ *  the file; a reference an entry holds again is the entry's. */
 function prune(library: BigQueryLibraryFile) {
   const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
   for (const item of recent.slice(bigQueryLibraryLimits.recent)) delete item.lastConnected
+  const dropped = library.profiles.filter(item => !(item.favorite || item.saved || item.lastConnected))
   library.profiles = library.profiles.filter(item => item.favorite || item.saved || item.lastConnected)
+  const held = new Set(library.profiles.flatMap(item => item.options.keyFile ? [item.options.keyFile] : []))
+  const kept = (library.keptKeyFiles ?? []).filter(item => !held.has(item.reference))
+  for (const item of dropped) {
+    const reference = item.options.keyFile
+    if (!reference || !item.keyPath || held.has(reference)) continue
+    const at = kept.findIndex(other => other.reference === reference)
+    if (at >= 0) kept.splice(at, 1)
+    kept.push({ reference, keyPath: item.keyPath })
+  }
+  if (kept.length) library.keptKeyFiles = kept.slice(-bigQueryLibraryLimits.keptKeyFiles)
+  else delete library.keptKeyFiles
   if (library.profiles.length > bigQueryLibraryLimits.profiles) throw new Error('The connection library supports up to 200 saved BigQuery connections.')
 }
 
@@ -120,7 +145,10 @@ export class BigQueryConnectionStore {
     }
     // A path this platform cannot use (a Windows path read on Linux or macOS) makes the file invalid too, rather than
     // failing every later read.
-    try { for (const profile of library.profiles) if (profile.options.keyFile && profile.keyPath) this.keyFiles.remember(profile.options.keyFile, profile.keyPath) }
+    try {
+      for (const kept of library.keptKeyFiles ?? []) this.keyFiles.remember(kept.reference, kept.keyPath)
+      for (const profile of library.profiles) if (profile.options.keyFile && profile.keyPath) this.keyFiles.remember(profile.options.keyFile, profile.keyPath)
+    }
     catch {
       await quarantine(this.path)
       return { library: empty(), warning: 'The saved BigQuery connections were invalid. Their original file was preserved.' }
@@ -186,10 +214,14 @@ export class BigQueryConnectionStore {
       // connection's, not the entry's: an entry edited to new settings leaves its old choice behind); true is the default.
       const shared = library.profiles.some(item => item.options.costPrompt === false && keyOf(item.options) === key) ? false : undefined
       const costPrompt = options.costPrompt ?? shared
-      const { costPrompt: _costPrompt, ...rest } = kept ? { ...options, environment: kept } : options
-      profile.options = costPrompt === false ? { ...rest, costPrompt: false } : rest
+      // The threshold likewise: options that name none (a connect from a live connection's settings) keep the shared one,
+      // and 0 clears it.
+      const costThreshold = options.costThreshold ?? sharedThreshold(library, key)
+      const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...rest } = kept ? { ...options, environment: kept } : options
+      profile.options = { ...rest, ...costPrompt === false ? { costPrompt: false } : {}, ...costThreshold ? { costThreshold } : {} }
       // A choice the options name is the connection's: entries with the same settings take it too.
       if (options.costPrompt !== undefined) setChoice(library, key, options.costPrompt)
+      if (options.costThreshold !== undefined) setThreshold(library, key, options.costThreshold)
       if (keyPath) profile.keyPath = keyPath
       else delete profile.keyPath
       if (input.favorite !== undefined) profile.favorite = input.favorite
@@ -223,7 +255,12 @@ export class BigQueryConnectionStore {
     const options = stored(input.options), key = keyOf(options), keyPath = this.keyPath(options)
     return (await this.change(library => {
       let profile = library.profiles.find(item => keyOf(item.options) === key)
-      if (!profile) { profile = { id: randomUUID(), options, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }; library.profiles.push(profile) }
+      if (!profile) {
+        // Only the label changes: the cost preferences take their defaults until set.
+        const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...plain } = options
+        profile = { id: randomUUID(), options: plain, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }
+        library.profiles.push(profile)
+      }
       const next = { ...profile.options }
       if (input.environment) next.environment = input.environment
       else delete next.environment
@@ -236,11 +273,30 @@ export class BigQueryConnectionStore {
   /** "Don't ask again for this connection" for a live BigQuery connection: only its entry's cost-prompt choice changes. */
   async setCostPrompt(value: unknown): Promise<BigQueryLibraryFile> {
     const input = bigQueryCostPromptInputSchema.parse(value)
-    const options = stored(input.options), key = keyOf(options), keyPath = this.keyPath(options)
+    return this.setForEntry(input.options, (library, key) => setChoice(library, key, input.costPrompt))
+  }
+
+  /** The connection's own cost-prompt threshold, named by a connect that reused a live connection: only its entry's
+   *  threshold changes (0 clears it). */
+  async setCostThreshold(value: unknown): Promise<BigQueryLibraryFile> {
+    const input = bigQueryCostThresholdInputSchema.parse(value)
+    // Clearing a threshold settings with no entry never had adds no History entry.
+    return this.setForEntry(input.options, (library, key) => setThreshold(library, key, input.costThreshold), input.costThreshold !== 0)
+  }
+
+  /** Applies `apply` to the entries with these settings, adding an entry for them first when there is none. */
+  private async setForEntry(value: BigQueryConnectionOptions, apply: (library: BigQueryLibraryFile, key: string) => void, create = true): Promise<BigQueryLibraryFile> {
+    const options = stored(value), key = keyOf(options), keyPath = this.keyPath(options)
     return (await this.change(library => {
       let profile = library.profiles.find(item => keyOf(item.options) === key)
-      if (!profile) { profile = { id: randomUUID(), options, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }; library.profiles.push(profile) }
-      setChoice(library, key, input.costPrompt)
+      if (!profile && !create) return
+      if (!profile) {
+        // A new entry keeps only what the options name for it: the other preferences take their defaults until set.
+        const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...plain } = options
+        profile = { id: randomUUID(), options: plain, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }
+        library.profiles.push(profile)
+      }
+      apply(library, key)
       prune(library)
       if (!library.profiles.includes(profile)) throw new Error('The connection could not be kept in the saved connections.')
     })).library
@@ -250,7 +306,10 @@ export class BigQueryConnectionStore {
   async remove(id: string): Promise<{ library: BigQueryLibraryFile; removed: boolean }> {
     const changed = await this.change(library => {
       const before = library.profiles.length
+      const gone = library.profiles.find(item => item.id === id)
       library.profiles = library.profiles.filter(item => item.id !== id)
+      // Removing an entry forgets its key file's path, a pruned copy of it included.
+      if (gone?.keyPath && library.keptKeyFiles) library.keptKeyFiles = library.keptKeyFiles.filter(item => item.keyPath !== gone.keyPath)
       return library.profiles.length !== before
     }, removed => !removed)
     return { library: changed.library, removed: changed.value }

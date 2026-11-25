@@ -4,13 +4,14 @@ Varia connects to Google BigQuery beside SQL Server. This page describes how it 
 connections, sign-in, identity pins, connect and disconnect, the pre-connect methods, execution, Object Explorer, Job
 History, errors, emulator mode, what Varia does not do yet and testing. Search Objects indexes BigQuery connections too
 ([Search Objects › BigQuery](object-search.md#bigquery)), docs/googlesql.md describes GoogleSQL editing, and
-docs/language-services.md its [completion](language-services.md#completion-from-the-index).
+docs/language-services.md its [completion](language-services.md#completion-from-the-index),
+[Go To Definition and Peek](language-services.md#go-to-definition) and [Move Commas](language-services.md#toggle-brackets-and-comma-placement).
 
 Varia runs GoogleSQL only; legacy SQL is refused (`LEGACY_SQL`). SQL Server-only features are hidden for a BigQuery
 connection rather than half-working, through the catalogues' `providers` and the method gate (docs/architecture.md,
 Provider gating): Activity Monitor, Integration Services, SQL Server Agent, Table Designer, object actions other than
-Properties, execution plans, client statistics, Go To Definition, and Object Explorer's live status chips (their
-probes are SQL Server's). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
+Properties, execution plans, client statistics and Toggle Brackets. Object Explorer's live status chips
+have a BigQuery chip of their own ([Object Explorer](#object-explorer), Running jobs). A BigQuery connection's icon is Varia's own (a magnifier over bars), not Google's logo.
 [docs/mockups/bigquery-ui.html](mockups/bigquery-ui.html) mocks the BigQuery screens on Varia's own renderer; where it and
 this page differ, this page describes what ships.
 
@@ -29,7 +30,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, and Ask before running a query over the cost threshold (cleared by "Don't ask again"; Cost, below). |
+| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Ask before running a query over the cost threshold (cleared by "Don't ask again"), and **Prompt above**, the connection's own threshold in whole GiB (empty, its placeholder naming Options' value, follows Options'; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -46,10 +47,12 @@ a Connect, Test Connection, Browse or the Default dataset list (which loads when
 ## Saved connections
 
 BigQuery entries live in `bigquery-connections.json` beside SQL Server's library: favourites, saved entries and the 30
-most recent connects, each keyed by its settings, with environment labels and the cost-prompt choice (`costPrompt: false`,
-[Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
-saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. A
-target whose entry has left the history (pruned or removed) asks for the key file again. The file also keeps the newest 64 confirmed federation token files and per-principal Starred Projects (up to 64 principals, 200 projects each; separate from connection identity, so starring projects never creates duplicate connections; legacy `extraProjects` from earlier files migrate into Starred Projects automatically). The dialog's history
+most recent connects, each keyed by its settings, with environment labels, the cost-prompt choice (`costPrompt: false`) and the connection's own threshold (`costThreshold`,
+whole GiB; [Cost](#cost)) per entry, written atomically and quarantined if unreadable. An entry with a key file keeps the file's path for main only; after a restart main reads the
+saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. An
+entry pruned from the 30 most recent leaves its key file's path behind (`keptKeyFiles`, the newest 48, for main only; with the 200 saved entries that stays within main's 256 remembered key files), so a
+connection still open from it reconnects after a restart without asking for the file again; a later connect from the
+history or the dialog takes the path back into an entry. Removing an entry forgets its path, a kept copy included, so a target whose entry was removed asks for the key file again. The file also keeps the newest 64 confirmed federation token files and per-principal Starred Projects (up to 64 principals, 200 projects each; separate from connection identity, so starring projects never creates duplicate connections; legacy `extraProjects` from earlier files migrate into Starred Projects automatically). The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
 default dataset and the sign-in (with the key file's name). Object Explorer, tabs, the query bar and the status bar show
 the project where SQL Server shows the server; the query tab's **Dataset** box, and the palette's Change Database, list the
@@ -470,6 +473,9 @@ BigQuery" (`RemoteResult.cs`, `SqlService.BigQueryResidence.cs`; the protocol is
   suggest filtering, the Pivot builder says the result cannot be pivoted yet, the Compare popover leaves it out, Search
   skips it, and the Highlight commands are greyed. A result kept short by Rows kept per execution says where that limit
   is set (Query Results › SQL Server › Results to Grid, which BigQuery results follow too) and that the query ran in full.
+  The limit counts over every result set of an execution, as SQL Server's does: a script's later SELECT keeps (or windows)
+  only what its earlier ones left, and one with nothing left keeps no rows, in memory, its rows counted. A new query from
+  such a result (Re-run, a BigQuery-side sort or filter) runs with the whole limit.
 
 ### Sort and filter in BigQuery
 
@@ -481,7 +487,7 @@ BigQuery" in their tooltips.
 
 - **Estimate first.** Before each one, `bigquery.dryRun` estimates it (free) and the cost prompts of Cost › Before Execute
   apply as they do to Execute: above the threshold, or an incomplete estimate. A declined prompt runs nothing and the
-  grid keeps what it showed; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
+  grid keeps what it showed; the estimate reads a checklist's ticks without fixing them, and only the query fixes them; a failed estimate says why in the toolbar and runs nothing. The query's job, rows and cost
   go to Messages.
 - **Sort.** Up to 16 keys, ascending with NULLs first and descending with NULLs last, as the in-memory sort orders them.
   BigQuery cannot order ARRAY, STRUCT, GEOGRAPHY, JSON, RANGE or INTERVAL columns: their sort button says so and refuses,
@@ -573,7 +579,16 @@ Messages).
   first, and a pending diagnostics run is dropped. Varia asks in only two cases, each opening with focus on
   Cancel as an alert dialog with a **Cost settings…** link:
   - **Above the threshold** (default 10 GiB): "This query will process 1.41 TiB (about $8.81 on demand), more than the
-    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. That choice is
+    10.00 GiB threshold. Run it?", with Run, Cancel and **Don't ask again for** the connection's name. The threshold is
+    the connection's own when its Advanced Properties › Cost › **Prompt above** sets one (1 to 1,048,576 GiB, as Options'),
+    else Options'; the chip's amber follows the same one (read from the saved entry when the tab connects and before each
+    prompt, and at once after a Connect or Save that changes it). Like the choice below, it is a preference of the saved entry,
+    not part of the connection's identity or target, so changing it never opens a second connection: entries with the
+    same settings share it, a connect that names none (a live connection's settings never carry it) keeps it, and the
+    dialog shows the saved one and names a value only when Prompt above changes (emptied, it sends 0, which clears it and
+    is never stored). A connect that reuses a live connection saves it through main; one that cannot be saved holds for the session.
+    A read that finds the saved connections unreadable keeps the threshold last read. When the threshold is the
+    connection's own, the prompt says so. That choice is
     kept on the saved entry as `costPrompt: false` (written through main's `varia:bigquery-cost-prompt`), so reconnects
     and restarts keep it; the connection's Advanced Properties › Cost › **Ask before running a query over the cost
     threshold** shows the saved choice and turns it back on. The Connect form names a choice only when that box is
@@ -586,6 +601,10 @@ Messages).
     `UNKNOWN` (DDL that reads no table, such as DROP or TRUNCATE, never counts as 0-byte; DML and CREATE TABLE AS SELECT
     do). **Don't warn me about incomplete estimates
     again** clears `queryExecution.bigQuery.incompleteEstimateWarning`.
+
+  Every billed path asks through these same prompts with the same threshold: Execute, Job History's Re-run, a windowed
+  result's sort, filter, value list and sample, Script As › CREATE and the on-demand definitions of Peek and Properties,
+  and the Search Objects index's billed build (`BigQueryCostService.prompts`).
 
   One prompt shows at a time: another tab's waits its turn, so an answer always goes to the query it was shown for, and
   one that the answer before it made moot (Don't ask again) is not shown; the incomplete-estimate warning it was
@@ -634,6 +653,14 @@ listers; nothing in it runs a job.
   punctuation (300 characters, STRUCT fields up to 15 deep). They hold on BigQuery's branches of the zod schemas and C#
   only; SQL Server's names keep their 128 characters.
 - **Copy and drag.** A node inserts its backtick-quoted path (`` `project.dataset.table` ``; a column each part quoted).
+- **Running jobs.** The connection node's status chip, "N jobs running", counts the connection principal's own pending and
+  running jobs in the billing project: jobs.list with `stateFilter` pending and running, without `allUsers`, projection
+  minimal, top-level jobs only (a running script counts once), through the rate limiter above. It is a free API call, never a
+  query. Jobs other principals run in the project, and jobs in the extra projects, are not counted; Job History's All users
+  shows those. It is the `explorer.bigquery` probe of the `bigquery.explorer` live source (docs/live.md), every 10 s, sampled
+  only while Object Explorer shows and paused while it is hidden, like SQL Server's chips (docs/object-explorer.md, Live
+  status); Options › Environment › Live data › Show live status in Object Explorer turns both off. It counts up to 10,000 ("10,000+" past that), shows
+  nothing while nothing runs or when the listing is refused, and has no click action. Datasets have no chips.
 
 ### Preview Rows
 
@@ -678,6 +705,11 @@ queries: metadata comes solely from free `bigquery.properties`, **Preview Rows**
 selected, and native table **Definition** stays on-demand with dry-run estimate and cost prompts. **Open as Tab**
 (`Ctrl+Enter`, button, or `Ctrl+click`) promotes BigQuery Peek directly into the unified `BigQueryPropertiesTab` on the
 matching canonical tab instead of opening a duplicate Peek tab.
+
+In a BigQuery query, the same card opens from a name (`Alt+F12`, Ctrl+hover / ⌘+hover) and the tab from Ctrl+click,
+on the **Definition** tab for a view, materialized view or routine; F12 opens that free definition in a new query
+([Go To Definition](language-services.md#go-to-definition) has the rules). The name resolves through the connection's
+Search Objects index, as completion does, so a name the index has not read yet finds nothing.
 
 Sections appear in canonical order, omitting tabs that do not apply to the object:
 
@@ -754,10 +786,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   window for other users' jobs when `jobs.get` on them is refused); an open job in a location the answer could not read
   stays open until it can. A DONE job never changes and is never read again; new scope or filters list from scratch, at
   once, even when the sample under way then finds nothing open. Three samples in a row that the time budget cuts before
-  any answer lands (a stalled network, rate limits retried until the budget runs out) fail with `TIMEOUT`, as does each one
+  any answer lands (a stalled network) fail with `TIMEOUT`, as does each one
   after until an answer lands, so the retries back off; each such sample asks for a quarter of the jobs a page (down to one,
   doubling back once samples finish), so a page too slow for the budget still lands, as does a sample in which another
-  listing answered but one sent in the budget's first quarter was cut before its first page; a failure retries from the asked interval, never the idle one. The
+  listing answered but one sent in the budget's first quarter was cut before its first page. A sample whose time went to BigQuery's rate limit (429 or `rateLimitExceeded`, retried with backoff until the budget ran out) before any answer landed fails at once with `QUOTA`, keeping its page size; a failure retries from the asked interval, never the idle one. The
   open jobs' listing goes on from its page as the others do, ahead of the refresh listing while it is under way, and a job missing from it counts as finished once it is whole. The `bigquery.jobs` live source refreshes every 5 s while a job is running or
   pending and every 60 s otherwise (its `idleIntervalMs`, [docs/live.md](live.md)), and the load guard leaves it alone: its
   cost is network and quota waits, which a longer interval would not ease. Pinned jobs (a link, the dialog) are read by id
@@ -768,8 +800,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 - **Columns.** State (Running, Pending, Done, Failed, Cancelled, with row tones: failed and cancelled are DONE jobs with an
   error, cancelled when its reason is `stopped` and it did not time out), Job ID, Type, Statement, User, Created, Duration,
   Processed, Billed, Cost (on demand, from bytes billed; empty with Show cost as Bytes only), Slot time, Cache, Location,
-  Varia (jobs with the `varia_client` label), Destination, Error and SQL; then the identity columns the actions read (Job,
-  Parent job, Mine, Details hidden, Children). A script shows ▸; "Show statements in grid" in the details pane lists up to
+  Varia (jobs with the `varia_client` label), Destination, Error and SQL. Each row also carries the identity columns the
+  actions read (the job's full reference, its parent script, whether it is the principal's, whether BigQuery hid its details
+  and its children's count): hidden columns ([docs/live.md](live.md)), never shown, copied or saved, though Search still
+  matches the job reference. A script shows ▸; "Show statements in grid" in the details pane lists up to
   1,000 of its statements (the newest, when it has more) under it in statement order (at most 4 scripts at once), read again only while it runs.
 - **Filters.** State and Type chips (every chip on is no filter), Range (last hour, 24 hours, 7 days, 30 days, or Custom…
   with From and To, at most 180 days and no older than BigQuery's 180-day retention), Statements (statement types such as

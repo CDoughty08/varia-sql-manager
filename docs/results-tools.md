@@ -152,8 +152,9 @@ its column's sort button and a bar along the grid's top.
 **Row memory.** When a running query stops keeping rows (result memory budget full, or the computer low on memory), the
 grid's strip says so while the query keeps reading and counting, with **Stop query** (Cancel Executing Query, Alt+Pause on
 Windows and Linux; Tab reaches it from the grid, Enter or Space presses it). Kept rows stay; when the query ends the
-button goes and focus returns to the grid. The **Maximum rows kept per execution** strip has no button; the toolbar's
-Cancel still stops the query.
+button goes and focus returns to the grid. Messages names the budget's size as the strip does ("<1 MB" for a budget below
+one). The **Maximum rows kept per execution** strip has no button; the toolbar's Cancel still stops the query. That limit
+counts over every result set of one execution, SQL Server's batches and a BigQuery script's statements alike.
 
 A BigQuery result can instead stay windowed in BigQuery: its rows are read into a bounded cache as the grid scrolls, and
 an Automatic result the budget refuses part way switches to windowed rather than stopping. Its sorts, filters and value

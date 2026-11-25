@@ -90,7 +90,9 @@ const rows = () => page.evaluate(({ grid, row, cell, tones }) => {
 }, parts)
 const jobCell = id => grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^(?:[▸▾] )?${id}$`) }) }).locator(gridPart.cell).nth(2)
 const views = () => page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'bigquery.jobs'))
-const listings = () => requests.filter(request => request.method === 'GET' && request.path.endsWith('/jobs'))
+// Job History's listings, not Object Explorer's running-jobs chip (minimal pages of 1,000 filtered to open jobs).
+const chipListing = request => request.query.get('projection') === 'minimal' && request.query.get('maxResults') === '1000' && request.query.getAll('stateFilter').length > 0
+const listings = () => requests.filter(request => request.method === 'GET' && request.path.endsWith('/jobs') && !chipListing(request))
 
 try {
   step = 'connect'

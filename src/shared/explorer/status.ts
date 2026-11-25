@@ -192,7 +192,15 @@ export function agentJobChips(row: AgentJobStatusRow, live: boolean): { readonly
 }
 
 /** Every chip a database or server can show, for docs/object-explorer.md. */
-export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | 'agent' | 'agentJob'; readonly chip: string; readonly tone: string; readonly when: string }[] = [
+/** A BigQuery connection's node (explorer.bigquery): the principal's own pending and running jobs in the billing project, none while
+ *  none runs. `more`: the count stopped at its cap, so it reads "10,000+". */
+export function bigQueryChips(runningJobs: number | null | undefined, more = false): StatusChip[] {
+  if (runningJobs === null || runningJobs === undefined || runningJobs <= 0) return []
+  const count = Math.trunc(runningJobs), number = count.toLocaleString('en-US') + (more ? '+' : ''), text = `${number} ${count === 1 && !more ? 'job' : 'jobs'} running`
+  return [{ id: 'jobs', tone: 'running', label: text, value: number, words: `BigQuery: ${text}`, title: `BigQuery: ${text} in the billing project, started by this account.`, icon: 'agent-job' }]
+}
+
+export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | 'agent' | 'agentJob' | 'BigQuery server'; readonly chip: string; readonly tone: string; readonly when: string }[] = [
   ...Object.entries(states).filter(([state]) => state !== '10').map(([state, value]) => ({ kind: 'database' as const, chip: value.label + (value.tone === 'running' && state !== '7' ? ' n %' : ''), tone: value.tone, when: `state ${state}${state === '6' ? ' or 10' : ''}: ${value.title}` })),
   { kind: 'database', chip: 'READ-ONLY / STANDBY', tone: 'warning', when: 'is_read_only, or is_in_standby (a log-shipping standby)' },
   { kind: 'database', chip: 'SINGLE USER / RESTRICTED USER', tone: 'warning', when: 'user_access 1 or 2' },
@@ -202,6 +210,7 @@ export const statusChipDocs: readonly { readonly kind: 'server' | 'database' | '
   { kind: 'agent', chip: 'n jobs running', tone: 'running', when: 'as the server\'s chip; the node\'s sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip' },
   { kind: 'agentJob', chip: 'Running · step n/m', tone: 'running', when: 'the job is executing, waiting for a worker thread or performing completion actions (Job Activity Monitor\'s agent.jobs read, while its Jobs folder is open); the step count where msdb gives it' },
   { kind: 'agentJob', chip: 'Between retries / Suspended', tone: 'warning', when: 'that is the job\'s execution status' },
+  { kind: 'BigQuery server', chip: 'n jobs running', tone: 'running', when: 'the connection principal\'s own pending and running jobs in the billing project (jobs.list, a free API call; other principals\' jobs are not counted, and "n+" once the count reaches its cap); none while none runs' },
   { kind: 'agentJob', chip: 'Failed', tone: 'critical', when: 'the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, unless the row was listed after that read (a Disable or Enable lists it again at once), until the next read' }
 ]
 

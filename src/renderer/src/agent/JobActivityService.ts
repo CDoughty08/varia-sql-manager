@@ -502,15 +502,30 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
 
   // --- Change owner and Attach schedule (AG-3b) ------------------------------------------------------------------------------
 
+  /** Reads a failed form again for the jobs it names, which may not be the selection now (the Agent overview's form never was). */
+  async retryForm(id: string): Promise<void> {
+    const form = this.get(id)?.form
+    if (!form) return
+    const refused = await this.openForm(id, form.verb, form.jobs)
+    const now = this.get(id)?.form
+    if (refused && now?.key === form.key) this.patch(id, { form: { ...now, state: 'failed', error: refused } })
+  }
+
   /** Opens Change owner's or Attach schedule's form for the jobs selected now, and reads what it offers: New Job's describe (whether the login
    *  is sysadmin, and the logins) or the Schedules describe (the shared schedules with their guards, the jobs' versions and, for sysadmin,
-   *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. */
-  async openForm(id: string, verb: AgentBulkFormVerb): Promise<void> {
-    await this.settledSelection(id)
+   *  which job uses which). A form opened again replaces the last; a read for one replaced or closed is dropped. With `given` it opens for
+   *  those jobs instead of the selection (the Agent overview's Change owner… names the jobs its check found, AG-15). */
+  async openForm(id: string, verb: AgentBulkFormVerb, given?: readonly SelectedJob[]): Promise<string | undefined> {
+    if (!given) await this.settledSelection(id)
     const state = this.get(id)
-    if (!state?.connectionId || !this.canBulk(id)) return
+    if (!state?.connectionId) return agentBulkText.formUnavailable
+    // With `given` the caller is another document, which shows why no form opened (the monitor's own bar greys its buttons instead).
+    if (given) {
+      const refused = !this.live(id) ? agentBulkText.formUnavailable : state.bulk?.running ? agentBulkText.formBusy : bulkUnavailable(given.length)
+      if (refused) return refused
+    } else if (!this.canBulk(id)) return undefined
     const connectionId = state.connectionId
-    const key = this.newId(), jobs = [...state.selected]
+    const key = this.newId(), jobs = [...given ?? state.selected]
     this.patch(id, { form: verb === 'changeOwner' ? { verb, key, jobs, state: 'loading', owner: '' } : { verb, key, jobs, state: 'loading', search: '' } })
     const requestId = this.newId()
     let failure: string | undefined, value: Awaited<ReturnType<VariaApi['describeObject']>> | undefined

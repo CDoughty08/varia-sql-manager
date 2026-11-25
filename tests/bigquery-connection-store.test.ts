@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BigQueryConnectionStore } from '../src/main/bigquery-connection-store'
-import { BigQueryCredentials, BigQueryKeyFiles, federationSource } from '../src/main/bigquery-credentials'
+import { BigQueryCredentials, BigQueryKeyFiles, federationSource, maxKeyFiles } from '../src/main/bigquery-credentials'
 import { connectionHistory } from '../src/main/connection-history'
 import { connectionLibrary } from '../src/main/connection-library'
 import { BackendError } from '../src/main/backend/errors'
+import { bigQueryLibraryLimits } from '../src/shared/bigquery-connections'
 import type { BigQueryConnectionOptions } from '../src/shared/contracts'
+import { bigQueryStoredProfileSchema } from '../src/shared/bigquery-connections'
 
 const directories: string[] = []
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }) })
@@ -61,6 +63,41 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     // A connect without an environment keeps the entry's when asked to.
     const kept = await store.rememberEntry(gcloud('varia-project-31'), true)
     expect(kept.environment).toBe('Production')
+  })
+
+  it('keeps the key file of a history entry pruned past 30, so a target restored from it does not ask for the file again', async () => {
+    const directory = await folder(), path = join(directory, 'bigquery-connections.json'), keyFiles = new BigQueryKeyFiles()
+    const keyPath = join(directory, 'reader.json'), keyFile = keyFiles.register(keyPath)
+    const keyed: BigQueryConnectionOptions = { provider: 'bigquery', project: 'varia-keyed', authentication: 'serviceAccountKey', keyFile }
+    const store = new BigQueryConnectionStore(path, keyFiles)
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(Date.UTC(2026, 10, 1))
+      await store.rememberEntry(keyed)
+      for (let index = 1; index <= 30; index++) { vi.setSystemTime(Date.UTC(2026, 10, 1, 0, index)); await store.rememberEntry(gcloud(`varia-project-${String(index).padStart(2, '0')}`)) }
+    } finally { vi.useRealTimers() }
+    const { library } = await store.load()
+    expect(library.profiles.map(profile => profile.options.project)).not.toContain('varia-keyed')
+    expect(library.keptKeyFiles).toEqual([{ reference: keyFile, keyPath }])
+    // After a restart main knows the reference again from the file alone, so the restored target's connect finds its path.
+    const restarted = new BigQueryKeyFiles()
+    await new BigQueryConnectionStore(path, restarted).load()
+    expect(restarted.path(keyFile)).toBe(keyPath)
+    // Connecting through it again makes it an entry's once more, and the kept reference goes.
+    const again = await new BigQueryConnectionStore(path, restarted).rememberEntry(keyed)
+    expect(again.library.profiles.find(profile => profile.options.project === 'varia-keyed')).toMatchObject({ keyPath })
+    expect(again.library.keptKeyFiles).toBeUndefined()
+    // The renderer's view never carries kept paths.
+    expect(JSON.stringify(BigQueryConnectionStore.view(library))).not.toContain('keptKeyFiles')
+    // Removing an entry forgets its key file's path, a kept copy of it included.
+    const entry = again.library.profiles.find(profile => profile.options.project === 'varia-keyed')!
+    await writeFile(path, JSON.stringify({ ...again.library, keptKeyFiles: [{ reference: '0b6f2f8e-0b0e-4f6a-9d61-6d8c2b7f1e22', keyPath }] }))
+    const removed = await new BigQueryConnectionStore(path, new BigQueryKeyFiles()).remove(entry.id)
+    expect(removed.removed).toBe(true)
+    expect(removed.library.keptKeyFiles ?? []).toEqual([])
+    expect(await readFile(path, 'utf8')).not.toContain(JSON.stringify(keyPath).slice(1, -1))
+    // Kept references and every saved entry's fit main's key file registry together, so loading never evicts one of them.
+    expect(bigQueryLibraryLimits.profiles + bigQueryLibraryLimits.keptKeyFiles).toBeLessThanOrEqual(maxKeyFiles)
   })
 
   it('quarantines a file whose key file path is not absolute, rather than failing every later read', async () => {
@@ -295,12 +332,50 @@ describe('Connection library and history across both engines', () => {
     expect(first.id).not.toBe(second.id)
   })
 
+  it("keeps the connection's own threshold on its entries: a connect that names none keeps it, 0 clears it", async () => {
+    const directory = await folder(), store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles())
+    const thresholds = async () => (await store.load()).library.profiles.map(profile => profile.options.costThreshold)
+    const first = await store.upsert({ options: { ...gcloud(), displayName: 'A', costThreshold: 50 }, saved: true })
+    expect(await thresholds()).toEqual([50])
+    // A live connection's settings (which never carry it) connect again: the entry keeps it.
+    await store.rememberEntry(gcloud())
+    expect(await thresholds()).toEqual([50])
+    // Another entry with the same settings shares it, and a new value set through either reaches both.
+    const second = await store.upsert({ options: { ...gcloud('varia-beta'), displayName: 'B' }, saved: true })
+    await store.upsert({ id: second.id, options: { ...gcloud(), displayName: 'B' }, saved: true })
+    expect(await thresholds()).toEqual([50, 50])
+    await store.upsert({ id: second.id, options: { ...gcloud(), displayName: 'B', costThreshold: 20 }, saved: true })
+    expect(await thresholds()).toEqual([20, 20])
+    // 0 (Options' threshold) clears it and is never kept; a file holding 0 is invalid.
+    await store.upsert({ id: first.id, options: { ...gcloud(), displayName: 'A', costThreshold: 0 }, saved: true })
+    expect(await thresholds()).toEqual([undefined, undefined])
+    expect(bigQueryStoredProfileSchema.safeParse({ id: first.id, options: { ...gcloud(), costThreshold: 0 }, favorite: false }).success).toBe(false)
+    // A connect that reused a live connection sets it through setCostThreshold, adding an entry when there is none.
+    await store.setCostThreshold({ options: gcloud(), costThreshold: 8 })
+    expect(await thresholds()).toEqual([8, 8])
+    await store.setCostThreshold({ options: gcloud('varia-gamma'), costThreshold: 3 })
+    expect((await store.load()).library.profiles.find(profile => profile.options.project === 'varia-gamma')?.options.costThreshold).toBe(3)
+    await store.setCostThreshold({ options: gcloud(), costThreshold: 0 })
+    expect((await thresholds()).slice(0, 2)).toEqual([undefined, undefined])
+    // Clearing one for settings with no entry adds none.
+    const count = (await store.load()).library.profiles.length
+    await store.setCostThreshold({ options: gcloud('varia-omega'), costThreshold: 0 })
+    expect((await store.load()).library.profiles).toHaveLength(count)
+    // Bounded: whole GiB up to 1,048,576.
+    await expect(store.setCostThreshold({ options: gcloud(), costThreshold: 1_048_577 })).rejects.toThrow()
+    await expect(store.setCostThreshold({ options: gcloud(), costThreshold: 1.5 })).rejects.toThrow()
+    await expect(store.upsert({ options: { ...gcloud(), costThreshold: -1 } })).rejects.toThrow()
+    // Set Connection Environment for settings with no entry never keeps a 0.
+    await store.setEnvironment({ options: { ...gcloud('varia-delta'), costThreshold: 0 }, environment: 'Production' })
+    expect((await store.load()).library.profiles.find(profile => profile.options.project === 'varia-delta')?.options).not.toHaveProperty('costThreshold')
+  })
+
   it('keeps SQL Server\'s library working when BigQuery\'s file cannot be read', async () => {
     const sql = sqlStore(), bigQuery = { load: vi.fn(async () => { throw new Error('EBUSY') }), remove: vi.fn(async () => { throw new Error('EBUSY') }) }
     const sqlId = '00000000-0000-4000-8000-000000000009'
     sql.load.mockResolvedValue({ library: { version: 1, profiles: [{ id: sqlId }] } } as never)
     const library = connectionLibrary({ connections: sql as never, savedPasswords: passwords as never, bigQuery: bigQuery as never })
-    expect(await library.load()).toMatchObject({ bigQuery: { profiles: [] }, warning: 'The saved BigQuery connections could not be read.' })
+    expect(await library.load()).toMatchObject({ bigQuery: { profiles: [] }, warning: 'The saved BigQuery connections could not be read.', bigQueryUnreadable: true })
     await library.remove(sqlId)
     expect(sql.remove).toHaveBeenCalledWith(sqlId)
     expect(bigQuery.remove).not.toHaveBeenCalled()
@@ -314,5 +389,11 @@ describe('Connection library and history across both engines', () => {
     expect((await bigQuery.load()).library.profiles).toEqual([expect.objectContaining({ options: gcloud(), lastConnected: expect.any(String) })])
     await history.rememberEntry({ server: 'sql01', database: '', authentication: 'windows', trustServerCertificate: false })
     expect(sql.rememberEntry).toHaveBeenCalledTimes(1)
+    // A reused connect's threshold: set, cleared, and cleared for settings with no entry all hold.
+    expect(await history.setBigQueryCostThreshold!({ ...gcloud(), costThreshold: 12 }, 12)).toBe(true)
+    expect((await bigQuery.load()).library.profiles[0]?.options.costThreshold).toBe(12)
+    expect(await history.setBigQueryCostThreshold!(gcloud(), 0)).toBe(true)
+    expect(await history.setBigQueryCostThreshold!(gcloud('varia-omega'), 0)).toBe(true)
+    expect((await bigQuery.load()).library.profiles).toHaveLength(1)
   })
 })

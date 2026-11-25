@@ -285,7 +285,8 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
         requestRates.Clear();
     }
 
-    private sealed record SessionInfo(string? Status, string? Login, string? Host, string? Application, string? Database, int? OpenTransactions, DateTime? LoginTime, long? HostProcessId, string? Varia);
+    private sealed record SessionInfo(string? Status, string? Login, string? Host, string? Application, string? Database, int? OpenTransactions, DateTime? LoginTime, long? HostProcessId, string? Varia,
+        (string Text, string? Name)? Job = null);
 
     /// <summary>The session's identity (login time, host process id) and Varia label on a Blocking row, from its
     /// Sessions row, so Details and Kill Process can name it from that pane.</summary>
@@ -296,11 +297,20 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
         writer.Set(cells, "varia", LiveCell.Of(info?.Varia));
     }
 
+    /// <summary>The Agent job step a session runs (AG-16): the link's words and the job's name, empty for any other session.</summary>
+    private static void SetJob(ActivityRowWriter writer, LiveCell[] cells, (string Text, string? Name)? job)
+    {
+        writer.Set(cells, "job", LiveCell.Of(job?.Text));
+        writer.Set(cells, "jobName", LiveCell.Of(job?.Name));
+    }
+
     /// <param name="at">This sample's time in milliseconds on the probe's sample clock (the server's own between samples that
     /// read it), which per-row rates measure their span with.</param>
     /// <param name="hideMonitor">False without server state: the monitor's own session is then the only one SQL Server shows, so
     /// it is never hidden as one of Varia's pools.</param>
-    public ActivitySessionsSample Build(IReadOnlyDictionary<string, ActivityResult> results, long at, VariaSessions varia, int monitorSpid, int focusSession, bool hideMonitor = true)
+    /// <param name="jobs">The Agent job step a program name leads to, with its names as kept (AgentJobNames.Resolve); none without it.</param>
+    public ActivitySessionsSample Build(IReadOnlyDictionary<string, ActivityResult> results, long at, VariaSessions varia, int monitorSpid, int focusSession, bool hideMonitor = true,
+        Func<string?, (string Text, string? Name)?>? jobs = null)
     {
         var sessionsCap = (int)catalog.Limit("sessions");
         var rows = results.GetValueOrDefault("sessions");
@@ -368,7 +378,10 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             sessions.Set(cells, "login", LiveCell.Of(rows.Text(row, "login_name")));
             sessions.Set(cells, "database", LiveCell.Of(database));
             sessions.Set(cells, "command", LiveCell.Of(command));
-            sessions.Set(cells, "application", LiveCell.Of(rows.Text(row, "program_name")));
+            var program = rows.Text(row, "program_name");
+            var job = jobs?.Invoke(program);
+            sessions.Set(cells, "application", LiveCell.Of(program));
+            SetJob(sessions, cells, job);
             sessions.Set(cells, "waitType", LiveCell.Of(waitType));
             sessions.Set(cells, "waitTimeMs", waitType is null ? LiveCell.Null : LiveCell.Of(waitMs));
             sessions.Set(cells, "waitResource", LiveCell.Of(waitResource));
@@ -402,7 +415,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             built.Add(live);
             facts[live] = new(System: !rows.Flag(row, "is_user_process"), VariaPool: pool, Active: hasRequest, Blocked: node?.BlockedBy > 0, Blocking: node?.Downstream > 0,
                 IdleOpenTransaction: !hasRequest && openTransactions > 0, RollingBack: rollingBack);
-            infos[id] = new(status, rows.Text(row, "login_name"), rows.Text(row, "host_name"), rows.Text(row, "program_name"), database, openTransactions, loginTime, rows.Long(row, "host_process_id"), label);
+            infos[id] = new(status, rows.Text(row, "login_name"), rows.Text(row, "host_name"), program, database, openTransactions, loginTime, rows.Long(row, "host_process_id"), label, job);
         }
         sessionRates.EndSample();
 
@@ -427,6 +440,7 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             blocking.Set(cells, "login", LiveCell.Of(info?.Login));
             blocking.Set(cells, "hostName", LiveCell.Of(info?.Host));
             blocking.Set(cells, "application", LiveCell.Of(info?.Application));
+            SetJob(blocking, cells, info?.Job);
             blocking.Set(cells, "database", LiveCell.Of(info?.Database));
             blocking.Set(cells, "openTransactions", LiveCell.Of(info?.OpenTransactions));
             blocking.Set(cells, "cycle", LiveCell.Bit(node.Cycle));
@@ -501,7 +515,11 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
             active.Set(cells, "openTransactions", LiveCell.Of(requests.Int(row, "open_transaction_count")));
             active.Set(cells, "loginTime", ActivityRowWriter.Time(loginTime));
             active.Set(cells, "hostProcessId", LiveCell.Of(requests.Long(row, "host_process_id")));
-            active.Set(cells, "varia", LiveCell.Of(info is not null && loginTime is not null && info.LoginTime == loginTime ? info.Varia : null));
+            // The session's own Sessions row (same login time) gives its program and job, as it gives the Varia label.
+            var same = info is not null && loginTime is not null && info.LoginTime == loginTime ? info : null;
+            active.Set(cells, "varia", LiveCell.Of(same?.Varia));
+            active.Set(cells, "application", LiveCell.Of(same?.Application));
+            SetJob(active, cells, same?.Job);
             if (ActiveTone(blockedBy is not null, requests.Text(row, "command") == "KILLED/ROLLBACK") is { } tone) active.Tone(cells, tone, catalog);
             rows.Add(new LiveRow(cells));
         }

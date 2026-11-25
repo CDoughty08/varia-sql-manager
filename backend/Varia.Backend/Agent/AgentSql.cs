@@ -146,7 +146,7 @@ internal static partial class AgentSql
         HistoryAll, HistoryAllSince, HistorySince, HistoryMessage, JobDocument, JobDocumentSteps, JobCategories, Operators, Alerts, AgentMail, MailProfiles, JobDocumentFacts, OwnerLogins,
         AlertDocument, AlertRows, OperatorRows, OperatorDocument, Notifications, AlertNotifications, OperatorNotifications, JobNotifications, AlertJobs, AlertDatabases, Counters, CounterValues, MessageText,
         JobStepDatabases, ..JobStepProxies, JobSchedules, Schedules, ScheduleVersions, ScheduleLinks, JobsInSchedule, JobDurations, IdleCondition,
-        ErrorLogMi];
+        ErrorLogMi, OverviewJobs, OverviewOwners, OverviewHistory, OverviewAlerts, OverviewService];
 
     /// <summary>Whether a statement is one of <see cref="All"/>: the reader runs nothing else, so everything it runs was linted.</summary>
     public static bool Known(AgentStatement statement) => All.Any(known => ReferenceEquals(known, statement));

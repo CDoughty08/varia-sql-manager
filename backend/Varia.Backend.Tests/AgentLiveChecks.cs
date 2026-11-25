@@ -14,7 +14,8 @@ namespace Varia.Backend.Tests;
 /// scratch job of this run's own runs once and its history, row and activity are read back through msdb's procedures, and
 /// a scratch login in SQLAgentUserRole alone (impersonated) is refused the error logs but reads its own jobs and Agent's
 /// properties, as AG-0 found. Only this run's job and login are created, each dropped in finally. AG-2's job verbs run on the
-/// same scratch job (AgentActionLiveChecks); its service verbs are the AgentService suite. Later lanes add the
+/// same scratch job (AgentActionLiveChecks); AG-16 then runs a waiting job the Activity Monitor finds by name
+/// (ActivitySourceLiveChecks.AgentJobAsync); its service verbs are the AgentService suite. Later lanes add the
 /// Agent, AgentJobs and AgentRoles suites (docs/agent-plan.md › Testing).</summary>
 internal static class AgentLiveChecks
 {
@@ -84,9 +85,12 @@ internal static class AgentLiveChecks
         // A killed earlier run's job, login user or other Agent object goes first, so this suite alone keeps a shared server clean.
         await ScratchDatabase.SweepAgentAsync(Sql, Console.WriteLine);
         await JobAsync(check, connection, reader, scratch, Sql, service, info, json);
+        await ActivitySourceLiveChecks.AgentJobAsync(check, service, info, json, scratch.AgentObject("job"), Sql);
         await AgentTreeChecks.LiveAsync(check, service, info, json, scratch, Sql);
         await RolesAsync(check, connection, reader, scratch, Sql, None, profile.Explorer(ExplorerCatalog.Current).Band);
         await AgentScriptingLiveChecks.RunAsync(check, service, info, json, scratch, Sql);
+        // The Agent overview (AG-15) on its own scratch job, login and schedule, after the job suites have dropped theirs.
+        await AgentOverviewLiveChecks.RunAsync(check, service, info, json, scratch, Sql, connection, profile);
     }
 
     /// <summary>Object Explorer's Agent node probe (explorer.agentService, AG-1) on a server whose Agent is up: Agent XPs 1 and

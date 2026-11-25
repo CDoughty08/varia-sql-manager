@@ -28,6 +28,39 @@ internal sealed partial class ObjectSearchService
             if (state.BigQuery) state.Stale[(project, dataset)] = ++state.StaleMarks;
     }
 
+    /// <summary>Records that DDL may have changed any dataset of a project, which ones unknown (a script whose statements could not
+    /// all be read): the next stale-only build lists the project again and reads each of its datasets whole.</summary>
+    public void MarkProjectStale(string connectionId, string project)
+    {
+        if (!BqNames.IsProject(project) || !states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+            if (state.BigQuery) state.StaleProjects[project] = ++state.StaleMarks;
+    }
+
+    /// <summary>Test seam: a connection's index counts as a BigQuery one, so DDL marks land on it without a build.</summary>
+    internal void TrackBigQuery(string connectionId)
+    {
+        var state = states.GetOrAdd(connectionId, _ => new State(pool, resources));
+        lock (state.Gate) state.BigQuery = true;
+    }
+
+    /// <summary>The newest stale mark not yet spent on a connection, or null (a query's result carries it, docs/object-search.md).</summary>
+    public long? StaleMarkOf(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return null;
+        lock (state.Gate) return state.BigQuery ? state.StaleMark : null;
+    }
+
+    /// <summary>Whether the connection's BigQuery index tracks <paramref name="project"/> (starred, discovered, or held).</summary>
+    public bool TracksBigQueryProject(string connectionId, string project)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return false;
+        lock (state.Gate)
+            return state.BigQuery && (state.StarredProjects.Contains(project, StringComparer.Ordinal)
+                || state.DiscoveredProjects.Contains(project, StringComparer.Ordinal)
+                || state.Index.Databases.Any(read => read.Dataset is not null && read.Database == project));
+    }
+
     /// <summary>The editor's lookup into a BigQuery connection's index (<see cref="BigQueryLookup"/>): a snapshot of its build's state
     /// and the reads held now. A connection with no index yet still answers its billing project.</summary>
     internal BigQueryLookup LookupBigQuery(string connectionId, string billing)
@@ -58,6 +91,13 @@ internal sealed partial class ObjectSearchService
     {
         if (!states.TryGetValue(connectionId, out var state)) return [];
         lock (state.Gate) return [.. state.Stale.Keys];
+    }
+
+    /// <summary>The projects marked stale whole on a connection (the checks read it).</summary>
+    internal IReadOnlyCollection<string> StaleProjectsOf(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return [];
+        lock (state.Gate) return [.. state.StaleProjects.Keys];
     }
 
     public async Task<ObjectIndexResult> IndexBigQueryAsync(ObjectIndexArgs args, IBigQueryIndexSource source, CancellationToken token, Action<object>? progress = null)
@@ -158,6 +198,21 @@ internal sealed partial class ObjectSearchService
         }
         try
         {
+            // A project marked whole: each dataset its listing names takes the project's mark (so a failed read keeps it marked and
+            // a full build reads it whole too), and the project's own mark is spent once a listing is read.
+            Dictionary<string, long> wholeProjects;
+            lock (state.Gate) wholeProjects = new Dictionary<string, long>(state.StaleProjects, StringComparer.Ordinal);
+            void Spread(string project, BigQueryDatasetList list)
+            {
+                if (!wholeProjects.TryGetValue(project, out var mark)) return;
+                lock (state.Gate)
+                {
+                    foreach (var name in list.Datasets)
+                        if (!state.Stale.TryGetValue((project, name), out var had) || had < mark) state.Stale[(project, name)] = mark;
+                    if (state.StaleProjects.TryGetValue(project, out var current) && current == mark) state.StaleProjects.Remove(project);
+                }
+                foreach (var name in list.Datasets) stale.Add((project, name));
+            }
             using var slots = new SemaphoreSlim(BigQueryIndexLimits.Details);
             // One dataset's pass 2 details: the bulk path's rows where they cover an object, free tables.get and routines.get for the rest.
             async Task<ObjectIndexSkip?> DetailAsync((string Project, string Dataset) target, (List<BigQueryEntry> Listed, int[] Read, bool Cut) value,
@@ -277,6 +332,23 @@ internal sealed partial class ObjectSearchService
                     foreach (var project in knownProjects) allowedStale.Add(project);
                     foreach (var read in state.Index.Databases)
                         if (read.Dataset is not null) allowedStale.Add(read.Database);
+                    foreach (var project in wholeProjects.Keys.Where(allowedStale.Contains).Order(StringComparer.Ordinal))
+                    {
+                        BigQueryDatasetList list;
+                        try { list = await source.DatasetsAsync(args.ConnectionId, project, stop); }
+                        catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+                        {
+                            Skip(SkipOf(error, project, "", "bigquery.datasets.get"));
+                            continue;
+                        }
+                        if (list.Cut) Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project));
+                        var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
+                        state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut);
+                        if (!list.Cut)
+                            lock (state.Gate)
+                                foreach (var gone in state.Stale.Keys.Where(key => key.Project == project && !names.Contains(key.Dataset)).ToList()) { state.Stale.Remove(gone); stale.Remove(gone); }
+                        Spread(project, list);
+                    }
                     targets.AddRange(stale.Where(item => allowedStale.Contains(item.Project))
                         .OrderBy(item => item.Project, StringComparer.Ordinal).ThenBy(item => item.Dataset, StringComparer.Ordinal));
                 }
@@ -295,6 +367,7 @@ internal sealed partial class ObjectSearchService
                         var names = listed.ToHashSet(StringComparer.Ordinal);
                         state.Index.KeepWhere(read => read.Database != scope.Project || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut
                             || scope.Dataset is { } kept && kept != dataset);
+                        if (scope.Dataset is null) Spread(scope.Project, list);
                         targets.AddRange(listed.Select(name => (scope.Project, name)));
                     }
                 }
@@ -368,6 +441,7 @@ internal sealed partial class ObjectSearchService
                         if (list.Cut) Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: billing));
                         var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
                         state.Index.KeepWhere(read => read.Database != billing || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut);
+                        Spread(billing, list);
                         foreach (var name in list.Datasets)
                         {
                             wave1Targets.Add((billing, name));
@@ -462,6 +536,7 @@ internal sealed partial class ObjectSearchService
                     if (list.Cut) Skip(new("", "TOO_LARGE", "The project has more datasets than the index lists; it keeps the first " + (BigQueryIndexLimits.ListPages * 1000).ToString("N0", CultureInfo.InvariantCulture) + ".", Project: project));
                     var names = list.Datasets.ToHashSet(StringComparer.Ordinal);
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || list.Cut);
+                    Spread(project, list);
                     var bucket = isDiscovered ? wave2DiscoveredTargets : wave2StarredTargets;
                     foreach (var name in list.Datasets)
                     {

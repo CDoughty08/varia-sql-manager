@@ -110,7 +110,8 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   readonly focus?: (id: string) => void
   readonly timers?: Timers
   readonly newId?: () => string
-  /** The workbench's events: a BigQuery query whose DDL may have changed objects re-reads the datasets it marked (`stale`). */
+  /** The workbench's events: a BigQuery query's result names the newest stale mark its connection's index holds (`indexStale`), and a
+   *  new one re-reads the datasets DDL marked (`stale`). */
   readonly events?: { subscribe(listener: (event: WorkbenchEvent) => void): Disposable }
   /** BigQuery's cost prompts before a full build's billed bulk path runs (BigQueryCostService.beforeScript); without it the bulk path never runs. */
   readonly billedGate?: (connectionId: string, estimate: BigQueryDryRunResult, signal: AbortSignal) => Promise<{ readonly run: boolean; readonly maximumBytesBilled?: number }>
@@ -120,9 +121,6 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
 /** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), the datasets DDL marked, or everything
  *  (Refresh on the server's node). */
 export type BigQueryRefresh = { readonly scope: BigQueryIndexScope } | { readonly stale: true } | { readonly full: true }
-/** Statement types whose job may have changed what a BigQuery index lists (SqlService.ChangesObjects), and a script, whose
- *  statements may have. */
-export const bigQueryChangesObjects = (statement: string | undefined): boolean => !!statement && (/^(CREATE|DROP|ALTER|UNDROP)_/.test(statement) || statement === 'SCRIPT')
 
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
@@ -330,6 +328,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly refreshes = new Map<string, BigQueryRefresh[]>()
   /** Builds still at the bulk path's estimate or cost prompt, by request: Stop, a newer build or dispose closes the prompt. */
   private readonly estimating = new Map<string, AbortController>()
+  /** The newest stale mark each BigQuery connection's stale-only build was asked for (staleHint). */
+  private readonly staleAsked = new Map<string, number>()
+  /** Builds the user stopped: their CANCELLED answer keeps the stale mark asked, so only a newer mark asks again. */
+  private readonly stopping = new Set<string>()
 
   constructor(private readonly o: ObjectSearchOptions) {
     super({ indexes: {}, documents: {}, paneFocus: 0 })
@@ -342,7 +344,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.registrations.push({ dispose: unsubscribe }, { dispose: unlisten })
     const unlistenDocuments = o.documents.subscribe?.(() => this.syncDocuments())
     if (unlistenDocuments) this.registrations.push({ dispose: unlistenDocuments })
-    if (o.events) this.registrations.push(o.events.subscribe(event => { if (event.type === 'query.finished') this.queryFinished(event.tabId, event.summary?.job?.statementType, event.error !== undefined) }))
+    if (o.events) this.registrations.push(o.events.subscribe(event => { if (event.type === 'query.finished') this.queryFinished(event.tabId, event.summary?.indexStale) }))
     this.sync()
   }
 
@@ -379,10 +381,13 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         ...bigQuery && partial ? partial : {}, ...billed ? { bulk: billed } : {}
       }).then(result => {
         const entry = this.getSnapshot().indexes[connectionId]
+        const stopped = this.stopping.delete(requestId)
         if (this.disposed || entry?.requestId !== requestId) return
         if (result.ok) {
           this.putIndex({ connectionId, done: result.value.status.databases, total: result.value.status.databases, objects: result.value.status.objects, status: result.value.status })
           this.refresh(connectionId)
+          // DDL that landed during the build (or a mark it did not reach) is read by a stale-only build after it.
+          this.staleHint(connectionId, result.value.status.staleMark)
         } else {
           // A refresh that fails leaves the index it refreshed as it was, still searchable: only a whole build's failure is the index's.
           const failed = result.code !== 'CANCELLED' && !(partial && entry.status && entry.status.state !== 'none')
@@ -390,6 +395,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
           // they would otherwise hide.
           if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
+          // A stale-only build that did not run its course is asked again at the next hint, unless the user stopped it: Stop waits
+          // for a newer mark. A refresh queued behind a build that ended this way is dropped, and so is its mark.
+          if (!stopped && (result.code === 'CANCELLED' || failed || (partial && 'stale' in partial))) this.staleAsked.delete(connectionId)
         }
         this.nextRefresh(connectionId)
       }, onUnexpectedError)
@@ -402,6 +410,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         // Stopped at the estimate or the prompt: nothing was sent, and the index stays as it was.
         this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
         this.refreshes.delete(connectionId)
+        this.stopping.delete(requestId)
         return
       }
       this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
@@ -438,19 +447,23 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    * DDL from a query tab marked (`stale`). A connection with no index yet builds nothing (its first build reads everything); one
    * whose build is running re-reads once that build ends, so the refresh never cancels it.
    */
-  refreshBigQuery(connectionId: string, refresh: BigQueryRefresh): void {
+  /** Returns whether the refresh was sent or queued behind the running build. */
+  refreshBigQuery(connectionId: string, refresh: BigQueryRefresh): boolean {
     const connection = this.o.connections.get(connectionId)
-    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return
+    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
     const entry = this.getSnapshot().indexes[connectionId]
     if (entry?.requestId) {
       const queued = this.refreshes.get(connectionId) ?? []
       if (!queued.some(item => JSON.stringify(item) === JSON.stringify(refresh))) this.refreshes.set(connectionId, [...queued, refresh])
-      return
+      return true
     }
     // After a whole build failed, only another whole build clears its error: a partial one would hide it.
-    if (entry?.error && !('full' in refresh)) return
-    if (entry?.status && entry.status.state !== 'none') this.build(connectionId, refresh)
+    if (entry?.error && !('full' in refresh)) return false
+    if (!entry?.status || entry.status.state === 'none') return false
+    this.build(connectionId, refresh)
+    return true
   }
+
 
   /** Object Explorer's Refresh on a BigQuery node: its project, or its dataset (a node below one re-reads that dataset); the
    *  server's node re-reads every project. Other nodes leave the index as it is. */
@@ -466,6 +479,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   stopBuild(connectionId: string): void {
     this.refreshes.delete(connectionId)
     const requestId = this.getSnapshot().indexes[connectionId]?.requestId
+    if (requestId) this.stopping.add(requestId)
     if (requestId) this.estimating.get(requestId)?.abort()
     if (requestId) void this.o.api.explorerCancel([requestId]).catch(onUnexpectedError)
   }
@@ -475,6 +489,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.refreshes.clear()
     for (const controller of this.estimating.values()) controller.abort()
     const ids = Object.values(this.getSnapshot().indexes).flatMap(entry => entry.requestId ? [entry.requestId] : [])
+    for (const id of ids) this.stopping.add(id)
     if (ids.length) void this.o.api.explorerCancel(ids).catch(onUnexpectedError)
   }
 
@@ -741,22 +756,35 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const typed = searchTypeKinds(asked.types)
     const own = typed && providerSearchKinds(bigQuery ? 'bigquery' : 'sqlserver', typed)
     if (own && !own.length) return Promise.resolve({ ok: true as const, value: noHits(this.getSnapshot().indexes[connectionId]?.status) })
-    return this.o.api.explorerSearch({
+    const answer = this.o.api.explorerSearch({
       connectionId, requestId, text: asked.text, caseSensitive: asked.caseSensitive, wholeWord: asked.wholeWord, regex: asked.regex, in: asked.scope, ...own ? { kinds: own } : {},
       ...asked.fuzzy && !asked.regex ? { match: 'fuzzy' as const } : {},
       ...!bigQuery && asked.database !== undefined ? { database: asked.database } : {},
       ...bigQuery && asked.project !== undefined ? { project: asked.project, ...asked.dataset !== undefined ? { dataset: asked.dataset } : {} } : {},
       ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
+    // A job that ended without its tab (closed, stopped, left running) marked datasets after its run's end: the next search finds them.
+    if (bigQuery) void answer.then(result => { if (result.ok) this.staleHint(connectionId, result.value.index.staleMark) }, () => {})
+    return answer
   }
 
-  /** A BigQuery query tab's run ended: DDL in it (or a script, which may hold some) marked datasets the backend re-reads now. A run
-   *  that failed reports no statement type, but DDL before the failure may have run: the stale-only build reads whatever was
-   *  marked, and nothing when nothing was. */
-  private queryFinished(tabId: string, statement: string | undefined, failed: boolean): void {
-    if (!failed && !bigQueryChangesObjects(statement)) return
+  /** A BigQuery query tab's run ended: the newest stale mark its connection's index holds, if any, is read now. */
+  private queryFinished(tabId: string, indexStale: number | undefined): void {
     const connectionId = this.o.documents.get(tabId)?.connectionId
-    if (connectionId) this.refreshBigQuery(connectionId, { stale: true })
+    if (connectionId) this.staleHint(connectionId, indexStale)
+  }
+
+  /**
+   * A BigQuery index holds a stale mark newer than the last one a stale-only build was asked for (a query's result, a search's or a
+   * build's status names it): one stale-only build reads what DDL marked. A mark a failed read left keeps its number, so it asks no
+   * build again; the next DDL's mark does.
+   */
+  private staleHint(connectionId: string, mark: number | undefined): void {
+    if (mark === undefined || mark <= (this.staleAsked.get(connectionId) ?? 0)) return
+    const connection = this.o.connections.get(connectionId)
+    if (!live(connection) || !isBigQueryConnection(connection)) return
+    // Recorded only once a build is sent or queued: a refresh refused now (a failed whole build) is asked again at the next hint.
+    if (this.refreshBigQuery(connectionId, { stale: true })) this.staleAsked.set(connectionId, mark)
   }
 
   /** Runs the next BigQuery refresh asked while a build ran. */
@@ -939,6 +967,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const { indexes } = this.getSnapshot()
     const gone = Object.keys(indexes).filter(id => !ids.has(id))
     for (const id of [...this.refreshes.keys()]) if (!ids.has(id)) this.refreshes.delete(id)
+    for (const id of [...this.staleAsked.keys()]) if (!ids.has(id)) this.staleAsked.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
       // A disconnect closes a bulk build's estimate or cost prompt.

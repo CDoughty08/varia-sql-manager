@@ -60,7 +60,7 @@ export function connectionTargetOptions(options: ConnectionOptions): SqlServerTa
 }
 /** BigQuery's target settings: the options without their labels, in the schema's key order (so two equal ones encode alike). */
 export function bigQueryTargetOptions(options: BigQueryConnectionOptions): BigQueryTargetOptions {
-  const { displayName: _displayName, color: _color, environment: _environment, costPrompt: _costPrompt, ...snapshot } = bigQueryConnectionOptionsSchema.parse(options)
+  const { displayName: _displayName, color: _color, environment: _environment, costPrompt: _costPrompt, costThreshold: _costThreshold, ...snapshot } = bigQueryConnectionOptionsSchema.parse(options)
   return bigQueryTargetOptionsSchema.parse(snapshot)
 }
 /** Either provider's target settings. */

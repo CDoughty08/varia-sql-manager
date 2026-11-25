@@ -179,14 +179,26 @@ internal sealed class DistinctSnapshot
         lock (gate)
         {
             if (frozen is { } done) return done;
-            var keep = Complete && ticked <= reps.Length - ticked;
-            var rows = new int[keep ? ticked : reps.Length - ticked];
-            for (int group = 0, at = 0; group < reps.Length; group++)
-                if (ticks[group] == keep) rows[at++] = reps[group];
-            // NULL is named only when the snapshot saw one: an entry never shown was never cleared, so NULLs that arrive later stay.
-            frozen = (keep ? FilterOp.In : FilterOp.NotIn, rows, (keep ? nullTicked : !nullTicked) && Nulls > 0);
+            frozen = Filter();
             return frozen.Value;
         }
+    }
+
+    /// <summary>The filter its ticks make now, as <see cref="Freeze"/> would fix it, without fixing it: a BigQuery estimate of a
+    /// filter (bigquery.dryRun) reads it, so a declined cost prompt leaves the checklist free to tick again.</summary>
+    public (FilterOp Op, int[] Rows, bool Nulls) Peek()
+    {
+        lock (gate) return frozen ?? Filter();
+    }
+
+    private (FilterOp Op, int[] Rows, bool Nulls) Filter()
+    {
+        var keep = Complete && ticked <= reps.Length - ticked;
+        var rows = new int[keep ? ticked : reps.Length - ticked];
+        for (int group = 0, at = 0; group < reps.Length; group++)
+            if (ticks[group] == keep) rows[at++] = reps[group];
+        // NULL is named only when the snapshot saw one: an entry never shown was never cleared, so NULLs that arrive later stay.
+        return (keep ? FilterOp.In : FilterOp.NotIn, rows, (keep ? nullTicked : !nullTicked) && Nulls > 0);
     }
 
     /// <summary>What the filter its ticks make keeps (<see cref="Freeze"/>, which it calls), in 32 hex digits: the first half of

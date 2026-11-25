@@ -164,7 +164,23 @@ describe('editing commands', () => {
     await commands.execute('edit.makeLowercase', undefined, 'menu')
     expect(text()).toBe('select 1\nfrom t')
   })
-  // The GoogleSQL side (both commands greyed, the text unchanged) is in bigquery-workbench.test.ts.
+  // GoogleSQL's tokens: `#` starts a comment, so T-SQL's rules would take the comma out of `# total,` and make `a b` (a aliased
+  // b) two columns; a backtick name, a triple-quoted string and a raw string keep their commas too.
+  it('move commas in a GoogleSQL query by its own tokens', async () => {
+    const { commands, documents } = setup()
+    const sql = 'SELECT a # total,\n  b,\n  `x,y`,\n  """p,\nq""",\n  r\'s,\\\'\',\n  c\nFROM t'
+    const query = documents.restore('commas.sql', sql, 'sql', 'lf', undefined, 'bigquery')
+    expect(documents.getModel(query.id)?.getLanguageId()).toBe('googlesql')
+    const text = () => documents.getModel(query.id)!.getValue()
+    expect(await commands.execute('edit.commasToFront', undefined, 'menu')).toBe(true)
+    expect(text()).toBe('SELECT a # total,\n  b\n ,`x,y`\n ,"""p,\nq"""\n ,r\'s,\\\'\'\n ,c\nFROM t')
+    expect(await commands.execute('edit.commasToEnd', undefined, 'palette')).toBe(true)
+    expect(text()).toBe(sql)
+    // GO is a name in GoogleSQL, never a batch separator: the statement runs on past it, and its comma moves.
+    ;(documents.getModel(query.id) as unknown as TestModel).edit('SELECT a,\nGO')
+    expect(await commands.execute('edit.commasToFront', undefined, 'menu')).toBe(true)
+    expect(text()).toBe('SELECT a\n,GO')
+  })
   it('move commas in a SQL Server query, in the statement around the caret', async () => {
     const { commands, documents, tab, text } = setup()
     ;(documents.getModel(tab.id) as unknown as TestModel).edit('SELECT a,\n  b\nFROM t')

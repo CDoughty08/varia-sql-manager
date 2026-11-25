@@ -1374,7 +1374,7 @@ const fixtures = {
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
-  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history' || params.source === 'agent.errorLog' || params.source === 'agent.tree'
+  const operations = params.source === 'ssis.operations', agent = params.source === 'agent.jobs' || params.source === 'agent.history' || params.source === 'agent.errorLog' || params.source === 'agent.tree' || params.source === 'agent.overview'
   if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations && !agent) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
   if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : agent ? liveProbes[probe.probe]?.source === params.source : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
@@ -1444,7 +1444,13 @@ const fakeSessions = [
 ]
 /** Sessions the fake Kill Process ended: they leave Sessions. */
 const killedSessions = new Set()
-const fakeSessionOf = id => fakeSessions.find(row => row.sessionId === id && !killedSessions.has(id))
+// AG-16: while the control file activity-agent-job exists, SQL Server Agent runs step 2 of the Nightly job (a running run, so
+// Stop Job can end it). The program name carries the job id's bytes in SQL Server's order; the backend resolves the names.
+const agentSession = { sessionId: 72, status: 'running', login: 'NT SERVICE\\SQLSERVERAGENT', database: 'master', command: 'WAITFOR', application: 'SQLAgent - TSQL JobStep (Job 0xD4C3B2A1000000408000000000000001 : Step 2)',
+  hostName: 'DB-01', job: 'Nightly, step 2 (Load)', jobName: 'Nightly', openTransactions: '0', loginTime: '2026-11-09 08:04:00.000', hostProcessId: '8500' }
+const agentSessionShown = () => !!controlDirectory && existsSync(join(controlDirectory, 'activity-agent-job'))
+const allSessions = () => agentSessionShown() ? [...fakeSessions, agentSession] : fakeSessions
+const fakeSessionOf = id => allSessions().find(row => row.sessionId === id && !killedSessions.has(id))
 const sameLoginTime = (row, loginTime) => !!row.loginTime && row.loginTime.replace(' ', 'T') === String(loginTime).replace(/(\.\d{3})\d*$/, '$1')
 function activityDetails(params) {
   const row = fakeSessionOf(params.sessionId)
@@ -1486,10 +1492,11 @@ function activityKill(params) {
   })
   return { results, elapsedMs: 6 }
 }
-const sessionTextColumns = ['login', 'database', 'application', 'hostName', 'command', 'waitType', 'status']
+const sessionTextColumns = ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
-  return fakeSessions.filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
+  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00' })
+  return allSessions().filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
 }
@@ -1529,7 +1536,7 @@ function activitySessionsSample(live, probe, revision = revisionOf(probe)) {
   // The probe's sort for this table (a header's sort button), by text with the session id breaking ties.
   const sort = (probe.sort ?? []).filter(key => key.table === undefined || key.table === 0)
   if (sort.length) rows.sort((a, b) => { for (const key of sort) { const left = String(a[key.column] ?? ''), right = String(b[key.column] ?? ''); if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.sessionId - b.sessionId })
-  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const columns = spec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...(column.role ? { role: column.role } : {}) }))
   const result = storeResult({ columns, rows: rows.map(row => spec.columns.map(column => column.id === 'sessionId' ? String(row.sessionId) : row[column.id] ?? null)) }, 0)
   const kept = live.kept.get(probe.probe) ?? []
   kept.push(result.resultId)
@@ -1720,6 +1727,7 @@ function wakeLive(live) {
     else if (live.source === 'agent.history') samples.push({ ...sample, ...agentHistorySample(live, probe) })
     else if (live.source === 'agent.errorLog') samples.push({ ...sample, ...agentErrorLogSample(live, probe) })
     else if (live.source === 'agent.tree') samples.push({ ...sample, status: agentTreeStatus() })
+    else if (live.source === 'agent.overview') samples.push({ ...sample, ...agentOverviewSample(live, probe) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
@@ -1836,7 +1844,7 @@ function liveUpdate(id, params) {
     if ((patch.view !== undefined || patch.filter !== undefined || patch.clear?.some(item => item === 'view' || item === 'filter')) && !probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
-  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' || live.source === 'agent.history' || live.source === 'agent.errorLog' ? { ...params.args } : { ...live.args, ...params.args }
+  if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' || live.source === 'agent.history' || live.source === 'agent.errorLog' || live.source === 'agent.overview' ? { ...params.args } : { ...live.args, ...params.args }
   // New args read again at once, as the backend's Reread of every probe does.
   if (params.args) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
@@ -2204,6 +2212,32 @@ function agentDeleteHistory(params) {
   const before = agentHistory.length
   for (let at = agentHistory.length - 1; at >= 0; at--) if (jobs.includes(agentHistory[at].job)) agentHistory.splice(at, 1)
   return { steps: [{ status: 'done', title: 'Delete job history', detail: `${jobs.length} ${jobs.length === 1 ? 'job' : 'jobs'}` }], messages: [`${before - agentHistory.length} history runs purged.`], elapsedMs: 1 }
+}
+
+// SQL Server Agent's overview (AG-15) of the fake server's jobs, read as sysadmin on Windows: the server's clock sits on the day
+// Nightly failed, Purge's owner is a disabled login, Backup notifies no one, no alert exists and one schedule is unused.
+const overviewColumns = table => liveProbes['agent.overview.read'].tables[table].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
+function agentOverviewSample(live, probe) {
+  const stamp = text => text.replace(' ', 'T')
+  const jobs = storeResult({ columns: overviewColumns(0), rows: agentJobs.map(job => [job.id.toUpperCase(), job.name, job.enabled ? '1' : '0', agentJobDoc(job).owner, job.category, String(job.outcome), stamp(job.lastRun),
+    agentRunning(job) ? '1' : '4', job.name === 'Backup' ? '0' : '2', '0', '0', '1', job.name === 'Purge' ? '1' : '0', '20', '10', '2026-10-01T00:00:00', job.created]) }, 0)
+  const alerts = storeResult({ columns: overviewColumns(1), rows: [] }, 0)
+  const schedules = storeResult({ columns: overviewColumns(2), rows: [['1', 'Nightly 02:30', '1', '2'], ['9', 'Quarter end', '1', '0']] }, 0)
+  const reads = storeResult({ columns: overviewColumns(3), rows: ['facts', 'state', 'clock', 'jobs', 'properties', 'alerts', 'profiles', 'owners', 'history', 'schedules', 'mail', 'service'].map(read => [read, 'ok', null, '0']) }, 0)
+  const tables = [jobs, alerts, schedules, reads]
+  // Two revisions kept per table, the older retired, as the other Agent sources keep theirs.
+  live.overviewRevisions ??= tables.map(() => [])
+  const retired = tables.map((table, index) => {
+    const kept = live.overviewRevisions[index]
+    kept.push(table.resultId)
+    live.revisions.push(table.resultId)
+    const old = kept.length > 2 ? [kept.shift()] : []
+    for (const resultId of old) { stored.delete(resultId); live.revisions.splice(live.revisions.indexOf(resultId), 1) }
+    return old
+  })
+  const status = [['platform', 'windows'], ['productVersion', '17.0.1000.7'], ['isSysadmin', 1], ['mailXps', 1], ['agentXps', 1], ['serviceState', 4], ['startupType', 2], ['serverNow', '2026-11-15T12:00:00'],
+    ['historyMaxRows', 1000], ['historyMaxRowsPerJob', 100], ['mailProfiles', 1], ['useDatabaseMail', 1], ['agentProfile', 'AgentMail'], ['agentProfileFound', 1], ['serviceAccount', 'NT SERVICE\\SQLSERVERAGENT']]
+  return { status: status.map(([id, value]) => ({ id, value })), tables: tables.map((table, index) => ({ table: index, descriptor: describe(table), revision: probe.samples, ...retired[index].length ? { retired: retired[index] } : {} })) }
 }
 
 // The SQL Server Agent error logs (AG-5b): Current and one archive, newest row first as AgentErrorLogReader merges them; Recycle

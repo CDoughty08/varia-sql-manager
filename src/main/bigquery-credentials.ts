@@ -7,7 +7,7 @@ import { BackendError } from './backend/errors'
 
 /** The largest key, configuration or ADC file main reads (BigQueryLimits.CredentialBytes in C#). */
 export const maxCredentialBytes = 64 * 1024
-const maxKeyFiles = 256
+export const maxKeyFiles = 256
 
 /**
  * The key and federation configuration files the renderer may name, by opaque reference (docs/bigquery.md,

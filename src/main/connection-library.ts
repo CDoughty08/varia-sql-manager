@@ -28,13 +28,13 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
     return { library, savedPasswords: saved.ids, ...(saved.warning ? { passwordWarning: saved.warning } : {}) }
   }
   // BigQuery's library beside it: its key files by name only.
-  const bigQueryView = async (): Promise<{ bigQuery: BigQueryLibraryView; bigQueryWarning?: string }> => {
+  const bigQueryView = async (): Promise<{ bigQuery: BigQueryLibraryView; bigQueryWarning?: string; bigQueryUnreadable?: true }> => {
     if (!deps.bigQuery) return { bigQuery: { profiles: [] } }
     // A BigQuery file that cannot be read (locked, a folder) never keeps SQL Server's library from loading.
     try {
       const { library, warning } = await deps.bigQuery.load()
       return { bigQuery: BigQueryConnectionStore.view(library), ...warning ? { bigQueryWarning: warning } : {} }
-    } catch { return { bigQuery: { profiles: [] }, bigQueryWarning: 'The saved BigQuery connections could not be read.' } }
+    } catch { return { bigQuery: { profiles: [] }, bigQueryWarning: 'The saved BigQuery connections could not be read.', bigQueryUnreadable: true } }
   }
   /** A BigQuery change answers with SQL Server's library as it is, so the renderer replaces both views at once. */
   const withSqlServer = async (bigQuery: BigQueryLibraryView) => {
@@ -43,11 +43,11 @@ export function connectionLibrary(deps: ConnectionLibraryDeps) {
     return { library, savedPasswords, bigQuery }
   }
   return {
-    async load(): Promise<ConnectionLibraryView & { warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView }> {
+    async load(): Promise<ConnectionLibraryView & { warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView; bigQueryUnreadable?: true }> {
       const { library, warning } = await deps.connections.load()
-      const { bigQuery, bigQueryWarning } = await bigQueryView()
+      const { bigQuery, bigQueryWarning, bigQueryUnreadable } = await bigQueryView()
       const warnings = [warning, bigQueryWarning].filter(Boolean).join(' ')
-      return { ...await view(library), passwordStorage: await deps.savedPasswords.state(), bigQuery, ...(warnings ? { warning: warnings } : {}) }
+      return { ...await view(library), passwordStorage: await deps.savedPasswords.state(), bigQuery, ...(warnings ? { warning: warnings } : {}), ...bigQueryUnreadable ? { bigQueryUnreadable } : {} }
     },
     /**
      * Save. With `rememberPassword`, the typed password is remembered under the saved entry only when a check signed in

@@ -5,7 +5,7 @@ import { bigQueryAuthenticationLabels, bigQueryKeyFileLabels } from '../../share
 import { bigQueryLimits } from '../../shared/connections'
 import { z } from 'zod'
 import Icon from './Icon'
-import { advancedCostPrompt, bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
+import { advancedCostPrompt, advancedCostThreshold, parseCostThreshold, shownCostThreshold, bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
 
 /** Location's choices: Automatic (the dataset's), the multi-regions, then common regions. Any other a profile names is
  *  listed as well. */
@@ -134,8 +134,8 @@ export function useBigQueryLists(options: BigQueryConnectionOptions, alive: { re
 export type BigQueryLists = ReturnType<typeof useBigQueryLists>
 
 /** How many of BigQuery's advanced settings are set. */
-export function bigQueryAdvancedCount(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount'>): number {
-  return [options.maximumBytesBilled, options.costPrompt === false, options.impersonateServiceAccount].filter(Boolean).length
+export function bigQueryAdvancedCount(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'costThreshold' | 'impersonateServiceAccount'>): number {
+  return [options.maximumBytesBilled, options.costPrompt === false, options.costThreshold, options.impersonateServiceAccount].filter(Boolean).length
 }
 
 /** The Advanced tab's accessible summary: how many of BigQuery's advanced settings are set. */
@@ -188,6 +188,8 @@ export interface BigQueryAdvancedDraft {
   readonly amount: string
   readonly unit: ByteUnit
   readonly impersonate: string
+  /** Prompt above as typed; undefined until edited, when the field shows the form's or saved threshold. */
+  readonly threshold?: string
 }
 /** Initialises BigQuery Advanced draft fields from loaded options (only on load/choose/reset, never while typing). */
 export function bigQueryAdvancedDraftFrom(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'impersonateServiceAccount'>): BigQueryAdvancedDraft {
@@ -198,30 +200,42 @@ export function bigQueryAdvancedDraftFrom(options: Pick<BigQueryConnectionOption
 export function bigQueryAdvancedValidationError(draft: BigQueryAdvancedDraft): string {
   const bytes = joinBytes(draft.amount, draft.unit)
   if (!bytes.ok) return bytes.error
+  const threshold = parseCostThreshold(draft.threshold ?? '')
+  if (!threshold.ok) return threshold.error
   const impersonate = draft.impersonate.trim()
   if (impersonate && !serviceAccountSchema.safeParse(impersonate).success) return impersonateFormatError
   return ''
 }
 
-/** BigQuery's inline Advanced Properties tab panel: cost cap and prompt, and impersonation. */
-export function BigQueryAdvanced({ options, savedCostPrompt, locked, draft, onDraftChange, onChange }: {
+/** BigQuery's inline Advanced Properties tab panel: cost cap, prompt and threshold, and impersonation. */
+export function BigQueryAdvanced({ options, savedCostPrompt, savedCostThreshold, defaultCostThreshold, locked, draft, onDraftChange, onChange }: {
   options: BigQueryConnectionOptions
   savedCostPrompt?: false
+  /** The saved entry's own threshold (GiB), and Options' (the placeholder). */
+  savedCostThreshold?: number
+  defaultCostThreshold: number
   locked?: boolean
   draft: BigQueryAdvancedDraft
   onDraftChange(draft: BigQueryAdvancedDraft): void
-  onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'impersonateServiceAccount'>>): void
+  onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'costThreshold' | 'impersonateServiceAccount'>>): void
 }) {
   const bytesResult = joinBytes(draft.amount, draft.unit)
   const impersonateTrimmed = draft.impersonate.trim()
   const impersonateError = impersonateTrimmed && !serviceAccountSchema.safeParse(impersonateTrimmed).success ? impersonateFormatError : ''
-  const error = (!bytesResult.ok ? bytesResult.error : '') || impersonateError
+  const thresholdResult = parseCostThreshold(draft.threshold ?? '')
+  const thresholdText = draft.threshold ?? String(shownCostThreshold(options, savedCostThreshold) ?? '')
+  const error = (!bytesResult.ok ? bytesResult.error : '') || (!thresholdResult.ok ? thresholdResult.error : '') || impersonateError
   const asking = (options.costPrompt ?? savedCostPrompt) !== false
 
   function updateBytes(nextAmount: string, nextUnit: ByteUnit) {
     onDraftChange({ ...draft, amount: nextAmount, unit: nextUnit })
     const parsed = joinBytes(nextAmount, nextUnit)
     if (parsed.ok) onChange({ maximumBytesBilled: parsed.bytes })
+  }
+  function updateThreshold(next: string) {
+    onDraftChange({ ...draft, threshold: next })
+    const parsed = parseCostThreshold(next)
+    if (parsed.ok) onChange({ costThreshold: advancedCostThreshold(parsed.value) })
   }
   function updateImpersonate(next: string) {
     onDraftChange({ ...draft, impersonate: next })
@@ -231,8 +245,9 @@ export function BigQueryAdvanced({ options, savedCostPrompt, locked, draft, onDr
   }
   function resetAll() {
     onDraftChange({ amount: '', unit: 'GiB', impersonate: '' })
-    // When the saved entry chose "Don't ask again" (costPrompt: false), explicit true is needed to turn the prompt back on.
-    onChange({ maximumBytesBilled: undefined, costPrompt: savedCostPrompt === false ? true : undefined, impersonateServiceAccount: undefined })
+    // When the saved entry chose "Don't ask again" (costPrompt: false), explicit true is needed to turn the prompt back on;
+    // likewise 0 clears a saved threshold.
+    onChange({ maximumBytesBilled: undefined, costPrompt: savedCostPrompt === false ? true : undefined, costThreshold: advancedCostThreshold(undefined), impersonateServiceAccount: undefined })
   }
   return <div className="connect-advanced-panel">
     <div className="connect-advanced-toolbar">
@@ -243,7 +258,9 @@ export function BigQueryAdvanced({ options, savedCostPrompt, locked, draft, onDr
       <div className="property-row"><label htmlFor="bq-max-bytes">Maximum bytes billed</label><div className="property-input-action"><input className="ui-field" id="bq-max-bytes" inputMode="decimal" maxLength={24} disabled={locked} placeholder="No limit" value={draft.amount} aria-invalid={!bytesResult.ok || undefined} aria-describedby="bq-max-bytes-note" onChange={event => updateBytes(event.target.value, draft.unit)} /><select className="ui-field bq-unit" aria-label="Maximum bytes billed unit" disabled={locked} value={draft.unit} onChange={event => updateBytes(draft.amount, event.target.value as ByteUnit)}>{byteUnits.map(([name]) => <option key={name} value={name}>{name}</option>)}</select></div></div>
       <p className="field-note" id="bq-max-bytes-note">Every query on this connection is sent with this cap, and BigQuery fails a query that would bill more, at no charge. Empty means no limit.</p>
       <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={asking} disabled={locked} aria-describedby="bq-cost-prompt-note" onChange={event => onChange({ costPrompt: advancedCostPrompt(options, savedCostPrompt, event.target.checked) })} />Ask before running a query over the cost threshold</label></div>
-      <p className="field-note" id="bq-cost-prompt-note">Tools › Options › Query Execution › BigQuery › Cost sets the threshold. Choosing "Don't ask again" in the prompt clears this.</p>
+      <p className="field-note" id="bq-cost-prompt-note">Choosing "Don't ask again" in the prompt clears this.</p>
+      <div className="property-row"><label htmlFor="bq-cost-threshold">Prompt above</label><div className="property-input-action"><input className="ui-field" id="bq-cost-threshold" inputMode="numeric" maxLength={9} disabled={locked} placeholder={`Options default (${defaultCostThreshold.toLocaleString('en-US')} GiB)`} value={thresholdText} aria-invalid={!thresholdResult.ok || undefined} aria-describedby="bq-cost-threshold-note" onChange={event => updateThreshold(event.target.value)} /><span className="bq-unit-label" aria-hidden="true">GiB</span></div></div>
+      <p className="field-note" id="bq-cost-threshold-note">The threshold in GiB the cost prompt uses on this connection, in place of Tools › Options › Query Execution › BigQuery › Cost's, for every billed query while the prompt is on. Empty uses the Options threshold.</p>
     </div></fieldset>
     <fieldset className="property-section"><legend>Identity</legend><div className="property-grid">
       <div className="property-row"><label htmlFor="bq-impersonate">Impersonate service account</label><input className="ui-field" id="bq-impersonate" type="email" maxLength={bigQueryLimits.serviceAccount} disabled={locked} spellCheck={false} placeholder="name@project.iam.gserviceaccount.com" value={draft.impersonate} aria-invalid={!!impersonateError || undefined} aria-describedby="bq-impersonate-note" onChange={event => updateImpersonate(event.target.value)} /></div>

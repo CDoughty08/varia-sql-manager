@@ -62,11 +62,30 @@ Varia's backend, not SQL Tools.
 - CTEs, derived tables, table variables and columns a statement declares have no definition. A name matching nothing, a
   temporary object or a linked server's object shows a short status-bar message, never an error dialog.
 
+In a **BigQuery query** the same keys and gestures work, without the backend's SQL Server lookup and without billing:
+
+- Names resolve as [completion](#completion-from-the-index) resolves them, from the connection's Search Objects index: a
+  table, view or table function where a table is written, a routine where it is called (`sales.to_cents(price)`), and an
+  alias or column's table or view. A one-part name is in the tab's default dataset, a two-part one in the billing project.
+  `WITH` queries, subqueries, built-in functions (`NET.HOST(`) and anything the index has not read yet have no definition.
+  A `CREATE TEMP FUNCTION` in the script is not in the index: a call to it finds a persistent routine of the same name in
+  the default dataset, if there is one. An index busy or failing says so rather than that nothing was found.
+- The keys work in BigQuery query tabs only, not in BigQuery Properties' or Peek's read-only Definition editor, which has
+  no query connection to resolve names on.
+- **F12** on a view, materialized view or routine opens its SQL in a new query on the same connection (in the object's
+  dataset when it is in the billing project), read from `tables.get` or `routines.get` as Properties reads it. A table, or a
+  routine with no stored body, has no free CREATE statement (Script As › CREATE reads it with a billed query, after its
+  cost prompt), so F12 says so instead.
+- **Alt+F12**, Ctrl+hover and Ctrl+click open BigQuery's Peek card or Properties tab ([BigQuery › Peek](bigquery.md#properties)),
+  on **Definition** for a view, materialized view or routine and where they open today for a table.
+
 ### Toggle Brackets and comma placement
 
-These SQL Server commands read the query's tokens, so text in strings, comments, variables, temporary tables and quoted
-names never changes. Each is one undo step, on the editor's context menu, **Edit › Advanced** and the command palette.
-They are available only in SQL Server queries: GoogleSQL reads text differently (`#` starts a comment, `[1]` is an array).
+These commands read the query's tokens, so text in strings, comments, variables, temporary tables and quoted names never
+changes. Each is one undo step, on the editor's context menu, **Edit › Advanced** and the command palette. Toggle Brackets
+is available only in SQL Server queries, since GoogleSQL's `[1]` is an array. Move Commas reads a BigQuery query with
+GoogleSQL's own tokens: `#` and `--` comments, backtick names, and raw, bytes and triple-quoted strings keep their commas,
+`[…]` is a bracket like `(…)`, and `GO` is an ordinary name, never a statement boundary.
 
 - **Toggle Brackets** (**Ctrl+[**, **⌘[** on macOS) brackets every name in the selection, or in the whole query when
   nothing is selected: `dbo.Orders o` becomes `[dbo].[Orders] [o]`. When every name already has brackets, it takes them off

@@ -86,6 +86,13 @@ internal sealed partial class ObjectSearchService : IDisposable
         public readonly Dictionary<(string Project, string Dataset), long> Stale = [];
         /// <summary>Numbers each stale mark (under Gate), so a build clears only the marks it saw before it read the dataset.</summary>
         public long StaleMarks;
+        /// <summary>BigQuery projects whose DDL could have touched any dataset (a script whose statements could not all be read, DDL
+        /// with no target and no default dataset), by project (under Gate): the next stale-only build lists the project again and
+        /// reads every dataset in it whole.</summary>
+        public readonly Dictionary<string, long> StaleProjects = new(StringComparer.Ordinal);
+        /// <summary>The newest stale mark not yet spent, or null: index status carries it so the renderer asks a stale-only
+        /// build once per new mark (never again for a mark a failed read left).</summary>
+        public long? StaleMark => Stale.Count + StaleProjects.Count == 0 ? null : Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max());
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -363,7 +370,7 @@ internal sealed partial class ObjectSearchService : IDisposable
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
-                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects);
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark);
             }
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),

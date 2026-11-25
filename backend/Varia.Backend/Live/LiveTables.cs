@@ -575,8 +575,8 @@ internal sealed class LiveSnapshotTable
         // Named columns of another of the probe's tables leave this one unfiltered.
         int[] columns = filter.Columns is { Length: > 0 } named
             ? [.. named.Select(id => spec.Columns.FindIndex(column => column.Id == id && LiveColumnJson.IsData(column))).Where(at => at >= 0)]
-            // The hidden tone column is not data: text the user cannot see never matches.
-            : [.. Enumerable.Range(0, spec.Columns.Count).Where(at => LiveColumnJson.IsData(spec.Columns[at]))];
+            // Text the user cannot see (the tone, hidden identity columns) never matches unless a filter names its column.
+            : [.. Enumerable.Range(0, spec.Columns.Count).Where(at => LiveColumnJson.IsData(spec.Columns[at]) && spec.Columns[at].Role != "hidden")];
         if (columns.Length == 0) return _ => true;
         return row => columns.Any(column => row.Cells[column].Text?.Contains(text, StringComparison.OrdinalIgnoreCase) == true);
     }

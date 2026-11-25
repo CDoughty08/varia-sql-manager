@@ -225,6 +225,8 @@ export interface ObjectIndexStatus {
   readonly bulk?: BigQueryBulkStatus
   /** BigQuery: how many distinct projects the index holds reads for. */
   readonly projects?: number
+  /** BigQuery: the newest DDL stale mark no stale-only build has spent yet (absent when none is left). */
+  readonly staleMark?: number
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 

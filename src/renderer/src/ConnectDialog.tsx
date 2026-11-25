@@ -13,7 +13,7 @@ import type { BigQueryConnectionProfile, BigQueryLibraryView, PickedKeyFile } fr
 import type { ProviderId } from '../../shared/providers'
 import type { BigQueryAuthenticationMode } from '../../shared/auth'
 import { BigQueryAdvanced, BigQueryConnectFields, accountText, bigQueryAdvancedCount, bigQueryAdvancedDraftFrom, bigQueryAdvancedSummary, bigQueryAdvancedValidationError, useBigQueryLists, type BigQueryAdvancedDraft } from './BigQueryConnectFields'
-import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPrompt, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
+import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, savedCostThreshold, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPreferences, shownCostThreshold, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import { dialogWindowKinds } from '../../shared/popouts'
 import Icon from './Icon'
@@ -222,7 +222,8 @@ function ConnectFooterReset({ disabled, onReset }: { readonly disabled: boolean;
 }
 
 export default function ConnectDialog({ initial, initialTargetId, raise, incomingRequest, onAcceptRequest, reviewOpen, review, initialAutoReconnect, onConnected, onClose }: Props) {
-  const { theme, platform, gestures, connections, backend, connectionReady, startupReconnect, settings, documents } = useWorkbench()
+  const { theme, platform, gestures, connections, backend, connectionReady, startupReconnect, settings, documents, bigQueryCost } = useWorkbench()
+  const defaultCostThreshold = useServiceSnapshot(settings).values['queryExecution.bigQuery.costThreshold']
   const executionTimeout = settings.get('queryExecution.executionTimeout')
   const { active } = useServiceSnapshot(theme)
   const liveConnections = useServiceSnapshot(connections)
@@ -234,7 +235,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   const isBigQuery = serverType.type === 'bigquery'
   // The cost-prompt choice is the saved entry's (savedCostPrompt below): the form names one only once Advanced Properties
   // changes it, so a remembered or stale value never overwrites "Don't ask again".
-  const [bigQuery, setBigQuery] = useState<BigQueryConnectionOptions>(() => initial.provider === 'bigquery' ? withoutCostPrompt(initial) : bigQueryDefaults())
+  const [bigQuery, setBigQuery] = useState<BigQueryConnectionOptions>(() => initial.provider === 'bigquery' ? withoutCostPreferences(initial) : bigQueryDefaults())
   const currentBigQuery = useRef(bigQuery)
   currentBigQuery.current = bigQuery
   const [bigQueryLibrary, setBigQueryLibrary] = useState<BigQueryLibraryView>({ profiles: [] })
@@ -368,6 +369,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   function showLibrary(view: ConnectionLibraryView & { bigQuery?: BigQueryLibraryView }) { setLibrary(view.library); setSavedIds(new Set(view.savedPasswords)); if (view.bigQuery) setBigQueryLibrary(view.bigQuery) }
   const bigQuerySelected = bigQueryLibrary.profiles.find(profile => profile.id === bigQuerySelectedId)
   const bigQuerySavedCostPrompt = savedCostPrompt(bigQueryLibrary.profiles, bigQuery)
+  const bigQuerySavedCostThreshold = savedCostThreshold(bigQueryLibrary.profiles, bigQuery)
   const bigQueryKeyName = bigQuery.keyFile ? pickedKeyName?.keyFile === bigQuery.keyFile ? pickedKeyName.name : bigQueryLibrary.profiles.find(profile => profile.options.keyFile === bigQuery.keyFile)?.keyFileName : undefined
   const bigQueryLists = useBigQueryLists(bigQuery, alive, isBigQuery)
   const sqlAdvancedErrors = useMemo(() => {
@@ -474,7 +476,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     const nextOptions = request.options
     if (!nextOptions) return
     if (nextOptions.provider === 'bigquery') {
-      const nextBq = withoutCostPrompt(nextOptions)
+      const nextBq = withoutCostPreferences(nextOptions)
       setServerType({ type: 'bigquery' })
       setBigQuery(nextBq)
       setBigQueryReconnect(request.autoReconnect ?? 'inherit')
@@ -813,9 +815,9 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     if (type === 'bigquery') {
       // BigQuery's form: an edited saved entry, or a new connection whose settings no entry has yet.
       if (!bigQueryEdited.current) return undefined
-      const form = bigQueryShape(bigQuery, bigQueryReconnect, bigQuery.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, bigQuery))
+      const form = bigQueryShape(bigQuery, bigQueryReconnect, bigQuery.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, bigQuery), bigQuery.costThreshold ?? savedCostThreshold(bigQueryLibrary.profiles, bigQuery))
       const baseline = bigQueryBaseline.current
-      if (!bigQueryAdvancedError && baseline && form === bigQueryShape(baseline.options, baseline.autoReconnect, baseline.options.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, baseline.options))) return undefined
+      if (!bigQueryAdvancedError && baseline && form === bigQueryShape(baseline.options, baseline.autoReconnect, baseline.options.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, baseline.options), baseline.options.costThreshold ?? savedCostThreshold(bigQueryLibrary.profiles, baseline.options))) return undefined
       if (bigQuerySelected) return !bigQueryAdvancedError && form === bigQueryShape(bigQuerySelected.options, bigQuerySelected.autoReconnect ?? 'inherit') ? undefined : { bigQueryTarget: bigQuerySelected }
       const key = bigQueryKey(bigQuery)
       if (!loaded || !key || !bigQueryReady(bigQuery) || bigQueryLibrary.profiles.some(profile => connectionKey(profile.options) === key)) return undefined
@@ -900,7 +902,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   function chooseBigQuery(profile: BigQueryConnectionProfile) {
     setServerType(current => switchServerType(current, 'bigquery'))
     if (properties === 'string') setProperties('properties')
-    const chosen = withoutCostPrompt(profile.options)
+    const chosen = withoutCostPreferences(profile.options)
     setBigQuery(chosen); setBigQuerySelectedId(profile.id); setSelectedId(undefined)
     setBigQueryAdvancedDraft(bigQueryAdvancedDraftFrom(chosen))
     setBigQueryReconnect(profile.autoReconnect ?? 'inherit'); bigQuerySettled()
@@ -948,6 +950,9 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     try {
       const previous = profile ?? bigQuerySelected
       const value = unwrap(await window.varia.saveConnectionProfile({ ...previous ? { id: previous.id } : {}, options: labelled, ...favorite !== undefined ? { favorite } : {}, autoReconnect: profile ? profile.autoReconnect ?? 'inherit' : bigQueryReconnect, ...how ? { saved: true } : {} }))
+      // A cost-prompt choice or threshold Save named is now the saved entry's: a live connection with these settings
+      // follows it at once (its chip too), rather than at its next prompt.
+      bigQueryCost?.connectedWith(labelled, true)
       if (!alive.current) return 'saved'
       showLibrary(value)
       const profiles = value.bigQuery?.profiles ?? [], key = connectionKey(labelled)
@@ -1227,9 +1232,10 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   // Labels & Custom Properties belong to the type shown.
   const labelled = isBigQuery ? bigQuery : options
   const sqlAdvCount = advancedCount(options.advanced)
-  const bqAdvCount = bigQueryAdvancedCount({ ...bigQuery, costPrompt: bigQuery.costPrompt ?? bigQuerySavedCostPrompt })
+  const shownCost = { ...bigQuery, costPrompt: bigQuery.costPrompt ?? bigQuerySavedCostPrompt, costThreshold: shownCostThreshold(bigQuery, bigQuerySavedCostThreshold) }
+  const bqAdvCount = bigQueryAdvancedCount(shownCost)
   const advBadgeCount = isBigQuery ? bqAdvCount : sqlAdvCount
-  const advSummaryText = isBigQuery ? bigQueryAdvancedSummary({ ...bigQuery, costPrompt: bigQuery.costPrompt ?? bigQuerySavedCostPrompt }) : advancedSummary(options.advanced)
+  const advSummaryText = isBigQuery ? bigQueryAdvancedSummary(shownCost) : advancedSummary(options.advanced)
   const passwordShown = usesPassword(options.authentication)
   const hasSavedPassword = !options.password && !!match
   const activeAdvancedError = isBigQuery ? bigQueryAdvancedError : sqlAdvancedError
@@ -1525,7 +1531,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
                 </fieldset>
               </>}
               {properties === 'advanced' && (isBigQuery
-                ? <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} locked={locked} draft={bigQueryAdvancedDraft} onDraftChange={bigQueryDraftChange} onChange={bigQueryUpdate} />
+                ? <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} savedCostThreshold={bigQuerySavedCostThreshold} defaultCostThreshold={defaultCostThreshold} locked={locked} draft={bigQueryAdvancedDraft} onDraftChange={bigQueryDraftChange} onChange={bigQueryUpdate} />
                 : <SqlAdvancedPanel value={options.advanced ?? {}} draft={sqlAdvancedDraft} edited={sqlAdvancedEdited.current} errors={sqlAdvancedErrors} error={sqlAdvancedError} executionTimeout={executionTimeout} locked={locked} onChange={(next, nextDraft) => { setSqlAdvancedDraft(nextDraft); if (next !== undefined) update({ advanced: next }); else { markEdited(); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined) } }} onReset={() => { sqlAdvancedEdited.current.clear(); setSqlAdvancedDraft({}); update({ advanced: {} }) }} />)}
               {properties === 'string' && !isBigQuery && <div className="connection-preview">
                 <div className="connect-preview-header">

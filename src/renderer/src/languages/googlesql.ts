@@ -45,7 +45,8 @@ export const googleSqlLanguage: Monaco.languages.IMonarchLanguage = {
       [/[@][A-Za-z_]\w*/, 'identifier'],
       { include: '@numbers' },
       [/(ARRAY|STRUCT|RANGE)(\s*)(<)/, ['keyword', 'white', { token: 'delimiter', next: '@typeArguments' }]],
-      [/(SAFE)(\.)(?=[A-Za-z_]\w*\s*\()/, ['keyword', 'delimiter']],
+      // `SAFE.` prefixes a namespaced function too (`SAFE.NET.HOST(`), whose name the next rule colours.
+      [/(SAFE)(\.)(?=[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?\s*\()/, ['keyword', 'delimiter']],
       [/([A-Za-z_]\w*)(\.)([A-Za-z_]\w*)(?=\s*\()/, [{ cases: { '@namespaces': 'predefined', '@default': 'identifier' } }, 'delimiter', { cases: { '$1@namespaces': 'predefined', '@default': 'identifier' } }]],
       // A name after a dot is a column, field or table, even when it spells a keyword (`t.date`, `s.range`).
       [/(\.)([A-Za-z_]\w*)/, ['delimiter', 'identifier']],

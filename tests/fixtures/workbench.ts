@@ -93,6 +93,7 @@ import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
+import { AgentOverviewService, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
@@ -464,7 +465,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const restore = new RestoreService({ api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor, targetIdOf, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
-  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
+  const activity = new ActivityMonitorService({ api, documents, connections, live: liveViews, targetIdOf, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
+    openJob: (connectionId, name) => { jobDocuments.openJob(connectionId, name, 'history') } })
   const live = fakeLive()
   const ssisPlaces = new SsisPlacesService({ api })
   const operations = new SsisOperationsService({ api, documents, panes, live, places: ssisPlaces, connections, settings, targetIdOf })
@@ -481,6 +483,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, ...(options.timers ? { timers: options.timers } : {}) })
   const logViewerRecycled = vi.fn<(connectionId: string) => void>()
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf, recycled: logViewerRecycled })
+  const overviewFixes = {
+    failedJobs: vi.fn<AgentOverviewFixes['failedJobs']>(), changeOwner: vi.fn<AgentOverviewFixes['changeOwner']>(), openJob: vi.fn<AgentOverviewFixes['openJob']>(),
+    agentProperties: vi.fn<AgentOverviewFixes['agentProperties']>(), recommendedAlerts: vi.fn<AgentOverviewFixes['recommendedAlerts']>(), schedules: vi.fn<AgentOverviewFixes['schedules']>(),
+    startAgent: vi.fn<AgentOverviewFixes['startAgent']>()
+  }
+  const agentOverview = new AgentOverviewService({ documents, panes, live, connections, targetIdOf, fixes: overviewFixes })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -550,7 +558,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
   const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
   // BigQuery's estimate chip: no estimates (the cost service's own tests cover it).
-  const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined, asksAboveThreshold: (_id: string) => true }
+  const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined, asksAboveThreshold: (_id: string) => true, thresholdFor: (_id: string) => 10, connectedWith: (_options: unknown, _saved?: boolean) => {} }
   const workbench = {
     sqlLanguage,
     sqlDiagnostics,
@@ -618,6 +626,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     jobHistory,
     jobActivity,
     logViewer,
+    agentOverview,
     agentJobs,
     jobDocuments,
     alertDocuments,
@@ -728,6 +737,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     jobHistory.dispose()
     jobActivity.dispose()
     logViewer.dispose()
+    agentOverview.dispose()
     agentJobs.dispose()
     objectSearch.dispose()
     inspector.dispose()
@@ -801,6 +811,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     credentialDocuments,
     logViewer,
     logViewerRecycled,
+    overviewFixes,
+    agentOverview,
     agentJobs,
     objectSearch,
     inspector,

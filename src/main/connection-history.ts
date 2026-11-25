@@ -17,6 +17,8 @@ export interface ConnectionHistory {
   setBigQueryCostPrompt?(options: BigQueryConnectionOptions, costPrompt: boolean): Promise<boolean>
   /** Claims legacy migrated `extraProjects` into `principal`'s starred projects on BigQuery connect. */
   claimBigQueryMigratedProjects?(principal: string): Promise<void>
+  /** Saves a BigQuery connection's own cost-prompt threshold (0: Options'); resolves whether it holds. */
+  setBigQueryCostThreshold?(options: BigQueryConnectionOptions, costThreshold: number): Promise<boolean>
 }
 
 export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQueryConnectionStore): ConnectionHistory {
@@ -29,12 +31,19 @@ export function connectionHistory(sqlServer: ConnectionStore, bigQuery: BigQuery
       : sqlServer.setAutoReconnect(options as ConnectionOptions, value, selectedProfileId),
     load: () => sqlServer.load(),
     async setBigQueryCostPrompt(options, costPrompt) {
-      const { costPrompt: _costPrompt, ...rest } = options, key = connectionKey(rest)
+      const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...rest } = options, key = connectionKey(rest)
       const library = await bigQuery.setCostPrompt({ options: rest, costPrompt })
       return library.profiles.some(profile => connectionKey(profile.options) === key && (profile.options.costPrompt !== false) === costPrompt)
     },
     async claimBigQueryMigratedProjects(principal) {
       await bigQuery.claimMigratedProjects(principal)
+    },
+    async setBigQueryCostThreshold(options, costThreshold) {
+      const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...rest } = options, key = connectionKey(rest)
+      const library = await bigQuery.setCostThreshold({ options: rest, costThreshold })
+      const same = library.profiles.filter(profile => connectionKey(profile.options) === key)
+      // Cleared holds when no entry with these settings keeps one (there may be no entry at all).
+      return costThreshold === 0 ? same.every(profile => !profile.options.costThreshold) : same.some(profile => profile.options.costThreshold === costThreshold)
     }
   }
 }

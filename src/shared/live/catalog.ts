@@ -36,8 +36,13 @@ export const liveTones = ['error', 'warning', 'running', 'muted'] as const
 export type LiveTone = typeof liveTones[number]
 /** `id` names the column in requests (sort, filter); `name` and `dataType` are what the stored result's columns carry.
  *  `role: 'tone'` marks the row's tone (one of liveTones, or NULL): the table's last column, an nvarchar, never a key. The
- *  grid hides it, and Copy and Save leave it out (ResultTextWriter), so it colours rows and is never data. */
-export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string; readonly role?: 'tone' }
+ *  grid hides it, and Copy and Save leave it out (ResultTextWriter), so it colours rows and is never data. `role: 'link'` is
+ *  data whose non-empty cells the grid draws as links, which open what they name through the owner (an Agent job, AG-16).
+ *  `role: 'hidden'`
+ *  marks an identity or plumbing column (a BigQuery job's full reference, a parent script) that the owner's row actions read
+ *  (LiveGrid.activeRow) but the grid never shows: hidden columns come after the shown ones and before the tone, Copy, Save
+ *  and Find leave them out, and the header cannot sort them; the probe's own args may still name them. */
+export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string; readonly role?: 'tone' | 'link' | 'hidden' }
 export interface LiveTableSpec {
   readonly id: string
   readonly mode: LiveTableMode
@@ -121,6 +126,8 @@ export interface LiveSourceSpec {
   readonly hidden?: 'pause' | 'statusOnly'
 }
 
+/** The BigQuery root's running-jobs chip (explorer.bigquery): the most jobs one sample counts. */
+export const bigQueryExplorerLimits = { runningJobs: 10_000 } as const
 const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id, dataType })
 const toneColumn: LiveColumnSpec = { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }
 /** The types debug.synthetic.wide's columns cycle through. */
@@ -146,12 +153,13 @@ const agentWatchedSeries: readonly LiveSeriesSpec[] = [
   { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
 ]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree', 'agent.overview', 'bigquery.explorer'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list', 'agent.treeProbe'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list', 'agent.treeProbe', 'agent.overview.read',
+  'explorer.bigquery'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -196,6 +204,14 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
     id: 'agent.tree', label: 'SQL Server Agent tree', scope: 'server', testOnly: false, probes: ['agent.treeProbe'],
     description: 'What SQL Server Agent\'s Object Explorer node lists (docs/sql-server-agent.md, Object Explorer), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master. Object Explorer holds one per connection while a SQL Server Agent node is open and shown, and re-lists only what changed, keeping expansion and selection: the node when Agent XPs or the service state changed, a folder when its fingerprint did. Hidden views pause.'
   },
+  'agent.overview': {
+    id: 'agent.overview', label: 'SQL Server Agent overview', scope: 'server', testOnly: false, probes: ['agent.overview.read'], hidden: 'pause',
+    description: `SQL Server Agent's overview and health checks (docs/sql-server-agent.md, Agent overview), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master through msdb's own procedures and a few sysadmin catalogue reads (AgentReader, linted by AgentSql.LintRead), plus explorer.agentService's state text. The overview document opens one view per connection; hidden views pause. It takes no args; Check again asks for a sample now.`
+  },
+  'bigquery.explorer': {
+    id: 'bigquery.explorer', label: 'Object Explorer status (BigQuery)', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: ['explorer.bigquery'], hidden: 'pause',
+    description: 'The chip Object Explorer shows on a BigQuery connection\'s node (docs/bigquery.md, Object Explorer): one view per connected BigQuery connection while Object Explorer shows, read through BigQuery\'s REST API with jobs.list, a free API call (never a query, never the INFORMATION_SCHEMA.JOBS views), through the connection principal\'s shared rate limiter. Hidden views pause. It takes no args.'
+  },
   [jobHistorySource]: {
     id: jobHistorySource, label: 'BigQuery job history', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: [jobHistoryProbe], hidden: 'pause',
     description: 'A BigQuery connection\'s jobs in its billing project (docs/bigquery.md, Job History), read through BigQuery\'s REST API with jobs.list and jobs.get, which are free API calls, never a query and never the INFORMATION_SCHEMA.JOBS views; every call goes through the connection principal\'s shared rate limiter. The Job History document opens one view per connection; hidden views pause. Args: the scope (the principal\'s jobs, or the project\'s with allUsers), the time range, state, job type, statement type and Started from Varia filters, pinned jobs, the scripts whose children show under them (expand), and whether the Cost column is written (prices).'
@@ -229,7 +245,7 @@ function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSp
       return {
         // A table that tones its rows ends with the tone column, which the backend fills (NULL until it sets one).
         id: table, mode: 'snapshot',
-        columns: [...table$.columns.map(item => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type] })), ...table$.tones?.length ? [{ ...toneColumn, id: liveColumnId(table, 'tone') }] : []],
+        columns: [...table$.columns.map((item): LiveColumnSpec => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type], ...item.link ? { role: 'link' as const } : item.hidden ? { role: 'hidden' as const } : {} })), ...table$.tones?.length ? [{ ...toneColumn, id: liveColumnId(table, 'tone') }] : []],
         key: table$.key.map(item => liveColumnId(table, item)), rowCap: table$.rowCap,
         ...table$.departedLinger ? { departed: true } : {},
         ...table$.facetColumns?.length ? { facets: table$.facetColumns.map(item => liveColumnId(table, item)) } : {}
@@ -360,6 +376,13 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. The last series is the server's clock (yyyymmddhhmmss, server local time), by which the status bar dates a Start in server time. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
     series: agentWatchedSeries
   },
+  'explorer.bigquery': {
+    id: 'explorer.bigquery', source: 'bigquery.explorer', label: 'Running jobs (API)', intervalMs: { default: 10_000, min: 5000, max: 300_000 },
+    loadGuard: false, budgetMs: { min: 1000, max: 10_000 }, minGapMs: 2000,
+    description: `How many of the connection principal's own jobs in the billing project are pending or running: jobs.list with stateFilter pending and running, without allUsers, projection=minimal, top-level jobs only (a running script counts once), in pages of 1,000 up to ${bigQueryExplorerLimits.runningJobs.toLocaleString('en-US')}; past that, more is 1 and the count stops there. Jobs other principals run in the project are not counted.`,
+    series: [{ id: 'runningJobs', unit: 'count', label: 'Running jobs', counter: 'gauge' }],
+    status: ['more']
+  },
   [jobHistoryProbe]: {
     id: jobHistoryProbe, source: jobHistorySource, label: 'Jobs',
     intervalMs: { default: jobHistoryLimits.intervalMs, min: jobHistoryLimits.minIntervalMs, max: jobHistoryLimits.maxIntervalMs }, idleIntervalMs: jobHistoryLimits.idleIntervalMs,
@@ -420,6 +443,46 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
         columns: [
           { id: 'logDate', name: 'Date', dataType: 'datetime2' }, { id: 'logSource', name: 'Log', dataType: 'nvarchar' }, { id: 'logType', name: 'Type', dataType: 'nvarchar' },
           { id: 'logMessage', name: 'Message', dataType: 'nvarchar' }, { id: 'logKey', name: 'Entry', dataType: 'nvarchar' }, { id: 'logArchive', name: 'Archive', dataType: 'int' }, { ...toneColumn, id: 'logTone' }
+        ]
+      }
+    ]
+  },
+  'agent.overview.read': {
+    id: 'agent.overview.read', source: 'agent.overview', label: 'Agent overview', intervalMs: { default: 60_000, min: 15_000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] }, budgetMs: { min: 1000, max: 10_000 },
+    description: `The facts the Agent overview's health checks read (src/shared/agent/overview.ts turns them into checks). For every Agent role: whether the login is sysadmin and Database Mail XPs (one SELECT), Agent XPs and the service's state and startup type (explorer.agentService's text), the server's clock, every job the login may see (msdb.dbo.sp_help_job: last run, state, failure notifications, schedule), the history caps (msdb.dbo.sp_get_sqlagent_properties), alerts (msdb.dbo.sp_help_alert; SQLAgentOperatorRole and up; none on Linux or Managed Instance) and the Database Mail profiles (msdb.dbo.sysmail_help_profile_sp). For sysadmin only: whether each job's owner can log in (msdb.dbo.sysjobs with sys.server_principals and sys.server_permissions), each job's history rows, runs and oldest row (msdb.dbo.sysjobhistory, aggregated on the server), the schedules with their job counts (msdb.dbo.sp_help_schedule), Agent's mail settings and its service account (sys.dm_server_services). Below sysadmin those are not run and the reads table says role. A refused read is a reads table row with its error code and message, never a failed probe. Lists cut at ${agentLimits.listRows} rows. Times are server local, as yyyy-mm-ddThh:mm:ss.`,
+    status: ['platform', 'productVersion', 'isSysadmin', 'mailXps', 'agentXps', 'serviceState', 'startupType', 'serverNow', 'historyMaxRows', 'historyMaxRowsPerJob', 'mailProfiles', 'useDatabaseMail', 'agentProfile', 'agentProfileFound', 'serviceAccount'],
+    tables: [
+      {
+        id: 'jobs', mode: 'snapshot', key: ['jobId'], rowCap: agentLimits.listRows,
+        columns: [
+          { id: 'jobId', name: 'Job ID', dataType: 'uniqueidentifier' }, { id: 'jobName', name: 'Name', dataType: 'nvarchar' }, { id: 'jobEnabled', name: 'Enabled', dataType: 'int' },
+          { id: 'jobOwner', name: 'Owner', dataType: 'nvarchar' }, { id: 'jobCategory', name: 'Category', dataType: 'nvarchar' }, { id: 'jobOutcome', name: 'Last Run Outcome', dataType: 'int' },
+          { id: 'jobLastRun', name: 'Last Run', dataType: 'nvarchar' }, { id: 'jobStatus', name: 'Status', dataType: 'int' }, { id: 'jobNotifyEmail', name: 'E-mail', dataType: 'int' },
+          { id: 'jobNotifyPage', name: 'Page', dataType: 'int' }, { id: 'jobNotifyNetsend', name: 'Net send', dataType: 'int' }, { id: 'jobScheduled', name: 'Scheduled', dataType: 'int' },
+          { id: 'jobOwnerState', name: 'Owner Login', dataType: 'int' }, { id: 'jobHistoryRows', name: 'History Rows', dataType: 'bigint' }, { id: 'jobHistoryRuns', name: 'History Runs', dataType: 'bigint' },
+          { id: 'jobHistoryOldest', name: 'Oldest History', dataType: 'nvarchar' },
+          { id: 'jobCreated', name: 'Created', dataType: 'nvarchar' }
+        ]
+      },
+      {
+        id: 'alerts', mode: 'snapshot', key: ['alertName'], rowCap: agentLimits.listRows,
+        columns: [
+          { id: 'alertName', name: 'Name', dataType: 'nvarchar' }, { id: 'alertEnabled', name: 'Enabled', dataType: 'int' }, { id: 'alertMessageId', name: 'Error Number', dataType: 'int' },
+          { id: 'alertSeverity', name: 'Severity', dataType: 'int' }, { id: 'alertLast', name: 'Last Occurred', dataType: 'nvarchar' }, { id: 'alertNotifies', name: 'Notifies', dataType: 'int' }
+        ]
+      },
+      {
+        id: 'schedules', mode: 'snapshot', key: ['scheduleId'], rowCap: agentLimits.listRows,
+        columns: [
+          { id: 'scheduleId', name: 'Schedule ID', dataType: 'int' }, { id: 'scheduleName', name: 'Name', dataType: 'nvarchar' }, { id: 'scheduleEnabled', name: 'Enabled', dataType: 'int' },
+          { id: 'scheduleJobs', name: 'Jobs', dataType: 'int' }
+        ]
+      },
+      {
+        id: 'reads', mode: 'snapshot', key: ['readId'], rowCap: 32,
+        columns: [
+          { id: 'readId', name: 'Read', dataType: 'nvarchar' }, { id: 'readState', name: 'State', dataType: 'nvarchar' }, { id: 'readMessage', name: 'Message', dataType: 'nvarchar' },
+          { id: 'readTruncated', name: 'Truncated', dataType: 'int' }
         ]
       }
     ]

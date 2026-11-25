@@ -116,6 +116,8 @@ export interface BigQueryConnectionOptions {
   maximumBytesBilled?: number
   /** false: Execute does not ask above the cost threshold on this connection (Don't ask again). Not part of its identity. */
   costPrompt?: boolean
+  /** The connection's own cost-prompt threshold in whole GiB, over Options' (0, sent only: back to Options'). Not part of its identity. */
+  costThreshold?: number
   displayName?: string
   color?: string
   environment?: string
@@ -226,10 +228,12 @@ export interface ResultColumn {
   name: string
   dataType: string
   wire: WireKind
-  /** `xml`, `json`, `plan`, `udt` and `vector` are data. The rest are hidden (isHiddenColumn) and always come last: `tone`, a
+  /** `xml`, `json`, `plan`, `udt`, `vector` and `link` (a live table's link column, whose cells open what they name) are data. The rest are hidden (isHiddenColumn) and always come last: `tone`, a
    *  live table's or a diff's row tone (src/shared/live/catalog.ts), and a diff's suffix, `old` (a previous value), `mark`
-   *  (the change marker) and `leftRow`/`rightRow` (each input's 1-based row). */
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone'
+   *  (the change marker) and `leftRow`/`rightRow` (each input's 1-based row); and `hidden`, a live table's identity column,
+   *  which its owner's row actions read but the grid never shows; and `link`, a live table's data column whose cells the grid
+   *  draws as links (src/shared/live/catalog.ts). */
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'old' | 'mark' | 'leftRow' | 'rightRow' | 'tone' | 'link' | 'hidden'
   /** A previous-value column's (role `old`) pair index: the data column it belongs to. */
   of?: number
   maxLength?: number
@@ -333,6 +337,9 @@ export interface QueryResult {
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
   /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
   job?: BigQueryJobSummary
+  /** BigQuery: the newest stale mark the connection's Search Objects index has not spent; Object Search asks one stale-only build
+   *  per new mark (docs/object-search.md, BigQuery). */
+  indexStale?: number
 }
 /** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
  *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
@@ -959,7 +966,7 @@ export interface VariaApi {
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
   /** Both engines' saved connections: SQL Server's `library`, and BigQuery's (key files by name only). */
-  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView }>>
+  loadConnectionLibrary(): Promise<ApiResult<ConnectionLibraryView & { windowsIdentity: string; warning?: string; passwordStorage: SecretStorageState; passwordWarning?: string; bigQuery: BigQueryLibraryView; /** BigQuery's file could not be read this time: its empty list is not what it holds. */ bigQueryUnreadable?: true }>>
   /** Off Windows, the Kerberos principal Windows Authentication would sign in as (the dialog's User name). */
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
   /** A BigQuery profile answers with BigQuery's library too (`bigQuery`); a SQL Server one leaves it out (unchanged). */

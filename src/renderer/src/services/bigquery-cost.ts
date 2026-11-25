@@ -45,11 +45,13 @@ export interface CostPromptRequest {
   readonly prices: boolean
   /** The BigQuery job a Job History Re-run runs again: the prompt names it. */
   readonly rerunOf?: string
+  /** The threshold is the connection's own (Advanced Properties › Prompt above), not Options'. */
+  readonly ownThreshold?: true
 }
 /** `moot`: the prompt waited behind another whose answer made it moot, and was never shown. */
 export interface CostPromptAnswer { readonly run: boolean; readonly dontAskAgain?: boolean; readonly moot?: true }
 
-/** Where "Don't ask again for this connection" is kept. */
+/** Where "Don't ask again for this connection" and the connection's own threshold are kept. */
 export interface CostOptOut {
   /** Whether the threshold prompt asks on this connection, as last read. */
   asks(connection: LiveConnection): boolean
@@ -59,18 +61,29 @@ export interface CostOptOut {
   /** A connect named the choice (Advanced Properties): it replaces any made here, and holds for the session if main
    *  could not save it (`saved` false). */
   named(options: BigQueryConnectionOptions, costPrompt: boolean, saved: boolean): void
+  /** The connection's own threshold in GiB (Advanced Properties), as last read; undefined follows Options'. */
+  threshold(connection: LiveConnection): number | undefined
+  /** A connect named the connection's threshold (0: Options'), as `named` does for the choice. */
+  namedThreshold(options: BigQueryConnectionOptions, costThreshold: number, saved: boolean): void
 }
 
 /**
  * "Don't ask again for this connection" as `costPrompt: false` on the saved BigQuery connection (bigquery-connections.json),
  * found by its entry key, so a reconnect or restart keeps it; the connection's Advanced Properties turn the prompt back on.
- * `changed` runs when a choice is read or made, so the chip can follow it.
+ * The connection's own threshold (`costThreshold`, set only in Advanced Properties) is read and held the same way: a live
+ * connection's options never carry these preferences, since they are not part of its target. `changed` runs when a
+ * choice or threshold is read or made, so the chip can follow it.
  */
 export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBigQueryCostPrompt'>, changed: () => void = () => {}): CostOptOut {
   const declined = new Map<string, boolean>()
   // Choices made here whose write has not landed, or failed: a read of the saved entries (by any connection with these
   // settings) does not undo them this session. A choice a connect names (named, below) replaces them.
   const local = new Set<string>()
+  // The thresholds read or named (GiB), and those named by a connect whose save failed: a read does not undo them.
+  const thresholds = new Map<string, number>()
+  const localThreshold = new Set<string>()
+  // Bumped by each threshold named, as `writes` is by each choice: a read that began before one does not undo it.
+  const thresholdWrites = new Map<string, number>()
   // Bumped by each choice made or named: a read that began before one is older than it and is dropped.
   const writes = new Map<string, number>()
   const bump = (entry: string) => writes.set(entry, (writes.get(entry) ?? 0) + 1)
@@ -79,19 +92,28 @@ export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBig
     try { return connection.options.provider === 'bigquery' ? connectionKey(connection.options) : undefined } catch { return undefined }
   }
   const set = (entry: string, value: boolean) => { if (declined.get(entry) !== value) { declined.set(entry, value); changed() } }
+  const setThreshold = (entry: string, value: number | undefined) => {
+    if (thresholds.get(entry) === value) return
+    if (value) thresholds.set(entry, value)
+    else thresholds.delete(entry)
+    changed()
+  }
   return {
     asks: connection => { const entry = key(connection); return entry === undefined || !declined.get(entry) },
     async refresh(connection) {
       const entry = key(connection)
       if (entry === undefined) return
-      if (local.has(entry)) return
-      const write = writes.get(entry) ?? 0
+      if (local.has(entry) && localThreshold.has(entry)) return
+      const write = writes.get(entry) ?? 0, thresholdWrite = thresholdWrites.get(entry) ?? 0
       try {
         const loaded = await api.loadConnectionLibrary()
-        if (!loaded.ok || (writes.get(entry) ?? 0) !== write || local.has(entry)) return
+        // A file that could not be read this time (locked, say) lists nothing: the last values read stand, so a threshold
+        // below Options' is never dropped by a transient failure.
+        if (!loaded.ok || loaded.value.bigQueryUnreadable) return
         // Entries with the same settings are one connection: the choice applies to them all (the store writes them alike).
         const profiles = loaded.value.bigQuery.profiles.filter(item => { try { return connectionKey(item.options) === entry } catch { return false } })
-        set(entry, profiles.some(item => item.options.costPrompt === false))
+        if (!local.has(entry) && (writes.get(entry) ?? 0) === write) set(entry, profiles.some(item => item.options.costPrompt === false))
+        if (!localThreshold.has(entry) && (thresholdWrites.get(entry) ?? 0) === thresholdWrite) setThreshold(entry, profiles.find(item => item.options.costThreshold)?.options.costThreshold)
       } catch { /* The last choice read stands. */ }
     },
     async dontAsk(connection) {
@@ -114,6 +136,15 @@ export function costOptOut(api: Pick<VariaApi, 'loadConnectionLibrary' | 'setBig
       if (saved) local.delete(entry)
       else local.add(entry)
       set(entry, !costPrompt)
+    },
+    threshold: connection => { const entry = key(connection); return entry === undefined ? undefined : thresholds.get(entry) },
+    namedThreshold(options, costThreshold, saved) {
+      const entry = keyOf(options)
+      if (entry === undefined) return
+      thresholdWrites.set(entry, (thresholdWrites.get(entry) ?? 0) + 1)
+      if (saved) localThreshold.delete(entry)
+      else localThreshold.add(entry)
+      setThreshold(entry, costThreshold || undefined)
     }
   }
 }
@@ -398,7 +429,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   private async prompts(connection: LiveConnection, estimate: BigQueryDryRunResult, entry: Entry | undefined, signal?: AbortSignal, rerunOf?: string): Promise<boolean> {
     await this.deps.optOut.refresh(connection)
     if (signal?.aborted || this.disposed) return false
-    const settings = this.deps.settings, threshold = () => gibibytes(settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
+    const settings = this.deps.settings, threshold = () => gibibytes(this.thresholdGiB(connection)) ?? 0
     // The prompt as things stand: worked out again for a waiting prompt whose turn found it moot (another tab's Don't ask
     // again), so the incomplete-estimate warning it was hiding still asks.
     const current = () => costPrompt(estimate, {
@@ -411,7 +442,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       const kind = prompt.kind
       let applied: Promise<unknown> | undefined
       const answer = await this.deps.ask({
-        prompt, connection: connection.displayName ?? connection.server, thresholdBytes: threshold(), prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
+        prompt, connection: connection.displayName ?? connection.server, thresholdBytes: threshold(), ...this.deps.optOut.threshold(connection) ? { ownThreshold: true as const } : {}, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
         ...this.cap(connection) ? { cap: this.cap(connection) } : {}, ...rerunOf ? { rerunOf } : {}
       }, signal, () => current()?.kind === kind,
       // Applied as the answer is given, before another tab's waiting prompt is checked: Don't ask again stops it too.
@@ -436,15 +467,25 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return own ?? gibibytes(this.deps.settings.get('queryExecution.bigQuery.maximumBytesBilled'))
   }
 
+  /** The threshold in GiB on this connection: its own (Advanced Properties), else Options'. */
+  private thresholdGiB(connection: LiveConnection | undefined): number {
+    return (connection && this.deps.optOut.threshold(connection)) ?? this.deps.settings.get('queryExecution.bigQuery.costThreshold')
+  }
+  /** The threshold in GiB the tab's prompt and chip use: its connection's own, else Options'. */
+  thresholdFor(tabId: string): number { return this.thresholdGiB(this.connection(tabId)) }
+
   /** Whether Execute asks above the threshold on this tab: the setting, and not turned off for its connection. */
   asksAboveThreshold(tabId: string): boolean {
     const connection = this.connection(tabId)
     return this.deps.settings.get('queryExecution.bigQuery.costPrompt') && (!connection || this.deps.optOut.asks(connection))
   }
 
-  /** A connect that names the cost-prompt choice (Advanced Properties): main saved it, and the chip shows it now. */
+  /** A connect that names the cost-prompt choice or the connection's threshold (Advanced Properties): main saved it, and
+   *  the chip and the prompts use it now. */
   connectedWith(options: ProviderConnectionOptions, saved = true): void {
-    if (options.provider === 'bigquery' && options.costPrompt !== undefined) this.deps.optOut.named(options, options.costPrompt, saved)
+    if (options.provider !== 'bigquery') return
+    if (options.costPrompt !== undefined) this.deps.optOut.named(options, options.costPrompt, saved)
+    if (options.costThreshold !== undefined) this.deps.optOut.namedThreshold(options, options.costThreshold, saved)
   }
   /** The prompt choice for a connection changed: the chips re-render. */
   optOutChanged(): void { if (!this.disposed) this.publish(new Map(this.getSnapshot())) }

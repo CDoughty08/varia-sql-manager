@@ -8,7 +8,7 @@ import { onUnexpectedError } from '../../core/errors'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import type { LiveGrid } from '../../live/LiveGrid'
 import type { LiveRowAction, LiveRowActions } from '../../menus/targets'
-import { isVariaPool, sessionColumns, sessionFromRow, type SessionRef, type SessionTable } from '../session-actions'
+import { isVariaPool, jobUnavailable, sessionColumns, sessionFromRow, type SessionRef, type SessionTable } from '../session-actions'
 
 export interface SessionRows {
   /** For LiveGridPane: its LiveGrid, once built. */
@@ -16,6 +16,8 @@ export interface SessionRows {
   readonly rows: LiveRowActions
   /** For the pane's root: a focused grid makes these the palette's rows. */
   readonly onFocus: () => void
+  /** For LiveGridPane: a click or Enter on a link cell (the Agent Job column) opens the job of the active row, if it runs one. */
+  readonly onOpenLink: () => void
 }
 
 /** What an action says when the active row names no session it can act on. */
@@ -25,17 +27,19 @@ export function useSessionRows(monitorId: string, table: SessionTable): SessionR
   const { activity, commands } = useWorkbench()
   const [grid, setGrid] = useState<LiveGrid>()
   const current = useRef<{ grid?: LiveGrid; key?: string; session?: SessionRef }>({})
-  const rows = useMemo<LiveRowActions>(() => {
+  const { rows, openLink } = useMemo<{ rows: LiveRowActions; openLink: () => void }>(() => {
     const read = async (): Promise<SessionRef | undefined> => {
       const shown = current.current.grid
       return shown && sessionFromRow(table, await shown.activeRow(sessionColumns(table)))
     }
     const act = (action: LiveRowAction, session: SessionRef) => {
       if (action === 'details') activity.openDetails(monitorId, session)
+      else if (action === 'openJob') { const why = activity.openJob(monitorId, session); if (why) commands.reportWarning(why) }
+      else if (action === 'stopJob') void activity.stopJob(monitorId, session)
       // The confirm refuses what Kill may not end (the permission, Varia's own pools) and says why.
       else activity.askKill(monitorId, session)
     }
-    return {
+    const rows: LiveRowActions = {
       kind: 'session',
       // A right-click moves the active row just before the menu asks, while the row's session is still being read: until
       // that read lands, any active row enables both (the action reads the row again, and the confirm refuses a pool).
@@ -45,6 +49,7 @@ export function useSessionRows(monitorId: string, table: SessionTable): SessionR
         const snapshot = shown?.getSnapshot()
         if (!snapshot?.selection) return false
         if (snapshot.activeKey === undefined || snapshot.activeKey !== key) return true
+        if (action === 'openJob' || action === 'stopJob') return !jobUnavailable(session, action === 'openJob' ? 'open' : 'stop')
         return !!session && (action === 'details' || !isVariaPool(session))
       },
       run: action => {
@@ -54,6 +59,9 @@ export function useSessionRows(monitorId: string, table: SessionTable): SessionR
         }, onUnexpectedError)
       }
     }
+    // A link cell opens the row's job; the empty Agent Job cell of a session that runs none does nothing.
+    const openLink = () => { read().then(session => { if (session?.job) act('openJob', session) }, onUnexpectedError) }
+    return { rows, openLink }
   }, [activity, commands, monitorId, table])
   useEffect(() => activity.registerSessionRows(monitorId, rows).dispose, [activity, monitorId, rows])
   useEffect(() => {
@@ -72,5 +80,5 @@ export function useSessionRows(monitorId: string, table: SessionTable): SessionR
     const stop = grid.subscribe(update)
     return () => { reads++; stop(); current.current = {} }
   }, [grid, table])
-  return { onGrid: setGrid, rows, onFocus: () => activity.focusSessionRows(monitorId, rows) }
+  return { onGrid: setGrid, rows, onFocus: () => activity.focusSessionRows(monitorId, rows), onOpenLink: openLink }
 }
