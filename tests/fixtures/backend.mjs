@@ -1449,6 +1449,10 @@ const killedSessions = new Set()
 const agentSession = { sessionId: 72, status: 'running', login: 'NT SERVICE\\SQLSERVERAGENT', database: 'master', command: 'WAITFOR', application: 'SQLAgent - TSQL JobStep (Job 0xD4C3B2A1000000408000000000000001 : Step 2)',
   hostName: 'DB-01', job: 'Nightly, step 2 (Load)', jobName: 'Nightly', openTransactions: '0', loginTime: '2026-11-09 08:04:00.000', hostProcessId: '8500' }
 const agentSessionShown = () => !!controlDirectory && existsSync(join(controlDirectory, 'activity-agent-job'))
+/** The Agent session's run of Nightly: held (it never ends by itself) until Stop Job ends it, while activity-agent-job shows the session. */
+function holdAgentSessionRun() {
+  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00', held: true })
+}
 const allSessions = () => agentSessionShown() ? [...fakeSessions, agentSession] : fakeSessions
 const fakeSessionOf = id => allSessions().find(row => row.sessionId === id && !killedSessions.has(id))
 const sameLoginTime = (row, loginTime) => !!row.loginTime && row.loginTime.replace(' ', 'T') === String(loginTime).replace(/(\.\d{3})\d*$/, '$1')
@@ -1495,7 +1499,7 @@ function activityKill(params) {
 const sessionTextColumns = ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
-  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00', held: true })
+  holdAgentSessionRun()
   return allSessions().filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
@@ -2283,6 +2287,8 @@ function agentJobVerb(params) {
     agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })
   }
   if (params.action === 'stopJob') {
+    // While Agent's session for Nightly shows, Nightly runs, whichever probe sampled first.
+    if (job.id === agentJobs[0].id) holdAgentSessionRun()
     const run = agentRuns.get(job.id)
     if (!run) return refused('JOB_STATE', `${job.name} is not running.`)
     Object.assign(run, { stopped: true, samples: 2 })
