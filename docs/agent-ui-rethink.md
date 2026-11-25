@@ -214,8 +214,9 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
     step just below, the edge is drawn straight but marked "→ N": unlike Go to the next step, it follows that step if steps
     move.
   - Quit the job reporting success or failure: a pill under the port.
-  - The last step's Go to the next step: an edge to an **End** node, with a warning (`rx-flow-end`). msdb accepts it and
-    the job ends after that step, but it is rarely meant.
+  - The last step's Go to the next step, on success or on failure: an edge to an **End · job fails** node, with a warning
+    (`rx-flow-end`). msdb accepts it when the job is saved, but Agent then reports the run as Failed, even when every
+    step succeeded.
 - **Start step**: an entry arrow and a Start pill.
 - **Loops**: a cycle is tagged ("Loop · 3 ⇄ 4"). A backward jump that is not part of a cycle (step 7's failure going to step 6)
   gets no tag.
@@ -284,7 +285,12 @@ Items 1 to 9 are proposed; the owner's answers of 2026-11-25 are folded in and m
    - A loop with no way out: a warning that says so. Every action of every step in the cycle stays inside it, so the job
      never ends by itself. This check is not drawn in the mocks.
    - The last step goes to the next step: a warning, drawn to the End node, with Quit reporting success as its fix
-     (owner). Its wording waits on which outcome Agent reports (Still open, below).
+     (owner). Checked on SQL Server 2025 (17.0) on 2026-11-25: Agent runs the last step, then fails the job with "The job
+     failed. JobManager tried to run a non-existent step (N) for job …", where N is one past the last step. That holds
+     for one-step jobs, for success and failure actions, and when every step succeeded. The job row is Failed
+     (`run_status` 0, `last_run_outcome` 0), and the message names no "last step to run", so History's run summary reads
+     only "Failed". The warning says so: "Step 7 goes to the next step, but it is the last step, so Agent reports every
+     run as failed."
    - A go-to target that no longer exists: already a problem in List.
 
    The same checks tag steps in List, so they are not Flow-only.
@@ -313,15 +319,10 @@ Items 1 to 9 are proposed; the owner's answers of 2026-11-25 are folded in and m
 2. Drag to connect? Yes, as a shortcut beside the menu.
 3. Reorder by dragging nodes? No: List and the menu only for now.
 4. The last step's Go to the next step: drawn to an End node, like the Start node, and warned, because it is unlikely to be
-   intentional even though msdb accepts it.
+   intentional even though msdb accepts it. A live check since showed Agent fails every such run (decision 6).
 5. Loop check: a warning.
 6. Large jobs: Fit and scrolling for now, no minimap.
 7. "Show in Flow" on History's run summary: yes.
-
-### Still open
-
-- Which outcome Agent reports when the last step goes to the next step. Check on a live server before writing that
-  warning's text.
 
 ## Questions for the owner
 

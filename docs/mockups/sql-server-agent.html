@@ -1433,9 +1433,9 @@ function rxFlowDraw(o) {
       const t = to === 'next' ? i + 1 : to - 1
       let d
       if (t === steps.length) {
-        // The last step's Go to the next step: msdb accepts it and the job ends there, so it is drawn to an End node and warned.
+        // The last step's Go to the next step: msdb accepts it, but Agent then fails the job ("tried to run a non-existent step"), so it is drawn to an End node and warned.
         d = `M${x} ${y0}V${y0 + 22}`; mid[key] = [x + 13, y0 + 11]
-        html += `<span class="fl-end" style="left:${x}px;top:${y0 + 24}px">${ic('warn', 11)}End</span>`
+        html += `<span class="fl-end" style="left:${x}px;top:${y0 + 24}px">${ic('warn', 11)}End · job fails</span>`
       }
       else if (t === i + 1) {
         d = `M${x} ${y0}V${flTop(t) - 2}`; mid[key] = [x + 13, y0 + 13]
@@ -1458,7 +1458,7 @@ function rxFlowDraw(o) {
   const nodes = steps.map((s, i) => {
     const n = i + 1, st = o.state?.[n], never = o.unreach?.includes(n)
     const cls = [o.sel === n ? 'sel' : '', never ? 'dim' : '', st?.[0] || ''].join(' ')
-    const act = (to, cyc) => to === 'next' ? (n === steps.length ? 'go to the next step, which ends the job' : 'go to the next step') : to === 'qs' ? 'quit reporting success' : to === 'qf' ? 'quit reporting failure' : `go to step ${to}${cyc ? ', loop' : ''}`
+    const act = (to, cyc) => to === 'next' ? (n === steps.length ? 'go to the next step, which fails the job' : 'go to the next step') : to === 'qs' ? 'quit reporting success' : to === 'qf' ? 'quit reporting failure' : `go to step ${to}${cyc ? ', loop' : ''}`
     const name = `Step ${n}, ${s.n}, ${s.type}${s.start ? ', Start step' : ''}${never ? ', never runs' : ''}. On success, ${act(s.ok, (o.loops || []).includes(`${n}ok`))}. On failure, ${act(s.fail, (o.loops || []).includes(`${n}fail`))}.`
     return `<div class="fl-node ${cls}" role="treeitem" aria-label="${name}" style="left:${FL.x0}px;top:${flTop(i)}px;width:${FL.w}px;height:${FL.h}px">
       <div class="l1"><span class="no">${n}</span><span class="t">${s.n}</span>${never ? '<span class="rx-tag warn">Never runs</span>' : ''}${s.changed ? '<span class="rx-diff">changed</span>' : ''}<span class="ty">${ic(flType[s.type], 12)}${s.type}</span></div>
@@ -1476,12 +1476,12 @@ const rxFlowLegend = () => `<div class="rx-sec"><div class="h">Key</div><div cla
   <span><svg width="28" height="10"><path d="M1 5H27" style="stroke:var(--success);stroke-width:1.5"/></svg>✓ On success</span>
   <span><svg width="28" height="10"><path d="M1 5H27" style="stroke:var(--error);stroke-width:1.5;stroke-dasharray:5 3"/></svg>✗ On failure</span>
   <span><span class="fl-quit ok">Quit · success</span></span><span><span class="fl-quit bad">Quit · failure</span></span>
-  <span><span class="fl-start" style="position:static;transform:none">${ic('play', 10)}Start</span>Start step</span><span><span class="rx-tag warn">Never runs</span>nothing reaches it</span><span><span class="fl-end">${ic('warn', 11)}End</span>last step goes to the next step</span>
+  <span><span class="fl-start" style="position:static;transform:none">${ic('play', 10)}Start</span>Start step</span><span><span class="rx-tag warn">Never runs</span>nothing reaches it</span><span><span class="fl-end">${ic('warn', 11)}End · job fails</span>last step goes to the next step</span>
   <span style="grid-column:1/-1">Steps stay in step order, top to bottom, as in List and History. Jumps run beside the column: success on the left, failure on the right. A go-to to the step just below is straight, marked → N.</span></div></div>`
 const rxFlowChecks = (loop = true, end = false) => `<div class="rx-sec"><div class="h">Flow checks<span class="r">${1 + loop + end} problems</span></div>
   <div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 1 never runs</span><span class="a"><span class="btn">Make Start step</span></span><span class="d">The Start step is 2 and no step goes to step 1, so Archive old extracts is skipped on every scheduled run. Start at step can still run it.</span></div>
   ${loop ? `<div class="rx-check"><span class="i rx-warn">${ic('loop', 14)}</span><span class="t">Steps 3 and 4 can repeat</span><span class="a"></span><span class="d">A failed row count goes back to the load. Agent does not count passes: the loop ends when step 3 fails (to step 6) or step 4 succeeds.</span></div>` : ''}
-  ${end ? `<div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 7 goes to the next step, but it is the last step</span><span class="a"><span class="btn">Quit reporting success</span></span><span class="d">Agent accepts it and the job ends after step 7. It is rarely meant: pick a Quit action to say how the job should end.</span></div>` : ''}
+  ${end ? `<div class="rx-check"><span class="i rx-warn">${ic('warn', 14)}</span><span class="t">Step 7 goes to the next step, but it is the last step</span><span class="a"><span class="btn">Quit reporting success</span></span><span class="d">So Agent reports every run as failed, even when step 7 succeeds ("tried to run a non-existent step (8)"). Pick a Quit action to say how the job should end.</span></div>` : ''}
   <div class="rx-check"><span class="i rx-ok">${ic('check', 14)}</span><span class="t">Every go-to target exists</span><span class="a"></span><span class="d">No step goes to a step that no longer exists.</span></div></div>`
 const rxFlowSel = () => `<div class="rx-sec"><div class="h">Selected step<span class="r">${ic('code', 12)}T-SQL</span></div>
   <div class="fl-sname"><span class="no">4</span>Validate row counts</div>
@@ -1538,7 +1538,7 @@ Object.assign(RX, {
 })
 Object.assign(RXN, {
   'rx-flow': 'Aid (later tier): Steps › Flow, the same steps as a graph. Steps stay in step order; ✓ success edges are solid and run left, ✗ failure edges are dashed and run right, Quit ends are pills. The Start step has an entry arrow, a step nothing reaches is dashed and tagged Never runs (a Problem), a cycle is tagged Loop (also a Problem). Select a step to see it beside the graph; the side panel lists the flow checks. Each job document opens on List.',
-  'rx-flow-end': 'Aid (later tier): msdb lets the last step go to the next step; the job then ends after it. Flow draws that edge to an End node and flow checks warn, with Quit reporting success as the fix. Before it ships, check on a live server which outcome Agent reports for such a run.',
+  'rx-flow-end': 'Aid (later tier): msdb lets the last step go to the next step, but Agent then fails every run with "JobManager tried to run a non-existent step (8)", even when step 7 succeeds (checked on SQL Server 2025). Flow draws that edge to an End · job fails node and flow checks warn, with Quit reporting success as the fix.',
   'rx-flow-menu': 'Aid (later tier): right-click (or Shift+F10) on a step gives its actions. Dragging a ✓ or ✗ port onto a step sets Go to step N, as a shortcut; dropping it on empty space opens this submenu. On success and On failure list SSMS\'s four actions with every step by number and name, the current one checked; picking one edits the draft, as the List editor does. The menu is MenuService\'s (native on macOS).',
   'rx-flow-edit': 'Aid (later tier): double-click (or Enter) opens the same step editor as List, docked beside the graph, which zooms to fit. The changed edge is drawn in the accent with a changed tag; the dirty dot, Save · 1 change and Undo are the document\'s own.',
   'rx-flow-lastrun': 'Aid (later tier): Last run draws a run from History over the graph: the path it took in bold with the order on each edge, each step\'s outcome and duration (×2 for a step a loop ran twice), steps it never reached faded. The run box and History share one selected run. Drawn from the History section\'s own read, which runs while an overlay shows; no new backend method.',
