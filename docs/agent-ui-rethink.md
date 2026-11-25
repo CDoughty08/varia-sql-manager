@@ -206,7 +206,7 @@ failure goes, or whether a step can ever run, you check one step at a time. The 
 ### What it shows
 
 - **Steps**: one node per step with its number, name, type and icon (T-SQL, PowerShell, CmdExec, SSIS, Analysis Services
-  and the replication types), and its key field (database, package, run as, or retries).
+  and the replication types), and its key field (for example database, package, command or run as).
 - **Edges**: two ports per node, ✓ On success and ✗ On failure. Success edges are solid, failure edges dashed. Each port
   has its glyph, so colour is never the only cue.
   - Go to the next step: a short straight edge.
