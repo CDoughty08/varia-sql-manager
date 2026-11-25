@@ -7,8 +7,10 @@ namespace Varia.Backend.Search;
 /// <summary>What the index reads from BigQuery (BigQueryService implements it with free REST calls through the principal's limiter).</summary>
 internal interface IBigQueryIndexSource
 {
-    /// <summary>The connection's billing project and its other extra projects; throws NOT_CONNECTED.</summary>
-    (string Billing, IReadOnlyList<string> Extra) Projects(string connectionId);
+    /// <summary>The connection's billing project; throws NOT_CONNECTED.</summary>
+    string BillingProject(string connectionId);
+    /// <summary>Every accessible project via projects.list, sorted ordinally and capped at <see cref="BigQueryIndexLimits.MaxProjects"/>.</summary>
+    Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, CancellationToken token);
     Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token);
     Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token);
     Task<Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token);
@@ -21,6 +23,9 @@ internal interface IBigQueryIndexSource
     Exception Map(Exception error, string project, string permission, CancellationToken token);
 }
 
+/// <summary>The accessible projects projects.list returned, deduplicated and sorted ordinally; Cut when more than
+/// <see cref="BigQueryIndexLimits.MaxProjects"/> existed.</summary>
+internal sealed record BigQueryProjectDiscovery(List<string> Projects, bool Cut);
 /// <summary>A project's datasets, each one's location as datasets.list gives it (the bulk path's regions); Cut when the listing
 /// stopped at <see cref="BigQueryIndexLimits.ListPages"/>.</summary>
 internal sealed record BigQueryDatasetList(List<string> Datasets, bool Cut, IReadOnlyDictionary<string, string>? Locations = null);
@@ -40,6 +45,12 @@ internal static class BigQueryIndexLimits
     public const int Columns = 10_000;
     /// <summary>The longest column description or routine signature kept.</summary>
     public const int FactChars = 1024;
+    /// <summary>The most accessible projects projects.list discovery keeps in one build.</summary>
+    public const int MaxProjects = 500;
+    /// <summary>Projects whose datasets are listed concurrently in wave 2.</summary>
+    public const int Projects = 4;
+    /// <summary>The most starred projects one build or estimate accepts (matches BigQueryLimits.StarredProjects).</summary>
+    public const int StarredProjects = 200;
 }
 
 /// <summary>A date-sharded group or one object as pass 1 lists it, with what pass 2 (or an earlier read) knows of it.</summary>

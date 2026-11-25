@@ -47,18 +47,19 @@ internal static partial class BigQueryIndexChecks
         }
 
         var before = await Lookup(PathRequest(), PathRequest("varia-alpha"));
-        check(before.Index == "none" && Items(before.Answers[0]) == "varia-alpha,varia-beta" && before.Answers[1] is { State: "absent", Items.Count: 0 },
-            $"before any build the lookup still names the connection's projects, billing first, and knows no dataset: {before.Index} {Items(before.Answers[0])} {before.Answers[1].State}");
+        check(before.Index == "none" && Items(before.Answers[0]) == "varia-alpha" && before.Answers[1] is { State: "absent", Items.Count: 0 },
+            $"before any build the lookup names the billing project and knows no dataset: {before.Index} {Items(before.Answers[0])} {before.Answers[1].State}");
         var gets = harness.Fake.To(".*").Count();
-        await harness.Index();
+        await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
         var after = harness.Fake.To(".*").Count();
         await Lookup(PathRequest("varia-alpha", "sales", "orders"));
         check(harness.Fake.To(".*").Count() == after && after > gets, "a lookup reads the index in memory: no request reaches BigQuery");
 
-        var top = await Lookup(PathRequest(), PathRequest("varia-alpha"), PathRequest("varia-alpha", "sales"), PathRequest("varia-beta", "census"), PathRequest("nope"));
+        var top = await Lookup(PathRequest(), PathRequest("varia-alpha"), PathRequest("varia-alpha", "sales"), PathRequest("varia-beta", "census"), PathRequest("bigquery-public-data", "samples"), PathRequest("nope"));
         var objects = top.Answers[2];
-        check(top.Index == "ready" && top.Answers[0].Items.Single(item => item.Name == "varia-beta") is { Kind: "bqProject", Detail: "names" } && top.Answers[0].Items[0] is { Name: "varia-alpha", Detail: null },
-            "projects come back with the extra project marked as read by name only");
+        check(top.Index == "ready" && Items(top.Answers[0]) == "varia-alpha,varia-beta,bigquery-public-data,example.com:varia-beta"
+            && top.Answers[0].Items.All(item => item is { Kind: "bqProject", Detail: null }),
+            "projects come back in billing, starred, then discovered order with full details: " + Items(top.Answers[0]));
         check(top.Answers[1] is { State: "ready", Path: ["varia-alpha"] } && top.Answers[1].Items.Select(item => item.Name).ToList() is var datasets && datasets.Contains("sales") && datasets.Contains("staging")
             && datasets.SequenceEqual(datasets.Order(StringComparer.Ordinal)) && top.Answers[1].Items.All(item => item.Kind == "bqDataset"),
             "a project's datasets come back by name: " + Items(top.Answers[1]));
@@ -67,8 +68,10 @@ internal static partial class BigQueryIndexChecks
             && objects.Items.Single(item => item.Name.StartsWith("events_2", StringComparison.Ordinal)) is { Name: "events_20260103", Shards: { Count: 3, Prefix: "events_" } }
             && objects.Items.Any(item => item.Kind == "bqModel") && objects.Items.All(item => item.Kind != "bqDataset" && item.Kind != "bqColumn"),
             "a dataset's objects come back with kinds, subtypes, a routine's signature and a sharded group as its newest shard, without the dataset entry or columns: " + Items(objects));
-        check(top.Answers[3] is { State: "partial" } && top.Answers[4] is { State: "absent", Path: ["nope"], Items.Count: 0 },
-            $"a dataset of a project read by name only is partial, and an unknown project absent: {top.Answers[3].State} {top.Answers[4].State}");
+        check(top.Answers[3] is { State: "ready" } && Items(top.Answers[3]) == "population"
+            && top.Answers[4] is { State: "ready" } && Items(top.Answers[4]) == "shakespeare"
+            && top.Answers[5] is { State: "absent", Path: ["nope"], Items.Count: 0 },
+            $"starred and discovered datasets are ready with their objects, and an unknown project is absent: {top.Answers[3].State} {top.Answers[4].State} {top.Answers[5].State}");
 
         var orders = (await Lookup(PathRequest("varia-alpha", "sales", "orders"))).Answers[0];
         check(orders.Object is { Name: "orders", Kind: "bqTable", Detailed: true, Rows: 1234567, Bytes: 5368709120, Partitioning: "DAY on placed", Clustering: "customer, region" },
@@ -132,7 +135,14 @@ internal static partial class BigQueryIndexChecks
         check(cut[0].Object is { Detailed: false } && cut[0].State == "partial" && cut[1].Object is { Detailed: true },
             "a table whose dataset's columns were left out is not detailed, and its dataset is partial; a routine's signature keeps it detailed");
         var census = (await Lookup(PathRequest("varia-beta", "census", "population"))).Answers[0];
-        check(census is { State: "partial", Object: { Detailed: false }, Items.Count: 0 }, "an object of a project read by name only has no details and no columns");
+        var discoveredTable = (await Lookup(PathRequest("bigquery-public-data", "samples", "shakespeare"))).Answers[0];
+        check(census is { State: "ready", Object: { Detailed: true }, Items.Count: > 0 }
+            && discoveredTable is { State: "ready", Object: { Name: "shakespeare", Detailed: true }, Items.Count: > 0 }
+            && Items(discoveredTable) == "id,customer,tags,placed,address,address.city,address.geo,address.geo.lat",
+            "starred and discovered project tables resolve with full details and columns in language.lookup");
+        var namesOnlyLookup = With();
+        check(namesOnlyLookup.NamesOnly("varia-beta") && namesOnlyLookup.Dataset("varia-beta", "census").State == LookupState.Partial,
+            "a project in NamesOnly reports partial state for its datasets");
         var missing = (await Lookup(PathRequest("varia-alpha", "sales", "nothing"), PathRequest("varia-alpha", "nothing", "t"))).Answers;
         check(missing[0] is { State: "ready", Object: null, Path: ["varia-alpha", "sales"] } && missing[1] is { State: "absent", Object: null },
             "an object the dataset does not hold has no answer object, and a dataset the index does not hold is absent");

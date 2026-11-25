@@ -478,7 +478,6 @@ internal static class BigQueryExplorerChecks
             var options = new JsonObject
             {
                 ["provider"] = "bigquery", ["project"] = "varia-alpha", ["authentication"] = "serviceAccountKey", ["dataset"] = "sales", ["location"] = "US",
-                ["extraProjects"] = new JsonArray("varia-beta", "varia-alpha"),
                 ["credential"] = new JsonObject { ["source"] = "file", ["json"] = key.ToJsonString() }, ["keyFile"] = Guid.NewGuid().ToString()
             };
             if (cap is { } bytes) options["maximumBytesBilled"] = bytes;
@@ -536,8 +535,8 @@ internal static class BigQueryExplorerChecks
         using var harness = new Harness();
         await harness.ConnectAsync(key);
         var server = await harness.Children(new JsonObject { ["type"] = "object", ["object"] = new JsonObject { ["kind"] = "server" } });
-        check(Labels(server) == "varia-alpha (billing project), varia-beta" && server!.Nodes.All(node => node.Ref.Object!.Kind == "bqProject" && node.HasChildren),
-            "the connection node lists the billing project, then its extra projects once: " + Labels(server));
+        check(Labels(server) == "varia-alpha (billing project)" && server!.Total == 1 && server.Nodes.All(node => node.Ref.Object!.Kind == "bqProject" && node.HasChildren),
+            "the connection node lists only the billing project (starred and session projects live in Object Explorer): " + Labels(server));
         var datasets = await harness.Children(Object("bqProject", "varia-alpha"));
         check(Labels(datasets) == "staging (US), sales" && datasets!.Cursor is { } cursor && cursor.StartsWith("v1.bqDatasets.", StringComparison.Ordinal)
             && datasets.Nodes.All(node => node.Ref.Object is { Kind: "bqDataset", Project: "varia-alpha" }),

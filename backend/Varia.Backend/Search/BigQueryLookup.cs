@@ -36,7 +36,7 @@ internal sealed class BigQueryLookup
         (this.building, this.built, this.budget, this.arraysBuilt) = (building, built, budget, arraysBuilt);
     }
 
-    /// <summary>The connection's billing project, then its extra projects.</summary>
+    /// <summary>The connection's billing project, then its starred and discovered projects.</summary>
     public IReadOnlyList<string> Projects { get; }
 
     /// <summary>Whether the connection has an index: none (never built), building, or ready (a build finished, or reads are held).</summary>
