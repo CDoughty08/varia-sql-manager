@@ -173,18 +173,20 @@ export type MenuTarget =
   | PeekPropertiesTarget
   | PlanOutlineTarget
   | PlanPropertiesTarget
+  /** A step in a job document's Steps › Flow view (its node, or its item in the graph's accessible tree); its menu acts on that step. */
+  | { readonly kind: 'agentStep'; readonly tabId: string; readonly key: string }
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', explorerTools: 'explorer.tools', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
   ssisOperations: 'ssis.operation.context', jobHistory: 'bigquery.jobs.context', searchHit: 'search.hit.context', resultsTools: 'output.tools', peekProperties: 'peek.properties.context',
-  planOutline: 'plan.outline.context', planProperties: 'plan.properties.context', jobActivity: 'agent.jobs.context'
+  planOutline: 'plan.outline.context', planProperties: 'plan.properties.context', jobActivity: 'agent.jobs.context', agentStep: 'agent.steps.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'explorer.tools': 'Object Explorer menu', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
   'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations', 'bigquery.jobs.context': 'Job History',
   'search.hit.context': 'Search result', 'output.tools': 'More results tools', 'peek.properties.context': 'Peek properties',
-  'plan.outline.context': 'Plan outline', 'plan.properties.context': 'Plan properties', 'agent.jobs.context': 'Job Activity Monitor'
+  'plan.outline.context': 'Plan outline', 'plan.properties.context': 'Plan properties', 'agent.jobs.context': 'Job Activity Monitor', 'agent.steps.context': 'Step actions'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -234,7 +236,7 @@ export function argsFor(target: MenuTarget): CommandArgs {
   // The results toolbar's ⋯ runs its items as the toolbar's buttons do: with the toolbar's query and no target, so a command
   // that reads a grid from its target falls back to that query's focused grid.
   if (target.kind === 'resultsTools') return { tabId: target.tabId }
-  const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' || target.kind === 'jobHistory' || target.kind === 'jobActivity' ? target.tabId : undefined
+  const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' || target.kind === 'jobHistory' || target.kind === 'jobActivity' || target.kind === 'agentStep' ? target.tabId : undefined
   // A Job History row pressed outside the active row: its job is read when an action runs, so every row action is offered
   // (as for a selected row whose cells are still being read) and each says why when it does not apply.
   if (target.kind === 'jobHistory' && target.row !== undefined) return { target, tabId: target.tabId, state: pressedJobKeys }
@@ -248,6 +250,8 @@ export function argsFor(target: MenuTarget): CommandArgs {
 }
 const pressedJobKeys = { jobHistoryJobSelected: true, jobHistoryCanOpenResults: true, jobHistoryCanReattach: true, jobHistoryCanOpenSql: true, jobHistoryCanRerun: true, jobHistoryCanCancel: true }
 /** The Job History row a menu was opened on, when it is not the active row. */
+/** The job step a Steps › Flow menu was opened for. */
+export const agentStepOf = (args: CommandArgs | undefined): { readonly tabId: string; readonly key: string } | undefined => args?.target?.kind === 'agentStep' ? args.target : undefined
 export const jobHistoryRowOf = (args: CommandArgs | undefined): number | undefined => args?.target?.kind === 'jobHistory' ? args.target.row : undefined
 export const peekPropertiesOf = (args: CommandArgs | undefined): PeekPropertiesTarget | undefined => args?.target?.kind === 'peekProperties' ? args.target : undefined
 export const planOutlineOf = (args: CommandArgs | undefined): PlanOutlineTarget | undefined => args?.target?.kind === 'planOutline' ? args.target : undefined
