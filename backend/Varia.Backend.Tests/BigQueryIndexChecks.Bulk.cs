@@ -231,16 +231,19 @@ internal static partial class BigQueryIndexChecks
         jobs.Route(harness.Fake);
         await harness.ConnectAsync(key);
 
-        // The estimate: datasets.list's locations, the queries dry-run in each, at least 10 MiB per view.
+        // The estimate: datasets.list's locations, the queries dry-run in each, at least 10 MiB per view; never calls projects.list.
         var (code, result, message) = await harness.Call("bigquery.indexEstimate", new JsonObject { ["connectionId"] = harness.ConnectionId });
         var estimate = result as BigQueryIndexEstimateResult;
         check(code == "ok" && estimate is { Cut: false, Locations: [{ Project: "varia-alpha", Location: "US" }, { Project: "varia-alpha", Location: "us-east1" }], Estimate: { BytesProcessed: 2 * (50L << 20), StatementType: "SELECT", Faked: false, Incomplete: null } }
-            && jobs.DryRuns.Count == 6 && jobs.DryRuns.All(run => run.Location is "US" or "us-east1") && jobs.Created.IsEmpty,
-            $"the estimate dry-runs each location's three queries in that location and counts each at its floor: {code} {message} {estimate?.Estimate.BytesProcessed} {string.Join(",", jobs.DryRuns.Select(run => run.Location))}");
+            && jobs.DryRuns.Count == 6 && jobs.DryRuns.All(run => run.Location is "US" or "us-east1") && jobs.Created.IsEmpty
+            && harness.Gets(BigQueryFake.Projects) == 0,
+            $"the estimate dry-runs each billing location's three queries without auto-discovering projects: {code} {message} {estimate?.Estimate.BytesProcessed} {string.Join(",", jobs.DryRuns.Select(run => run.Location))}");
         jobs.DryRunBytes = 1L << 30;
-        var (_, bare, _) = await harness.Call("bigquery.indexEstimate", new JsonObject { ["connectionId"] = harness.ConnectionId, ["definitions"] = false, ["extraDetails"] = true });
-        check(bare is BigQueryIndexEstimateResult { Locations: [_, _, { Project: "varia-beta", Location: "US" }], Estimate.BytesProcessed: 3 * ((1L << 30) + (30L << 20)) } && jobs.DryRuns.Count == 9 && jobs.Created.IsEmpty,
-            "without definitions only the column query is estimated, a dry run's bytes count beside the floors, and extraDetails adds the extra project's locations");
+        var (_, bare, _) = await harness.Call("bigquery.indexEstimate", new JsonObject { ["connectionId"] = harness.ConnectionId, ["definitions"] = false, ["starredProjects"] = new JsonArray("varia-beta", "varia-alpha") });
+        var (badEstimateStar, _, _) = await harness.Call("bigquery.indexEstimate", new JsonObject { ["connectionId"] = harness.ConnectionId, ["starredProjects"] = new JsonArray("NOT A PROJECT") });
+        check(bare is BigQueryIndexEstimateResult { Locations: [_, _, { Project: "varia-beta", Location: "US" }], Estimate.BytesProcessed: 3 * ((1L << 30) + (30L << 20)) }
+            && jobs.DryRuns.Count == 9 && jobs.Created.IsEmpty && harness.Gets(BigQueryFake.Projects) == 0 && badEstimateStar == "INVALID_PARAMS",
+            "without definitions only the column query is estimated, starredProjects adds starred locations without discovering org projects, and invalid starred projects are refused");
 
         // The build: the US location's queries run once each, one at a time, never cached, each capped so the three together bill no
         // more than the budget (the estimate shown): 100 MiB less the later jobs' floors (10 and 10 MiB) and what the earlier ones
@@ -359,6 +362,7 @@ internal static partial class BigQueryIndexChecks
         {
             await Refused(more => { more["bulk"] = Bulk(); more["scope"] = new JsonObject { ["project"] = "varia-alpha" }; }),
             await Refused(more => { more["bulk"] = Bulk(); more["stale"] = true; }),
+            await Refused(more => more["bulk"] = Bulk(project: "bigquery-public-data")),
             await Refused(more => more["bulk"] = Bulk(project: "varia-beta")),
             await Refused(more => more["bulk"] = Bulk(location: "us`; --")),
             await Refused(more => more["bulk"] = Bulk(count: BigQueryBulkSql.MaxLocations + 1)),

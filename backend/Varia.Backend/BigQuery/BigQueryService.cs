@@ -322,20 +322,45 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
             var request = client.Service.Projects.List();
             request.MaxResults = BigQueryLimits.ProjectsPerPage;
             request.PageToken = args.PageToken;
-            var page = await request.ExecuteAsync(budget.Token);
-            var projects = new List<BigQueryProject>();
-            foreach (var project in page.Projects ?? [])
-            {
-                // The emulator names a project only by its id; Google fills projectReference too.
-                var id = project.ProjectReference?.ProjectId ?? project.Id;
-                if (!BigQueryLimits.IsProject(id) || projects.Count >= BigQueryLimits.ProjectsPerPage) continue;
-                var name = project.FriendlyName is { Length: > 0 } friendly ? BigQueryIdentity.Account(friendly) : null;
-                projects.Add(new(id!, name is { Length: > BigQueryLimits.FriendlyName } ? name[..BigQueryLimits.FriendlyName] : name));
-            }
-            var next = page.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } value && !value.Any(char.IsControl) ? value : null;
-            return new(projects, next);
+            return MapProjectList(await request.ExecuteAsync(budget.Token));
         }
         catch (Exception error) { throw BigQueryErrors.Map(error, kind: KindOf(args.Authentication), token: token); }
+    }
+
+    /// <summary>bigquery.connectionProjects: one page of projects.list on a live connection handle through the principal's limiter.</summary>
+    public async Task<BigQueryProjectList> ConnectionProjectsAsync(BigQueryConnectionProjectsArgs args, CancellationToken token)
+    {
+        BigQueryLimits.CheckPageToken(args.PageToken);
+        var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+        budget.CancelAfter(PreConnectLimit);
+        try
+        {
+            var page = await MetadataAsync(connection, t =>
+            {
+                var request = connection.Client.Service.Projects.List();
+                request.MaxResults = BigQueryLimits.ProjectsPerPage;
+                request.PageToken = args.PageToken;
+                return request.ExecuteAsync(t);
+            }, budget.Token);
+            return MapProjectList(page);
+        }
+        catch (Exception error) { throw BigQueryErrors.Map(error, kind: KindOf(connection.Options.Authentication), token: token); }
+    }
+
+    static BigQueryProjectList MapProjectList(ProjectList page)
+    {
+        var projects = new List<BigQueryProject>();
+        foreach (var project in page.Projects ?? [])
+        {
+            // The emulator names a project only by its id; Google fills projectReference too.
+            var id = project.ProjectReference?.ProjectId ?? project.Id;
+            if (!BigQueryLimits.IsProject(id) || projects.Count >= BigQueryLimits.ProjectsPerPage) continue;
+            var name = project.FriendlyName is { Length: > 0 } friendly ? BigQueryIdentity.Account(friendly) : null;
+            projects.Add(new(id!, name is { Length: > BigQueryLimits.FriendlyName } ? name[..BigQueryLimits.FriendlyName] : name));
+        }
+        var next = page.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } value && !value.Any(char.IsControl) ? value : null;
+        return new(projects, next);
     }
 
     /// <summary>Resolves the credential main read and pins its identity. Emulator mode signs nothing.</summary>

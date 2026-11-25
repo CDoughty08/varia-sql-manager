@@ -17,11 +17,38 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     /// need, never the rows or the full resource. Not tables.get's <c>selectedFields</c>, which picks the table's columns by name.</summary>
     internal const string IndexTableFields = "type,creationTime,lastModifiedTime,numRows,numBytes,description,schema,timePartitioning,rangePartitioning,clustering,view,materializedView,cloneDefinition,snapshotDefinition";
 
-    (string Billing, IReadOnlyList<string> Extra) IBigQueryIndexSource.Projects(string connectionId)
+    string IBigQueryIndexSource.BillingProject(string connectionId) => Connection(connectionId).Options.Project;
+
+    async Task<BigQueryProjectDiscovery> IBigQueryIndexSource.AccessibleProjectsAsync(string connectionId, CancellationToken token)
     {
-        var connection = Find(connectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
-        var billing = connection.Options.Project;
-        return (billing, [.. (connection.Options.ExtraProjects ?? []).Where(extra => extra != billing).Distinct(StringComparer.Ordinal)]);
+        var connection = Connection(connectionId);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var cut = false;
+        string? pageToken = null;
+        for (var page = 0; page < BigQueryIndexLimits.ListPages; page++)
+        {
+            var list = await IndexCallAsync(connection, t =>
+            {
+                var call = connection.Client.Service.Projects.List();
+                call.MaxResults = ExplorerPageMax;
+                call.PageToken = pageToken;
+                return call.ExecuteAsync(t);
+            }, token);
+            foreach (var project in list.Projects ?? [])
+            {
+                // The emulator names a project only by its id; Google fills projectReference too.
+                var id = project.ProjectReference?.ProjectId ?? project.Id;
+                if (!BqNames.IsProject(id) || seen.Contains(id!)) continue;
+                if (seen.Count >= BigQueryIndexLimits.MaxProjects) { cut = true; break; }
+                seen.Add(id!);
+            }
+            pageToken = list.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next ? next : null;
+            if (cut) break;
+            if (pageToken is null) return new([.. seen.Order(StringComparer.Ordinal)], false);
+            if (seen.Count >= BigQueryIndexLimits.MaxProjects) { cut = true; break; }
+        }
+        if (pageToken is not null) cut = true;
+        return new([.. seen.Order(StringComparer.Ordinal)], cut);
     }
 
     BigQueryConnection Connection(string connectionId) => Find(connectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
@@ -142,5 +169,6 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     }
 
     Exception IBigQueryIndexSource.Map(Exception error, string project, string permission, CancellationToken token) =>
-        error is TimeoutException ? new RequestException("TIMEOUT", "BigQuery did not answer in time.") : BigQueryErrors.Map(error, project, permission, token: token);
+        error is TimeoutException ? new RequestException("TIMEOUT", "BigQuery did not answer in time.")
+        : BigQueryErrors.Map(error, string.IsNullOrEmpty(project) ? null : project, permission, token: token);
 }

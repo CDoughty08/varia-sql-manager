@@ -26,10 +26,12 @@ internal sealed partial class BigQueryService
     public async Task<BigQueryIndexEstimateResult> IndexEstimateAsync(BigQueryIndexEstimateArgs args, CancellationToken token)
     {
         var watch = Stopwatch.StartNew();
+        if (args.StarredProjects is { } rawStarred && (rawStarred.Count > BigQueryIndexLimits.StarredProjects || rawStarred.Any(project => !BqNames.IsProject(project))))
+            throw new RequestException("INVALID_PARAMS", "Starred projects must be at most " + BigQueryIndexLimits.StarredProjects + " project ids.");
         var connection = Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         IBigQueryIndexSource source = this;
-        var (billing, extras) = source.Projects(args.ConnectionId);
-        List<string> projects = args.ExtraDetails == true ? [billing, .. extras] : [billing];
+        var billing = source.BillingProject(args.ConnectionId);
+        List<string> projects = [billing, .. (args.StarredProjects ?? []).Where(project => project != billing).Distinct(StringComparer.Ordinal)];
         var definitions = args.Definitions ?? true;
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         budget.CancelAfter(BulkEstimateLimit);
