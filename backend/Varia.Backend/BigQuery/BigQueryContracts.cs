@@ -8,7 +8,7 @@ namespace Varia.Backend.BigQuery;
 /// KeyFile is that opaque reference: the backend never sees a path, only what main read.
 /// </summary>
 internal sealed record BigQueryConnectOptions(string Provider, string Project, string Authentication,
-    string? Location = null, string? Dataset = null, IReadOnlyList<string>? ExtraProjects = null, string? KeyFile = null,
+    string? Location = null, string? Dataset = null, string? KeyFile = null,
     string? ImpersonateServiceAccount = null, long? MaximumBytesBilled = null, bool? CostPrompt = null, string? DisplayName = null, string? Color = null,
     string? Environment = null, bool NonInteractive = false, BigQueryCredentialMaterial? Credential = null);
 
@@ -29,6 +29,9 @@ internal sealed record BigQueryCredentialArgs(string Authentication, string? Key
 internal sealed record BigQueryProjectsArgs(string Authentication, string? KeyFile = null, string? ImpersonateServiceAccount = null,
     BigQueryCredentialMaterial? Credential = null, string? PageToken = null);
 
+/// <summary>bigquery.connectionProjects' parameters: a live BigQuery connection handle and optional page token.</summary>
+internal sealed record BigQueryConnectionProjectsArgs(string ConnectionId, string? PageToken = null);
+
 /// <summary>The dialog's account line: the account the credential signs in as (an email, or a federated subject), what kind
 /// of account it is, and the service account it impersonates, if any.</summary>
 internal sealed record BigQueryAccount(string Kind, string Account, string? Impersonated = null);
@@ -44,7 +47,7 @@ internal static partial class BigQueryLimits
     public const int Project = 128;
     public const int Dataset = 1024;
     public const int Location = 64;
-    public const int ExtraProjects = 16;
+    public const int StarredProjects = 200;
     public const int ServiceAccount = 254;
     public const int DisplayName = 128;
     /// <summary>A key or federation configuration file main reads: at most 64 KiB (docs/bigquery.md, Authentication).</summary>
@@ -97,7 +100,6 @@ internal static partial class BigQueryLimits
         if (!IsProject(options.Project)) Invalid("Enter a Google Cloud project id.");
         if (options.Location is { } location && (location.Length is 0 or > Location || !LocationId().IsMatch(location))) Invalid("The location is not valid.");
         if (options.Dataset is { } dataset && (dataset.Length is 0 or > Dataset || !DatasetId().IsMatch(dataset))) Invalid("A dataset name has only letters, numbers and underscores.");
-        if (options.ExtraProjects is { } extra && (extra.Count > ExtraProjects || extra.Any(project => !IsProject(project)))) Invalid("Extra projects must be at most 16 project ids.");
         if (options.MaximumBytesBilled is < 1 or > MaxSafeInteger) Invalid("Maximum bytes billed is outside its supported range.");
         if (options.DisplayName is { Length: > DisplayName }) Invalid("Display name exceeds its supported length.");
         if (options.Color is { } color && !Color().IsMatch(color)) Invalid("The color is not valid.");

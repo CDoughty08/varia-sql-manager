@@ -4,7 +4,7 @@ import type { EstimatedPlanRequest, EstimatedPlanResult } from './estimated-plan
 import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, ConnectionSaveView, SecretStorageState } from './connections'
 import type { ConnectionAuthentication, ConnectionFailureReason } from './connection-targets'
 import type { ConnectionBindingsChanged } from './connection-bindings'
-import type { BigQueryLibraryView, BigQueryProfileInput, PickedKeyFile } from './bigquery-connections'
+import type { BigQueryLibraryView, BigQueryProfileInput, BigQueryStarProjectInput, BigQueryStarredProjectsView, PickedKeyFile } from './bigquery-connections'
 import type { StepScriptSubsystem } from './agent/step-file'
 import type { BigQueryDryRunRequest, BigQueryDryRunResult } from './bigquery/dry-run'
 import type { ResultsRemoteQueryParams } from './bigquery/remote-view'
@@ -110,7 +110,6 @@ export interface BigQueryConnectionOptions {
   project: string
   location?: string
   dataset?: string
-  extraProjects?: string[]
   authentication: BigQueryAuthenticationMode
   keyFile?: string
   impersonateServiceAccount?: string
@@ -689,6 +688,8 @@ export interface RpcMethods {
   'connections.disconnect': { params: { connectionId: string }; result: { disconnected: boolean; failedAborts?: number } }
   'bigquery.account': { params: BigQueryCredentialParams; result: BigQueryAccount }
   'bigquery.projects': { params: BigQueryCredentialParams & { pageToken?: string }; result: BigQueryProjectList }
+  /** Connected BigQuery handle: one page of projects accessible to the handle's principal (for Star a Project…). */
+  'bigquery.connectionProjects': { params: { connectionId: string; pageToken?: string }; result: BigQueryProjectList }
   'bigquery.dryRun': { params: BigQueryDryRunRequest; result: BigQueryDryRunResult }
   'bigquery.properties': { params: BigQueryPropertiesRequest; result: BigQueryProperties }
   /** Job History: one job's details and full SQL, and a script's children (docs/bigquery.md, Job History). */
@@ -980,6 +981,11 @@ export interface VariaApi {
   /** BigQuery before connecting: the account the credential signs in as, and a page of the projects it can see. */
   bigQueryAccount(params: BigQueryCredentialParams): Promise<ApiResult<BigQueryAccount>>
   bigQueryProjects(params: BigQueryCredentialParams & { pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
+  /** Connected BigQuery handle: one page of accessible projects (free REST projects.list). */
+  bigQueryConnectionProjects(params: { connectionId: string; pageToken?: string }): Promise<ApiResult<BigQueryProjectList>>
+  /** Per-principal Starred Projects persisted in bigquery-connections.json (separate from connection identity). */
+  loadBigQueryStarredProjects(): Promise<ApiResult<BigQueryStarredProjectsView>>
+  setBigQueryProjectStar(input: BigQueryStarProjectInput): Promise<ApiResult<BigQueryStarredProjectsView>>
   /** A free dry run of GoogleSQL text on a connected BigQuery handle: the bytes it would process (the estimate chip, the
    *  cost prompts and dry-run diagnostics). It sends the text to Google. */
   bigQueryDryRun(params: BigQueryDryRunRequest): Promise<ApiResult<BigQueryDryRunResult>>

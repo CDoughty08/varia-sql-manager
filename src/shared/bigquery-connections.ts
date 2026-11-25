@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { BigQueryConnectionOptions } from './contracts'
-import { bigQueryConnectionOptionsSchema, connectionAutoReconnectSchema } from './connections'
+import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema, connectionAutoReconnectSchema } from './connections'
 import type { BigQueryAuthenticationMode } from './auth'
 import { environmentSchema } from './environments'
 
@@ -10,7 +10,7 @@ import { environmentSchema } from './environments'
  * configuration file by; the path behind it (`keyPath`) is main's only and never reaches the renderer, which sees the
  * file's name (decisions 2 and 47).
  */
-export const bigQueryLibraryLimits = { profiles: 200, recent: 30, path: 4096, confirmedSources: 64 } as const
+export const bigQueryLibraryLimits = { profiles: 200, recent: 30, path: 4096, confirmedSources: 64, starredPrincipals: 64, starredPerPrincipal: bigQueryLimits.starredProjects, principalChars: 256 } as const
 // Absolute on any platform main writes it from (a drive or UNC path on Windows, a rooted path elsewhere): a file with a
 // relative path is invalid, so it is quarantined like any other rather than failing every later read.
 const absolutePath = z.string().min(1).max(bigQueryLibraryLimits.path).refine(value => !/[\u0000-\u001f]/.test(value), 'A path cannot contain control characters.')
@@ -23,10 +23,32 @@ export const bigQueryStoredProfileSchema = z.object({
 /** A federation configuration's `credential_source.file` the user confirmed in the Connect dialog (decision 49), by the
  *  configuration's path: a changed source path asks again. */
 export const confirmedSourceSchema = z.object({ keyPath: absolutePath, source: absolutePath }).strict()
+/** Verified BigQuery principal pin (`bigquery:user:…`, `bigquery:serviceAccount:…`), used to scope Starred Projects. */
+export const bigQueryStarredPrincipalSchema = z.string().min(1).max(bigQueryLibraryLimits.principalChars)
+  .refine(value => value.startsWith('bigquery:') && !/[\u0000-\u001f]/.test(value), 'Invalid BigQuery principal id.')
+/** Starred projects persisted per verified BigQuery principal (mirrors BigQuery Studio's explorer starring UX without
+ *  altering connection identity). */
+export const bigQueryStarredEntrySchema = z.object({
+  principal: bigQueryStarredPrincipalSchema,
+  projects: z.array(bigQueryProjectSchema).max(bigQueryLibraryLimits.starredPerPrincipal)
+}).strict()
+export const bigQueryStarProjectInputSchema = z.object({
+  principal: bigQueryStarredPrincipalSchema,
+  project: bigQueryProjectSchema,
+  starred: z.boolean()
+}).strict()
+export type BigQueryStarProjectInput = z.infer<typeof bigQueryStarProjectInputSchema>
+export interface BigQueryStarredProjectsView {
+  readonly byPrincipal: Readonly<Record<string, readonly string[]>>
+}
 export const bigQueryLibraryFileSchema = z.object({
   version: z.literal(1), profiles: z.array(bigQueryStoredProfileSchema).max(bigQueryLibraryLimits.profiles),
-  confirmedSources: z.array(confirmedSourceSchema).max(bigQueryLibraryLimits.confirmedSources).optional()
+  confirmedSources: z.array(confirmedSourceSchema).max(bigQueryLibraryLimits.confirmedSources).optional(),
+  starredProjects: z.array(bigQueryStarredEntrySchema).max(bigQueryLibraryLimits.starredPrincipals).optional(),
+  /** Legacy extraProjects stripped from pre-upgrade profiles whose principal was not yet known; claimed on the next BigQuery connect. */
+  migratedProjects: z.array(bigQueryProjectSchema).max(bigQueryLibraryLimits.starredPerPrincipal).optional()
 }).strict().refine(value => new Set(value.profiles.map(profile => profile.id)).size === value.profiles.length, 'Duplicate connection IDs.')
+  .refine(value => !value.starredProjects || new Set(value.starredProjects.map(entry => entry.principal)).size === value.starredProjects.length, 'Duplicate starred project principals.')
 export type BigQueryStoredProfile = z.infer<typeof bigQueryStoredProfileSchema>
 export type BigQueryLibraryFile = z.infer<typeof bigQueryLibraryFileSchema>
 
