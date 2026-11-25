@@ -281,18 +281,74 @@ describe('BigQuery saved connections (bigquery-connections.json)', () => {
     expect(duplicateMigrated.warning).toContain('invalid')
   })
 
-  it('retains the recovery warning when an internal starred-projects read quarantines an invalid file so load() still surfaces it', async () => {
+  it('retains the recovery warning across internal peek() and starred reads so load() still surfaces it to Connect', async () => {
     const directory = await folder(), path = join(directory, 'bigquery-connections.json')
     await writeFile(path, '{not valid json')
     const store = new BigQueryConnectionStore(path, new BigQueryKeyFiles())
-    // Internal startup read quarantines the bad file and records the warning instead of discarding it.
+    // Internal startup reads quarantine the bad file and preserve the warning without consuming it.
     expect(await store.loadStarredProjects()).toEqual({ byPrincipal: {} })
+    expect((await store.peek()).library.profiles).toEqual([])
     // Subsequent Connect-dialog library load surfaces the preserved recovery warning once, then clears it.
     const first = await store.load()
     expect(first.warning).toBe('The saved BigQuery connections were invalid. Their original file was preserved.')
     expect(first.library.profiles).toEqual([])
     const second = await store.load()
     expect(second.warning).toBeUndefined()
+  })
+
+  it('keeps legacy migratedProjects bound to the original account identity even if the saved profile is edited to another account', async () => {
+    const directory = await folder(), path = join(directory, 'bigquery-connections.json')
+    const profileId = '6f0c2b8e-4d1a-4c3b-9e2f-1a2b3c4d5e6f'
+    const aliceOptions: BigQueryConnectionOptions = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', impersonateServiceAccount: 'alice@proj.iam.gserviceaccount.com' }
+    const bobOptions: BigQueryConnectionOptions = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', impersonateServiceAccount: 'bob@proj.iam.gserviceaccount.com' }
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      profiles: [{ id: profileId, options: { ...aliceOptions, extraProjects: ['alice-only-proj'] }, favorite: true }]
+    }))
+    const store = new BigQueryConnectionStore(path, new BigQueryKeyFiles())
+    const loaded = await store.load()
+    expect(loaded.library.profiles[0]?.migratedProjects).toEqual(['alice-only-proj'])
+    expect(loaded.library.profiles[0]?.migratedKey).toBeTruthy()
+    expect(JSON.stringify(BigQueryConnectionStore.view(loaded.library))).not.toContain('migratedKey')
+
+    // Edit the existing saved profile from Alice to Bob before first reconnect.
+    await store.upsert({ id: profileId, options: bobOptions, favorite: true })
+    // Reconnecting as Bob using that same profile ID must NOT claim Alice's pending projects.
+    const bob = 'bigquery:impersonated:bob@proj.iam.gserviceaccount.com'
+    const bobClaim = await store.claimMigratedProjects(bob, { profileId, options: bobOptions })
+    expect(bobClaim.claimed).toEqual([])
+    expect(await store.starredProjectsFor(bob)).toEqual([])
+    // Later connecting as Alice still claims Alice's projects and clears migratedProjects + migratedKey.
+    const alice = 'bigquery:impersonated:alice@proj.iam.gserviceaccount.com'
+    const aliceClaim = await store.claimMigratedProjects(alice, { options: aliceOptions })
+    expect(aliceClaim.claimed).toEqual(['alice-only-proj'])
+    expect(await store.starredProjectsFor(alice)).toEqual(['alice-only-proj'])
+    const finalProfile = (await store.peek()).library.profiles.find(p => p.id === profileId)
+    expect(finalProfile?.migratedProjects).toBeUndefined()
+    expect(finalProfile?.migratedKey).toBeUndefined()
+  })
+
+  it('preserves pinned session overflow past 200 stars under the originating targetId until capacity is freed', async () => {
+    const directory = await folder(), path = join(directory, 'bigquery-connections.json')
+    const store = new BigQueryConnectionStore(path, new BigQueryKeyFiles())
+    const ada = 'bigquery:user:ada@example.com'
+    const targetIds = Array.from({ length: 13 }, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`)
+    // 13 targets * 16 distinct projects = 208 projects -> 200 starred + 8 preserved on target 13.
+    let overflow: readonly string[] = []
+    for (let t = 0; t < 13; t++) {
+      const batch = Array.from({ length: 16 }, (_, j) => `sess-t${String(t).padStart(2, '0')}-p${String(j).padStart(2, '0')}`)
+      const res = await store.migrateTargetStarredProjects(ada, targetIds[t]!, batch)
+      if (t === 12) overflow = res.remaining
+    }
+    expect(await store.starredProjectsFor(ada)).toHaveLength(200)
+    expect(overflow).toHaveLength(8)
+    expect((await store.peek()).library.migratedTargets).toEqual([{ targetId: targetIds[12], projects: [...overflow] }])
+    // Free 8 star slots and reconnect target 13 -> all 8 overflow projects are claimed automatically.
+    const current = await store.starredProjectsFor(ada)
+    for (const drop of current.slice(0, 8)) await store.setProjectStarForPrincipal(ada, drop, false)
+    const claimed = await store.claimMigratedProjects(ada, { targetId: targetIds[12] })
+    expect(claimed.claimed).toEqual(overflow)
+    expect((await store.peek()).library.migratedTargets).toBeUndefined()
   })
 })
 

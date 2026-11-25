@@ -21,10 +21,13 @@ const legacyMigratedProjectsSchema = z.array(bigQueryProjectSchema).min(1).max(b
 export const bigQueryStoredProfileSchema = z.object({
   id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(),
   autoReconnect: connectionAutoReconnectSchema.optional(), keyPath: absolutePath.optional(),
-  /** Legacy extraProjects stripped from this profile on upgrade; claimed only when a connection matching this profile authenticates. */
-  migratedProjects: legacyMigratedProjectsSchema.optional()
+  /** Legacy extraProjects stripped from this profile on upgrade; claimed only when a connection matching `migratedKey` authenticates. */
+  migratedProjects: legacyMigratedProjectsSchema.optional(),
+  /** Connection identity (`connectionKey`) of the profile when `migratedProjects` was stripped, so editing the profile to another account never transfers pending projects across accounts. */
+  migratedKey: z.string().min(1).max(2048).optional()
 }).strict().refine(value => (value.options.keyFile !== undefined) === (value.keyPath !== undefined), 'A saved key file reference needs its path.')
   .refine(value => value.options.costThreshold !== 0, 'A saved cost threshold is at least 1 GiB.')
+  .refine(value => value.migratedKey === undefined || value.migratedProjects !== undefined, 'Migrated key requires migrated projects.')
 /** Legacy extraProjects stripped from an unpinned pre-upgrade session target; claimed only when that target authenticates. */
 export const bigQueryMigratedTargetSchema = z.object({
   targetId: z.uuid(),

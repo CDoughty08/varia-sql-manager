@@ -451,7 +451,7 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
 /// bigquery.indexEstimate and the cost prompts).</summary>
 internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, List<string>? StarredProjects = null, bool? AllProjects = null,
-    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null);
+    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
 /// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and

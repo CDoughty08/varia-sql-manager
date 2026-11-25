@@ -171,7 +171,7 @@ const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
     await store.confirmSource(keyPath, source)
     return true
   },
-  restoreKeyFiles: async () => { await bigQueryStore?.load() }
+  restoreKeyFiles: async () => { await bigQueryStore?.peek() }
 })
 /** BigQuery's options as the backend takes them: main adds the credential material the renderer never holds. */
 const withBigQueryCredential = async (params: unknown): Promise<unknown> => isBigQueryOptions(params as { provider?: string })
@@ -265,7 +265,7 @@ async function rememberConnectionProfile(connectionId: string, options: Provider
   if (options.provider !== 'bigquery' || !bigQueryStore) return
   // The entry Connect chose wins over another saved with the same settings (the library allows twins).
   const selected = z.object({ selectedProfileId: z.uuid() }).safeParse(context).data?.selectedProfileId
-  const key = connectionKey(options), matching = (await bigQueryStore.load()).library.profiles.filter(item => connectionKey(item.options) === key)
+  const key = connectionKey(options), matching = (await bigQueryStore.peek()).library.profiles.filter(item => connectionKey(item.options) === key)
   // A handle Connect handed back again (same settings) keeps the profile it was first opened from while that still exists.
   const kept = connectionProfiles.get(connectionId)
   if (kept !== undefined && matching.some(item => item.id === kept)) return
@@ -290,7 +290,7 @@ async function cancelRecordedJobs(records: readonly JobRecord[]): Promise<Record
   const jobs: RecordedJobsCancel['jobs'][number][] = [], uncancellable: string[] = []
   let profiles: Awaited<ReturnType<NonNullable<typeof bigQueryStore>['load']>>['library']['profiles']
   try {
-    profiles = bigQueryStore ? (await bigQueryStore.load()).library.profiles : []
+    profiles = bigQueryStore ? (await bigQueryStore.peek()).library.profiles : []
   } catch (error) {
     // Profiles unread: every job is listed as not cancelled, with why, rather than the answer failing without a word.
     const message = error instanceof Error ? error.message.slice(0, 1000) : 'The saved BigQuery connections could not be read.'
@@ -1159,7 +1159,7 @@ app.whenReady().then(async () => {
   handle('varia:connections-remove', async value => {
     const id = z.uuid().parse(value)
     // Only a BigQuery profile has job records: a SQL Server delete reads none and never fails with BigQuery's files.
-    const bigQuery = !!bigQueryStore && !!(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)
+    const bigQuery = !!bigQueryStore && !!(await bigQueryStore.peek().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)
     const unread = bigQuery && await jobRecords.load().then(() => false, () => true)
     // Records that cannot be read now may name this connection's jobs: it asks before it goes.
     if (unread) {
@@ -1602,7 +1602,7 @@ app.whenReady().then(async () => {
             if (principal) {
               // Emulator anonymous principals never star projects and must not leak into unclaimed migrated targets.
               if (!principal.startsWith('bigquery:anonymous:')) {
-                await bigQueryStore.addStarredProjects(principal, projects).catch(() => {})
+                await bigQueryStore.migrateTargetStarredProjects(principal, target.id, projects).catch(() => {})
               }
             } else if (!hadPrincipal) {
               // Only migrate per originating targetId when the target genuinely had no principal — never when seal verification stripped it.
@@ -1680,7 +1680,7 @@ app.whenReady().then(async () => {
     const one = running.length === 1
     // Show in Job History opens a project the page is connected to, or connects the saved connection that started its jobs;
     // with neither for any project it is not offered, and the box says why.
-    const profiles = await (bigQueryStore ? bigQueryStore.load().then(store => new Map(store.library.profiles.map(profile => [profile.id, profile.options.project] as const))) : Promise.resolve(new Map<string, string>())).catch(() => null)
+    const profiles = await (bigQueryStore ? bigQueryStore.peek().then(store => new Map(store.library.profiles.map(profile => [profile.id, profile.options.project] as const))) : Promise.resolve(new Map<string, string>())).catch(() => null)
     const show = jobsByProject(running, profiles, new Set(liveProjects))
     const showable = show.some(item => !item.unavailable)
     const keepText = `Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`

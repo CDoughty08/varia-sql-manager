@@ -862,6 +862,10 @@ internal static partial class BigQueryIndexChecks
         // 12. Wave 2 budget-stop does not conflate NOT_FOUND or PERMISSION_DENIED on earlier projects with budget cuts,
         // and marks 0-held budget-cut projects Partial in BigQueryLookup; discoveryCut prunes stale marks for dropped projects.
         {
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
+            var dsGoneStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var dsDeniedStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c"], tablesPerDiscovered: 1, columnsPerTable: 0)
             {
                 CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
@@ -881,10 +885,24 @@ internal static partial class BigQueryIndexChecks
                     [("disc-a", "ds_gone")] = "NOT_FOUND",
                     [("disc-b", "ds_denied")] = "PERMISSION_DENIED",
                     [("disc-c", "ds_gone2")] = "NOT_FOUND"
+                },
+                OnDatasetObjectsAsync = async (project, dataset, token) =>
+                {
+                    if (project == "disc-a" && dataset == "ds_gone") dsGoneStarted.TrySetResult();
+                    if (project == "disc-b" && dataset == "ds_denied") dsDeniedStarted.TrySetResult();
+                    if (project == "disc-a" && dataset == "ds_ok") await dsGoneStarted.Task.WaitAsync(token);
+                },
+                OnDatasetsAsync = async (project, token) =>
+                {
+                    if (project != "disc-c") return;
+                    // Gate disc-c's oversized reads until disc-a and disc-b have completed their reads so budget-stop ordering is deterministic across platforms.
+                    await dsGoneStarted.Task.WaitAsync(token);
+                    await dsDeniedStarted.Task.WaitAsync(token);
+                    while (!token.IsCancellationRequested && !search.HeldOf(id).Any(read => read.Database == "disc-a" && read.Dataset == "ds_ok"))
+                        await Task.Delay(2, token);
+                    await Task.Delay(15, token);
                 }
             };
-            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
-            var id = Guid.NewGuid().ToString();
             await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             var lookup = search.LookupBigQuery(id, "varia-alpha");
             check(lookup.ProjectState("disc-a") == LookupState.Ready
@@ -1042,6 +1060,107 @@ internal static partial class BigQueryIndexChecks
             check(fastFinishedFirst && stopSource.DiscoveredDatasetCalls < manyDisc.Count,
                 $"streaming Wave 2 indexes ready starred project before slow sibling finishes listing ({fastFinishedFirst}) and cancels remaining discovered DatasetsAsync on memory stop ({stopSource.DiscoveredDatasetCalls}/{manyDisc.Count})");
         }
+
+        // 17. missingOnly scoped refresh skips all REST calls when already cleanly covered by discovery, and reads when missing or previously skipped.
+        {
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-covered"], tablesPerDiscovered: 1, columnsPerTable: 1)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+                {
+                    ["varia-alpha"] = ["sales"],
+                    ["disc-covered"] = ["ds"],
+                    ["ext-unindexed"] = ["adhoc"]
+                }
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var dsCallsBefore = source.DiscoveredDatasetCalls;
+            var objCallsBefore = source.DiscoveredObjectCalls;
+            var detCallsBefore = source.DiscoveredDetailCalls;
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("disc-covered"), MissingOnly: true), source, CancellationToken.None);
+            var zeroCallsForCovered = source.DiscoveredDatasetCalls == dsCallsBefore
+                && source.DiscoveredObjectCalls == objCallsBefore
+                && source.DiscoveredDetailCalls == detCallsBefore;
+            // Unindexed external dataset IS read when requested with MissingOnly: true.
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("ext-unindexed", "adhoc"), MissingOnly: true), source, CancellationToken.None);
+            var extHeld = search.HeldOf(id).Any(read => read.Database == "ext-unindexed" && read.Dataset == "adhoc");
+            check(zeroCallsForCovered && extHeld,
+                $"missingOnly issues 0 REST calls for already-discovered project ({zeroCallsForCovered}) and reads unindexed external scope ({extHeld})");
+        }
+
+        // 18. Dataset-level read failures (ObjectsAsync QUOTA) stay Skipped/Partial past the 256-entry displayed SkipList cap.
+        {
+            var manyProjects = Enumerable.Range(1, 300).Select(i => $"disc-{i:D3}").ToList();
+            var source = new FakeBudgetSource(discoveredProjects: manyProjects, tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                FailObjectsSelector = (project, _) => project.StartsWith("disc-", StringComparison.Ordinal) ? "QUOTA" : null
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var lookup = search.LookupBigQuery(id, "varia-alpha");
+            var p300 = lookup.ProjectState("disc-300");
+            var ds300 = lookup.Dataset("disc-300", "ds");
+            check(result.Status.Skipped.Count <= 260
+                && p300 == LookupState.Partial
+                && ds300 is { State: LookupState.Skipped, Skip.Code: "QUOTA" },
+                $"dataset ObjectsAsync QUOTA failure stays Skipped/Partial past 256 displayed skips (shown={result.Status.Skipped.Count}, p300={p300}, ds300={ds300.State}/{ds300.Skip?.Code})");
+        }
+
+        // 19. DDL arriving via MarkStaleIfTracked during a project's first discovery (after DatasetsAsync, before ObjectsAsync/commit) lands and survives rebuild.
+        {
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-new"], tablesPerDiscovered: 1, columnsPerTable: 1)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+                {
+                    ["varia-alpha"] = ["sales"],
+                    ["disc-new"] = ["ds1"]
+                }
+            };
+            source.AfterDatasetsAsync = project =>
+            {
+                if (project == "disc-new")
+                {
+                    source.CustomDatasets!["disc-new"] = ["ds1", "ds_created"];
+                    search.MarkStaleIfTracked(id, "varia-alpha", "disc-new", "ds_created");
+                }
+            };
+            var build = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var markedDuringFirstDiscovery = search.StaleOf(id).Contains(("disc-new", "ds_created")) && build.Status.StaleMark is not null;
+            source.AfterDatasetsAsync = null;
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Stale: true), source, CancellationToken.None);
+            check(markedDuringFirstDiscovery && search.HeldOf(id).Any(read => read.Database == "disc-new" && read.Dataset == "ds_created"),
+                $"DDL via MarkStaleIfTracked during first discovery lands ({markedDuringFirstDiscovery}) and is indexed on stale refresh");
+        }
+
+        // 20. Streaming Wave 2 progress events always satisfy Done <= Total even when an early slow dataset finishes after later datasets are discovered.
+        {
+            var slowRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var laterDone = 0;
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-slow", "disc-fast-1", "disc-fast-2", "disc-fast-3", "disc-fast-4"], tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                OnDatasetObjectsAsync = async (project, _, token) =>
+                {
+                    if (project == "disc-slow") await slowRelease.Task.WaitAsync(token);
+                    else if (project.StartsWith("disc-fast-", StringComparison.Ordinal) && Interlocked.Increment(ref laterDone) == 4)
+                        slowRelease.TrySetResult();
+                }
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var badProgress = 0;
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None, progress: evt =>
+            {
+                var json = JsonSerializer.SerializeToNode(evt, Wire)!.AsObject();
+                var done = json["done"]!.GetValue<int>();
+                var total = json["total"]!.GetValue<int>();
+                if (done > total) Interlocked.Increment(ref badProgress);
+            });
+            check(badProgress == 0, $"all streaming Wave 2 progress events satisfy Done <= Total (violations={badProgress})");
+        }
     }
 
     sealed class UnusedHost : IObjectSearchHost
@@ -1063,6 +1182,7 @@ internal static partial class BigQueryIndexChecks
         public (string Project, string Code)? FailDatasetsForProject { get; set; }
         public Func<string, string?>? FailDatasetsSelector { get; set; }
         public (string Project, string Code)? FailObjectsForProject { get; set; }
+        public Func<string, string, string?>? FailObjectsSelector { get; set; }
         public Dictionary<(string Project, string Dataset), string>? FailObjectsForDataset { get; set; }
         public string? ThrowOnCancelObjectsProject { get; set; }
         public Dictionary<string, IReadOnlyList<string>>? CustomDatasets { get; set; }
@@ -1070,6 +1190,7 @@ internal static partial class BigQueryIndexChecks
         public Func<string, CancellationToken, Task>? OnDatasetsAsync { get; set; }
         public Action<string>? AfterDatasetsAsync { get; set; }
         public Func<string, CancellationToken, Task>? OnObjectsAsync { get; set; }
+        public Func<string, string, CancellationToken, Task>? OnDatasetObjectsAsync { get; set; }
 
         public string BillingProject(string connectionId) => "varia-alpha";
         public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token)
@@ -1095,8 +1216,11 @@ internal static partial class BigQueryIndexChecks
         public async Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)
         {
             if (OnObjectsAsync is not null) await OnObjectsAsync(project, token);
+            if (OnDatasetObjectsAsync is not null) await OnDatasetObjectsAsync(project, dataset, token);
             if (FailObjectsForProject is { } failObjects && failObjects.Project == project)
                 throw new RequestException(failObjects.Code, "Simulated objects failure.");
+            if (FailObjectsSelector?.Invoke(project, dataset) is { } selectedObjFail)
+                throw new RequestException(selectedObjFail, "Simulated objects failure.");
             if (FailObjectsForDataset is not null && FailObjectsForDataset.TryGetValue((project, dataset), out var datasetFail))
                 throw new RequestException(datasetFail, "Simulated dataset objects failure.");
             if (project == ThrowOnCancelObjectsProject)

@@ -194,6 +194,8 @@ export interface ObjectIndexParams {
   readonly allProjects?: boolean
   readonly maxProjects?: number
   readonly scope?: BigQueryIndexScope
+  /** With `scope`: skip all BigQuery API calls when the requested project/dataset is already cleanly covered in the index, and reuse held details instead of forcing re-reads. */
+  readonly missingOnly?: true
   readonly stale?: true
   /** A full build only: pass 2 reads these locations with the billed bulk queries. */
   readonly bulk?: BigQueryBulkIndex
@@ -362,12 +364,14 @@ export const objectIndexParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(),
   starredProjects: starredProjectsSchema.optional(), allProjects: z.boolean().optional(),
   maxProjects: z.number().int().min(1).max(objectSearchLimits.bigQuery.maxProjectsCap).optional(),
-  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional(),
+  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(),
+  missingOnly: z.literal(true).optional(), stale: z.literal(true).optional(),
   bulk: z.object({
     locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     budgetBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
   }).strict().optional()
 }).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.')
+  .refine(value => !value.missingOnly || value.scope !== undefined, 'missingOnly requires a scope.')
   .refine(value => !(value.bulk && (value.scope || value.stale)), 'The bulk path reads a full build only.') satisfies z.ZodType<ObjectIndexParams>
 export const bigQueryIndexEstimateRequestSchema = z.object({ connectionId: z.uuid(), definitions: z.boolean().optional(), starredProjects: starredProjectsSchema.optional() }).strict() satisfies z.ZodType<BigQueryIndexEstimateRequest>
 export const bigQueryIndexEstimateResultSchema = z.object({

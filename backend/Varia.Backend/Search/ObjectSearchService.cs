@@ -84,6 +84,10 @@ internal sealed partial class ObjectSearchService : IDisposable
         public HashSet<string> PartialProjects = new(StringComparer.Ordinal);
         /// <summary>Per-project dataset-listing skips (errors or dataset-list truncation) kept independently of the 256-entry displayed SkipList (under Gate).</summary>
         public Dictionary<string, ObjectIndexSkip> ProjectListingSkips = new(StringComparer.Ordinal);
+        /// <summary>Per-dataset read skips (object-listing, detail, or budget failures) kept independently of the 256-entry displayed SkipList (under Gate).</summary>
+        public Dictionary<(string Project, string Dataset), ObjectIndexSkip> DatasetSkips = [];
+        /// <summary>Projects currently being discovered or listed by an active build, so mid-build DDL marks land before discovery commits (under Gate).</summary>
+        public HashSet<string> InFlightProjects = new(StringComparer.Ordinal);
         /// <summary>BigQuery's last full build's bulk path, when it ran.</summary>
         public BigQueryBulkStatus? Bulk;
         /// <summary>BigQuery datasets DDL changed since their last read, by project and dataset (under Gate): the next build re-reads them whole.</summary>

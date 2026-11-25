@@ -270,18 +270,20 @@ describe('referencedBigQueryProjects', () => {
     expect(referencedBigQueryProjects('SELECT * FROM `Invalid_Project.ds.t` JOIN `short.ds.t`;')).toEqual([])
   })
 
-  it('excludes earlier FROM table aliases used in implicit UNNEST paths from referenced projects', () => {
+  it('excludes earlier FROM table aliases used in comma-FROM and correlated JOIN implicit UNNEST paths from referenced projects', () => {
     const sql = [
       'SELECT item',
       'FROM `billing-proj.sales.orders` AS orders, orders.payload.items AS item;',
       'SELECT i FROM `billing-proj-2.sales.orders`, orders.payload.items AS i;',
       'SELECT t FROM `billing-proj-3.sales.orders` order_rows, UNNEST(order_rows.items) AS line_items, line_items.nested.tags AS t;',
+      'SELECT item FROM `billing-proj-5.sales.orders` AS orders CROSS JOIN orders.payload.items AS item LEFT JOIN item.nested.tags AS tag;',
       'SELECT * FROM `billing-proj-4.sales.orders` AS orders, `real-other-proj.sales.customers` AS customers;'
     ].join('\n')
     expect(referencedBigQueryProjects(sql)).toEqual([
       'billing-proj',
       'billing-proj-2',
       'billing-proj-3',
+      'billing-proj-5',
       'billing-proj-4',
       'real-other-proj'
     ])
@@ -356,5 +358,37 @@ describe('bindBigQueryExplorerSync', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('forgets a disconnected principal so reconnecting waits for its fresh star load even after another account mutates stars', async () => {
+    const reconnectLoad = deferred<ApiResult<BigQueryStarredProjectsView>>()
+    let loadCalls = 0
+    const api: Pick<VariaApi, 'loadBigQueryStarredProjects' | 'setBigQueryProjectStar'> = {
+      loadBigQueryStarredProjects: vi.fn(async input => {
+        loadCalls++
+        if (input?.connectionId === connAda && loadCalls > 1) return reconnectLoad.promise
+        return { ok: true as const, value: { byPrincipal: { [ada]: ['varia-beta'] } } }
+      }),
+      setBigQueryProjectStar: vi.fn(async () => ({ ok: true as const, value: { byPrincipal: { [grace]: ['varia-gamma'] } } }))
+    }
+    const starred = new BigQueryStarredService({ api })
+    // 1. Account A connects and loads its starred project.
+    await starred.load(connAda, ada)
+    expect(starred.isLoadedFor(ada)).toBe(true)
+    expect(starred.starredFor(ada)).toEqual(['varia-beta'])
+    // 2. Account A disconnects (forgetPrincipal clears readiness and stale cache) and Account B stars a project.
+    starred.forgetPrincipal(ada)
+    expect(starred.isLoadedFor(ada)).toBe(false)
+    await starred.setStarred(connGrace, grace, 'varia-gamma', true)
+    expect(starred.isLoadedFor(grace)).toBe(true)
+    expect(starred.isLoadedFor(ada)).toBe(false)
+    // 3. Account A reconnects: isLoadedFor(ada) stays false until its new load settles, then restores its stars.
+    const loading = starred.load(connAda, ada)
+    expect(starred.isLoadedFor(ada)).toBe(false)
+    reconnectLoad.resolve({ ok: true, value: { byPrincipal: { [ada]: ['varia-beta'] } } })
+    await loading
+    expect(starred.isLoadedFor(ada)).toBe(true)
+    expect(starred.starredFor(ada)).toEqual(['varia-beta'])
+    starred.dispose()
   })
 })

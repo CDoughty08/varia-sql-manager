@@ -161,11 +161,37 @@ export class BigQueryStarredService extends SnapshotStore<BigQueryStarredProject
     if (this.pending.get(key)?.seq === opSeq) this.pending.delete(key)
     if (result.ok && seq > this.appliedSeq) {
       this.appliedSeq = seq
-      this.authoritative = copyByPrincipal(result.value.byPrincipal)
-      for (const principal of Object.keys(result.value.byPrincipal)) this.loadedPrincipals.add(principal)
+      const incoming = result.value.byPrincipal
+      // Update the mutated principal and every live principal returned by main without silently dropping another account
+      // while leaving it marked loaded (disconnected accounts are cleared explicitly via forgetPrincipal).
+      if (Object.hasOwn(incoming, principalId) && incoming[principalId]!.length) {
+        this.authoritative[principalId] = [...incoming[principalId]!]
+      } else {
+        delete this.authoritative[principalId]
+      }
+      for (const [principal, projects] of Object.entries(incoming)) {
+        this.authoritative[principal] = [...projects]
+        const latest = this.latestPrincipalLoadSeq.get(principal)
+        if (latest === undefined || seq >= latest) this.loadedPrincipals.add(principal)
+      }
+      const latestMutated = this.latestPrincipalLoadSeq.get(principalId)
+      if (latestMutated === undefined || seq >= latestMutated) this.loadedPrincipals.add(principalId)
     }
     this.publish(this.compose())
     return result
+  }
+
+  /**
+   * Clears cached readiness and stars for `principalId` when its last live connection disconnects, so a subsequent
+   * reconnect waits for a fresh `load(connectionId, principalId)` before Object Explorer applies saved tree expansion.
+   */
+  forgetPrincipal(principalId: string | undefined): void {
+    if (this.disposed || !principalId) return
+    const hadLoaded = this.loadedPrincipals.delete(principalId)
+    const hadEntry = Object.hasOwn(this.authoritative, principalId)
+    delete this.authoritative[principalId]
+    this.latestPrincipalLoadSeq.delete(principalId)
+    if (hadLoaded || hadEntry) this.publish(this.compose())
   }
 
   dispose(): void {
@@ -404,8 +430,10 @@ export function referencedBigQueryProjects(sql: string): string[] {
     }
 
     const followedByCall = isPunct(toks[cursor], '(')
-    // `FROM orders AS o, o.payload.items AS item`: a comma-FROM path starting with an earlier FROM alias is an implicit UNNEST, not a project.
-    const isImplicitUnnest = isCommaFrom && !singleBacktickMultiPart && parts.length >= 2 && fromAliases.has(parts[0].toLowerCase())
+    // `FROM orders AS o, o.payload.items AS item` and `FROM orders AS o CROSS JOIN o.payload.items AS item`:
+    // a comma-FROM or correlated JOIN path starting with an earlier FROM alias is an implicit UNNEST, not a project.
+    const isCorrelatedJoin = inFrom && prev?.kind === 'word' && prev.upper === 'JOIN'
+    const isImplicitUnnest = (isCommaFrom || isCorrelatedJoin) && !singleBacktickMultiPart && parts.length >= 2 && fromAliases.has(parts[0].toLowerCase())
     if (inFrom && isObjectPos && !followedByCall) recordFromAlias(cursor, parts.at(-1))
     if (followedByCall && parts.length >= 4 && parts[0].toUpperCase() === 'SAFE') {
       record(parts.slice(1))
@@ -455,6 +483,7 @@ export interface BigQueryExplorerSyncDeps {
     syncBigQueryReferencedProjects(connectionId: string, projects: readonly string[]): void
   }
   readonly loadStarred: (connectionId: string, principalId: string) => void
+  readonly forgetPrincipal?: (principalId: string) => void
   readonly debounceMs?: number
 }
 
@@ -464,7 +493,7 @@ export interface BigQueryExplorerSyncDeps {
  */
 export function bindBigQueryExplorerSync(deps: BigQueryExplorerSyncDeps): { sync(): void; dispose(): void } {
   const debounceMs = deps.debounceMs ?? 400
-  const seenConnections = new Set<string>()
+  const seenConnections = new Map<string, string>()
   const watchers = new Map<string, { connectionId: string; version: number; timer?: ReturnType<typeof setTimeout>; disposable: { dispose(): void } }>()
   let disposed = false
 
@@ -492,15 +521,23 @@ export function bindBigQueryExplorerSync(deps: BigQueryExplorerSyncDeps): { sync
   const sync = () => {
     if (disposed) return
     const liveBqIds = new Set<string>()
+    const livePrincipals = new Set<string>()
     for (const connection of deps.connections.liveBigQuery()) {
       liveBqIds.add(connection.id)
       const principal = connection.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection.principalId
-      if (principal?.startsWith('bigquery:') && !principal.startsWith('bigquery:anonymous:') && !seenConnections.has(connection.id)) {
-        seenConnections.add(connection.id)
-        deps.loadStarred(connection.id, principal)
+      if (principal?.startsWith('bigquery:') && !principal.startsWith('bigquery:anonymous:')) {
+        livePrincipals.add(principal)
+        if (!seenConnections.has(connection.id)) {
+          seenConnections.set(connection.id, principal)
+          deps.loadStarred(connection.id, principal)
+        }
       }
     }
-    for (const id of [...seenConnections]) if (!liveBqIds.has(id)) seenConnections.delete(id)
+    for (const [id, principal] of [...seenConnections.entries()]) {
+      if (liveBqIds.has(id)) continue
+      seenConnections.delete(id)
+      if (!livePrincipals.has(principal)) deps.forgetPrincipal?.(principal)
+    }
 
     const activeTabIds = new Set<string>()
     for (const doc of deps.documents.getSnapshot().documents) {

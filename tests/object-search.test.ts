@@ -136,9 +136,10 @@ describe('object search contracts', () => {
     expect(index({ allProjects: true, maxProjects: 1, starredProjects: [] })).toBe(true)
     expect(index({ allProjects: true, maxProjects: objectSearchLimits.bigQuery.maxProjectsCap })).toBe(true)
     expect(index({ scope: { project: 'varia-alpha' } })).toBe(true)
+    expect(index({ scope: { project: 'varia-alpha' }, missingOnly: true })).toBe(true)
     expect(index({ stale: true })).toBe(true)
     for (const bad of [
-      { scope: { project: 'varia-alpha' }, stale: true }, { stale: false }, { scope: { dataset: 'sales' } }, { scope: { project: 'varia-alpha', extra: 1 } }, { scope: { project: 'x' } },
+      { scope: { project: 'varia-alpha' }, stale: true }, { missingOnly: true }, { scope: { project: 'varia-alpha' }, missingOnly: false }, { stale: false }, { scope: { dataset: 'sales' } }, { scope: { project: 'varia-alpha', extra: 1 } }, { scope: { project: 'x' } },
       { extraDetails: true }, { allProjects: 'yes' }, { maxProjects: 0 }, { maxProjects: objectSearchLimits.bigQuery.maxProjectsCap + 1 }, { maxProjects: 1.5 }, { maxProjects: '500' },
       { starredProjects: ['Bad Project'] },
       { starredProjects: Array.from({ length: objectSearchLimits.bigQuery.starredProjects + 1 }, (_, i) => `varia-proj-${i}`) }
@@ -1287,15 +1288,48 @@ describe('ObjectSearchService', () => {
     service.open('bq', undefined, false, { project: 'varia-alpha', dataset: 'sales' })
     service.open('bq', undefined, false, { project: 'varia-beta', dataset: 'census' })
     expect(calls.index).toHaveLength(1)
-    // Opening Search Objects scoped to an unstarred session project/dataset triggers a free scoped refresh so matches are not falsely empty.
+    // Opening Search Objects scoped to an unstarred session project/dataset triggers a free missingOnly scoped refresh so matches are not falsely empty.
     service.open('bq', undefined, false, { project: 'session-only-1', dataset: 'adhoc' })
     expect(calls.index).toHaveLength(2)
-    expect(calls.index[1]).toMatchObject({ connectionId: 'bq', allProjects: false, scope: { project: 'session-only-1', dataset: 'adhoc' } })
-    pendingIndex[1]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 3 }), elapsedMs: 1 } })
+    expect(calls.index[1]).toMatchObject({ connectionId: 'bq', allProjects: false, scope: { project: 'session-only-1', dataset: 'adhoc' }, missingOnly: true })
+    // If the scoped refresh reports a QUOTA skip for that scope, it is NOT cached as indexed and re-opening retries it.
+    pendingIndex[1]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 2, skipped: [{ project: 'session-only-1', database: '', code: 'QUOTA', message: 'Quota exceeded.' }] }), elapsedMs: 1 } })
     await settle()
-    // Opening the same scope again after it has been indexed does not redundantly re-fetch it.
     service.open('bq', undefined, false, { project: 'session-only-1', dataset: 'adhoc' })
+    expect(calls.index).toHaveLength(3)
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 3 }), elapsedMs: 1 } })
+    await settle()
+    // Opening the same scope again after a clean read does not redundantly re-fetch it.
+    service.open('bq', undefined, false, { project: 'session-only-1', dataset: 'adhoc' })
+    expect(calls.index).toHaveLength(3)
+    service.dispose()
+  })
+
+  it('carries open external BigQuery search scopes through Build index and full rebuilds when discovery is off', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false, allProjects: false, starredProjects: () => [] })
+    connections.set([bigQueryConnection('bq')])
+    expect(calls.index).toHaveLength(0)
+    // Open a scoped Search Objects tab on an unstarred external dataset with indexOnConnect off, then click Build index.
+    const tabId = service.open('bq', 'orders', false, { project: 'ext-proj-1', dataset: 'adhoc' })!
+    expect(tabId).toBeTruthy()
+    expect(calls.index).toHaveLength(0)
+    service.build('bq')
+    expect(calls.index).toHaveLength(1)
+    expect(calls.index[0]).toMatchObject({ connectionId: 'bq', allProjects: false })
+    // Full build finishes -> ObjectSearchService automatically queues a missingOnly scope refresh for the open external tab.
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 1 }), elapsedMs: 1 } })
+    await settle()
     expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ connectionId: 'bq', allProjects: false, scope: { project: 'ext-proj-1', dataset: 'adhoc' }, missingOnly: true })
+    pendingIndex[1]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 2 }), elapsedMs: 1 } })
+    await settle()
+    // Triggering a full rebuild later also carries the open external scope through instead of losing its results.
+    service.build('bq')
+    expect(calls.index).toHaveLength(3)
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery', projects: 1 }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    expect(calls.index[3]).toMatchObject({ connectionId: 'bq', scope: { project: 'ext-proj-1', dataset: 'adhoc' }, missingOnly: true })
     service.dispose()
   })
 

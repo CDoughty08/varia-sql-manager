@@ -500,7 +500,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // projects claimed by main appear immediately without exposing other accounts.
   const bigQueryExplorerSync = bindBigQueryExplorerSync({
     connections, documents, events, explorer,
-    loadStarred: (connectionId, principalId) => { loadBigQueryStarred(connectionId, principalId) }
+    loadStarred: (connectionId, principalId) => { loadBigQueryStarred(connectionId, principalId) },
+    forgetPrincipal: principalId => { bigQueryStarred.forgetPrincipal(principalId) }
   })
   const reattachSubscriptions = [
     connections.subscribe(reattachSoon),

@@ -2,7 +2,7 @@ import type { VariaApi } from '../../../shared/contracts'
 import { belowSchema, folderSpecs, kindSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { BigQueryDryRunResult } from '../../../shared/bigquery/dry-run.ts'
-import { objectSearchLimits, type BigQueryBulkIndex, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
+import { objectSearchLimits, type BigQueryBulkIndex, type BigQueryIndexScope, type ObjectIndexProgress, type ObjectIndexSkip, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult, type SearchScope, type SearchType, providerSearchKinds, searchTypeKinds } from '../../../shared/explorer/search.ts'
 import type { WorkbenchEvent } from '../core/types'
 import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { onUnexpectedError } from '../core/errors'
@@ -118,9 +118,14 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   /** Per-connection BigQuery starred projects to include in Search Objects index builds and bulk estimates. */
   readonly starredProjects?: (connectionId: string) => readonly string[]
 }
-/** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), the datasets DDL marked, or everything
+/** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), or only if missing/unindexed, the datasets DDL marked, or everything
  *  (Refresh on the server's node). */
-export type BigQueryRefresh = { readonly scope: BigQueryIndexScope } | { readonly stale: true } | { readonly full: true }
+export type BigQueryRefresh = { readonly scope: BigQueryIndexScope; readonly missingOnly?: true } | { readonly stale: true } | { readonly full: true }
+
+/** Whether any reported skip covers `scope` (a project-level failure, any dataset failure in a project scope, or the matching dataset). */
+function scopeHasSkip(skipped: readonly ObjectIndexSkip[], scope: BigQueryIndexScope): boolean {
+  return skipped.some(skip => skip.project === scope.project && (skip.database === '' || scope.dataset === undefined || skip.database === scope.dataset))
+}
 
 export const searchTitle = 'Search Objects'
 /** The search Object Explorer's box runs: the same search as a tab's, on the server of the explorer's selection. */
@@ -370,6 +375,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       this.indexedStarred.set(connectionId, new Set(starredProjects ?? []))
       this.indexedScopes.delete(connectionId)
     }
+    const scopeKeyOf = (scope: BigQueryIndexScope) => scope.dataset !== undefined ? `${scope.project}\u0000${scope.dataset}` : scope.project
+    if (bigQuery && partial && 'scope' in partial) this.inFlightScope.set(connectionId, scopeKeyOf(partial.scope))
+    else this.inFlightScope.delete(connectionId)
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
     const bulk = bigQuery && !partial && this.o.settings.get('textEditor.googleSql.bulkIndex') && !!this.o.billedGate && !!this.o.api.bigQueryIndexEstimate
     // A newer build closes an older one's prompt. An older build already sent the backend supersedes when the new one is sent, which
@@ -398,14 +406,23 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         const entry = this.getSnapshot().indexes[connectionId]
         const stopped = this.stopping.delete(requestId)
         if (this.disposed || entry?.requestId !== requestId) return
+        this.inFlightScope.delete(connectionId)
         if (result.ok) {
-          if (bigQuery && partial && 'scope' in partial) {
+          if (bigQuery && partial && 'scope' in partial && !scopeHasSkip(result.value.status.skipped, partial.scope)) {
             const scopes = this.indexedScopes.get(connectionId) ?? new Set<string>()
-            scopes.add(partial.scope.dataset !== undefined ? `${partial.scope.project}\u0000${partial.scope.dataset}` : partial.scope.project)
+            scopes.add(scopeKeyOf(partial.scope))
             this.indexedScopes.set(connectionId, scopes)
+            if (partial.scope.dataset === undefined) {
+              const known = this.indexedStarred.get(connectionId) ?? new Set<string>()
+              known.add(partial.scope.project)
+              this.indexedStarred.set(connectionId, known)
+            }
           }
           this.putIndex({ connectionId, done: result.value.status.databases, total: result.value.status.databases, objects: result.value.status.objects, status: result.value.status })
-          this.refresh(connectionId)
+          // After a full BigQuery build completes, carry any open scoped tabs (e.g. unstarred external datasets when discovery is off)
+          // by queueing missingOnly scope reads before presenting their final results.
+          const deferredProjects = bigQuery && !partial ? this.queueOpenBigQueryScopes(connectionId) : undefined
+          this.refresh(connectionId, deferredProjects)
           // DDL that landed during the build (or a mark it did not reach) is read by a stale-only build after it.
           this.staleHint(connectionId, result.value.status.staleMark)
         } else {
@@ -462,9 +479,12 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     } finally { this.estimating.delete(requestId) }
   }
 
-  /** The starred projects already requested for each live BigQuery connection (by build or scoped refresh), so delayed starred loads only refresh missing ones. */
+  /** The starred projects cleanly indexed for each live BigQuery connection (by build or completed scoped refresh). */
   private readonly indexedStarred = new Map<string, Set<string>>()
+  /** Scoped projects/datasets cleanly indexed (no skip for that scope) for each live BigQuery connection. */
   private readonly indexedScopes = new Map<string, Set<string>>()
+  /** Currently running scoped refresh key per connection, kept separate from completed `indexedScopes`. */
+  private readonly inFlightScope = new Map<string, string>()
 
   /**
    * Re-reads part of a BigQuery connection's index: a project or dataset whole (Object Explorer's Refresh on it), or the datasets
@@ -476,25 +496,58 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const connection = this.o.connections.get(connectionId)
     if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
     const entry = this.getSnapshot().indexes[connectionId]
-    const recordScope = () => {
-      if ('scope' in refresh && !refresh.scope.dataset) {
-        const known = this.indexedStarred.get(connectionId) ?? new Set<string>()
-        known.add(refresh.scope.project)
-        this.indexedStarred.set(connectionId, known)
-      }
-    }
     if (entry?.requestId) {
+      if ('scope' in refresh && refresh.missingOnly) {
+        const key = refresh.scope.dataset !== undefined ? `${refresh.scope.project}\u0000${refresh.scope.dataset}` : refresh.scope.project
+        if (this.inFlightScope.get(connectionId) === key) return true
+      }
       const queued = this.refreshes.get(connectionId) ?? []
       if (!queued.some(item => JSON.stringify(item) === JSON.stringify(refresh))) this.refreshes.set(connectionId, [...queued, refresh])
-      recordScope()
       return true
     }
     // After a whole build failed, only another whole build clears its error: a partial one would hide it.
     if (entry?.error && !('full' in refresh)) return false
     if (!entry?.status || entry.status.state === 'none') return false
     this.build(connectionId, refresh)
-    recordScope()
     return true
+  }
+
+  /** Queues a `missingOnly` scoped refresh for an open BigQuery tab's project/dataset when it is not already covered by billing, stars, or a completed scope read. */
+  private ensureBigQueryScope(connectionId: string, scope: BigQueryIndexScope): boolean {
+    const connection = this.o.connections.get(connectionId)
+    if (!live(connection) || !isBigQueryConnection(connection)) return false
+    const billing = connection.options.provider === 'bigquery' ? connection.options.project : undefined
+    const starred = this.o.starredProjects?.(connectionId) ?? []
+    const entry = this.getSnapshot().indexes[connectionId]
+    const scopes = this.indexedScopes.get(connectionId)
+    const scopeIndexed = scopes?.has(scope.project) || (scope.dataset !== undefined && scopes?.has(`${scope.project}\u0000${scope.dataset}`))
+    if (!(entry?.status?.state === 'ready' || entry?.requestId)
+      || scope.project === billing || starred.includes(scope.project) || this.indexedStarred.get(connectionId)?.has(scope.project) || scopeIndexed) {
+      return false
+    }
+    return this.refreshBigQuery(connectionId, { scope, missingOnly: true })
+  }
+
+  /** After a full BigQuery build ends, queues `missingOnly` scope reads for any open single-server Search tabs scoped to unstarred external projects/datasets. */
+  private queueOpenBigQueryScopes(connectionId: string): Set<string> | undefined {
+    const connection = this.o.connections.get(connectionId)
+    if (!live(connection) || !isBigQueryConnection(connection)) return undefined
+    const billing = connection.options.provider === 'bigquery' ? connection.options.project : undefined
+    const starred = this.o.starredProjects?.(connectionId) ?? []
+    const queued = this.refreshes.get(connectionId) ?? []
+    const nextQueue = [...queued]
+    let deferred: Set<string> | undefined
+    for (const document of Object.values(this.getSnapshot().documents)) {
+      if (document.allServers || document.connectionId !== connectionId || document.project === undefined) continue
+      if (document.project === billing || starred.includes(document.project)) continue
+      const scope: BigQueryIndexScope = document.dataset !== undefined ? { project: document.project, dataset: document.dataset } : { project: document.project }
+      const refresh: BigQueryRefresh = { scope, missingOnly: true }
+      if (!nextQueue.some(item => JSON.stringify(item) === JSON.stringify(refresh))) nextQueue.push(refresh)
+      deferred ??= new Set<string>()
+      deferred.add(document.project)
+    }
+    if (nextQueue.length !== queued.length) this.refreshes.set(connectionId, nextQueue)
+    return deferred
   }
 
   /** Refreshes any starred project for `connectionId` that was not yet included when its index started (e.g. after startup/migration starred load). */
@@ -505,6 +558,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const starred = this.o.starredProjects?.(connectionId) ?? []
     for (const project of starred) {
       if (project === billing || this.indexedStarred.get(connectionId)?.has(project)) continue
+      if (this.inFlightScope.get(connectionId) === project) continue
       this.refreshBigQuery(connectionId, { scope: { project } })
     }
   }
@@ -555,18 +609,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       : {}
     this.putDocument({ id: document.id, connectionId: connection.id, ...emptyQuery, ...fuzzy ? { fuzzy } : {}, ...text ? { text } : {}, ...allServers ? { allServers: true } : scoped })
     for (const id of allServers ? this.liveIds() : [connection.id]) this.ensureIndex(id)
-    // Searching a scoped session-only BigQuery project/dataset whose connection already has a ready/building index
-    // triggers a free scoped metadata refresh so it doesn't silently return 0 hits when discovery is off or the project is unlisted.
+    // Searching a scoped unstarred BigQuery project/dataset whose connection already has a ready/building index
+    // asks the backend to read it only if missing or previously skipped (0 API calls when already covered by discovery).
     if (!allServers && isBigQueryConnection(connection) && typeof scope === 'object' && scope.project !== undefined) {
-      const billing = connection.options.provider === 'bigquery' ? connection.options.project : undefined
-      const starred = this.o.starredProjects?.(connection.id) ?? []
-      const entry = this.getSnapshot().indexes[connection.id]
-      const scopes = this.indexedScopes.get(connection.id)
-      const scopeIndexed = scopes?.has(scope.project) || (scope.dataset !== undefined && scopes?.has(`${scope.project}\u0000${scope.dataset}`))
-      if ((entry?.status?.state === 'ready' || entry?.requestId)
-        && scope.project !== billing && !starred.includes(scope.project) && !this.indexedStarred.get(connection.id)?.has(scope.project) && !scopeIndexed) {
-        this.refreshBigQuery(connection.id, { scope: scope.dataset !== undefined ? { project: scope.project, dataset: scope.dataset } : { project: scope.project } })
-      }
+      this.ensureBigQueryScope(connection.id, scope.dataset !== undefined ? { project: scope.project, dataset: scope.dataset } : { project: scope.project })
     }
     if (text) void this.search(document.id)
     this.o.focus?.(document.id)
@@ -792,6 +838,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.disposed = true
     this.indexedStarred.clear()
     this.indexedScopes.clear()
+    this.inFlightScope.clear()
     for (const controller of this.estimating.values()) controller.abort()
     this.estimating.clear()
     this.targetBindings.clear()
@@ -983,11 +1030,11 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /** Re-runs the searches of a connection's tabs once its build ends, so they see the whole index; an All servers tab asks only
    *  that server again, so N builds ending cost N requests, not N per connected server. */
-  private refresh(connectionId: string): void {
+  private refresh(connectionId: string, deferredProjects?: ReadonlySet<string>): void {
     for (const document of Object.values(this.getSnapshot().documents)) {
       if (!document.text.trim()) continue
       if (document.allServers) this.searchServers(document.id, [connectionId])
-      else if (document.connectionId === connectionId) void this.search(document.id)
+      else if (document.connectionId === connectionId && (!deferredProjects || document.project === undefined || !deferredProjects.has(document.project))) void this.search(document.id)
     }
   }
 
@@ -1032,6 +1079,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     for (const id of [...this.staleAsked.keys()]) if (!ids.has(id)) this.staleAsked.delete(id)
     for (const id of [...this.indexedStarred.keys()]) if (!ids.has(id)) this.indexedStarred.delete(id)
     for (const id of [...this.indexedScopes.keys()]) if (!ids.has(id)) this.indexedScopes.delete(id)
+    for (const id of [...this.inFlightScope.keys()]) if (!ids.has(id)) this.inFlightScope.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
       // A disconnect closes a bulk build's estimate or cost prompt.
