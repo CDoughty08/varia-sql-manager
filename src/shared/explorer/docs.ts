@@ -320,7 +320,7 @@ export function renderExplorerDocs(): string {
     'a module\'s parameter lines for a `CREATE PROCEDURE` or `CREATE FUNCTION` header. Constraints (keys, checks), Always Encrypted\'s',
     '`ENCRYPTED WITH` and a vector\'s base type other than the default are left to Script As.',
     '',
-    'A table\'s **Indexes & keys** list shows each key, index, constraint and trigger with its kind, name, status and **Summary**: a key\'s',
+    'A table\'s **Indexes & Keys** list shows each key, index, constraint and trigger with its kind, name, status and **Summary**: a key\'s',
     'or index\'s type and columns, a foreign key\'s columns and referenced table, a check\'s or default\'s expression, a trigger\'s',
     'timing and events. Names are bracketed as scripts write them (`[Order]]Id]`). A summary is a description, not T-SQL to paste;',
     'Script As writes that. The columns, foreign-key pairs and trigger events behind the summaries are read up to a fixed number of rows;',

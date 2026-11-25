@@ -553,6 +553,8 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
 }
 
 export interface ObjectInspectorFrameProps extends Omit<ObjectInspectorFrameViewProps, 'verbs'> {
+  /** Optional leading non-catalogue header verbs placed right after the Vitals toggle and before catalogue verbs. */
+  readonly leadingVerbs?: readonly HeaderVerb[]
   readonly verbs?: readonly Verb[]
   /** Optional trailing non-catalogue header verbs (for example Peek Card's Close button). */
   readonly extraVerbs?: readonly HeaderVerb[]
@@ -563,10 +565,12 @@ export interface ObjectInspectorFrameProps extends Omit<ObjectInspectorFrameView
  * `workbench.inspector` (persisted separately for `full` vs `peek`), follows modifier-hold state for shortcut badges,
  * and registers the frame for focus-scoped `Ctrl+1`–`9` tab switching.
  */
-export default function ObjectInspectorFrame({ verbs = [], extraVerbs, surface = 'full', ...props }: ObjectInspectorFrameProps) {
+export default function ObjectInspectorFrame({ leadingVerbs, verbs = [], extraVerbs, surface = 'full', ...props }: ObjectInspectorFrameProps) {
   const workbench = useWorkbench()
   const resolvedVerbs = useHeaderVerbs(verbs)
-  const allVerbs = extraVerbs?.length ? [...resolvedVerbs, ...extraVerbs] : resolvedVerbs
+  const allVerbs = leadingVerbs?.length || extraVerbs?.length
+    ? [...(leadingVerbs ?? []), ...resolvedVerbs, ...(extraVerbs ?? [])]
+    : resolvedVerbs
   const vitalsPrefs = useServiceSnapshot(workbench.inspector.vitals)
   const modHeld = useServiceSnapshot(workbench.inspector.modHeld)
   const surfacePrefs = vitalsPrefs[surface]
