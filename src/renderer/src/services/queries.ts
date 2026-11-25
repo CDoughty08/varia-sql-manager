@@ -298,6 +298,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Whether the tab holds a job `reattach` would still take over on its BigQuery connection (one not tried there, not
    *  passed over): a new run first would have its results and session replaced once that job re-attaches. */
   holdsUnattachedJobs(tabId: string): boolean {
+    // Without an attach, reattach() never takes a job over, so none may hold Execute back.
+    if (!this.api.attach) return false
     const state = this.getSnapshot()[tabId], document = this.documents.get(tabId)
     const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
     if (!state?.jobs?.length || !connection || connection.providerId !== 'bigquery') return false

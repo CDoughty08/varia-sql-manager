@@ -63,6 +63,16 @@ describe('Execute after Connect on a restored BigQuery tab', () => {
     await pending()
     await vi.waitFor(() => expect(f.queryApi.execute).toHaveBeenCalledOnce())
   })
+  it('holds nothing back without an attach, or on a SQL Server connection', () => {
+    const noAttach = fixture()
+    Object.assign(noAttach.queryApi, { attach: undefined })
+    noAttach.queries.restoreJobs(noAttach.tab.id, [job('job_1')])
+    expect(noAttach.queries.holdsUnattachedJobs(noAttach.tab.id)).toBe(false)
+    const sqlServer = fixture()
+    sqlServer.queries.restoreJobs(sqlServer.tab.id, [job('job_1')])
+    Object.assign(sqlServer.connection, { providerId: 'sqlserver' })
+    expect(sqlServer.queries.holdsUnattachedJobs(sqlServer.tab.id)).toBe(false)
+  })
 })
 
 describe('BigQuery job keys', () => {

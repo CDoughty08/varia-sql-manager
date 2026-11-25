@@ -182,7 +182,7 @@ Server's options (stop on error, actual and live plans, client statistics) are r
 main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
 and leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens Connect and, once the
 connection is ready, runs the query as a SQL Server tab does, through the same estimate and cost prompt. A restored tab whose job has
-not re-attached yet only attaches, so that job's results come back first.
+not re-attached yet only attaches, so that job's session and results come back first; Execute then runs as usual.
 
 - **One job, never two.** The backend sends `jobs.insert` with a client job id (`varia_` and 32 hex digits), GoogleSQL
   (`useLegacySql: false`), the default dataset, the connection's maximum bytes billed, the execution timeout as
