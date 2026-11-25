@@ -122,6 +122,8 @@ export interface LiveSourceSpec {
   readonly hidden?: 'pause' | 'statusOnly'
 }
 
+/** The BigQuery root's running-jobs chip (explorer.bigquery): the most jobs one sample counts. */
+export const bigQueryExplorerLimits = { runningJobs: 10_000 } as const
 const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id, dataType })
 const toneColumn: LiveColumnSpec = { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }
 /** The types debug.synthetic.wide's columns cycle through. */
@@ -147,12 +149,13 @@ const agentWatchedSeries: readonly LiveSeriesSpec[] = [
   { id: 'serverNow', unit: 'count', label: 'Server time (yyyymmddhhmmss)', counter: 'gauge' }
 ]
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree', 'agent.overview'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations', 'query.plan', 'agent.jobs', 'agent.history', 'agent.errorLog', 'bigquery.jobs', 'agent.tree', 'agent.overview', 'bigquery.explorer'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list', 'query.plan.operators',
-  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list', 'agent.treeProbe', 'agent.overview.read'
+  'explorer.agentService', 'agent.jobs.list', 'agent.jobs.service', 'agent.jobs.watched', 'agent.history.list', 'agent.errorLog.read', 'bigquery.jobs.list', 'agent.treeProbe', 'agent.overview.read',
+  'explorer.bigquery'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -200,6 +203,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'agent.overview': {
     id: 'agent.overview', label: 'SQL Server Agent overview', scope: 'server', testOnly: false, probes: ['agent.overview.read'], hidden: 'pause',
     description: `SQL Server Agent's overview and health checks (docs/sql-server-agent.md, Agent overview), read on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master through msdb's own procedures and a few sysadmin catalogue reads (AgentReader, linted by AgentSql.LintRead), plus explorer.agentService's state text. The overview document opens one view per connection; hidden views pause. It takes no args; Check again asks for a sample now.`
+  },
+  'bigquery.explorer': {
+    id: 'bigquery.explorer', label: 'Object Explorer status (BigQuery)', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: ['explorer.bigquery'], hidden: 'pause',
+    description: 'The chip Object Explorer shows on a BigQuery connection\'s node (docs/bigquery.md, Object Explorer): one view per connected BigQuery connection while Object Explorer shows, read through BigQuery\'s REST API with jobs.list, a free API call (never a query, never the INFORMATION_SCHEMA.JOBS views), through the connection principal\'s shared rate limiter. Hidden views pause. It takes no args.'
   },
   [jobHistorySource]: {
     id: jobHistorySource, label: 'BigQuery job history', scope: 'bigquery', providers: ['bigquery'], testOnly: false, probes: [jobHistoryProbe], hidden: 'pause',
@@ -364,6 +371,13 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     id: 'agent.jobs.watched', source: 'agent.jobs', label: 'Watched jobs', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
     description: `The jobs this window started (args.watch, at most ${agentLimits.watchedJobs}), each read through msdb.dbo.sp_help_job @job_aspect = N'JOB' into fixed slot series by its place in the args: its execution status, current step, step count, start (yyyymmddhhmmss in server local time, from msdb.dbo.sp_help_jobactivity; none where not readable), last run outcome and last run start (yyyymmddhhmmss). A slot with no job, or whose read was refused this sample, has no values; a job no longer there reads status -1 and nothing else. The last series is the server's clock (yyyymmddhhmmss, server local time), by which the status bar dates a Start in server time. It has no table, so a status bar view of it keeps sampling while the window is hidden (whileHidden statusOnly).`,
     series: agentWatchedSeries
+  },
+  'explorer.bigquery': {
+    id: 'explorer.bigquery', source: 'bigquery.explorer', label: 'Running jobs (API)', intervalMs: { default: 10_000, min: 5000, max: 300_000 },
+    loadGuard: false, budgetMs: { min: 1000, max: 10_000 }, minGapMs: 2000,
+    description: `How many of the connection principal's own jobs in the billing project are pending or running: jobs.list with stateFilter pending and running, without allUsers, projection=minimal, top-level jobs only (a running script counts once), in pages of 1,000 up to ${bigQueryExplorerLimits.runningJobs.toLocaleString('en-US')}; past that, more is 1 and the count stops there. Jobs other principals run in the project are not counted.`,
+    series: [{ id: 'runningJobs', unit: 'count', label: 'Running jobs', counter: 'gauge' }],
+    status: ['more']
   },
   [jobHistoryProbe]: {
     id: jobHistoryProbe, source: jobHistorySource, label: 'Jobs',

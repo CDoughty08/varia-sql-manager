@@ -64,9 +64,10 @@ describe('catalogue providers', () => {
     const problems = entries.filter(entry => entry.providers.includes('bigquery'))
       .flatMap(entry => entry.methods.filter(method => !methodProviders(method).includes('bigquery')).map(method => `${entry.name} declares bigquery but runs ${method}`))
     expect(problems).toEqual([])
-    // Job History's live source (BQ-9) is BigQuery's alone, and no other live source or action is declared for BigQuery yet;
+    // Job History's live source (BQ-9) and Object Explorer's BigQuery chip (BQ-12) are BigQuery's alone, and no other live source or
+    // action is declared for BigQuery yet;
     // Object Explorer's and Script As' BigQuery kinds (BQ-5) are BigQuery's alone, and the connection node serves both engines.
-    for (const entry of entries.filter(entry => /^(live source|object action|server action) /.test(entry.name))) expect(entry.providers, entry.name).toEqual(entry.name === 'live source bigquery.jobs' ? ['bigquery'] : ['sqlserver'])
+    for (const entry of entries.filter(entry => /^(live source|object action|server action) /.test(entry.name))) expect(entry.providers, entry.name).toEqual(['live source bigquery.jobs', 'live source bigquery.explorer'].includes(entry.name) ? ['bigquery'] : ['sqlserver'])
     for (const entry of entries.filter(entry => /^(Script As kind|Explorer kind) /.test(entry.name)))
       expect(entry.providers, entry.name).toEqual(/ bq[A-Z]/.test(entry.name) ? ['bigquery'] : entry.name === 'Explorer kind server' ? ['sqlserver', 'bigquery'] : ['sqlserver'])
     // The methods named are real methods with policies.

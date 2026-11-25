@@ -363,11 +363,26 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   (and, for routines and models, last change) is unchanged, since `tables.list` reports no change time. Refresh on a
   project or dataset in Object Explorer re-reads that project or dataset whole, on a node below a dataset, that dataset, and
   on the connection's node, everything (a rebuild).
-  DDL run from a query tab (CREATE, ALTER, DROP or UNDROP) marks the dataset it changed, and a script the tab's default
-  dataset (DDL in a script that names another dataset, or with no default dataset, waits for a Refresh); they are re-read
-  whole once the query ends, or by a build already running when it reaches them; a query that failed re-reads whatever DDL
-  before the failure marked. A refresh asked while a build runs waits for it; after a rebuild fails, only another rebuild
-  runs.
+  DDL run from a query tab (CREATE, ALTER, DROP, UNDROP, and LOAD DATA, which can create a table or change its schema; not row
+  access policies, search or vector indexes, reservations or project options, which change nothing the index lists)
+  marks the datasets it changed stale, read from the job: a statement's target (its table, routine or dataset), and for a
+  script each DDL statement's entry in the child listing the run reads anyway, so marking adds no call; a statement whose entry
+  names no target (a script's LOAD DATA, whose destination the listing leaves out) is read with jobs.get in the background, up
+  to 32 a script. DDL whose target cannot be read, and a script whose statements could not be listed, mark the default
+  dataset; when there is none, or the listing was cut short, the
+  whole billing project is marked, and its next stale read lists its datasets again and re-reads each. Temp tables and
+  functions live in the session's or script's anonymous `_` dataset, which no index lists, so they mark nothing. A run that
+  does not finish in its request (Stop, a lost connection, a tab closed or a run left attached) is followed in the background
+  with jobs.get, every 5 s at first and backing off to once a minute, at most 64 jobs at a time, until BigQuery reports it done,
+  then marked the same way (it gives up after 10 failed reads in a row); text with no word of such a statement (for a re-attached run, the job's own text) is not
+  followed. Every mark is free REST metadata, never a query. Marks carry a number: a query's result (`indexStale`), a search's
+  index status and a build's status (`staleMark`) name the newest, and the renderer asks one stale-only build for each new
+  number, so a mark set after its tab closed is read at the next search, run or build; a dataset whose read failed keeps its
+  mark for the next rebuild without asking again. A stale-only build that failed, or was cancelled other than by Stop, is asked
+  again at the next hint; one you Stop waits for a newer mark. Marked datasets are re-read whole, or by a build already running
+  when it reaches them. A dataset DDL names in an extra project is marked like any other, and one in a project the index does
+  not read is not marked; only the whole-project mark (targets unknown) is the billing project's alone. A refresh
+  asked while a build runs waits for it; after a rebuild fails, only another rebuild runs.
 - **Failures.** A project whose datasets cannot be listed, or a dataset whose objects cannot, is skipped with BigQuery's
   reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …); a dataset whose objects' details could
   not all be read keeps their names and is counted as "details missing". Each metadata call has 30 s. A dataset dropped

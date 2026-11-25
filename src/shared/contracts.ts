@@ -336,6 +336,9 @@ export interface QueryResult {
   clientStatistics?: import('./client-statistics').ClientStatisticsSample
   /** A BigQuery query's job (docs/bigquery.md, Execution); absent for SQL Server. */
   job?: BigQueryJobSummary
+  /** BigQuery: the newest stale mark the connection's Search Objects index has not spent; Object Search asks one stale-only build
+   *  per new mark (docs/object-search.md, BigQuery). */
+  indexStale?: number
 }
 /** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
  *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */

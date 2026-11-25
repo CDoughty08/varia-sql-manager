@@ -566,6 +566,11 @@ export const statusChipKinds = {
   agent: ['explorer.agentService', 'explorer.agent']
 } as const satisfies Partial<Record<NodeKind, readonly string[]>>
 export type StatusChipKind = keyof typeof statusChipKinds
+/** A BigQuery connection's chips (docs/bigquery.md, Object Explorer): its node's running jobs, from the `bigquery.explorer` live
+ *  source. Its datasets have no runtime state, so they have no chips. */
+export const bigQueryStatusChipKinds = {
+  server: ['explorer.bigquery']
+} as const satisfies Partial<Record<NodeKind, readonly string[]>>
 
 export const explorerLimits = {
   pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,

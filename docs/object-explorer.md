@@ -423,11 +423,16 @@ taken or the backend refuses one at its 8 a server ([docs/ipc.md](ipc.md#live-su
 without chips until a slot frees. The chips are the only part of a row's end that gives way: the environment tag, item
 count and connection dot keep their size, and the label gives up the row's empty space first.
 
+A connected BigQuery connection has its own background view, of the `bigquery.explorer` source, under the same rules: its
+node's chip counts the principal's own pending and running jobs in the billing project, from jobs.list (a free API call,
+never a query). Its datasets have no runtime state, so they show no chips ([docs/bigquery.md](bigquery.md#object-explorer)).
+
 | Kind | Probes |
 | --- | --- |
 | `server` | `explorer.agent`, `explorer.availability` |
 | `database` | `explorer.databases`, `explorer.progress` |
 | `agent` | `explorer.agentService`, `explorer.agent` |
+| `server` (BigQuery) | `explorer.bigquery` |
 
 | Node | Chip | Tone | When |
 | --- | --- | --- | --- |
@@ -451,6 +456,7 @@ count and connection dot keep their size, and the label gives up the row's empty
 | agent | n jobs running | running | as the server's chip; the node's sublabel says "Agent XPs disabled" while that option is 0, and an unknown service state shows no chip |
 | agentJob | Running · step n/m | running | the job is executing, waiting for a worker thread or performing completion actions (Job Activity Monitor's agent.jobs read, while its Jobs folder is open); the step count where msdb gives it |
 | agentJob | Between retries / Suspended | warning | that is the job's execution status |
+| BigQuery server | n jobs running | running | the connection principal's own pending and running jobs in the billing project (jobs.list, a free API call; other principals' jobs are not counted, and "n+" once the count reaches its cap); none while none runs |
 | agentJob | Failed | critical | the job is not running and its last run failed. While SQL Server Agent cannot run jobs (stopped, Agent XPs off, or neither readable) only this chip shows. A job the read finds disabled, or enabled, is dimmed with the disabled badge, or not, unless the row was listed after that read (a Disable or Enable lists it again at once), until the next read |
 
 ## Peek

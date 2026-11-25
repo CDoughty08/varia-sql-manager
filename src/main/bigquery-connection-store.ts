@@ -36,11 +36,25 @@ function setThreshold(library: BigQueryLibraryFile, key: string, costThreshold: 
 /** The threshold entries with these settings share, if any. */
 const sharedThreshold = (library: BigQueryLibraryFile, key: string) => library.profiles.find(item => item.options.costThreshold && keyOf(item.options) === key)?.options.costThreshold
 
-/** History keeps the 30 most recent connections; an entry that is not a favourite, saved or recent is dropped. */
+/** History keeps the 30 most recent connections; an entry that is not a favourite, saved or recent is dropped. A dropped
+ *  entry's key file stays known by its reference (`keptKeyFiles`, newest last), so a target restored from it still finds
+ *  the file; a reference an entry holds again is the entry's. */
 function prune(library: BigQueryLibraryFile) {
   const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
   for (const item of recent.slice(bigQueryLibraryLimits.recent)) delete item.lastConnected
+  const dropped = library.profiles.filter(item => !(item.favorite || item.saved || item.lastConnected))
   library.profiles = library.profiles.filter(item => item.favorite || item.saved || item.lastConnected)
+  const held = new Set(library.profiles.flatMap(item => item.options.keyFile ? [item.options.keyFile] : []))
+  const kept = (library.keptKeyFiles ?? []).filter(item => !held.has(item.reference))
+  for (const item of dropped) {
+    const reference = item.options.keyFile
+    if (!reference || !item.keyPath || held.has(reference)) continue
+    const at = kept.findIndex(other => other.reference === reference)
+    if (at >= 0) kept.splice(at, 1)
+    kept.push({ reference, keyPath: item.keyPath })
+  }
+  if (kept.length) library.keptKeyFiles = kept.slice(-bigQueryLibraryLimits.keptKeyFiles)
+  else delete library.keptKeyFiles
   if (library.profiles.length > bigQueryLibraryLimits.profiles) throw new Error('The connection library supports up to 200 saved BigQuery connections.')
 }
 
@@ -67,7 +81,10 @@ export class BigQueryConnectionStore {
     }
     // A path this platform cannot use (a Windows path read on Linux or macOS) makes the file invalid too, rather than
     // failing every later read.
-    try { for (const profile of library.profiles) if (profile.options.keyFile && profile.keyPath) this.keyFiles.remember(profile.options.keyFile, profile.keyPath) }
+    try {
+      for (const kept of library.keptKeyFiles ?? []) this.keyFiles.remember(kept.reference, kept.keyPath)
+      for (const profile of library.profiles) if (profile.options.keyFile && profile.keyPath) this.keyFiles.remember(profile.options.keyFile, profile.keyPath)
+    }
     catch {
       await quarantine(this.path)
       return { library: empty(), warning: 'The saved BigQuery connections were invalid. Their original file was preserved.' }
@@ -212,7 +229,10 @@ export class BigQueryConnectionStore {
   async remove(id: string): Promise<{ library: BigQueryLibraryFile; removed: boolean }> {
     const changed = await this.change(library => {
       const before = library.profiles.length
+      const gone = library.profiles.find(item => item.id === id)
       library.profiles = library.profiles.filter(item => item.id !== id)
+      // Removing an entry forgets its key file's path, a pruned copy of it included.
+      if (gone?.keyPath && library.keptKeyFiles) library.keptKeyFiles = library.keptKeyFiles.filter(item => item.keyPath !== gone.keyPath)
       return library.profiles.length !== before
     }, removed => !removed)
     return { library: changed.library, removed: changed.value }
