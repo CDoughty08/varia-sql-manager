@@ -583,31 +583,41 @@ internal static partial class BigQuerySessionChecks
             $"listings between polls start at 20 children a page, the final one at 200: {string.Join(",", childListings.Select(request => HttpUtility.ParseQueryString(request.Uri.Query)["maxResults"]))}");
 
         // A page of full jobs larger than the byte limit is asked again with fewer jobs; one child alone too large cuts the listing short.
-        var listed0 = harness.Fake.Seen.Count;
-        var pageBytes = harness.BigQuery.ChildPageBytes;
-        harness.BigQuery.ChildPageBytes = 1_000;
-        var shrunk = await harness.Execute(Tab(), "SCRIPT ok");
-        var sizes = harness.Fake.Seen.Skip(listed0).Where(request => request.Url.EndsWith("/jobs", StringComparison.Ordinal) && HttpUtility.ParseQueryString(request.Uri.Query)["parentJobId"] is not null)
-            .Select(request => HttpUtility.ParseQueryString(request.Uri.Query)["maxResults"]).Distinct().ToList();
-        check(shrunk is { Code: "ok", Result.Status: "completed" } && Says(shrunk.Result, "(2 rows affected)") && sizes.Contains("200") && sizes.Contains("50"),
-            $"a children page over the byte limit is asked again with fewer jobs: {string.Join(",", sizes)}");
-        harness.BigQuery.ChildPageBytes = 100;
-        var tooLarge = Tab();
-        var cut = await harness.Execute(tooLarge, "SCRIPT ok");
-        check(cut is { Code: "ok", Result.Status: "completed" } && (await harness.State(tooLarge)).State is { Checked: false },
-            $"a child larger than the byte limit leaves the listing incomplete, so the transaction is unknown: {cut.Code} {(await harness.State(tooLarge)).State}");
-        harness.BigQuery.ChildPageBytes = pageBytes;
+        var (pageBytes, firstPage, pages) = (harness.BigQuery.ChildPageBytes, harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages);
+        try
+        {
+            var listed0 = harness.Fake.Seen.Count;
+            harness.BigQuery.ChildPageBytes = 1_000;
+            var shrunkTab = Tab();
+            var shrunk = await harness.Execute(shrunkTab, "SCRIPT ok");
+            var sizes = harness.Fake.Seen.Skip(listed0).Where(request => request.Url.EndsWith("/jobs", StringComparison.Ordinal) && HttpUtility.ParseQueryString(request.Uri.Query)["parentJobId"] is not null)
+                .Select(request => HttpUtility.ParseQueryString(request.Uri.Query)["maxResults"]).Distinct().ToList();
+            check(shrunk is { Code: "ok", Result.Status: "completed" } && Says(shrunk.Result, "(2 rows affected)") && !Says(shrunk.Result, SqlService.IncompleteScript)
+                && sizes.Contains("200") && sizes.Contains("50") && (await harness.State(shrunkTab)).State is { TransactionCount: 0, Checked: true },
+                $"a children page over the byte limit is asked again with fewer jobs, and the listing still ends complete: {string.Join(",", sizes)}");
+            harness.BigQuery.ChildPageBytes = 100;
+            var tooLarge = Tab();
+            var cut = await harness.Execute(tooLarge, "SCRIPT ok");
+            check(cut is { Code: "ok", Result.Status: "completed" } && Says(cut.Result, SqlService.IncompleteScript) && (await harness.State(tooLarge)).State is { Checked: false },
+                $"a child larger than the byte limit leaves the listing incomplete: the result says so and the transaction is unknown: {cut.Code} {Texts(cut.Result?.Messages ?? [])}");
+            harness.BigQuery.ChildPageBytes = pageBytes;
 
-        // A listing between polls that is cut short holds only the newest children: none is read until a listing reaches the
-        // ones before it, so statements still come in order (here two finish per poll, and a poll lists one page of one).
-        bq.ReleaseStep = 2;
-        (harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages) = (1, 1);
-        var inOrder = await harness.Execute(Tab(), "SCRIPT ok");
-        (harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages) = (20, 500);
-        bq.ReleaseStep = 1;
-        static string Ids(string text) => System.Text.RegularExpressions.Regex.Replace(text, "varia_[0-9a-f]{32}", "job");
-        check(inOrder is { Code: "ok", Result.Status: "completed" } && Ids(Texts(inOrder.Result.Messages)) == Ids(texts) && inOrder.Result.ResultSets.Count == 1,
-            $"an incremental listing cut short reads nothing, so the statements keep their order: {Texts(inOrder.Result?.Messages ?? [])}");
+            // A listing between polls that is cut short holds only the newest children: none is read, and the early reads stop,
+            // so the final listing reads every statement in order (here two finish per poll, and a poll lists one page of one).
+            bq.ReleaseStep = 2;
+            (harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages) = (1, 1);
+            var inOrder = await harness.Execute(Tab(), "SCRIPT ok");
+            static string Ids(string text) => System.Text.RegularExpressions.Regex.Replace(text, "varia_[0-9a-f]{32}", "job");
+            check(inOrder is { Code: "ok", Result.Status: "completed" } && Ids(Texts(inOrder.Result.Messages)) == Ids(texts) && inOrder.Result.ResultSets.Count == 1,
+                $"an incremental listing cut short reads nothing, so the statements keep their order: {Texts(inOrder.Result?.Messages ?? [])}");
+            var script = bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>();
+            check(bq.Lists.Count(item => item == script) == 2, $"a poll's listing cut short stops the early listings; the final listing reads the rest: {bq.Lists.Count(item => item == script)}");
+        }
+        finally
+        {
+            (harness.BigQuery.ChildPageBytes, harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages) = (pageBytes, firstPage, pages);
+            bq.ReleaseStep = 1;
+        }
 
         var failed = await harness.Execute(tab, "SCRIPT fails", args => { args["startLine"] = 10; args["startColumn"] = 3; });
         var error = failed.Result?.Messages.FirstOrDefault(message => message.Kind == "error" && message.Text.Contains("Syntax error", StringComparison.Ordinal));

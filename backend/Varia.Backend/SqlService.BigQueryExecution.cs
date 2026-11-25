@@ -25,6 +25,8 @@ internal sealed partial class SqlService
 {
     /// <summary>The tabs running a BigQuery query, so a tab runs one at a time (SESSION_BUSY), as a SQL Server session does.</summary>
     private readonly ConcurrentDictionary<string, byte> bigQueryTabs = new();
+    /// <summary>The note on a script whose final children listing was cut short.</summary>
+    internal const string IncompleteScript = "Varia could not list all of the script's statements, so the results of earlier statements may be missing.";
 
     /// <summary>The rows the first getQueryResults answer asks for (the page the grid shows first); later pages are sized by
     /// the result's width (<see cref="BigQueryPageRows"/>).</summary>
@@ -448,7 +450,9 @@ internal sealed partial class SqlService
                         page.Dispose();
                         page = null;
                         if (!listing) continue;
-                        try { await ChildrenAsync(full: false); }
+                        // A poll's listing cut short would be read again in full at every poll: the early reads stop, and the
+                        // final listing reads the rest.
+                        try { if (!(await ChildrenAsync(full: false)).Complete) listing = false; }
                         catch (Exception error) when (!token.IsCancellationRequested && error is not ChildReadFailure) { listing = false; }
                     }
                 }
@@ -492,6 +496,8 @@ internal sealed partial class SqlService
                             : succeededChildren.ToString(CultureInfo.InvariantCulture) + " statements before the failing one ran, and BigQuery billed them.");
                     throw jobFailed;
                 }
+                // A listing cut short (a statement too large to list, or more than Varia reads) holds only the later statements.
+                if (script && children is not null && !listedAll) messages.Add(IncompleteScript);
                 // BigQuery reports a script's statements as children; with none listed (the emulator) the parent's rows stand.
                 if (script && children is { Count: > 0 })
                 {

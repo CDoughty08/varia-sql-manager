@@ -97,7 +97,7 @@ internal sealed partial class BigQueryService
     internal int MaxChildPages { get; set; } = 500;
     /// <summary>A children page's byte limit: full jobs carry each statement's SQL (up to 1 MB), so a larger page is asked again
     /// with a quarter of the jobs (the retries count apart from the pages), and each page that fits doubles the next, up to
-    /// <see cref="ChildPageSize"/>. 200 a page over 500 pages reads up to 100,000 children.</summary>
+    /// <see cref="ChildPageSize"/> and below any size that was too large. 200 a page over 500 pages reads up to 100,000 children.</summary>
     internal int ChildPageBytes { get; set; } = 16 << 20;
     /// <summary>How long one getQueryResults call waits on a running parent before its children are listed again.</summary>
     internal int ChildPollMs { get; set; } = 2000;
@@ -190,6 +190,8 @@ internal sealed partial class BigQueryService
         string? pageToken = null;
         // A poll between reads usually finds a few new children, so it starts small; a page that fits doubles the next.
         var size = known is null ? ChildPageSize : Math.Min(ChildPageSize, IncrementalChildPageSize);
+        // A size that was too large is never asked again in this listing, so the page never grows back into it.
+        var ceiling = ChildPageSize;
         var shrinks = 0;
         for (var page = 0; ; page++)
         {
@@ -206,11 +208,12 @@ internal sealed partial class BigQueryService
             {
                 // Long statements make a page of full jobs large: fewer a page, and a single child too large to read cuts the listing short.
                 if (size == 1 || ++shrinks > MaxChildPages) return (Order(children), false);
+                ceiling = size - 1;
                 size = Math.Max(1, size / 4);
                 page--;
                 continue;
             }
-            size = Math.Min(ChildPageSize, size * 2);
+            size = Math.Min(ceiling, size * 2);
             var stop = false;
             using (answer)
             {
