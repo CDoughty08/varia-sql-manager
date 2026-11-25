@@ -171,12 +171,19 @@ export function explorerContribution({ commands, documents, connections, explore
           const updateAnswer = (value: string, busy = false) => {
             currentValue = value
             const trimmed = value.trim()
-            if (trimmed && bigQueryProjectSchema.safeParse(trimmed).success
-              && trimmed !== billing && !bigQueryStarred.isStarred(principal, trimmed) && !loadedIds.has(trimmed)) {
-              quickInput.setAnswer({
-                items: [{ id: trimmed, label: trimmed, description: 'Star project by ID', icon: 'star-empty', group: 'By project ID' }],
-                ...busy ? { busy: true } : {}
-              })
+            if (trimmed && bigQueryProjectSchema.safeParse(trimmed).success && !loadedIds.has(trimmed)) {
+              const item: QuickPickItem = trimmed === billing
+                ? {
+                    id: trimmed, label: trimmed, icon: 'project', disabled: true, group: 'By project ID',
+                    description: 'Billing project', disabledHint: 'The billing project is always shown in Object Explorer.'
+                  }
+                : bigQueryStarred.isStarred(principal, trimmed)
+                  ? {
+                      id: trimmed, label: trimmed, icon: 'star-full', disabled: true, group: 'By project ID',
+                      description: 'Already starred', disabledHint: 'This project is already starred.'
+                    }
+                  : { id: trimmed, label: trimmed, description: 'Star project by ID', icon: 'star-empty', group: 'By project ID' }
+              quickInput.setAnswer({ items: [item], ...busy ? { busy: true } : {} })
               return
             }
             quickInput.setAnswer({ items: [], ...busy ? { busy: true } : {}, ...loadNote && !trimmed ? { message: { text: loadNote, severity: 'info' } } : {} })

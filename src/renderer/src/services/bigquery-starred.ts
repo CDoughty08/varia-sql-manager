@@ -198,6 +198,8 @@ export function referencedBigQueryProjects(sql: string): string[] {
     if (parts.length < 3) return
     const [project, dataset, third] = parts
     if (!project || !dataset || !third) return
+    // BigQuery reserves INFORMATION_SCHEMA; 2-part billing-project queries (`region-us.INFORMATION_SCHEMA.JOBS`, `analytics.INFORMATION_SCHEMA.TABLES`) have no project prefix.
+    if (dataset.toUpperCase() === 'INFORMATION_SCHEMA') return
     const isInfoSchema = third.toUpperCase() === 'INFORMATION_SCHEMA' && (bigQueryDatasetSchema.safeParse(dataset).success || /^region-[a-z0-9-]+$/i.test(dataset))
     if (!isInfoSchema && !bigQueryDatasetSchema.safeParse(dataset).success) return
     if (!bigQueryProjectSchema.safeParse(project).success) return
@@ -231,6 +233,11 @@ export function referencedBigQueryProjects(sql: string): string[] {
       createHeader = 'none'
       fromStack.length = 0
       parenExtract.length = 0
+      continue
+    }
+    if (isPunct(token, '|') && isPunct(toks[index + 1], '>')) {
+      inFrom = false
+      index++
       continue
     }
 

@@ -410,7 +410,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
       aria-label={`Star ${node.label}`}
       aria-pressed={starRole === 'starred'}
       title={starRole === 'starred' ? 'Unstar project' : 'Star project to keep in Object Explorer'}
-      onMouseDown={stop} onDoubleClick={stop}
+      onMouseDown={event => { event.preventDefault(); event.stopPropagation() }} onDoubleClick={stop}
       onClick={event => { event.stopPropagation(); actions.toggleProjectStar?.(rowId) }}>
       <Icon name={starRole === 'starred' ? 'star-full' : 'star-empty'} />
     </button>

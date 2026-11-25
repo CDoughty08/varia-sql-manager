@@ -430,6 +430,14 @@ describe('BigQuery Starred & Session Projects in Object Explorer', () => {
     expect(bigQueryStarred.isStarred(ada, 'bigquery-public-data')).toBe(true)
     expect(refreshBigQuery).toHaveBeenCalledWith(connectionId, { scope: { project: 'bigquery-public-data' } })
 
+    // Re-opening Star a Project… and typing an already-starred unlisted project shows a disabled "Already starred" item instead of "No matching projects".
+    expect(await commands.execute('bigquery.starProjectPrompt', { target: { kind: 'explorer', node: billingNode } }, 'menu')).toBe(true)
+    await Promise.resolve()
+    await Promise.resolve()
+    quickInput.filter('bigquery-public-data')
+    expect(quickInput.getSnapshot().rows.map(row => row.item)).toEqual([expect.objectContaining({ id: 'bigquery-public-data', disabled: true, description: 'Already starred' })])
+    quickInput.hide('cancel')
+
     // Picking a project already listed by projects.list ("varia-gamma") stars immediately without calling explorerChildren again.
     const callsBeforeListed = explorerChildren.mock.calls.length
     expect(await commands.execute('bigquery.starProjectPrompt', { target: { kind: 'explorer', node: serverNode } }, 'menu')).toBe(true)

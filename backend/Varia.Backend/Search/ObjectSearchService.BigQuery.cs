@@ -76,7 +76,7 @@ internal sealed partial class ObjectSearchService
                 .. state.DiscoveredProjects,
                 .. databases.Where(read => read.Dataset is not null).Select(read => read.Database).Order(StringComparer.Ordinal)
             ];
-            return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed);
+            return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed, [.. state.PartialProjects]);
         }
     }
 
@@ -165,7 +165,8 @@ internal sealed partial class ObjectSearchService
             // A full build starts its skip list afresh; a scoped or stale-only one keeps the skips outside what it reads (at high orders so fresh refresh skips take priority).
             var kept = state.Skipped.ToList().Where(skip => !InScope(skip)).ToList();
             state.Skipped = new(MaxSkipped);
-            for (var at = 0; at < kept.Count; at++) state.Skipped.Add(CarriedSkipOffset + at, kept[at]);
+            for (var at = 0; at < kept.Count; at++)
+                state.Skipped.Add(kept[at] is { Project: "", Database: "" } ? SkipList.Server : CarriedSkipOffset + at, kept[at]);
         }
         // Records the dataset's mark as its read begins: a marked dataset is read whole, even when marked after this build began.
         bool Seen((string, string) target)
@@ -203,11 +204,12 @@ internal sealed partial class ObjectSearchService
                 }
                 foreach (var gone in state.StaleProjects.Keys.Where(project => !allowed.Contains(project)).ToList())
                     state.StaleProjects.Remove(gone);
+                state.PartialProjects.RemoveWhere(project => !allowed.Contains(project));
             }
         }
         void Skip(ObjectIndexSkip skip)
         {
-            var order = Interlocked.Increment(ref skipOrder) - 1;
+            var order = skip is { Project: "", Database: "" } ? SkipList.Server : Interlocked.Increment(ref skipOrder) - 1;
             lock (state.Gate) if (Current()) state.Skipped.Add(order, skip);
         }
         ObjectIndexSkip SkipOf(Exception error, string project, string dataset, string permission)
@@ -475,15 +477,19 @@ internal sealed partial class ObjectSearchService
                         if (held is not null) Interlocked.Exchange(ref scopedPassIncomplete, 1);
                     });
                 Report(detailsDone, wanted, "details", true);
-                // Whole-project scoped refresh that succeeded with full details clears any prior names-only mark for that project.
+                // Whole-project scoped refresh that succeeded with full details clears any prior names-only or partial-project mark for that project.
                 if (scopedClean && Volatile.Read(ref scopedPassIncomplete) == 0 && scope is { Dataset: null })
                 {
                     lock (state.Gate)
                     {
-                        if (Current() && state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(scope.Project, StringComparer.Ordinal))
+                        if (Current())
                         {
-                            var remaining = currentNamesOnly.Where(project => project != scope.Project).ToList();
-                            state.NamesOnly = remaining.Count > 0 ? remaining : null;
+                            state.PartialProjects.Remove(scope.Project);
+                            if (state.NamesOnly is { Count: > 0 } currentNamesOnly && currentNamesOnly.Contains(scope.Project, StringComparer.Ordinal))
+                            {
+                                var remaining = currentNamesOnly.Where(project => project != scope.Project).ToList();
+                                state.NamesOnly = remaining.Count > 0 ? remaining : null;
+                            }
                         }
                     }
                 }
@@ -600,7 +606,11 @@ internal sealed partial class ObjectSearchService
                 {
                     if (!Current()) throw new OperationCanceledException(stop);
                     state.StarredProjects = [.. starred];
-                    if (!allProjects) state.DiscoveredProjects = [];
+                    if (!allProjects)
+                    {
+                        state.DiscoveredProjects = [];
+                        state.PartialProjects.Clear();
+                    }
                 }
                 if (!allProjects || (discoverySucceeded && !discoveryCut))
                 {
@@ -677,7 +687,11 @@ internal sealed partial class ObjectSearchService
                             state.Stale.Remove(gone);
                             stale.Remove(gone);
                         }
-                        foreach (var gone in noiseFilteredProjects) state.StaleProjects.Remove(gone);
+                        foreach (var gone in noiseFilteredProjects)
+                        {
+                            state.StaleProjects.Remove(gone);
+                            state.PartialProjects.Remove(gone);
+                        }
                     }
                 }
                 var wave2Total = wave1Targets.Count + wave2StarredTargets.Count + wave2DiscoveredTargets.Count;
@@ -733,6 +747,7 @@ internal sealed partial class ObjectSearchService
                     var budgetStopped = Volatile.Read(ref wave2BudgetExhausted) != 0;
                     var finalDiscovered = new List<string>(discovered.Count);
                     var budgetExcluded = new HashSet<string>(StringComparer.Ordinal);
+                    var partialProjects = new HashSet<string>(StringComparer.Ordinal);
                     for (var index = 0; index < wave2Projects.Count; index++)
                     {
                         var (project, isDiscovered) = wave2Projects[index];
@@ -746,11 +761,18 @@ internal sealed partial class ObjectSearchService
                         }
                         finalDiscovered.Add(project);
                     }
+                    if (budgetStopped)
+                    {
+                        foreach (var target in wave2DiscoveredTargets)
+                            if (!wave2CompletedTargets.ContainsKey(target) && heldProjects.Contains(target.Project))
+                                partialProjects.Add(target.Project);
+                    }
                     lock (state.Gate)
                     {
                         if (Current())
                         {
                             state.DiscoveredProjects = finalDiscovered;
+                            state.PartialProjects = partialProjects;
                             if (budgetExcluded.Count > 0)
                             {
                                 foreach (var gone in state.Stale.Keys.Where(key => budgetExcluded.Contains(key.Project)).ToList())

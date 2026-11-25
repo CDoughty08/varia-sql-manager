@@ -784,6 +784,41 @@ internal static partial class BigQueryIndexChecks
             check(build1Cancelled && build2.Status.State == "ready" && heldAfter == 2 && search.MemoryUsed == 0,
                 $"superseded concurrent build answers CANCELLED ({build1Cancelled}), leaves superseding build intact ({heldAfter} datasets), and leaks 0 bytes on Forget ({search.MemoryUsed})");
         }
+
+        // 10. Connection-level BigQuery skips (maxProjects truncation / discovery failure) survive even after >256 dataset skips in Wave 1.
+        {
+            var manyDatasets = Enumerable.Range(0, 265).Select(index => "ds_" + index).ToList();
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-01", "disc-02"], tablesPerDiscovered: 1, columnsPerTable: 1)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["varia-alpha"] = manyDatasets },
+                FailObjectsForProject = ("varia-alpha", "PERMISSION_DENIED")
+            };
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), MaxProjects: 1), source, CancellationToken.None);
+            check(result.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }),
+                "connection-level maxProjects truncation skip is preserved via SkipList.Server even after >256 Wave 1 dataset skips");
+        }
+
+        // 11. Mid-project Wave 2 memory early-stop reports ProjectState.Partial and Dataset.Skipped in BigQueryLookup.
+        {
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-mid"], tablesPerDiscovered: 40, columnsPerTable: 0)
+            {
+                CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["disc-mid"] = ["ds1", "ds2", "ds3", "ds4", "ds5", "ds6"] },
+                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200, [("disc-mid", "ds4")] = 200, [("disc-mid", "ds5")] = 200, [("disc-mid", "ds6")] = 200 }
+            };
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
+            var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            var lookup = search.LookupBigQuery(id, "varia-alpha");
+            var missing = new[] { "ds2", "ds3", "ds4", "ds5", "ds6" }.FirstOrDefault(ds => !lookup.Datasets("disc-mid").Contains(ds));
+            var missingInfo = missing is not null ? lookup.Dataset("disc-mid", missing) : null;
+            check(lookup.Datasets("disc-mid").Contains("ds1")
+                && lookup.ProjectState("disc-mid") == LookupState.Partial
+                && missingInfo is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" }
+                && result.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }),
+                $"mid-project Wave 2 memory early-stop reports Partial project state ({lookup.ProjectState("disc-mid")}) and Skipped for unheld dataset {missing} ({missingInfo?.State})");
+        }
     }
 
     sealed class UnusedHost : IObjectSearchHost
@@ -801,8 +836,10 @@ internal static partial class BigQueryIndexChecks
         public int ColumnsPerTable { get; set; } = columnsPerTable;
         public string? FailTableForProject { get; set; }
         public (string Project, string Code)? FailDatasetsForProject { get; set; }
+        public (string Project, string Code)? FailObjectsForProject { get; set; }
         public string? ThrowOnCancelObjectsProject { get; set; }
         public Dictionary<string, IReadOnlyList<string>>? CustomDatasets { get; set; }
+        public Dictionary<(string Project, string Dataset), int>? TablesPerDataset { get; set; }
         public Func<string, CancellationToken, Task>? OnObjectsAsync { get; set; }
 
         public string BillingProject(string connectionId) => "varia-alpha";
@@ -819,6 +856,8 @@ internal static partial class BigQueryIndexChecks
         public async Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)
         {
             if (OnObjectsAsync is not null) await OnObjectsAsync(project, token);
+            if (FailObjectsForProject is { } failObjects && failObjects.Project == project)
+                throw new RequestException(failObjects.Code, "Simulated objects failure.");
             if (project == ThrowOnCancelObjectsProject)
             {
                 var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -831,7 +870,9 @@ internal static partial class BigQueryIndexChecks
                 Interlocked.Increment(ref discoveredObjectCalls);
                 await Task.Yield();
             }
-            var count = project == "varia-alpha" ? 1 : tablesPerDiscovered;
+            var count = TablesPerDataset is not null && TablesPerDataset.TryGetValue((project, dataset), out var customCount)
+                ? customCount
+                : project == "varia-alpha" ? 1 : tablesPerDiscovered;
             var tables = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
             {
                 TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },

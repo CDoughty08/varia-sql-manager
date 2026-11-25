@@ -148,9 +148,11 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const projects = status.skipped.filter(skip => !skip.database && !!skip.project).length
   const globalSkips = status.skipped.filter(skip => !skip.database && !skip.project)
   const namesOnly = status.namesOnly?.length ?? 0
-  const globalNote = globalSkips.length
-    ? (globalSkips.some(skip => skip.code === 'TOO_LARGE') ? ' · project list truncated' : ' · project discovery skipped')
-    : ''
+  const isMemorySkip = (skip: { readonly code: string; readonly message: string }) => skip.code === 'TOO_LARGE' && /memory limit/i.test(skip.message)
+  const memoryStopped = globalSkips.some(isMemorySkip)
+  const listTruncated = globalSkips.some(skip => skip.code === 'TOO_LARGE' && !isMemorySkip(skip))
+  const discoveryFailed = globalSkips.some(skip => skip.code !== 'TOO_LARGE')
+  const globalNote = (listTruncated ? ' · project list truncated' : '') + (memoryStopped ? ' · index memory limit reached' : '') + (discoveryFailed ? ' · project discovery skipped' : '')
   const skipped = globalNote + (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
     + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '')
@@ -192,11 +194,17 @@ export function indexGap(entry: IndexEntry): string | undefined {
   const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent && !skip.details).length
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
   const globalSkips = bigQuery ? status.skipped.filter(skip => !skip.database && !skip.project) : []
+  const isMemorySkip = (skip: { readonly code: string; readonly message: string }) => skip.code === 'TOO_LARGE' && /memory limit/i.test(skip.message)
+  const memoryStopped = globalSkips.some(isMemorySkip)
+  const listTruncated = globalSkips.some(skip => skip.code === 'TOO_LARGE' && !isMemorySkip(skip))
+  const discoveryFailed = globalSkips.some(skip => skip.code !== 'TOO_LARGE')
   const projectSkips = bigQuery ? status.skipped.some(skip => !skip.database && !!skip.project) : status.skipped.some(skip => !skip.database)
   const namesOnly = status.namesOnly?.length ?? 0
   const gaps = [
     databases ? `${count(databases, bigQuery ? 'dataset' : 'database')} skipped` : '',
-    globalSkips.length ? (globalSkips.some(skip => skip.code === 'TOO_LARGE') ? 'project list truncated' : 'project discovery skipped') : '',
+    listTruncated ? 'project list truncated' : '',
+    memoryStopped ? 'index memory limit reached' : '',
+    discoveryFailed ? 'project discovery skipped' : '',
     projectSkips ? bigQuery ? 'projects skipped' : 'server objects skipped' : '',
     status.skipped.some(skip => skip.details) ? 'details missing' : '',
     status.skipped.some(skip => skip.agent) ? 'SQL Server Agent objects skipped' : '',
