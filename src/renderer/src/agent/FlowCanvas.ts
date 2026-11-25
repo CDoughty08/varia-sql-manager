@@ -109,6 +109,8 @@ export class FlowCanvas {
   private connecting?: { readonly from: number; readonly which: FlowWhich; readonly id: number; x: number; y: number; over: number }
   private owner: Window
   private ownerDocument: Document
+  private pixelRatioQuery?: MediaQueryList
+  private backingLimit = Infinity
   private readonly size: Disposable
   private readonly visibility: Disposable
   private readonly adoption: Disposable
@@ -117,6 +119,7 @@ export class FlowCanvas {
     this.owner = windowOf(options.root)
     this.ownerDocument = options.root.ownerDocument
     this.ownerDocument.addEventListener('visibilitychange', this.visibilityChanged)
+    this.watchPixelRatio()
     this.adoption = windows.onDidAdopt(() => {
       const document = options.root.ownerDocument
       if (this.ownerDocument === document) return
@@ -125,6 +128,7 @@ export class FlowCanvas {
       this.owner = windowOf(options.root)
       this.ownerDocument = document
       document.addEventListener('visibilitychange', this.visibilityChanged)
+      this.watchPixelRatio()
       this.resize()
     })
     this.size = observeResize(options.root, () => this.resize())
@@ -153,6 +157,11 @@ export class FlowCanvas {
       this.options.root.append(this.app.canvas)
       this.world.addChild(this.back, this.edges, this.cards, this.labels, this.front)
       this.app.stage.addChild(this.grid, this.world)
+      const gl = this.gl
+      if (gl) {
+        const limits = [gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), gl.getParameter(gl.MAX_TEXTURE_SIZE), ...Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS) as ArrayLike<number> | null ?? [])]
+        this.backingLimit = Math.min(...limits.filter((value): value is number => typeof value === 'number' && value > 0))
+      }
       this.resize()
     } catch {
       try { this.app.destroy(true, { children: true }) } catch { /* Initialization may have failed before a renderer exists. */ }
@@ -162,11 +171,33 @@ export class FlowCanvas {
   }
   private contextLost = (event: Event) => { event.preventDefault(); this.cancelFrame(); this.options.failed() }
   private visibilityChanged = () => { if (this.ownerDocument.hidden) this.cancelFrame(); else this.resize() }
+  // As the plan canvas: a new display scale (another monitor, a changed OS scale) draws again at it, so text stays sharp.
+  private watchPixelRatio(): void {
+    this.pixelRatioQuery?.removeEventListener('change', this.pixelRatioChanged)
+    this.pixelRatioQuery = this.owner.matchMedia(`(resolution: ${this.owner.devicePixelRatio || 1}dppx)`)
+    this.pixelRatioQuery.addEventListener('change', this.pixelRatioChanged, { once: true })
+  }
+  private pixelRatioChanged = () => {
+    if (this.disposed) return
+    this.watchPixelRatio()
+    this.resize()
+  }
+  private get gl(): WebGLRenderingContext | undefined { return (this.app.renderer as { gl?: WebGLRenderingContext }).gl }
+  // A collapsed root at a low zoom factor rounds to a 0-pixel canvas, which still has a 1-pixel drawing buffer.
+  private backed(gl: WebGLRenderingContext): boolean { return gl.drawingBufferWidth === Math.max(1, this.app.canvas.width) && gl.drawingBufferHeight === Math.max(1, this.app.canvas.height) }
   private resize(): void {
     if (this.disposed || !this.ready) return
     this.width = Math.max(1, this.options.root.clientWidth)
     this.height = Math.max(1, this.options.root.clientHeight)
-    this.app.renderer.resize(this.width, this.height, this.owner.devicePixelRatio || 1)
+    // Full DPI when the backing store fits, else the most the device allocates; labels rasterize at the effective resolution.
+    this.app.renderer.resize(this.width, this.height, Math.min(this.owner.devicePixelRatio || 1, this.backingLimit / this.width, this.backingLimit / this.height))
+    const gl = this.gl
+    if (gl && !gl.isContextLost() && !this.backed(gl)) {
+      // Browsers may allocate less than the advertised limits and clamp silently. Follow what was allocated.
+      const resolution = Math.min(gl.drawingBufferWidth / this.width, gl.drawingBufferHeight / this.height)
+      if (resolution > 0) this.app.renderer.resize(this.width, this.height, resolution)
+      if (!(resolution > 0) || !this.backed(gl)) { this.cancelFrame(); this.options.failed(); return }
+    }
     // The first size places the graph at 100 %, centred, from the top (Fit when it is wider than the view).
     if (!this.placed && this.width > 1) { this.placed = true; this.moveCamera(this.home()) }
     this.invalidate()
@@ -540,8 +571,7 @@ export class FlowCanvas {
     }
     if (this.pool.end()) TexturePool.clear(true)
     this.app.render()
-    const cache = (this.app.renderer as unknown as { canvasText?: { _activeTextures?: Record<string, unknown> | null } }).canvasText?._activeTextures
-    if (cache) for (const key in cache) if (cache[key] === null) delete cache[key]
+    this.pruneTextCache()
     void flow
   }
   private readonly toned = new Map<string, TextStyle>()
@@ -550,6 +580,12 @@ export class FlowCanvas {
     this.polyline(graphics, [[x, y], [x + width, y], [x + width, y + height], [x, y + height], [x, y]], true)
     graphics.stroke({ color, width: 1 })
   }
+  /** Pixi 8 keeps a null entry for every released text/style/resolution key, so each zoom step would otherwise leave one behind
+   *  until disposal (the plan canvas does the same). Its lookups treat a missing key like a null one. */
+  private pruneTextCache(): void {
+    const cache = (this.app.renderer as unknown as { canvasText?: { _activeTextures?: Record<string, unknown> | null } }).canvasText?._activeTextures
+    if (cache) for (const key in cache) if (cache[key] === null) delete cache[key]
+  }
   dispose(): void {
     this.disposed = true; this.cancelFrame(); this.adoption.dispose(); this.size.dispose(); this.visibility.dispose()
     const root = this.options.root
@@ -557,6 +593,7 @@ export class FlowCanvas {
     root.removeEventListener('pointerup', this.up); root.removeEventListener('pointercancel', this.cancel); root.removeEventListener('lostpointercapture', this.cancel)
     root.removeEventListener('pointerleave', this.leave); root.removeEventListener('dblclick', this.doubleClick)
     this.ownerDocument.removeEventListener('visibilitychange', this.visibilityChanged)
+    this.pixelRatioQuery?.removeEventListener('change', this.pixelRatioChanged)
     this.pool.dispose(); this.fitted.clear()
     if (this.ready) { this.app.canvas.removeEventListener('webglcontextlost', this.contextLost); this.app.destroy(true, { children: true, texture: true, textureSource: true }) }
     TexturePool.clear(true)
