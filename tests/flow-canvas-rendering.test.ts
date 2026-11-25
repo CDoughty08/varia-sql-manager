@@ -56,7 +56,7 @@ vi.mock('pixi.js', async original => {
 })
 vi.mock('../src/renderer/src/core/windows', () => ({ observeResize: () => ({ dispose() {} }), observeIntersection: () => ({ dispose() {} }),
   windowOf: (node: Node) => node.ownerDocument?.defaultView ?? window, windows: { onDidAdopt: vi.fn(() => ({ dispose() {} })) } }))
-import { FlowCanvas, type FlowCanvasModel } from '../src/renderer/src/agent/FlowCanvas'
+import { FlowCanvas, type FlowCanvasModel, type FlowCanvasOptions } from '../src/renderer/src/agent/FlowCanvas'
 
 const colors = { background: '#000000', card: '#111111', text: '#ffffff', muted: '#aaaaaa', border: '#777777', accent: '#8888ff', selection: '#222244', success: '#00ff00', error: '#ff0000', warning: '#ffff00', dots: '#333333' }
 function model(names: readonly string[] = ['Check', 'Rebuild', 'Update']): FlowCanvasModel {
@@ -65,8 +65,8 @@ function model(names: readonly string[] = ['Check', 'Rebuild', 'Update']): FlowC
   return { flow, layout: flowLayout(flow, flowMetrics), nodes: draft.steps.map(step => ({ name: step.name, type: 'T-SQL', icon: 'step-tsql', sub: 'master', never: false, changed: false })),
     accent: new Set(), hot: new Set(), fadeRest: false, chips: [], sequence: new Map() }
 }
-function create(root: HTMLElement, failed = () => { throw new Error('Canvas initialization failed') }, shown = model(), selected = 0) {
-  return new FlowCanvas({ root, model: shown, colors, selected, focused: false, editable: true, select() {}, open() {}, connect() {}, dropped() {}, cameraChanged() {}, failed })
+function create(root: HTMLElement, failed = () => { throw new Error('Canvas initialization failed') }, shown = model(), selected = 0, extra: Partial<FlowCanvasOptions> = {}) {
+  return new FlowCanvas({ root, model: shown, colors, selected, focused: false, editable: true, select() {}, open() {}, connect() {}, dropped() {}, cameraChanged() {}, failed, ...extra })
 }
 type Rendering = { draw(): void; resize(): void; pool: { active: Map<string, { resolution: number; styleKey: string }> }
   app: { canvas: HTMLCanvasElement; renderer: { resolution: number; gl: { drawingBufferWidth: number }; canvasText: { _activeTextures: Record<string, unknown> } } } }
@@ -187,5 +187,81 @@ it('ends a connect drag when the steps change, and names the step under a pointe
     placed.connecting = { from: 2, which: 'success', id: 1, x: 0, y: 0, over: -1 }
     canvas.update(model(['Check', 'Rebuild']), 0, false, true)
     expect(placed.connecting).toBeUndefined()
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+type Moving = Placed & { moveCamera(camera: { x: number; y: number; scale: number }): void; chipBoxes(): { x: number; width: number }[] }
+const captured = (root: HTMLElement) => Object.assign(root, { setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false })
+
+it('drops a port dragged off the canvas on nothing, though a step lies under the pointer past the canvas edge', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const connect = vi.fn(), dropped = vi.fn()
+  const root = captured(sized(900, 360)), shown = model(Array.from({ length: 8 }, (_, at) => `Step ${at + 1}`))
+  const canvas = create(root, undefined, shown, 0, { connect, dropped }), placed = canvas as unknown as Placed
+  try {
+    await Promise.resolve()
+    const { x, y, scale } = placed.camera, screen = ([px, py]: readonly [number, number]) => ({ clientX: x + px * scale, clientY: y + py * scale })
+    const middle = (at: number) => { const node = shown.layout.nodes[at]!; return screen([node.x + node.width / 2, node.y + node.height / 2]) }
+    const drag = (to: { clientX: number; clientY: number }) => {
+      root.dispatchEvent(new MouseEvent('pointerdown', { button: 0, ...screen(shown.layout.ports[0]![0]) }))
+      root.dispatchEvent(new MouseEvent('pointermove', to))
+      root.dispatchEvent(new MouseEvent('pointerup', to))
+    }
+    // Step 5 is below the 360 px canvas: released over where it is drawn, the drag connects nothing and opens no picker.
+    expect(middle(4).clientY).toBeGreaterThan(360)
+    drag(middle(4))
+    expect(connect).not.toHaveBeenCalled()
+    expect(dropped).not.toHaveBeenCalled()
+    // On the canvas, the same drag onto step 3 connects.
+    drag(middle(2))
+    expect(connect).toHaveBeenCalledWith(0, 'success', 2)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it('brings a step panned off to the side back into view, as well as one above or below', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const shown = model(), canvas = create(sized(900, 600), undefined, shown), placed = canvas as unknown as Moving
+  try {
+    await Promise.resolve()
+    placed.moveCamera({ x: -1200, y: -400, scale: 1 })
+    canvas.reveal(1)
+    const node = shown.layout.nodes[1]!, left = placed.camera.x + node.x, top = placed.camera.y + node.y
+    expect(left).toBeGreaterThanOrEqual(0)
+    expect(left + node.width).toBeLessThanOrEqual(900)
+    expect(top).toBeGreaterThanOrEqual(0)
+    expect(top + node.height).toBeLessThanOrEqual(600)
+    expect(canvas.anchor(1)!.left).toBeGreaterThanOrEqual(0)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it('opens where the released canvas left off, and brings the selection into view only when asked', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const shown = fifty(), camera = { x: -40, y: -1500, scale: 0.8 }
+  const kept = create(sized(900, 600), undefined, shown, 0, { camera, revealSelected: false }), moved = create(sized(900, 600), undefined, shown, 0, { camera, revealSelected: true })
+  try {
+    await Promise.resolve()
+    expect((kept as unknown as Placed).camera).toEqual(camera)
+    // Step 1 is above that view: a selection made while no canvas existed is brought back.
+    expect((moved as unknown as Placed).camera.y).toBeGreaterThan(camera.y)
+  } finally { kept.dispose(); moved.dispose(); frames.mockRestore() }
+})
+
+it("fits the loop and changed chips beside the lanes as well as the graph, in a narrow pane", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const draft: AgentStepsDraft = { startKey: 's1', steps: Array.from({ length: 10 }, (_, at) => ({ ...newStepDraft([]), key: `s${at + 1}`, from: at + 1, name: `Step ${at + 1}`, onSuccess: 3 as const, onFail: 2 as const })) }
+  const steps = draft.steps.map((step, at) => at === 9 ? { ...step, onSuccess: 4 as const, onSuccessTarget: 's1' } : step)
+  const flow = stepsFlow({ ...draft, steps }), layout = flowLayout(flow, flowMetrics)
+  const shown: FlowCanvasModel = { ...model(steps.map(step => step.name)), flow, layout,
+    chips: [{ edge: '9:success', text: 'Loop · 1, 2, 3, 4, 5, 6, 7, 8, 9, 10' }, { edge: '9:success', text: 'changed', tone: 'accent' }] }
+  const canvas = create(sized(320, 600), undefined, shown), placed = canvas as unknown as Moving
+  try {
+    await Promise.resolve()
+    const boxes = placed.chipBoxes()
+    expect(Math.min(...boxes.map(box => box.x))).toBeLessThan(0)
+    canvas.fit()
+    for (const box of boxes) {
+      expect(placed.camera.x + box.x * placed.camera.scale).toBeGreaterThanOrEqual(0)
+      expect(placed.camera.x + (box.x + box.width) * placed.camera.scale).toBeLessThanOrEqual(320)
+    }
   } finally { canvas.dispose(); frames.mockRestore() }
 })

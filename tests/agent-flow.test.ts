@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { flowActionWords, flowChecks, flowLayout, stepsFlow, type FlowMetrics } from '../src/shared/agent/flow'
-import { agentStepProblems, newStepDraft, type AgentStepDraft, type AgentStepsDraft, type StepAction } from '../src/shared/agent/steps'
+import { flowActionWords, flowChecks, flowLayout, flowNeverRuns, flowReachedFrom, stepsFlow, type FlowMetrics } from '../src/shared/agent/flow'
+import { agentStepProblems, initialStepsDraft, newStepDraft, type AgentStepDraft, type AgentStepsDraft, type StepAction } from '../src/shared/agent/steps'
 
 // The mocks' "Finance nightly load" (docs/mockups/sql-server-agent.html › rxFin): a step that never runs (1), the Start step (2), a loop
 // (3 ⇄ 4), a forward jump that skips a step (5 → 7 on success), a backward jump that is not a loop (7 → 6 on failure).
@@ -142,5 +142,34 @@ describe('the flow layout', () => {
     expect(layout.quits.map(quit => `${quit.edge.from}${quit.edge.which}`)).toEqual(['0fail', '1success', '1fail'])
     // The whole job read: the same steps end and miss.
     expect(stepsFlow(cut).edges.slice(2).map(edge => edge.target.kind)).toEqual(['end', 'missing'])
+  })
+  it('gives the Start arrow its own place on the Start step, apart from a jump back to it', () => {
+    // Step 2 succeeds back to step 1, the Start step: the jump's arrow and Start's end on the same side, at different heights.
+    const layout = flowLayout(stepsFlow(job([['A', 'next', 'qf'], ['B', 1, 'qf']])), metrics)
+    const back = layout.edges.find(item => item.edge.from === 1 && item.edge.which === 'success')!, node = layout.nodes[0]!
+    const end = back.points[back.points.length - 1]!
+    expect(end[0]).toBe(layout.start!.to[0])
+    expect(layout.start!.to[1]).toBeCloseTo(node.y + node.height / 3)
+    expect(end[1]).toBeCloseTo(node.y + node.height * 2 / 3)
+  })
+  it("keeps a cut job's Start and reachability open where a step not read could change them", () => {
+    // A 51-step job read to step 50 that starts at step 51, which jumps back to step 2: the draft as Varia builds it falls back to step 1.
+    const records = Array.from({ length: 50 }, (_, at) => ({ id: at + 1, name: `Step ${at + 1}`, subsystem: 'TSQL', onSuccessAction: 2, onFailAction: 2 }))
+    const draft = initialStepsDraft(records, 51)
+    expect(draft.startKey).toBe('s1')
+    const flow = stepsFlow(draft, true, 51)
+    expect(flow).toMatchObject({ start: -1, startUnread: 51, partial: true })
+    expect(flowLayout(flow, metrics).start).toBeUndefined()
+    expect(flowNeverRuns(flow, 1)).toBe(false)
+    expect(flowReachedFrom(flow, 1)).toBe('perhaps steps Varia does not read')
+    // Its Start read: that step, not the draft's fallback; what reaches a step still qualified.
+    const read = stepsFlow(initialStepsDraft(records, 7), true, 7)
+    expect(read).toMatchObject({ start: 6, partial: true })
+    expect(read.startUnread).toBeUndefined()
+    expect(flowReachedFrom(read, 6)).toBe("The job's start, perhaps steps Varia does not read")
+    // The whole job read: a step nothing reaches never runs.
+    const whole = stepsFlow(job([['A', 'qs', 'qf'], ['B', 'qs', 'qf']]))
+    expect(flowNeverRuns(whole, 1)).toBe(true)
+    expect(flowReachedFrom(whole, 1)).toBe('No step')
   })
 })
