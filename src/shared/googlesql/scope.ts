@@ -579,7 +579,7 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
   const place = placeOf(statement, first, open)
   // A name followed by '(' is a call: a function, not a column.
   if (isPunct(toks[last + 1], '(') && index === parts.length - 1 && place !== 'object') {
-    return { parts, at: index, span: { start: toks[first].start, end: toks[last].end }, object: false, scope: { sources: [], ctes: [] } }
+    return { parts, at: index, span: { start: toks[first].start, end: toks[last].end }, object: false, call: true, scope: { sources: [], ctes: [] } }
   }
   return { parts, at: index, span: { start: toks[first].start, end: toks[last].end }, object: place === 'object', scope: scopeAt(statement, open, offset) }
 }

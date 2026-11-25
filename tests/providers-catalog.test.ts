@@ -75,8 +75,8 @@ describe('catalogue providers', () => {
 
   it('declares both engines on the provider-neutral commands and keeps the SQL Server ones to SQL Server', () => {
     const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.execute', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll',
-      'explorer.refresh', 'explorer.scriptAs', 'explorer.scriptCreateToNewQuery']
-    const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.goToDefinition', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
+      'explorer.refresh', 'explorer.scriptAs', 'explorer.scriptCreateToNewQuery', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab', 'edit.commasToFront', 'edit.commasToEnd']
+    const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.toggleBrackets', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
     // BigQuery's own Object Explorer commands (BQ-5).
     for (const id of ['explorer.previewRows', 'explorer.bigQueryProperties'] as const) expect(commandProviders(id), id).toEqual(['bigquery'])
     for (const id of both) expect(commandProviders(id), id).toEqual(['sqlserver', 'bigquery'])
@@ -107,9 +107,9 @@ describe('catalogue providers', () => {
     expect(commandAllowsProvider('activity.open', keys('sqlserver', 'bigquery'), true)).toBe(false)
     // Disconnect, New Query and the dataset box serve a BigQuery connection too (BQ-2).
     for (const id of ['connection.disconnect', 'connection.reconnect', 'explorer.newQuery', 'query.changeDatabase', 'query.disconnect'] as const) expect(commandAllowsProvider(id, keys('bigquery', 'bigquery'), true), id).toBe(true)
-    // The comma commands read T-SQL tokens, so they serve only a SQL Server query.
+    // The comma commands read either language's tokens, so they serve both engines' queries; Toggle Brackets reads T-SQL's only.
     for (const id of ['edit.commasToFront', 'edit.commasToEnd'] as const) {
-      expect(commandAllowsProvider(id, keys('bigquery', 'sqlserver')), id).toBe(false)
+      expect(commandAllowsProvider(id, keys('bigquery', 'sqlserver')), id).toBe(true)
       expect(commandAllowsProvider(id, keys('sqlserver', 'bigquery')), id).toBe(true)
     }
     expect(commandAllowsProvider('edit.toggleBrackets', keys('bigquery', 'sqlserver'))).toBe(false)

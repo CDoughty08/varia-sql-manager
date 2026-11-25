@@ -28,7 +28,16 @@
     number                 3
     delimiter.parenthesis  )
     delimiter              ,
-2:   NET.HOST(url), HLL_COUNT.MERGE(sketch), my_dataset.my_function(x),
+2:   NET.HOST(url), SAFE.NET.HOST(url), HLL_COUNT.MERGE(sketch), my_dataset.my_function(x),
+    predefined             NET
+    delimiter              .
+    predefined             HOST
+    delimiter.parenthesis  (
+    identifier             url
+    delimiter.parenthesis  )
+    delimiter              ,
+    keyword                SAFE
+    delimiter              .
     predefined             NET
     delimiter              .
     predefined             HOST
