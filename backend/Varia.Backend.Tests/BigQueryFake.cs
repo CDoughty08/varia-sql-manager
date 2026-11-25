@@ -141,16 +141,26 @@ internal sealed class BigQueryFake
     }
 
     /// <summary>
-    /// What BigQuery does with two query parameters any reply may meet, so a caller that confuses them fails here as it would
-    /// against BigQuery: <c>fields</c> (partial response) keeps only the named top-level properties, and tables.get's
-    /// <c>selectedFields</c> keeps only the table's columns of those names.
+    /// What BigQuery does with three query parameters a reply may meet, so a caller that confuses them fails here as it would
+    /// against BigQuery: <c>fields</c> (partial response) keeps only the named top-level properties, tables.get's
+    /// <c>selectedFields</c> keeps only the table's columns of those names, and jobs.list's <c>projection</c>, unless full,
+    /// drops each job's configuration, statistics.query and statistics.parentJobId.
     /// </summary>
     private static Reply Shape(Request request, Reply reply)
     {
         if (reply.Status != 200 || reply.ContentType != "application/json") return reply;
         var query = System.Web.HttpUtility.ParseQueryString(request.Uri.Query);
-        if (query["fields"] is null && query["selectedFields"] is null) return reply;
+        var minimal = request.Method == "GET" && JobList.IsMatch(request.Url) && query["projection"] != "full";
+        if (query["fields"] is null && query["selectedFields"] is null && !minimal) return reply;
         if (System.Text.Json.Nodes.JsonNode.Parse(reply.Body) is not System.Text.Json.Nodes.JsonObject json) return reply;
+        if (minimal && json["jobs"] is System.Text.Json.Nodes.JsonArray jobs)
+            foreach (var job in jobs.OfType<System.Text.Json.Nodes.JsonObject>())
+            {
+                // jobs.list's minimal projection (and its default) leaves out the configuration and, as a real project showed,
+                // statistics.query; parentJobId too, to be safe, since Google does not say whether it stays.
+                job.Remove("configuration");
+                if (job["statistics"] is System.Text.Json.Nodes.JsonObject statistics) { statistics.Remove("query"); statistics.Remove("parentJobId"); }
+            }
         if (query["selectedFields"] is { } selected && json["schema"]?["fields"] is System.Text.Json.Nodes.JsonArray columns)
         {
             var names = selected.Split(',').ToHashSet(StringComparer.Ordinal);
@@ -163,6 +173,8 @@ internal sealed class BigQueryFake
         }
         return reply with { Body = json.ToJsonString() };
     }
+
+    private static readonly Regex JobList = new("^" + Jobs + "$");
 
     /// <summary>A partial-response mask's top-level names: <c>a,b(c,d),e/f</c> keeps a, b and e.</summary>
     private static HashSet<string> TopLevel(string mask)

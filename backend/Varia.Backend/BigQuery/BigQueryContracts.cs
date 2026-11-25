@@ -237,7 +237,7 @@ internal sealed record BigQueryProperties(
 /// <summary>
 /// query.attach (docs/bigquery.md, Re-attaching to jobs): re-attaches the tab <c>SessionId</c> to a job a previous run (or
 /// backend) started, by its id, location and project. AdoptSession takes over the BigQuery session the job ran in, starting
-/// its transaction state from <c>Transaction</c> (the job record's, decision 54); Detached only holds the session's queue
+/// its transaction state from <c>Transaction</c> (the job record's); Detached only holds the session's queue
 /// until the job is DONE and reads no results. JobKey is the tab's job key, which main ties the job's record to.
 /// </summary>
 internal sealed record BigQueryAttachArgs(string ConnectionId, string SessionId, string QueryId, string JobKey, string JobId, string Project, string? Location = null,

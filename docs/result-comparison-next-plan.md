@@ -2218,7 +2218,7 @@ would leave out the sort, and "Rows" is already the toolbar's All rows / Changes
     input meanwhile never closes them, and the re-ask covers only the backend evicting a view past a result's 8.
   - A view of another result, or a closed one, answers `VIEW_NOT_FOUND`. A result keeps at most 8 views, so a view
     closed meanwhile is re-asked by the renderer, once; a second `VIEW_NOT_FOUND` is the comparison's failure.
-  - A remote view answers `REMOTE_RESULT`, BQ-3c-1's case.
+  - A remote view answers `REMOTE_RESULT`, as other result tools do on a windowed result.
   - `ResultClient.diff`, which compares a view's base result today, passes the view ids.
 - **Backend (the large part):**
   - `ResultDiffer.Compare` and `UnifiedDiff.Write` walk sealed pages in stored order, split across threads, with
@@ -2346,8 +2346,8 @@ In flight as of 2026-11-22. After each merges, open comparison branches merge ma
 - **Difference navigation** has merged: Go to Next/Previous Difference, Go to Possible Match, the overview strip and the
   `comparisonRowHasPartner` key that C2's keys copy. Every lane starts from main.
 - **BigQuery** (docs/bigquery.md, 0.10.0):
-  - Remote views (BQ-3c) and job re-attach (BQ-3d-1, BQ-3d-2) have merged, so C1 and C6 build on the view plumbing, and
-    the protocol, catalogue, document-registry and hot-exit files the comparison lanes append to already hold BQ-3d's
+  - Remote views and job re-attach have merged, so C1 and C6 build on the view plumbing, and
+    the protocol, catalogue, document-registry and hot-exit files the comparison lanes append to already hold re-attach's
     changes. C6 adds `comparisonOutOfDate` to `ResultsService.ts`; C5b's new document kind stays out of the hot-exit
     records.
   - BigQuery disables Compare on windowed results, so a comparison's inputs are in memory. C6's remote-view refusal is the

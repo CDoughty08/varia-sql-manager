@@ -218,7 +218,7 @@ internal static partial class BigQueryExecutionChecks
 
         string Id(BigQueryFake.Request request) => request.Url[(request.Url.LastIndexOf('/') + 1)..];
 
-        /// <summary>The script child's statistics as jobs.list (minimal) gives them: ChildStatistics' query, with its statement type.</summary>
+        /// <summary>The script child's statistics as jobs.list (full projection) gives them: ChildStatistics' query, with its statement type.</summary>
         JsonObject ListedChildStatistics(string parent, int n = 1)
         {
             var query = (ListChildTarget ? ChildStatistics?["query"]?.DeepClone().AsObject() : null) ?? new JsonObject();
@@ -809,6 +809,10 @@ internal static partial class BigQueryExecutionChecks
         // The note's figure (SQL Server's too) is written as the results strip writes it: never "(0 MB)".
         var figures = new[] { 0L, 256 * 1024, 1L << 20, 3L << 19, 8L << 30, 10L << 30 }.Select(SqlService.MemoryFigure).ToList();
         check(figures.SequenceEqual(["<1 MB", "<1 MB", "1 MB", "2 MB", "8,192 MB", "10.0 GB"]), "the budget note's figure matches the strip's: " + string.Join(", ", figures));
+        // SQL Server's Messages note is the same text, which SqlService's batch loop writes through BudgetFullNote.
+        check(SqlService.BudgetFullNote(256 * 1024) == "Results were truncated because the result memory budget (<1 MB) is full. Execution continued; close other query results to free memory."
+            && SqlService.BudgetFullNote(8L << 30).Contains("(8,192 MB) is full.", StringComparison.Ordinal),
+            "the budget note's whole text, SQL Server's and BigQuery's: " + SqlService.BudgetFullNote(256 * 1024));
 
         // A cell past its cap and a read error, through query.execute.
         jobs = new Jobs { Schema = Schema(Field("n", "INTEGER"), Field("s", "STRING")), Rows = [Row("x1", new string('a', ColumnPlan.TextCap + 1)), Row("x2", "b")] };

@@ -264,7 +264,7 @@ describe('BigQuery key files and federation sources (main)', () => {
       await expect(federationSource(JSON.stringify({ credential_source: { file } }))).rejects.toThrow('not a full local path')
   })
 
-  it('refuses a federation configuration whose token file the user has not confirmed (decision 49)', async () => {
+  it('refuses a federation configuration whose token file the user has not confirmed', async () => {
     const directory = await folder(), files = new BigQueryKeyFiles(), token = join(directory, 'token'), config = join(directory, 'federation.json')
     await writeFile(token, 'x')
     await writeFile(config, JSON.stringify({ type: 'external_account', audience: '//iam.googleapis.com/x', credential_source: { file: token } }))

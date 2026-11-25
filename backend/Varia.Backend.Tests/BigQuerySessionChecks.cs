@@ -70,6 +70,8 @@ internal static partial class BigQuerySessionChecks
         /// <summary>jobs.list answers 403, as for a principal with the Job User role only.</summary>
         public bool ListDenied;
         public int PollsBeforeDone;
+        /// <summary>How many more of a script's children each poll of a running script lists.</summary>
+        public int ReleaseStep = 1;
         public JsonNode? CommitError;
         public JsonNode? AbortError;
         /// <summary>Answers a COMMIT insert before the normal answer: return a reply, or null for the normal one.</summary>
@@ -239,9 +241,14 @@ internal static partial class BigQuerySessionChecks
                 return new(200, new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = new JsonArray(own) }.ToJsonString());
             }
             if (!Jobs.TryGetValue(parent, out var job)) return new(200, "{\"kind\":\"bigquery#jobList\"}");
-            // Newest first, as BigQuery lists them.
-            var items = job.Children.Take(job.Released).Reverse().Select(child => (JsonNode)Json(child)).ToArray();
-            return new(200, new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = new JsonArray(items) }.ToJsonString());
+            // Newest first, as BigQuery lists them, in pages of maxResults.
+            var skip = query["pageToken"] is { } from0 && from0.StartsWith('p') ? int.Parse(from0[1..], CultureInfo.InvariantCulture) : 0;
+            var size = query["maxResults"] is { } asked ? int.Parse(asked, CultureInfo.InvariantCulture) : int.MaxValue;
+            var all = job.Children.Take(job.Released).Reverse().ToList();
+            var items = all.Skip(skip).Take(size).Select(child => (JsonNode)Json(child)).ToArray();
+            var list = new JsonObject { ["kind"] = "bigquery#jobList", ["jobs"] = new JsonArray(items) };
+            if (skip + items.Length < all.Count) list["nextPageToken"] = "p" + (skip + items.Length).ToString(CultureInfo.InvariantCulture);
+            return new(200, list.ToJsonString());
         }
 
         BigQueryFake.Reply Results(BigQueryFake.Request request)
@@ -252,7 +259,7 @@ internal static partial class BigQuerySessionChecks
             if (job.Polls > 0)
             {
                 job.Polls--;
-                job.Released = Math.Min(job.Children.Count, job.Released + 1);
+                job.Released = Math.Min(job.Children.Count, job.Released + ReleaseStep);
                 return new(200, new JsonObject { ["kind"] = "bigquery#getQueryResultsResponse", ["jobReference"] = reference, ["jobComplete"] = false }.ToJsonString());
             }
             Release(job);
@@ -294,13 +301,14 @@ internal static partial class BigQuerySessionChecks
             BigQuery.HeldPoll = TimeSpan.FromMilliseconds(20);
         }
 
-        public async Task ConnectAsync(JsonObject key)
+        public async Task ConnectAsync(JsonObject key, Action<JsonObject>? configure = null)
         {
             var options = new JsonObject
             {
                 ["provider"] = "bigquery", ["project"] = "varia-alpha", ["authentication"] = "serviceAccountKey", ["dataset"] = "sales", ["location"] = "US",
                 ["credential"] = new JsonObject { ["source"] = "file", ["json"] = key.ToJsonString() }, ["keyFile"] = Guid.NewGuid().ToString()
             };
+            configure?.Invoke(options);
             var (code, result, message) = await Call("connections.connect", options);
             if (code != "ok") throw new InvalidOperationException("connect: " + code + " " + message);
             ConnectionId = ((ConnectionInfo)result!).Id;
@@ -527,6 +535,23 @@ internal static partial class BigQuerySessionChecks
         var ended = await harness.Close(plain);
         check(ended is { Code: "ok", Result: { Closed: true, Note: null } } && bq.Aborts.Last() == "sess-2", $"a plain close ends the session: {ended.Code} {string.Join(",", bq.Aborts)}");
         check(harness.Fake.Unmatched.IsEmpty, "sessions send nothing the scripted BigQuery does not answer: " + string.Join(", ", harness.Fake.Unmatched.Select(request => request.Method + " " + request.Url)));
+
+        // Varia's own session jobs bill nothing, but none goes out uncapped: 10 MiB, even under a lower connection cap, which
+        // would otherwise refuse a commit and roll its transaction back.
+        var own = bq.Inserts.Where(body => body["configuration"]!["query"]!["query"]!.GetValue<string>() is BigQuerySql.Commit or BigQuerySql.AbortSession).ToArray();
+        check(own.Length == 3 && own.All(body => Cap(body) == "10485760"),
+            "COMMIT TRANSACTION and ABORT_SESSION carry a 10 MiB maximumBytesBilled: " + string.Join(", ", own.Select(Cap)));
+        var lowBq = new Bq();
+        lowBq.Statements["BEGIN TRANSACTION"] = "BEGIN_TRANSACTION";
+        using var low = new Harness(lowBq);
+        await low.ConnectAsync(key, options => options["maximumBytesBilled"] = 1000);
+        var capped = Tab();
+        await low.Execute(capped, "BEGIN TRANSACTION");
+        await low.Close(capped, "commit");
+        var lowOwn = lowBq.Inserts.Where(body => body["configuration"]!["query"]!["query"]!.GetValue<string>() is BigQuerySql.Commit or BigQuerySql.AbortSession).ToArray();
+        check(lowOwn.Length == 2 && lowOwn.All(body => Cap(body) == "10485760"),
+            "a connection's cap below 10 MiB leaves its session jobs at 10 MiB: " + string.Join(", ", lowOwn.Select(Cap)));
+        static string? Cap(JsonNode body) => body["configuration"]!["query"]!["maximumBytesBilled"]?.ToString();
     }
 
     /// <summary>Scripts: children listed between polls and read in statement order, DML counts and DDL sentences, a failing
@@ -548,6 +573,51 @@ internal static partial class BigQuerySessionChecks
         check(bq.Lists.Count(item => item == parent) >= 3, $"children are listed between polls, then once in full: {bq.Lists.Count(item => item == parent)}");
         var state = await harness.State(tab);
         check(state.State is { TransactionCount: 0, Checked: true }, $"a script's children decide the transaction (BEGIN … COMMIT closes it): {state.State}");
+        // The fake's minimal projection leaves out statistics.query and parentJobId, as BigQuery's does: only the full one names
+        // a child's statement type, rows affected and DDL target.
+        var childListings = harness.Fake.To(Base + "/jobs").Where(request => HttpUtility.ParseQueryString(request.Uri.Query)["parentJobId"] is not null).ToList();
+        check(childListings.Count >= 3 && childListings.All(request => HttpUtility.ParseQueryString(request.Uri.Query)["projection"] == "full"),
+            $"a script's children are listed with projection=full: {string.Join(" | ", childListings.Select(request => request.Uri.Query))}");
+        // A poll between reads asks for a few children first; the final listing for pages of 200.
+        check(childListings.Select(request => HttpUtility.ParseQueryString(request.Uri.Query)["maxResults"]).ToHashSet() is var asked && asked.Contains("20") && asked.Contains("200"),
+            $"listings between polls start at 20 children a page, the final one at 200: {string.Join(",", childListings.Select(request => HttpUtility.ParseQueryString(request.Uri.Query)["maxResults"]))}");
+
+        // A page of full jobs larger than the byte limit is asked again with fewer jobs; one child alone too large cuts the listing short.
+        var (pageBytes, firstPage, pages) = (harness.BigQuery.ChildPageBytes, harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages);
+        try
+        {
+            var listed0 = harness.Fake.Seen.Count;
+            harness.BigQuery.ChildPageBytes = 1_000;
+            var shrunkTab = Tab();
+            var shrunk = await harness.Execute(shrunkTab, "SCRIPT ok");
+            var sizes = harness.Fake.Seen.Skip(listed0).Where(request => request.Url.EndsWith("/jobs", StringComparison.Ordinal) && HttpUtility.ParseQueryString(request.Uri.Query)["parentJobId"] is not null)
+                .Select(request => HttpUtility.ParseQueryString(request.Uri.Query)["maxResults"]).Distinct().ToList();
+            check(shrunk is { Code: "ok", Result.Status: "completed" } && Says(shrunk.Result, "(2 rows affected)") && !Says(shrunk.Result, SqlService.IncompleteScript)
+                && sizes.Contains("200") && sizes.Contains("50") && (await harness.State(shrunkTab)).State is { TransactionCount: 0, Checked: true },
+                $"a children page over the byte limit is asked again with fewer jobs, and the listing still ends complete: {string.Join(",", sizes)}");
+            harness.BigQuery.ChildPageBytes = 100;
+            var tooLarge = Tab();
+            var cut = await harness.Execute(tooLarge, "SCRIPT ok");
+            check(cut is { Code: "ok", Result.Status: "completed" } && Says(cut.Result, SqlService.IncompleteScript) && (await harness.State(tooLarge)).State is { Checked: false },
+                $"a child larger than the byte limit leaves the listing incomplete: the result says so and the transaction is unknown: {cut.Code} {Texts(cut.Result?.Messages ?? [])}");
+            harness.BigQuery.ChildPageBytes = pageBytes;
+
+            // A listing between polls that is cut short holds only the newest children: none is read, and the early reads stop,
+            // so the final listing reads every statement in order (here two finish per poll, and a poll lists one page of one).
+            bq.ReleaseStep = 2;
+            (harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages) = (1, 1);
+            var inOrder = await harness.Execute(Tab(), "SCRIPT ok");
+            static string Ids(string text) => System.Text.RegularExpressions.Regex.Replace(text, "varia_[0-9a-f]{32}", "job");
+            check(inOrder is { Code: "ok", Result.Status: "completed" } && Ids(Texts(inOrder.Result.Messages)) == Ids(texts) && inOrder.Result.ResultSets.Count == 1,
+                $"an incremental listing cut short reads nothing, so the statements keep their order: {Texts(inOrder.Result?.Messages ?? [])}");
+            var script = bq.UserInserts.Last()["jobReference"]!["jobId"]!.GetValue<string>();
+            check(bq.Lists.Count(item => item == script) == 2, $"a poll's listing cut short stops the early listings; the final listing reads the rest: {bq.Lists.Count(item => item == script)}");
+        }
+        finally
+        {
+            (harness.BigQuery.ChildPageBytes, harness.BigQuery.IncrementalChildPageSize, harness.BigQuery.MaxChildPages) = (pageBytes, firstPage, pages);
+            bq.ReleaseStep = 1;
+        }
 
         var failed = await harness.Execute(tab, "SCRIPT fails", args => { args["startLine"] = 10; args["startColumn"] = 3; });
         var error = failed.Result?.Messages.FirstOrDefault(message => message.Kind == "error" && message.Text.Contains("Syntax error", StringComparison.Ordinal));

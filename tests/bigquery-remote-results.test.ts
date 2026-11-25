@@ -19,9 +19,9 @@ import type { ResultMemoryDetail } from '../src/shared/contracts'
 describe('BigQuery remote results', () => {
   const load = { queryId: crypto.randomUUID(), resultId: 7, generation: 1, kind: 'load' }
 
-  it('takes results.remoteQuery strictly: a query id, an owned result and its generation, and a load, view or distinct kind', () => {
+  it('takes results.remoteQuery strictly: a query id, an owned result and its generation, and a load, view, distinct, sample or rerun kind', () => {
     expect(validateRequest('results.remoteQuery', load)).toEqual(load)
-    // A view takes a sort key or a filter; the other kinds are BQ-3c-3's.
+    // A view takes a sort key or a filter; the other kinds are checked on their own.
     for (const patch of [{ kind: 'view' }, { kind: 'view', sort: [] }, { kind: 'sample' }, { queryId: 'not-a-uuid' }, { resultId: 0 }, { resultId: 2 ** 32 }, { resultId: 1.5 }, { generation: 0 }, { generation: 1.5 }, { generation: 2 ** 31 }, { extra: true }])
       expect(() => validateRequest('results.remoteQuery', { ...load, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
     expect(() => validateRequest('results.remoteQuery', { queryId: load.queryId, resultId: 7, kind: 'load' })).toThrow('Invalid request')

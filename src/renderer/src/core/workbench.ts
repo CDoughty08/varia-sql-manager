@@ -308,7 +308,7 @@ export interface Workbench extends Disposable {
   readonly operations: SsisOperationsService
   /** The Integration Services document's package and run pages' reads, kept per history step. */
   readonly ssisPlaces: SsisPlacesService
-  /** BigQuery Job History (BQ-9): each BigQuery connection's document, its filters, details and row actions. */
+  /** BigQuery Job History: each BigQuery connection's document, its filters, details and row actions. */
   readonly jobHistory: JobHistoryService
   /** SQL Server Agent's Job Activity Monitors (AG-3): one per connection, each a live view of its jobs. */
   readonly jobActivity: JobActivityService

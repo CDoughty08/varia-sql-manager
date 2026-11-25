@@ -25,6 +25,8 @@ internal sealed partial class SqlService
 {
     /// <summary>The tabs running a BigQuery query, so a tab runs one at a time (SESSION_BUSY), as a SQL Server session does.</summary>
     private readonly ConcurrentDictionary<string, byte> bigQueryTabs = new();
+    /// <summary>The note on a script whose final children listing was cut short.</summary>
+    internal const string IncompleteScript = "Varia could not list all of the script's statements, so the results of earlier statements may be missing.";
 
     /// <summary>The rows the first getQueryResults answer asks for (the page the grid shows first); later pages are sized by
     /// the result's width (<see cref="BigQueryPageRows"/>).</summary>
@@ -246,6 +248,9 @@ internal sealed partial class SqlService
         async Task<(List<BigQueryChild> Children, bool Complete)> ChildrenAsync(bool full)
         {
             var listed = await bigQuery.ChildrenAsync(connection, project, jobId, full ? null : readChildren, token);
+            // An incremental listing cut short holds only the newest children: reading them now would skip the ones before,
+            // so they wait for the next poll or the final listing.
+            if (!full && !listed.Complete) return listed;
             foreach (var child in listed.Children)
             {
                 if (readChildren.Contains(child.Id)) continue;
@@ -301,7 +306,7 @@ internal sealed partial class SqlService
                 // The job already exists: after the identity check its session (when adopted) and state are taken over, and the
                 // poll below follows it as it would a job this request inserted.
                 Job own;
-                // The checked job's location and, when adopted, its session (with the record's transaction, decision 54).
+                // The checked job's location and, when adopted, its session (with the record's transaction).
                 void Adopt(Job checkedJob)
                 {
                     location = KnownLocation(checkedJob.JobReference?.Location) ?? location;
@@ -347,7 +352,7 @@ internal sealed partial class SqlService
                 sent = created = true;
                 // A Stop between the check and here found nothing sent to cancel: it is asked again now.
                 if (token.IsCancellationRequested && Interlocked.Exchange(ref stopAsked, 0) != 0) StopJob();
-                // The adopted session's transaction starts from the job record's (decision 54), not from a listing.
+                // The adopted session's transaction starts from the job record's, not from a listing.
                 Adopt(own);
                 // Set before the tail is cleared, so a close in between still sees a job to leave running; only a job in the
                 // tab's own session holds it.
@@ -445,7 +450,9 @@ internal sealed partial class SqlService
                         page.Dispose();
                         page = null;
                         if (!listing) continue;
-                        try { await ChildrenAsync(full: false); }
+                        // A poll's listing cut short would be read again in full at every poll: the early reads stop, and the
+                        // final listing reads the rest.
+                        try { if (!(await ChildrenAsync(full: false)).Complete) listing = false; }
                         catch (Exception error) when (!token.IsCancellationRequested && error is not ChildReadFailure) { listing = false; }
                     }
                 }
@@ -489,6 +496,8 @@ internal sealed partial class SqlService
                             : succeededChildren.ToString(CultureInfo.InvariantCulture) + " statements before the failing one ran, and BigQuery billed them.");
                     throw jobFailed;
                 }
+                // A listing cut short (a statement too large to list, or more than Varia reads) holds only the later statements.
+                if (script && children is not null && !listedAll) messages.Add(IncompleteScript);
                 // BigQuery reports a script's statements as children; with none listed (the emulator) the parent's rows stand.
                 if (script && children is { Count: > 0 })
                 {
@@ -682,8 +691,8 @@ internal sealed partial class SqlService
     /// <summary>
     /// Where the tab's job runs: its session's location once it has one; otherwise, when the connection's location is
     /// Automatic, its dataset's (datasets.get, free, kept per connection), else the connection's. A dataset in another
-    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first
-    /// (decision 18), which the tab's Dataset box asks about.
+    /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first,
+    /// which the tab's Dataset box asks about.
     /// </summary>
     private async Task<string?> TabLocationAsync(BigQueryTabSession session, BigQueryConnection connection, string? dataset, CancellationToken token)
     {

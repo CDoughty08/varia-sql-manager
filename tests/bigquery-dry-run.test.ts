@@ -122,7 +122,7 @@ const estimate = (bytesProcessed: number, extra: Partial<BigQueryDryRunResult> =
 describe('dry-run diagnostics', () => {
   it('dry-runs only after an edit and a pause, then shows the estimate and clears markers', async () => {
     const f = fixture()
-    // Opening or restoring a tab runs nothing (decision 44).
+    // Opening or restoring a tab runs nothing, not even a free estimate the user did not ask for.
     expect(f.timers).toHaveLength(0)
     expect(f.api.bigQueryDryRun).not.toHaveBeenCalled()
     f.model.edit('SELECT * FROM orders')

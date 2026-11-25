@@ -75,6 +75,7 @@ Each is a well-known pattern elsewhere. Each would cut steps or prevent a common
 | Multi-select and bulk actions | Every admin grid | Job Activity Monitor bulk bar | `rx-jam` |
 | Templates on New | Project templates, cloud quick-starts | New Job: Blank, Copy an existing job, or a template | `rx-job-new` |
 | Copy to another environment with a dependency check | dbatools Copy-DbaAgentJob | Copy to another server | `rx-copy-server` |
+| Steps as a graph with a run drawn over it | CI pipeline graphs, SSIS control flow, workflow schedulers | Steps › Flow (Later) | `rx-flow`, `rx-flow-lastrun` |
 
 ## Create from…
 
@@ -157,7 +158,7 @@ After the first release, in docs/agent-plan.md's lanes:
 Later:
 - Copy to another server (a write on a second connection).
 - New Job templates.
-- A Flow view of step targets.
+- A Flow view of step targets (mocked 2026-11-24, owner's answers 2026-11-25; see [Flow view (Later)](#flow-view-later)).
 
 ## Every changed view has a rethink scene
 
@@ -191,6 +192,139 @@ Unchanged, so no rethink scene: the Object Explorer scenes, Log File Viewer (cro
 service-control dialog and progress state, Delete Object for a job, Delete History, Filter Settings and the status-bar
 chip.
 
+## Flow view (Later)
+
+Status: **mocked on 2026-11-24; the owner answered its questions on 2026-11-25. It stays Later**: no lane, no release.
+Mocks: the "Rethink · steps flow (later)" group in `docs/mockups/sql-server-agent.html` (`rx-flow`, `rx-flow-menu`,
+`rx-flow-edit`, `rx-flow-lastrun`, `rx-flow-running`, `rx-flow-end`), in Dark and Light through the page's Theme box. The
+fictional job is "Finance nightly load": seven steps of five types, with a step that never runs, a loop, a forward jump that skips a step and a
+backward jump that is not a loop.
+
+SSMS shows steps as a flat list. Each step's On success and On failure actions sit on its Advanced page, so to see where a
+failure goes, or whether a step can ever run, you check one step at a time. The Flow view draws the same steps as a graph.
+
+### What it shows
+
+- **Steps**: one node per step with its number, name, type and icon (T-SQL, PowerShell, CmdExec, SSIS, Analysis Services
+  and the replication types), and its key field (for example database, package, command, run as or retries).
+- **Edges**: two ports per node, ✓ On success and ✗ On failure. Success edges are solid, failure edges dashed. Each port
+  has its glyph, so colour is never the only cue.
+  - Go to the next step: a short straight edge.
+  - Go to step N: an edge in a lane beside the column, success lanes on the left, failure lanes on the right. When N is the
+    step just below, the edge is drawn straight but marked "→ N": unlike Go to the next step, it follows that step if steps
+    move.
+  - Quit the job reporting success or failure: a pill under the port.
+  - The last step's Go to the next step, on success or on failure: an edge to an **End · job fails** node, with a warning
+    (`rx-flow-end`). msdb accepts it when the job is saved, but Agent then reports the run as Failed, even when every
+    step succeeded.
+- **Start step**: an entry arrow and a Start pill.
+- **Loops**: a cycle is tagged ("Loop · 3 ⇄ 4"). A backward jump that is not part of a cycle (step 7's failure going to step 6)
+  gets no tag.
+- **Never runs**: a step that nothing reaches from the Start step is dashed and tagged, and is listed as a problem.
+- **Selected step**: its summary beside the graph. The summary includes **Reached from**, which lists the steps that lead to
+  it. SSMS shows that nowhere.
+
+### Decisions
+
+Items 1 to 9 are proposed; the owner's answers of 2026-11-25 are folded in and marked "(owner)".
+
+1. **Where it lives**: a List | Flow switch at the top left of the job document's Steps section. In List it sits in the steps
+   list's header (rx-job-steps already draws it); in Flow, which has no list, it leads the graph's toolbar at the same corner.
+   It is not a new section or tab: both views show the same draft, and the selection carries across. Every job document
+   opens on List; the choice is not remembered for now (owner).
+2. **Layout**: steps stay in step order, top to bottom, and are never auto-arranged. That way the numbers match List, History
+   and Start at step, and a move in List moves the node. Edges run in lanes. Where two cross, the one on top gets a small gap.
+3. **Editing from the graph**: every edit goes to the same draft as List. That means the dirty dot, Save · N changes, Undo,
+   Script, and the unchanged step save planner. A changed edge is drawn in the accent with a "changed" tag.
+   - Click selects a step and shows its summary.
+   - Double-click or Enter opens the step editor, the same component List uses, docked beside the graph, and the graph zooms
+     to fit. Close editor goes back to the summary.
+   - Right-click or Shift+F10 opens the step's menu: Edit step, Start job at this step, Make Start step, On success ›,
+     On failure ›, Add step after ›, Move up, Move down, Delete step. The On success and On failure submenus list SSMS's four
+     actions, with "Go to step N: name" (the List editor's wording) for every other step and the current choice checked.
+   - Delete and Move work as in List: targets follow the move, and rx-step-delete's banner offers Undo.
+   - Dragging a ✓ or ✗ port onto a step sets Go to step N; dropping it on empty space opens that action's submenu. It is a
+     shortcut: the menu stays the keyboard and screen reader path (owner).
+   - Steps are not dragged to reorder them: reordering stays in List and the menu's Move up and Move down, because the
+     layout is step order (owner).
+4. **Overlays**: a Show switch with Targets only, Last run and Live run.
+   - **Last run** draws one run from the History section over the graph. A box picks the run. The path is bold, with the
+     order on each edge, and each step shows its outcome and duration. A step that ran more than once shows ×N and each pass.
+     Steps the run never reached are faded. Beside the graph: the run's summary, every pass in order, and the selected failed
+     step's message. History's run summary gets a **Show in Flow** link that opens Flow with that run as Last run
+     (owner).
+   - **Live run** turns on when the job starts and goes back to the previous view when it ends. It shows the current step with
+     a ring and a bar against its usual time, each finished step's outcome, the two ways the run can go next, and Stop.
+5. **Data**: no new backend method is expected, but the History section's read has to change how it runs. The graph is drawn
+   in the renderer from:
+   - the step fields from the job document's describe (`start_step_id`, `on_success_action`, `on_success_step_id`,
+     `on_fail_action`, `on_fail_step_id`);
+   - the History section's `agent.history` view, for both overlays. Today that view opens when History first shows and
+     pauses while the History section is collapsed or the document is not the active tab, so it must also run while Flow
+     shows Last run or Live run, even with History collapsed. It returns step rows for **one selected run only**; the section
+     reads up to 200 of them and says when it cut them. So the Last run box and History's selected run are one shared selection: picking a run in either picks it in both. A pass is a step's rows up to and
+     including its first row that is not a Retry. Earlier Retry rows count as that pass's retries, so ×N counts passes, not
+     rows. A run with more rows than the cap says so in the panel;
+   - the header's live run state, which gives only the current step (and whether it is retrying). Live run's finished steps
+     come from History's rows of the in-progress run, so that run is selected while Live run shows. If it cannot be, the other
+     steps show a dash with History's note that their states
+     appear once that run is read and selected, as History's live run already does.
+
+   Confirm these when the view is built. Two rules need work there:
+   - **The failed step**: the Last run panel's outcome names the step that failed (step 5 in the mock), not the last step to
+     run, and shows Agent's own message under it. History's run summary takes the step from the message's "last step to run",
+     which for a job with a notify step is the notify step (step 6). Both should use the failed step, so they agree. The job
+     header names no step, because its outcome comes from Agent's job status, which carries none.
+   - **Usual time per pass**: the usual time adds up all of a step's rows in a run, so a step that a loop ran twice gets a
+     doubled usual time. Live run's bar needs the usual time of one pass.
+6. **Flow checks** (principle 6: they warn, they never block Save):
+   - Never runs: a warning. Make Start step is offered as its fix only when the step's paths lead to the current Start step,
+     so nothing else stops running (step 1 in the mock). Otherwise the fix is to edit a step to go to it.
+   - Loop: a warning (owner). Loops are a known retry pattern, but Agent does not count passes, so one that keeps failing
+     runs until a step leaves it.
+   - A loop with no way out: a warning that says so. Every action of every step in the cycle stays inside it, so the job
+     never ends by itself. This check is not drawn in the mocks.
+   - The last step goes to the next step: a warning, drawn to the End node, with Quit reporting success as its fix
+     (owner). Checked on SQL Server 2025 (17.0) on 2026-11-25: Agent runs the last step, then fails the job with "The job
+     failed. JobManager tried to run a non-existent step (N) for job …", where N is one past the last step. That holds
+     for one-step jobs, for success and failure actions, and when every step succeeded. The job row is Failed
+     (`run_status` 0, `last_run_outcome` 0), and the message names no "last step to run", so History's run summary reads
+     only "Failed". The warning says so: "Step 7 goes to the next step, but it is the last step, so Agent reports every
+     run as failed."
+   - A go-to target that no longer exists: already a problem in List.
+
+   The same checks tag steps in List, so they are not Flow-only.
+7. **Keyboard and screen readers**: Pixi draws pixels only, so a visually hidden ARIA tree of the steps, in step order,
+   carries focus over the canvas; arrow keys move between them and the canvas draws the focus ring. Each node's
+   accessible name includes its type and both actions. For example: "Step 4, Validate row counts, T-SQL. On success, go to the
+   next step. On failure, go to step 3, loop." The menu is the keyboard path for setting actions, and List stays available as
+   the plain alternative.
+8. **Look**: Calm Pro.
+   - Nodes are graphite.
+   - The success and error colours appear only on edges and outcomes.
+   - The iris accent is kept for the selection, the Start step, the current step and changed edges.
+   - Icons are codicon-style strokes: code for T-SQL, a terminal for PowerShell, a window for CmdExec, a package for SSIS, a
+     chart for Analysis Services. No SSMS icons.
+   - Zoom: −, the percentage, +, and Fit. Large jobs get Fit and scrolling, with no minimap for now (owner).
+9. **Rendering**: Pixi, which the execution plan viewer already uses (`pixi.js`, `src/renderer/src/plans/PlanCanvas.ts`).
+   Flow shares that viewer's pieces rather than its plan-specific `PlanCanvas` class: the camera, Fit and zoom
+   (`plans/geometry.ts`), the label pool (`plans/labels.ts`), icons from `src/shared/icons.ts`, drawing on demand with no
+   ticker, culling, releasing while hidden and recreating the GPU context on show. The step menu, editor and side panel stay
+   DOM. Forced colours mode, or a GPU context that fails, falls back to List, as the plan viewer falls back to its outline.
+   The mocks are SVG only because they are static HTML.
+
+### Owner's answers (2026-11-25)
+
+1. Remember List or Flow? No: always open on List for now.
+2. Drag to connect? Yes, as a shortcut beside the menu.
+3. Reorder by dragging nodes? No: List and the menu only for now.
+4. The last step's Go to the next step: drawn to an End node, like the Start node, and warned, because it is unlikely to be
+   intentional even though msdb accepts it. A live check since showed Agent fails every such run (decision 6).
+5. Loop check: a warning.
+6. Large jobs: Fit and scrolling for now, no minimap.
+7. "Show in Flow" on History's run summary: yes.
+
 ## Questions for the owner
 
-None. Create from… schedules default to Share (decided 2026-11-18); each can be switched to Copy or Leave out.
+None for the first release. Create from… schedules default to Share (decided 2026-11-18); each can be switched to Copy or
+Leave out. The Flow view's questions were answered on 2026-11-25; see [Flow view (Later)](#flow-view-later).

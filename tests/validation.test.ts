@@ -66,7 +66,7 @@ describe('IPC validation', () => {
       { sql: 'SELECT 1' }, { node: { type: 'object', object: { kind: 'server' } }, subtype: 'history' }
     ]) expect(() => validateRequest('explorer.children', { ...valid, ...patch }), JSON.stringify(patch)).toThrow('Invalid request')
     // Loads run on the explorer lane under the backend's own gates; main keeps the default 45 s deadline.
-    // BigQuery's tree loads through the same method (BQ-5).
+    // BigQuery's tree loads through the same method.
     expect(methodPolicies['explorer.children']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 45_000, providers: ['sqlserver', 'bigquery'] })
     // Cancellation is main's own channel (varia:explorer-cancel), not a backend method.
     expect(() => validateRequest('explorer.cancel', { requestIds: [requestId] })).toThrow('Unsupported backend method')
@@ -279,7 +279,7 @@ describe('IPC validation', () => {
     for (const transaction of [undefined, 'commit', 'rollback']) expect(validateRequest('query.session.close', { sessionId, ...transaction ? { transaction } : {} })).toEqual({ sessionId, ...transaction ? { transaction } : {} })
     for (const params of [{ sessionId, transaction: 'save' }, { sessionId, transaction: null }, { sessionId, commit: true }]) expect(() => validateRequest('query.session.close', params)).toThrow()
     expect(deadlineFor('query.session.close', { sessionId, transaction: 'commit' }).deadlineMs).toBe(60_000)
-    // Decision 54: every close but a commit has 30 s, enough for a BigQuery session's wait for DONE and its abort.
+    // Every close but a commit has 30 s, enough for a BigQuery session's wait for DONE and its abort.
     expect(deadlineFor('query.session.close', { sessionId, transaction: 'rollback' }).deadlineMs).toBe(30_000)
     expect(deadlineFor('query.session.close', { sessionId }).deadlineMs).toBe(30_000)
     // A BigQuery commit refused at quit keeps the session (abortOnRefusedCommit false); nothing else is accepted.

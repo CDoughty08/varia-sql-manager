@@ -657,7 +657,7 @@ internal static partial class BigQueryExecutionChecks
         }
     }
 
-    /// <summary>The proxy check (decision 19): the Storage Read channel goes through the system proxy with CONNECT, as
+    /// <summary>The proxy check: the Storage Read channel goes through the system proxy with CONNECT, as
     /// Google's endpoint needs TLS, and an unreachable proxy is a REST fallback, not a failed query.</summary>
     static async Task StorageProxyAsync(Action<bool, string> check)
     {

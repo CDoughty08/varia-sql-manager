@@ -40,7 +40,7 @@ async function fixture() {
   return { service, open, close, authentication, bigQuery, request, signInAs: (value: string | null) => { principal = value } }
 }
 
-describe('BigQuery connections through the connection owner (BQ-2)', () => {
+describe('BigQuery connections through the connection owner', () => {
   it('opens a BigQuery target, pins the verified Google account to it, and records the connect in BigQuery\'s history', async () => {
     const { service, open, authentication, bigQuery, request } = await fixture()
     const context = request()

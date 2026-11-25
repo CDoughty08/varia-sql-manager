@@ -65,7 +65,7 @@ describe('node identity', () => {
     // Generated at 74d3ab7, before ObjectRef had SSIS fields: Object Explorer keys its selection, filters and expansion by these.
     const golden = JSON.parse(readFileSync('tests/fixtures/explorer/ref-keys.json', 'utf8')) as { connectionId: string; ref: ExplorerNodeRef; key: string }[]
     expect(golden.length).toBeGreaterThan(300)
-    // Every kind and folder but the SSIS ones (S1b), SQL Server Agent's (AG-1) and BigQuery's (BQ-5), which came after the golden keys.
+    // Every kind and folder but the SSIS ones (S1b), SQL Server Agent's (AG-1) and BigQuery's, which came after the golden keys.
     const later = (id: string) => id.startsWith('agent') || id.startsWith('bq')
     expect(new Set(golden.map(entry => entry.ref.type === 'object' ? entry.ref.object.kind : entry.ref.owner.kind))).toEqual(new Set(nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis') && !later(kind))))
     expect(new Set(golden.flatMap(entry => entry.ref.type === 'folder' ? [entry.ref.folder] : []))).toEqual(new Set(folderIds.filter(id => id !== 'integrationServicesCatalogs' && !id.startsWith('ssis') && !later(id))))

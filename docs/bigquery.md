@@ -180,7 +180,9 @@ BigQuery's rule refuses are dropped, and a location that is not a location id is
 takes an optional `dataset` (the query's default dataset; the connection's when absent) and ignores `database`. SQL
 Server's options (stop on error, actual and live plans, client statistics) are refused with `UNSUPPORTED_PROVIDER`, in
 main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
-and leaves out SQL Server's options whatever the tab and Tools › Options hold.
+and leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens Connect and, once the
+connection is ready, runs the query as a SQL Server tab does, through the same estimate and cost prompt. A restored tab whose job has
+not re-attached yet only attaches, so that job's session and results come back first; Execute then runs as usual.
 
 - **One job, never two.** The backend sends `jobs.insert` with a client job id (`varia_` and 32 hex digits), GoogleSQL
   (`useLegacySql: false`), the default dataset, the connection's maximum bytes billed, the execution timeout as
@@ -219,8 +221,13 @@ In-memory BOOL columns order false before true when they sort, filter between va
 
 A multi-statement script runs as one parent job whose statements are child jobs. Between polls (every 2 s) the backend
 lists the parent's new children (`jobs.list` with `parentJobId`, newest first, so paging stops at the first child it has
-read) and reads each finished one in statement order: a SELECT's rows become the next result set, a DML statement's
-affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
+read) and reads each finished one in statement order. The listing uses `projection=full`: the minimal projection leaves
+out `statistics.query`, so it names no statement type, rows affected or DDL target. Full jobs carry each statement's SQL,
+so each page is read under 16 MiB: the final listing asks for 200 jobs a page and a poll for 20, a page that fits doubles
+the next (up to 200, and to at most half a size that was too large) and a larger one is asked again with a quarter. Only
+the statistics are decoded and the SQL is never kept. A statement too large to read alone leaves the listing incomplete:
+a poll's incomplete listing reads nothing and stops the early reads, so statements keep their order, and an incomplete
+final listing says that earlier statements' results may be missing and leaves the transaction unknown. A SELECT's rows become the next result set, a DML statement's affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
 it. Early results show while the script runs. A listing that fails between polls stops the early reads (`jobs.list`
 needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
 rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
@@ -616,7 +623,9 @@ Messages).
   the chip and the marker for the old text. Emulator mode's faked estimates never ask.
 - **The cap** is the hard guard: Cost's **Maximum bytes billed per query** (0, none, by default) goes out as the job's
   `maximumBytesBilled` when the connection's Advanced Properties set none; the connection's own cap wins. BigQuery fails a
-  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only).
+  job past it at no charge (`COST_CAP`, which names the cap, in bytes alone under Bytes only). Varia's own session jobs
+  (`COMMIT TRANSACTION` and `ABORT_SESSION`) bill nothing but still carry a 10 MiB cap, BigQuery's minimum for a billed query,
+  so the cap never stands in the way of a commit.
 
 ## Object Explorer
 
@@ -837,7 +846,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   - **Copy Job ID** copies `project:LOCATION.job_id`, and **Copy Console Link** the job's address in the BigQuery console
     as text (Varia opens no browser; Google does not document the address, so a test pins the form the console uses).
 - **Methods.** `bigquery.jobs.get` (metadata lane): one job's details and full SQL, and a script's children
-  (`jobs.list?parentJobId`, with `allUsers` for another user's script), whose refusal leaves the details and says why.
+  (`jobs.list?parentJobId` with `projection=full`, with `allUsers` for another user's script), whose refusal leaves the
+  details and says why.
   `bigquery.jobs.cancel` (control lane): one job, answered at once with the state BigQuery reports. Both take a connection
   handle, a job id of at most 1,024 characters and a location of at most 64, and serve BigQuery alone. The session a job
   ran in is reported only as whether there was one; its id never leaves the backend.
@@ -917,7 +927,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `-- --bigquery-checks`) drive connect, disconnect and the pre-connect methods through `SqlService.DispatchAsync`
   against `BigQueryFake`, an HTTP handler injected through `BigQueryEnvironment.Http` that answers Google's endpoints
   from `backend/Varia.Backend.Tests/Fixtures/BigQuery` (hand-written from Google's documented shapes) and fails any
-  request no route answers. They cover every mode's sign-in and pin, every error row, the accepted and refused
+  request no route answers. Like BigQuery, it applies `fields`, `selectedFields` and `jobs.list`'s projection: unless
+  `projection=full`, listed jobs lose their configuration, `statistics.query` and `statistics.parentJobId` (the Job
+  History smoke fake does the same). They cover every mode's sign-in and pin, every error row, the accepted and refused
   credential shapes, emulator mode and the dataset lists. `BigQueryExecutionChecks` drives `query.execute` against a
   scripted BigQuery: the insert's body and job id, polling, paging, every type, the row limit, budget and cell caps, read
   errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text. Its Storage
