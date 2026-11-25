@@ -5,12 +5,14 @@
 import type { AgentStepDraft, AgentStepsDraft, StepAction } from './steps.ts'
 
 export type FlowWhich = 'success' | 'fail'
-/** Where an edge goes: a step (by position), a Quit, the End past the last step (Agent then fails the job) or a step that no longer exists. */
+/** Where an edge goes: a step (by position), a Quit, the End past the last step (Agent then fails the job), a step that no longer exists, or,
+ *  in a job with more steps than Varia reads, a step past those read (by its saved id, when the draft names it). */
 export type FlowTarget =
   | { readonly kind: 'step'; readonly index: number }
   | { readonly kind: 'quit'; readonly success: boolean }
   | { readonly kind: 'end' }
   | { readonly kind: 'missing' }
+  | { readonly kind: 'unread'; readonly stepId?: number }
 export interface FlowEdge {
   readonly from: number
   readonly which: FlowWhich
@@ -46,20 +48,24 @@ export interface StepsFlow {
 const flowWhich: readonly FlowWhich[] = ['success', 'fail']
 /** An edge's key, `${from}:${which}`: what the canvas's accent and hot sets and its chips name. */
 export const flowEdgeKey = (from: number, which: FlowWhich): string => `${from}:${which}`
-const targetOf = (draft: AgentStepsDraft, step: AgentStepDraft, at: number, which: FlowWhich): FlowTarget => {
+const savedId = (key: string | undefined): number | undefined => key && /^s[1-9][0-9]*$/.test(key) ? Number(key.slice(1)) : undefined
+const targetOf = (draft: AgentStepsDraft, step: AgentStepDraft, at: number, which: FlowWhich, more: boolean): FlowTarget => {
   const action = which === 'success' ? step.onSuccess : step.onFail, key = which === 'success' ? step.onSuccessTarget : step.onFailTarget
   if (action === 1 || action === 2) return { kind: 'quit', success: action === 1 }
-  if (action === 3) return at === draft.steps.length - 1 ? { kind: 'end' } : { kind: 'step', index: at + 1 }
+  // Past the steps read, the next step is one Varia did not read, not the End.
+  if (action === 3) return at < draft.steps.length - 1 ? { kind: 'step', index: at + 1 } : more ? { kind: 'unread', ...step.from !== undefined ? { stepId: step.from + 1 } : {} } : { kind: 'end' }
   const index = key ? draft.steps.findIndex(item => item.key === key) : -1
-  return index >= 0 ? { kind: 'step', index } : { kind: 'missing' }
+  if (index >= 0) return { kind: 'step', index }
+  const id = savedId(key)
+  return more && id !== undefined ? { kind: 'unread', stepId: id } : { kind: 'missing' }
 }
 const stepTarget = (edge: FlowEdge): number | undefined => edge.target.kind === 'step' ? edge.target.index : undefined
 
-/** The steps as a graph: edges, what the Start step reaches and the loops. */
-export function stepsFlow(draft: AgentStepsDraft): StepsFlow {
+/** The steps as a graph: edges, what the Start step reaches and the loops. `more`: the job has steps past those read (its steps were cut). */
+export function stepsFlow(draft: AgentStepsDraft, more = false): StepsFlow {
   const count = draft.steps.length
   const raw = draft.steps.flatMap((step, at) => flowWhich.map(which => {
-    const action = which === 'success' ? step.onSuccess : step.onFail, target = targetOf(draft, step, at, which)
+    const action = which === 'success' ? step.onSuccess : step.onFail, target = targetOf(draft, step, at, which, more)
     return { from: at, which, action, target, marked: action === 4 && target.kind === 'step' && target.index === at + 1 }
   }))
   const start = draft.steps.findIndex(step => step.key === draft.startKey)
@@ -198,7 +204,7 @@ export function flowChecks(draft: AgentStepsDraft, flow: StepsFlow = stepsFlow(d
     checks.push(edge.which === 'success'
       ? {
         kind: 'end', key: draft.steps[last]!.key, field: 'onSuccess', title: `Step ${n} goes to the next step, but it is the last step`,
-        detail: `So Agent reports every run as failed, even when step ${n} succeeds ("JobManager tried to run a non-existent step (${n + 1})"). Pick a Quit action to say how the job ends.`,
+        detail: `So a run that reaches step ${n} and succeeds there is reported as failed ("JobManager tried to run a non-existent step (${n + 1})"). Pick a Quit action to say how the job ends.`,
         fix: { kind: 'quit', which: 'success', success: true }, fixLabel: 'Quit reporting success'
       }
       : {
@@ -219,6 +225,7 @@ export function flowActionWords(edge: FlowEdge): string {
   if (target.kind === 'quit') return `quit reporting ${target.success ? 'success' : 'failure'}`
   if (target.kind === 'end') return 'go to the next step, which fails the job'
   if (target.kind === 'missing') return 'go to a step that no longer exists'
+  if (target.kind === 'unread') return `go to ${edge.action === 3 ? 'the next step' : 'step'}${target.stepId !== undefined ? ` ${target.stepId}` : ''}, past the steps Varia reads`
   if (edge.action === 3) return 'go to the next step'
   return `go to step ${target.index + 1}${edge.loop ? ', loop' : ''}`
 }
@@ -254,9 +261,10 @@ export interface FlowLayout {
   readonly edges: readonly FlowEdgeLayout[]
   /** The port centres of each step, success then failure. */
   readonly ports: readonly (readonly [FlowPoint, FlowPoint])[]
-  /** The Quit pills (their top centre) and the End node (its top centre), keyed `index:which`. */
+  /** The Quit pills (their top centre), also for a step that no longer exists or was not read; and an End node (its top centre) for each of
+   *  the last step's actions that goes to the next step, so both have a destination when both do. */
   readonly quits: readonly { readonly edge: FlowEdge; readonly at: FlowPoint }[]
-  readonly end?: { readonly at: FlowPoint; readonly edge: FlowEdge }
+  readonly ends: readonly { readonly at: FlowPoint; readonly edge: FlowEdge }[]
   readonly start?: { readonly from: FlowPoint; readonly to: FlowPoint }
   /** The x just past the lanes on each side, for chips. */
   readonly chipLeft: number
@@ -307,14 +315,14 @@ export function flowLayout(flow: StepsFlow, metrics: FlowMetrics): FlowLayout {
   }
   const edges: FlowEdgeLayout[] = []
   const quits: { edge: FlowEdge; at: FlowPoint }[] = []
-  let end: FlowLayout['end']
+  const ends: { at: FlowPoint; edge: FlowEdge }[] = []
   flow.edges.forEach((edge, id) => {
     const [px, py] = ports[edge.from]![edge.which === 'success' ? 0 : 1]
     const y0 = py + portDrop
     const target = edge.target
-    if (target.kind === 'quit' || target.kind === 'missing') { quits.push({ edge, at: [px, y0 + 1] }); edges.push({ edge, points: [], mid: [px, y0] }); return }
+    if (target.kind === 'quit' || target.kind === 'missing' || target.kind === 'unread') { quits.push({ edge, at: [px, y0 + 1] }); edges.push({ edge, points: [], mid: [px, y0] }); return }
     if (target.kind === 'end') {
-      end = { at: [px, y0 + endDrop + 2], edge }
+      ends.push({ at: [px, y0 + endDrop + 2], edge })
       edges.push({ edge, points: [[px, y0], [px, y0 + endDrop]], mid: [px + 13, y0 + endDrop / 2] })
       return
     }
@@ -334,7 +342,7 @@ export function flowLayout(flow: StepsFlow, metrics: FlowMetrics): FlowLayout {
   const chipLeft = x - laneGap - leftCount * laneStep, chipRight = x + w + laneGap + rightCount * laneStep
   return {
     // Lane chips sit past the right lanes; with none, the Quit pills stay inside the node column.
-    width: chipRight + margin + (rightCount ? 120 : 0), height, x, nodes, edges, ports, quits, ...end ? { end } : {},
+    width: chipRight + margin + (rightCount ? 120 : 0), height, x, nodes, edges, ports, quits, ends,
     ...startNode ? { start: { from: [margin + startWidth, sy] as const, to: [x - 2, sy] as const } } : {},
     chipLeft, chipRight
   }

@@ -59,14 +59,14 @@ vi.mock('../src/renderer/src/core/windows', () => ({ observeResize: () => ({ dis
 import { FlowCanvas, type FlowCanvasModel } from '../src/renderer/src/agent/FlowCanvas'
 
 const colors = { background: '#000000', card: '#111111', text: '#ffffff', muted: '#aaaaaa', border: '#777777', accent: '#8888ff', selection: '#222244', success: '#00ff00', error: '#ff0000', warning: '#ffff00', dots: '#333333' }
-function model(): FlowCanvasModel {
-  const draft: AgentStepsDraft = { startKey: 's1', steps: ['Check', 'Rebuild', 'Update'].map((name, at) => ({ ...newStepDraft([]), key: `s${at + 1}`, from: at + 1, name, onSuccess: 3, onFail: 2 })) }
+function model(names: readonly string[] = ['Check', 'Rebuild', 'Update']): FlowCanvasModel {
+  const draft: AgentStepsDraft = { startKey: 's1', steps: names.map((name, at) => ({ ...newStepDraft([]), key: `s${at + 1}`, from: at + 1, name, onSuccess: 3, onFail: 2 })) }
   const flow = stepsFlow(draft)
   return { flow, layout: flowLayout(flow, flowMetrics), nodes: draft.steps.map(step => ({ name: step.name, type: 'T-SQL', icon: 'step-tsql', sub: 'master', never: false, changed: false })),
     accent: new Set(), hot: new Set(), fadeRest: false, chips: [], sequence: new Map() }
 }
-function create(root: HTMLElement, failed = () => { throw new Error('Canvas initialization failed') }) {
-  return new FlowCanvas({ root, model: model(), colors, selected: 0, focused: false, editable: true, select() {}, open() {}, connect() {}, dropped() {}, cameraChanged() {}, failed })
+function create(root: HTMLElement, failed = () => { throw new Error('Canvas initialization failed') }, shown = model(), selected = 0) {
+  return new FlowCanvas({ root, model: shown, colors, selected, focused: false, editable: true, select() {}, open() {}, connect() {}, dropped() {}, cameraChanged() {}, failed })
 }
 type Rendering = { draw(): void; resize(): void; pool: { active: Map<string, { resolution: number; styleKey: string }> }
   app: { canvas: HTMLCanvasElement; renderer: { resolution: number; gl: { drawingBufferWidth: number }; canvasText: { _activeTextures: Record<string, unknown> } } } }
@@ -125,4 +125,51 @@ it('draws again at a new display scale, caps the backing store at what the devic
     gpu.limit = 0; gpu.allocatable = 0
     frames.mockRestore(); media.mockRestore(); pixelRatio.mockRestore()
   }
+})
+
+type Placed = { camera: { x: number; y: number; scale: number }; connecting?: unknown }
+const sized = (width: number, height: number) => {
+  const root = document.createElement('div')
+  Object.defineProperty(root, 'clientWidth', { value: width }); Object.defineProperty(root, 'clientHeight', { value: height })
+  return root
+}
+const fifty = () => model(Array.from({ length: 50 }, (_, at) => `Step ${at + 1}`))
+
+it('opens at the step selected before the canvas existed, and Fit shows the whole of a 50-step job', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const shown = fifty(), canvas = create(sized(900, 600), undefined, shown, 30), placed = canvas as unknown as Placed
+  try {
+    await Promise.resolve()
+    // Step 31 was selected in List: the first placement scrolls to it rather than opening at the top.
+    const node = shown.layout.nodes[30]!, top = placed.camera.y + node.y * placed.camera.scale
+    expect(top).toBeGreaterThanOrEqual(0)
+    expect(top + node.height * placed.camera.scale).toBeLessThanOrEqual(600)
+    // Fit goes below the 25 % zoom floor when the graph needs it, and the translation is for the scale it draws at.
+    canvas.fit()
+    expect(placed.camera.scale).toBeLessThan(0.25)
+    expect(placed.camera.y).toBeGreaterThanOrEqual(0)
+    expect(placed.camera.y + shown.layout.height * placed.camera.scale).toBeLessThanOrEqual(600)
+    // Zooming out past Fit stays at Fit's scale, its centre kept.
+    const fitted = placed.camera.scale
+    canvas.zoom(0.5)
+    expect(placed.camera.scale).toBeCloseTo(fitted)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it('ends a connect drag when the steps change, and names the step under a pointer menu, none over empty canvas', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const root = sized(900, 600), shown = model(), canvas = create(root, undefined, shown), placed = canvas as unknown as Placed
+  try {
+    await Promise.resolve()
+    const press = (x: number, y: number) => root.dispatchEvent(new MouseEvent('pointerdown', { button: 2, clientX: x, clientY: y }))
+    const node = shown.layout.nodes[1]!, scale = placed.camera.scale
+    press(placed.camera.x + (node.x + 20) * scale, placed.camera.y + (node.y + 10) * scale)
+    expect(canvas.pressedNode()).toBe(1)
+    press(placed.camera.x + (node.x - 60) * scale, placed.camera.y + (node.y + 10) * scale)
+    expect(canvas.pressedNode()).toBe(-1)
+    // A drag held from a port while a step is deleted (or moved): the next model ends it rather than drawing from a port that moved.
+    placed.connecting = { from: 2, which: 'success', id: 1, x: 0, y: 0, over: -1 }
+    canvas.update(model(['Check', 'Rebuild']), 0, false, true)
+    expect(placed.connecting).toBeUndefined()
+  } finally { canvas.dispose(); frames.mockRestore() }
 })

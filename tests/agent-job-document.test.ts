@@ -683,3 +683,37 @@ describe("the job document's Steps page", () => {
     expect(jobDocuments.get(id)?.ssis).toMatchObject({ open: 'F\\P1', projectModels: { 'F\\P2': expect.anything() } })
   })
 })
+
+describe("the job document's step command models", () => {
+  it('keeps each step\'s model (and its undo) across the views until the document closes, and drops an older read\'s', async () => {
+    const { stepModels, pruneStepModels } = await import('../src/renderer/src/agent/step-models')
+    const { jobDocuments } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const fake = () => ({ dispose: vi.fn() }) as unknown as import('monaco-editor').editor.ITextModel
+    const kept = fake(), older = fake()
+    stepModels(id).set('read2|s1', { model: kept, documentId: 'a' })
+    stepModels(id).set('read1|s1', { model: older, documentId: 'b' })
+    // List and Flow mount and unmount the editor; the models stay with the document.
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.setStepsView(id, 'list')
+    expect(stepModels(id).get('read2|s1')?.model).toBe(kept)
+    pruneStepModels(id, 'read2')
+    expect(older.dispose).toHaveBeenCalled()
+    expect([...stepModels(id).keys()]).toEqual(['read2|s1'])
+    jobDocuments.closed(id)
+    expect(kept.dispose).toHaveBeenCalled()
+    expect(stepModels(id).size).toBe(0)
+  })
+  it('opens Flow\'s docked editor for an Edit step link from History or the copy review, and selects the step on List', async () => {
+    const { jobDocuments } = opened(model({ steps: [{ id: 1, name: 'Extract', subsystem: 'TSQL' }, { id: 2, name: 'Load', subsystem: 'TSQL' }] }))
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.editStep(id, 's2')
+    expect(jobDocuments.get(id)?.step).toBe('s2')
+    expect(jobDocuments.get(id)?.stepEditor).toBeUndefined()
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.editStep(id, 's1')
+    expect(jobDocuments.get(id)).toMatchObject({ step: 's1', stepEditor: true })
+  })
+})

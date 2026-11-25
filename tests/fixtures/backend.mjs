@@ -1495,7 +1495,7 @@ function activityKill(params) {
 const sessionTextColumns = ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
-  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00' })
+  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00', held: true })
   return allSessions().filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
@@ -1870,6 +1870,8 @@ const agentRunning = job => agentRuns.has(job.id)
 /** Each list or watched sample moves a started run on; after two it ends (Succeeded, or Canceled when stopped). */
 function agentAdvance() {
   for (const [id, run] of agentRuns) {
+    // The Agent session's run (activity-agent-job) lasts until Stop Job ends it: its session row says the job runs, so Stop must find it.
+    if (run.held && !run.stopped) continue
     if (run.samples++ < 2) continue
     Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
     agentRuns.delete(id)

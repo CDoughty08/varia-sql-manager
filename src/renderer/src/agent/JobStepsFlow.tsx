@@ -70,6 +70,7 @@ function actionLine(edge: FlowEdge, steps: readonly AgentStepDraft[]): string {
   if (target.kind === 'quit') return `Quit reporting ${target.success ? 'success' : 'failure'}`
   if (target.kind === 'end') return 'Go to the next step · none, so the job fails'
   if (target.kind === 'missing') return 'Go to a step that no longer exists'
+  if (target.kind === 'unread') return `Go to ${edge.action === 3 ? 'the next step' : 'step'}${target.stepId !== undefined ? ` · ${target.stepId}` : ''}, past the steps Varia reads`
   const name = steps[target.index]?.name || 'Unnamed step'
   return edge.action === 3 ? `Go to the next step · ${target.index + 1} ${name}` : `Go to step ${target.index + 1} · ${name}`
 }
@@ -101,7 +102,7 @@ function Check({ check, editable, service, id }: { readonly check: FlowCheck; re
 }
 
 export default function JobStepsFlow({ state, model, draft, editable, service, switcher, editor }: FlowProps) {
-  const { theme, commands } = useWorkbench()
+  const { theme, commands, menuTargets } = useWorkbench()
   const colors = useServiceSnapshot(theme).active.colors
   const steps = draft.steps.steps
   const selectedStep = service.selectedStep(state.id)
@@ -116,10 +117,11 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   const items = useRef(new Map<string, HTMLDivElement>())
   const dropMarker = useRef<HTMLSpanElement>(null)
 
-  const flow = useMemo(() => stepsFlow(draft.steps), [draft.steps])
-  const layout = useMemo(() => flowLayout(flow, flowMetrics), [flow])
-  // A job with more steps than Varia reads has go-tos past them that are not problems Varia can fix, so it checks nothing (as List).
+  // A job with more steps than Varia reads: its go-tos past them, and its last read step's next step, lead to steps not read (drawn so),
+  // not to the End or a missing step; and it checks nothing (as List).
   const truncated = !!model.stepsTruncated
+  const flow = useMemo(() => stepsFlow(draft.steps, truncated), [draft.steps, truncated])
+  const layout = useMemo(() => flowLayout(flow, flowMetrics), [flow])
   const checks = useMemo(() => truncated ? [] : flowChecks(draft.steps, flow), [draft.steps, flow, truncated])
   const canvasModel: FlowCanvasModel = useMemo(() => {
     const accent = changedEdges(draft.steps, model)
@@ -192,10 +194,27 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   const firstPlace = useRef(true)
   useEffect(() => { if (firstPlace.current) { firstPlace.current = false; return } canvas.current?.recenter() }, [editingNow])
 
-  const menuTarget = useMenuTarget<HTMLElement>(element => {
-    const key = element.getAttribute('data-step-key') ?? service.selectedStep(state.id)?.key
+  // A keyboard menu opens on the tree's active item (the selected step); a pointer menu on the canvas is the menu of the step under the pointer,
+  // and none over empty canvas, an edge or a pill (it never acts on a selected step that may be off screen).
+  const menuTarget = useMenuTarget<HTMLElement>((tree, from) => {
+    const item = from.closest('[data-step-key]')
+    const key = item ? item.getAttribute('data-step-key')
+      : from === tree ? service.selectedStep(state.id)?.key
+        : latest.current.steps[canvas.current?.pressedNode() ?? -1]?.key
     return key ? { kind: 'agentStep', tabId: state.id, key } : null
   }, () => root.current ?? undefined)
+  // Shift+F10 on a step panned out of view: the camera brings it back, rather than the menu scrolling the tree (and the canvas with it).
+  useEffect(() => {
+    const tree = root.current
+    if (!tree) return
+    return menuTargets.registerReveal(tree, item => {
+      const at = latest.current.steps.findIndex(step => step.key === item.getAttribute('data-step-key'))
+      if (at >= 0) canvas.current?.reveal(at)
+      place(cameraRef.current)
+    })
+  // place reads refs only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuTargets])
   const treeRef = (element: HTMLDivElement | null) => { root.current = element; menuTarget(element) }
 
   const missing = truncated ? [] : flow.edges.filter(edge => edge.target.kind === 'missing')

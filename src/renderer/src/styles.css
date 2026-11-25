@@ -2950,7 +2950,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-step-list-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-transform: uppercase; letter-spacing: .04em; }
 .agent-steps-view { text-transform: none; letter-spacing: 0; font-size: var(--varia-size-sm); }
 .agent-steps-view .segmented-option { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
-.agent-flow { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.agent-flow { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; container: agent-flow / inline-size; }
 .agent-flow-toolbar { display: flex; align-items: center; gap: var(--varia-space-1); flex-wrap: wrap; }
 .agent-flow-sep { width: 1px; align-self: stretch; margin: var(--varia-space-0) var(--varia-space-1); background: var(--varia-panel-border); }
 .agent-flow-spacer { flex: 1; }
@@ -2968,6 +2968,15 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-flow-drop { position: absolute; width: 1px; height: 1px; pointer-events: none; }
 .agent-flow-failed { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--varia-space-2); padding: var(--varia-space-4); text-align: center; }
 .agent-flow-side { display: flex; flex-direction: column; gap: var(--varia-space-3); min-width: 0; padding: var(--varia-space-3); overflow: auto; border-left: 1px solid var(--varia-panel-border); }
+/* A pane too narrow for the graph beside its panel (a split editor): the panel goes under the graph, which keeps a usable height. */
+@container agent-flow (max-width: 760px) {
+  .agent-flow-body, .agent-flow-body[data-wide] { grid-template-columns: minmax(0, 1fr); grid-template-rows: clamp(280px, 50vh, 520px) auto; height: auto; }
+  .agent-flow-side { border-left: 0; border-top: 1px solid var(--varia-panel-border); overflow: visible; }
+}
+@container agent-flow (min-width: 761px) and (max-width: 1040px) {
+  .agent-flow-body[data-wide] { grid-template-columns: minmax(0, 1fr); grid-template-rows: clamp(280px, 50vh, 520px) auto; height: auto; }
+  .agent-flow-body[data-wide] .agent-flow-side { border-left: 0; border-top: 1px solid var(--varia-panel-border); overflow: visible; }
+}
 .agent-flow-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-transform: uppercase; letter-spacing: .04em; }
 .agent-flow-head button { text-transform: none; letter-spacing: 0; }
 .agent-flow-sec { display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); min-width: 0; }
