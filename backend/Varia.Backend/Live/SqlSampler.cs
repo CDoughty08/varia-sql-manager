@@ -624,11 +624,11 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         var snapshots = new List<LiveSnapshotSample>();
         var appends = new List<LiveAppendSample>();
         var full = new List<int>();
-        foreach (var (index, rows, more, view, scope) in read)
+        foreach (var (index, rows, more, view, scope, refiltered) in read)
         {
             if (spec.Tables[index].Mode == "snapshot")
             {
-                var write = tables.Snapshot(spec, index).Write(rows, new(item.Sort, spec.FilterMode == "memory" ? item.Filter : null, view, item.Tracks.GetValueOrDefault(index), scope), more);
+                var write = tables.Snapshot(spec, index).Write(rows, new(item.Sort, spec.FilterMode == "memory" ? item.Filter : null, view, item.Tracks.GetValueOrDefault(index), scope, refiltered), more);
                 if (write.Sample is { } sample) snapshots.Add(sample);
                 if (write.Budget) full.Add(index);
             }
@@ -684,6 +684,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     public void Idle() => Drop(healthy: true);
 
     public void Apply(object args) => sourceReader?.Apply(args);
+    public IReadOnlyCollection<string>? Rereads(object args) => sourceReader is null ? [] : sourceReader.Rereads(args);
     public LiveSampleBatch Resort(IReadOnlyList<LiveDue> probes) => tables.Resort(probes);
     public uint[] Keep() => tables.Keep(limits.Kept);
     public void Release() => tables.Release();

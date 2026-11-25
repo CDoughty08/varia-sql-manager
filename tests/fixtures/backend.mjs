@@ -1837,6 +1837,8 @@ function liveUpdate(id, params) {
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
   if (params.args) live.args = live.source === 'ssis.operations' || live.source === 'agent.jobs' || live.source === 'agent.history' || live.source === 'agent.errorLog' ? { ...params.args } : { ...live.args, ...params.args }
+  // New args read again at once, as the backend's Reread of every probe does.
+  if (params.args) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
   if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })

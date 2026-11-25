@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Live;
@@ -39,6 +40,8 @@ internal sealed class ActivityReader : ILiveSqlReader
     private int focus;
     /// <summary>The focus moved to another session since the last sessions sample: its series start again.</summary>
     private bool focusMoved;
+    /// <summary>Each table's filter as last applied, serialized: an update reads again only the probes whose filters changed.</summary>
+    private readonly Dictionary<string, string> applied = new(StringComparer.Ordinal);
     private ServerProfile? profile;
 
     public ActivityReader(ILiveHost host, string connectionId, ActivityLiveArgs? args = null, ActivityCatalog? catalog = null)
@@ -87,13 +90,32 @@ internal sealed class ActivityReader : ILiveSqlReader
         var args = (ActivityLiveArgs)value;
         lock (gate)
         {
-            foreach (var dto in args.Filters ?? []) filters[dto!.Table!] = ActivityFilter.Compile(catalog, dto);
+            foreach (var dto in args.Filters ?? [])
+            {
+                filters[dto!.Table!] = ActivityFilter.Compile(catalog, dto);
+                applied[dto.Table!] = JsonSerializer.Serialize(dto);
+            }
             if (args.FocusSession is { } session && session != focus)
             {
                 focus = session;
                 focusMoved = true;
             }
         }
+    }
+
+    /// <summary>The probes holding the tables whose filters change, and the sessions probe when the focus moves: a Sessions
+    /// filter does not run the plan-cache probe early.</summary>
+    public IReadOnlyCollection<string>? Rereads(object value)
+    {
+        var args = (ActivityLiveArgs)value;
+        var probes = new HashSet<string>(StringComparer.Ordinal);
+        lock (gate)
+        {
+            foreach (var dto in args.Filters ?? [])
+                if (dto?.Table is { } table && catalog.Tables.TryGetValue(table, out var spec) && (!applied.TryGetValue(table, out var before) || before != JsonSerializer.Serialize(dto))) probes.Add(spec.Probe);
+            if (args.FocusSession is { } session && session != focus && catalog.Tables.TryGetValue("sessions", out var owner)) probes.Add(owner.Probe);
+        }
+        return probes;
     }
 
     public void Reset()

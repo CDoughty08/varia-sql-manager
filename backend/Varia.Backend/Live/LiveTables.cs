@@ -168,9 +168,9 @@ internal readonly record struct LiveTableWrite<T>(T? Sample, bool Budget) where 
 
 /// <summary>What a snapshot revision applies to the source's rows: the user's sort (catalogue column ids; the key breaks
 /// ties), a filter on stored cell text, the probe's row view (a predicate the source gives for the chosen view id) and the
-/// latest track list.</summary>
+/// latest track list. Refiltered: the source's own args filter changed with these rows, so none lingers as departed.</summary>
 internal sealed record LiveSnapshotSettings(LiveSortArgs[]? Sort = null, LiveFilterArgs? Filter = null, Func<LiveRow, bool>? View = null, LiveTrackArgs? Track = null,
-    Func<LiveRow, bool>? FacetScope = null);
+    Func<LiveRow, bool>? FacetScope = null, bool Refiltered = false);
 
 /// <summary>The stored tables of one subscription (docs/ipc.md, Live subscriptions, Tables): every snapshot and append table
 /// of its probes, created on first use, sharing one memory limit (64 MiB, LiveBudget) within the live share of the result
@@ -346,6 +346,9 @@ internal sealed class LiveSnapshotTable
     private (int Index, bool Descending)[] sorted = [];
     private List<LiveFacet>? sentFacets;
     private long revision;
+    /// <summary>Rows read anew under new args have not been stored yet (a write at the budget stored nothing): until one is, no
+    /// tracked row the old args showed lingers as departed.</summary>
+    private bool refiltered;
 
     public LiveSnapshotTable(LiveTableSet owner, LiveTableJson spec, int index)
     {
@@ -364,7 +367,8 @@ internal sealed class LiveSnapshotTable
     {
         var keyed = key.Length > 0;
         var facets = spec.Facets is { Count: > 0 } named ? Facets(source, named, settings.FacetScope) : null;
-        var lingers = spec.Departed && keyed && settings.Track is not null;
+        if (settings.Refiltered) refiltered = true;
+        var lingers = spec.Departed && keyed && settings.Track is not null && !refiltered;
         present.Clear();
         if (lingers) foreach (var row in source) present.Add(row.Key(key));
         var filter = Filter(settings.Filter);
@@ -372,7 +376,7 @@ internal sealed class LiveSnapshotTable
         foreach (var row in source) if ((settings.View?.Invoke(row) ?? true) && filter(row)) rows.Add((row, false, rows.Count));
         if (lingers)
         {
-            // A tracked row that left the source (not one the view or filter hides) stays one revision, at the row it had: the
+            // A tracked row that left the source (not one the view, the filter or new args hide) stays one revision, at the row it had: the
             // list's first Linger keys (the grid's selected rows), not the rows it follows only to place the selection.
             var track = settings.Track!;
             foreach (var tracked in track.Keys.Take(Math.Clamp(track.Linger ?? track.Keys.Length, 0, track.Keys.Length)).Distinct(StringComparer.Ordinal))
@@ -444,6 +448,7 @@ internal sealed class LiveSnapshotTable
             return new(null, true);
         }
         revisions.Add(set);
+        if (!resort) refiltered = false;
         var stored = 0;
         foreach (var item in rows)
         {
