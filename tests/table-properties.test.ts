@@ -513,5 +513,19 @@ describe('Table Properties unified inspector helpers and view', () => {
     fixture.tableProperties.selectTab(fixture.id, 'permissions')
     const permissionsHtml = render()
     expect(permissionsHtml).toContain('style="height:424px;flex:none"')
+    expect(permissionsHtml).toContain('(20 permissions and predicates)')
+
+    // Singular count labels use singular nouns when exactly one item is present (and not truncated).
+    const singleFixture = opened(tableModel({
+      permissions: [{ principal: 'app', principalType: 'SQL_USER', permission: 'SELECT', state: 'GRANT', grantor: 'dbo' }],
+      extendedProperties: [{ name: 'MS_Description', value: 'Orders' }]
+    }))
+    await settled()
+    const singleHtml = renderToStaticMarkup(createElement(WorkbenchProvider, {
+      workbench: { ...singleFixture, platform: 'win32' } as unknown as Workbench,
+      children: createElement(TableProperties, { documentId: singleFixture.id })
+    }))
+    expect(singleHtml).toContain('(1 permission or predicate)')
+    expect(singleHtml).toContain('(1 extended property)')
   })
 })

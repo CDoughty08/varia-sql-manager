@@ -899,12 +899,12 @@ describe('Peek kinds beyond modules', () => {
     // A synonym has no Top rows, a sequence no Parameters, a database or a login no Dependencies.
     expect([peekHas('synonym', 'rows'), peekHas('sequence', 'parameters'), peekHas('database', 'dependencies'), peekHas('login', 'dependencies'), peekHas('key', 'dependencies'), peekHas('constraint', 'dependencies')]).toEqual([false, false, false, false, false, false])
     for (const kind of peekKinds) expect(peekTabsOf(kind).slice(0, 2), kind).toEqual(['overview', 'definition'])
-    // Columns, Indexes & keys, Key columns and Parameters are lists, read with the facts: the backend's catalogue names them for the kinds that show them.
+    // Columns, Indexes & Keys, Key columns and Parameters are lists, read with the facts: the backend's catalogue names them for the kinds that show them.
     expect(peekListsOf('table')).toEqual(['columns', 'tableObjects'])
     expect(peekListsOf('key')).toEqual(['keyColumns'])
     expect(peekListsOf('constraint')).toEqual([])
     expect(peekListsOf('function')).toEqual(['parameters'])
-    expect(peekTabTitle('table', 'tableObjects')).toBe('Indexes & keys')
+    expect(peekTabTitle('table', 'tableObjects')).toBe('Indexes & Keys')
     expect(peekTabTitle('key', 'keyColumns')).toBe('Key columns')
     expect(peekTabTitle('login', 'userMapping')).toBe('User mapping')
     expect(peekTabTitle('index', 'indexColumns')).toBe(peekLists.indexColumns.title)

@@ -27,6 +27,7 @@ on:
       - src/main/update-staging.ts
       - scripts/packaged-smoke.mjs
       - scripts/packaged-contents.mjs
+      - scripts/package-prepare.mjs
       - scripts/prepare-sqltools-service.mjs
       - scripts/prepare-electron.mjs
       - scripts/portable-smoke.mjs
@@ -89,7 +90,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     uses: ./.github/workflows/package.yml
     with:
-      runner: macos-15-intel
+      runner: macos-15
       rid: osx-x64
       target: --mac dmg zip --x64
       executable: dist/mac/Varia SQL Manager.app/Contents/MacOS/Varia SQL Manager

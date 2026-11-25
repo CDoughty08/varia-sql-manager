@@ -32,8 +32,8 @@ the Measurements below with the new baseline.
   own display is 1024x768) run on main pushes; the Windows and macOS benchmarks run daily and by hand
   (`bench-desktop.yml`).
 - **Release builds** (`release.yml`, through `package.yml`, held by `tests/release-workflow.test.ts`) package every main
-  push, tags and manual runs, and a pull request only when it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on main (Intel alone, every Monday), so an x64-only
-  break shows before the tag it would block. Installers upload only for tags and manual runs; a typecheck runs only for
+  push, tags and manual runs, and a pull request only when it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on main (cross-built on `macos-15` arm64 with Rosetta 2 packaged smoke, retiring `macos-15-intel`), so an x64-only
+  break shows before the tag it would block. `package.yml` caches NuGet (`packages.lock.json`) and prepares the app, SQL Tools Service, backend and update helper concurrently (`scripts/package-prepare.mjs`). On non-tag main and PR pushes, Windows uses `--config.compression=store` (still building and smoke-testing Setup, Portable, ZIP and the updater) and macOS uses `--mac dir` (still smoke-testing the full `.app` with fuses and asar integrity while skipping unused DMG/ZIP and hdiutil). Tags, manual runs and the weekly run build full compressed release artifacts. Installers upload only for tags and manual runs; a typecheck runs only for
   tags. GitHub reads only a pull request's first 3,000 changed files for `paths`, so a larger pull request may skip
   Release builds: run them by hand then. The Windows package also publishes the update helper (NativeAOT), builds the
   archive installed copies stage from, and its installer smoke stages and swaps that archive into the installation it
@@ -119,9 +119,15 @@ the Measurements below with the new baseline.
   Release-backend vitest files as concurrent lanes: all at once with 8 or more CPUs, two chains side by side on CI's 3 and
   4 vCPU runners (all at once starved macOS until time-bounded tests failed). On CI runners with fewer than 8 CPUs,
   `VITEST_MAX_WORKERS` is capped (`Math.ceil(cpus / 2)`, capped below `cpus`) so vitest and the .NET lanes do not
-  oversubscribe the runner. The electron-vite build runs after the .NET chain, not after vitest. tsc runs only on Linux
-  (`VARIA_CHECK_SKIP=typecheck` on Windows and macOS): it reads only sources and installed types, and Linux's
-  case-sensitive paths are the strictest. A check stopped by the step timeout prints what its running lanes held.
+  oversubscribe the runner. The electron-vite build runs after the .NET chain, not after vitest. Windows and macOS `Check`
+  skip tsc and electron-vite build (`VARIA_CHECK_SKIP=typecheck,build`) and run the OS-sensitive scope (`VARIA_CHECK_SCOPE=os`):
+  all OS/main/FS/scripts/process/sidecar Vitest files (`scripts/vitest-scope.mjs`) and all OS/FS/ICU/process/crypto/network
+  offline .NET suites (`OfflineSuites.PureManaged` + packed pass run on Linux and locally). Linux `Check` runs 100% of every
+  Vitest file, offline .NET suite, packed pass, tsc and electron-vite build. A check stopped by the step timeout prints what
+  its running lanes held.
+- `vitest.config.ts` splits tests into a `stateless` project (`isolate: false`, pure Node tests verified by
+  `tests/vitest-scope.test.ts` to have no DOM, mocks, fake timers, env/global mutation or `child_process`) and an `isolated`
+  project (`isolate: true`), eliminating repeated module-graph imports across 300+ stateless files.
 - `findConflicts(defaultRules(platform), platform)` memoizes its default-rule check per platform (returning a fresh copy)
   and `contextRecord` clones a precomputed platform base record, so every `KeybindingService` instantiated across vitest
   does not re-scan all rules and focus samples.
@@ -134,22 +140,24 @@ the Measurements below with the new baseline.
   unrelated tests. Look for a process above the job's priority when a Windows test stalls with its worker using no CPU.
 - The offline .NET suites run in six concurrent lanes (`OfflineSuites.cs`) with a raised `ThreadPool.SetMinThreads` floor
   so synchronous lanes do not starve async checks, after the few suites that change or measure process-wide state run
-  alone; each prints its time. `FusedWhole` (`Diffs`, `DistinctsSearch`, `MixedServices`, `Faults`) and
+  alone; each prints its time. `ResultStore.DefaultPacking` is `AsyncLocal`, so the packed-pass result suites share the same
+  six-lane schedule without a mid-run barrier. `FusedWhole` (`Diffs`, `DistinctsSearch`, `MixedServices`, `Faults`) and
   `BigQueryExecution` (`Core`, `Residence`, `ViewsCopySave`, `Storage`) are split into four concurrent suites each, and
   BigQuery residence checks poll asynchronously instead of busy-spinning on `SpinWait`. `OfflineSuites` names any suite
-  still running after 3 minutes
-  and exits. The result suites run a second time with every result's pages packed (Program.cs `packedPass`), since only
-  that pass reaches every reader through packed pages.
+  still running after 3 minutes and exits.
 - Offline checks fail their connections on a malformed named-pipe address on Windows instead of `tcp:127.0.0.1,1`
   (`Unreachable.cs`).
+- `scripts/fixtures/explorer-tree.mjs` (`findExplorerRow`) checks rendered rows synchronously and scans virtualized overflowed
+  trees immediately instead of waiting 2 s before scrolling, saving over 5 runner-minutes per PR in `object-actions-smoke`
+  and `explorer-smoke`.
 - `npm run build:smoke` prepares Electron and SQL Tools Service in parallel with the Release backend and electron-vite
   builds (`scripts/check.mjs --build`). Jobs that do not launch the SQL language server (Linux smoke shards 1 and 2,
   Windows smoke shards, Linux benchmarks) pass `VARIA_CHECK_SKIP=sqltools`.
-- Linux jobs that need SQL Server (`live`, `smoke-linux`, `bench-linux`) start the container in the background right
-  after checkout via `scripts/ci-docker.mjs` (retrying transient Docker pulls up to three times) and wait for readiness
-  only before the first SQL step, hiding container boot behind setup and builds. The BigQuery emulator uses the same
-  pull-retry helper and starts only in the Linux smoke shard that owns `connections-smoke.mjs`
-  (`smoke-shards.mjs --has-suite`).
+- Linux jobs that need SQL Server (`live`, `smoke-linux`, `bench-linux`) start the Docker pull and container boot detached
+  right after checkout via `scripts/ci-docker.mjs --detach` (retrying transient Docker pulls up to three times) and wait for
+  readiness only before the first SQL step, hiding both image pull and container boot behind setup and builds. The BigQuery
+  emulator uses the same detached pull-retry helper and starts only in live slot 1 and the Linux smoke shard that owns
+  `connections-smoke.mjs` (`smoke-shards.mjs --has-suite`).
 - Smoke suites race `close()` through `within()` (`scripts/fixtures/smoke.mjs`), which clears its timer
   (`tests/idle-waits.test.ts`). A close not finished in 45 s kills the app and fails the suite with its own error
   (`boundedClose`; on Linux it names the processes left in the app's process group), and `smoke-shards.mjs` kills a
@@ -170,16 +178,12 @@ the Measurements below with the new baseline.
 Savings are estimates checked against CI logs. "Owner" marks changes that contradict a rule
 in CLAUDE.md, which the owner decides.
 
-1. **Profile object-actions-smoke and the Windows-only slow checks** (M). object-actions is the longest suite (124 s
-   Linux, 179 s Windows), over the roughly 90 s split guideline; its login block is about 10 times slower per line than
-   its neighbours. A Windows excess of about 15 s usually means an assertion runs out its 15 s Windows expect timeout.
-   Use `VARIA_SMOKE_PROFILE`.
-2. **Cross-build osx-x64 on arm64, or `--dir` packaging on non-tag macOS runs** (M). Ends the Intel image GitHub is
-   retiring; `--dir` skips the DMG and hdiutil step behind 2 of the 3 infrastructure false failures.
-3. **Split the Host offline suite** (S). It is the floor of the offline lanes (its `Thread.Sleep(1200)` and budget waits).
-4. **Non-isolated vitest for read-only catalogue and lint tests** (M, trial first). About 9 to 11 s off the vitest chain,
-   but leaked module state can weaken coverage silently: trial with `sequence.shuffle` on an allowlist guarded against
-   mocks, timers, globals and `process.env`.
+1. **Refresh `suiteSeconds` after the `explorer-tree.mjs` fix and consider consolidating tiny smoke suites** (S). With
+   the 2 s pre-scroll wait removed, `object-actions-smoke` and `explorer-smoke` drop sharply; re-measure via CI logs and
+   rebalance `scripts/smoke-shards.mjs`. Merging sibling 5–12 s suites removes ~3–5 s of Electron cold-start/close per merge.
+2. **Split `ScriptingLiveChecks` (145 s) in Live group 1** (M). It is 66% of Live group 1; splitting it lets all three
+   live groups drop under 200 s.
+3. **Split the Host offline suite** (S). It remains a lane floor on small runners (its `Thread.Sleep(1200)` and budget waits).
 
 Considered and rejected (do not re-propose without new numbers):
 

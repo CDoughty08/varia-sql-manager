@@ -14,19 +14,38 @@ static class OfflineSuites
     // Google's and AWS's environment variables.
     public static readonly string[] Alone = ["Entra", "ConnectionPrincipal", "Store", "Scripting", "SessionDisconnect", "BigQuery"];
 
-    // Measured seconds per suite on CI (PR #723, 2026-11-24; suites under 0.3 s count as 0.1 s). Refresh when a suite moves
+    // Pure in-memory managed suites with zero OS API, P/Invoke, filesystem-write or OS-collation branches.
+    // Linux Check and local runs always execute every suite plus the packed pass; macOS and Windows Check set
+    // VARIA_TEST_OFFLINE_SCOPE=os to skip only these suites and the packed second pass while keeping every
+    // OS, filesystem, process, pipe/socket, Entra/Kerberos, line-ending and ICU collation check.
+    public static readonly string[] PureManaged =
+    [
+        "ParallelResult",
+        "FusedRead", "FusedWhole.Diffs", "FusedWhole.DistinctsSearch", "FusedWhole.MixedServices", "FusedWhole.Faults",
+        "BigQueryExecution.Residence", "BigQueryExecution.Storage",
+        "BigQuerySession", "BigQueryJobHistory",
+        "Packing", "Packer", "IdlePacker", "SealPacking", "PageFilter", "RoomPool",
+    ];
+
+    public static bool OsScope => string.Equals(Environment.GetEnvironmentVariable("VARIA_TEST_OFFLINE_SCOPE"), "os", StringComparison.OrdinalIgnoreCase);
+
+    // Measured seconds per suite on CI (PR #729, 2026-11-24; suites under 0.3 s count as 0.1 s). Refresh when a suite moves
     // by more than a few seconds. Heavy CPU-bound suites carry their contended CI times so no two land on the same lane.
     public static readonly Dictionary<string, double> Weights = new()
     {
-        ["ParallelResult"] = 82.0, ["SearchNarrowing"] = 60.0, ["FusedRead"] = 58.0, ["Text"] = 58.0,
-        ["FusedWhole.Diffs"] = 40.0, ["FusedWhole.DistinctsSearch"] = 35.0, ["FusedWhole.MixedServices"] = 35.0, ["FusedWhole.Faults"] = 25.0,
-        ["BigQueryExecution.Residence"] = 25.0, ["BigQueryExecution.ViewsCopySave"] = 20.0, ["BigQueryExecution.Core"] = 15.0, ["BigQueryExecution.Storage"] = 15.0,
-        ["PageFilter"] = 33.0, ["SearchFold"] = 29.0, ["Packing"] = 27.0, ["Host"] = 27.0, ["Explorer"] = 23.0, ["View"] = 20.0,
-        ["BigQuerySession"] = 20.0, ["IdlePacker"] = 20.0, ["BigQueryJobHistory"] = 17.0, ["Profile"] = 15.0,
-        ["Live"] = 12.0, ["Ssis"] = 7.7, ["ActivityAction"] = 6.2, ["SqlLanguage"] = 6.0, ["LiveScheduler"] = 5.5, ["Restore"] = 5.1,
-        ["ServerFiles"] = 4.2, ["LiveTable"] = 3.7, ["Store"] = 3.0, ["Entra"] = 2.4,
-        ["Login"] = 2.2, ["Peek"] = 2.2, ["Seam"] = 2.2, ["TypedForm"] = 2.0, ["RoomPool"] = 2.0, ["ActionProgress"] = 1.8, ["LspTransport"] = 1.8, ["Action"] = 1.7, ["Scripting"] = 1.6,
-        ["SqlLanguageDiagnostics"] = 1.0, ["SqlCompletion"] = 1.0, ["LoginDelete"] = 0.8, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["Packer"] = 0.7, ["SealPacking"] = 0.7, ["OperationProgress"] = 0.5, ["Page"] = 0.4, ["ActivitySource"] = 0.4,
+        ["SearchNarrowing"] = 85.0, ["BigQueryExecution.Residence"] = 73.0, ["ParallelResult"] = 72.0, ["FusedWhole.Diffs"] = 64.0,
+        ["BigQueryExecution.Storage"] = 60.0, ["Host"] = 40.0, ["Packing"] = 38.0, ["FusedRead"] = 36.0,
+        ["FusedWhole.DistinctsSearch"] = 36.0, ["BigQueryJobHistory"] = 34.0, ["Text"] = 33.0, ["SearchFold"] = 32.0,
+        ["View"] = 22.0, ["BigQuerySession"] = 20.0, ["PageFilter"] = 19.0, ["IdlePacker"] = 19.0,
+        ["FusedWhole.Faults"] = 15.0, ["Explorer"] = 13.0, ["FusedWhole.MixedServices"] = 12.0, ["SealPacking"] = 11.0,
+        ["LoginDelete"] = 11.0, ["Profile"] = 10.0, ["Store"] = 9.0, ["Ssis"] = 9.0, ["LiveScheduler"] = 8.5,
+        ["Search"] = 8.4, ["Live"] = 7.8, ["AgentActions"] = 7.1, ["SqlLanguage"] = 6.2,
+        ["BigQueryExecution.ViewsCopySave"] = 6.0, ["Packer"] = 5.8, ["RoomPool"] = 5.6, ["Restore"] = 5.5, ["Page"] = 5.5,
+        ["Seam"] = 5.1, ["LiveTable"] = 5.0, ["Plan"] = 4.8, ["ActionProgress"] = 4.6, ["ServerFiles"] = 4.2,
+        ["SqlLanguageDiagnostics"] = 4.2, ["BigQueryExecution.Core"] = 4.0, ["ActivityAction"] = 4.0, ["Agent"] = 3.9,
+        ["BigQueryIndex"] = 3.9, ["TypedForm"] = 3.7, ["LspTransport"] = 3.4, ["Login"] = 3.0, ["Entra"] = 2.5,
+        ["ResultSearch"] = 2.3, ["Peek"] = 2.2, ["TransposedText"] = 2.1, ["Action"] = 1.7, ["Diff"] = 1.6, ["Scripting"] = 1.6,
+        ["SqlCompletion"] = 1.0, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["OperationProgress"] = 0.5, ["ActivitySource"] = 0.4,
     };
 
     // Six lanes. The lanes mostly wait, so more lanes than CI's 3 to 4 vCPUs still help: locally, 1 lane took 65 s, 4 took
@@ -36,7 +55,8 @@ static class OfflineSuites
 
     public static int Lanes => int.TryParse(Environment.GetEnvironmentVariable("VARIA_TEST_OFFLINE_LANES"), out var lanes) && lanes > 0 ? lanes : DefaultLanes;
 
-    // Longest first, each onto the lane with the least work so far.
+    // Longest first, each onto the lane with the least work so far. Within each lane, raw suites run before Packed suites
+    // so a suite and its Packed twin (e.g. SearchNarrowing + Packed SearchNarrowing) never contend for CPU/GC at t=0.
     public static List<string>[] Assign(IEnumerable<string> names, int lanes)
     {
         var assigned = Enumerable.Range(0, lanes).Select(_ => new List<string>()).ToArray();
@@ -47,6 +67,14 @@ static class OfflineSuites
             assigned[lane].Add(name);
             load[lane] += Weight(name);
         }
+        foreach (var lane in assigned)
+            lane.Sort((a, b) =>
+            {
+                var packed = IsPacked(a).CompareTo(IsPacked(b));
+                if (packed != 0) return packed;
+                var weight = Weight(b).CompareTo(Weight(a));
+                return weight != 0 ? weight : StringComparer.Ordinal.Compare(a, b);
+            });
         return assigned;
     }
 
@@ -70,7 +98,9 @@ static class OfflineSuites
     /// weighed as the first run's.</summary>
     public const string PackedPrefix = "Packed ";
 
-    static string Base(string name) => name.StartsWith(PackedPrefix, StringComparison.Ordinal) ? name[PackedPrefix.Length..] : name;
+    static bool IsPacked(string name) => name.StartsWith(PackedPrefix, StringComparison.Ordinal);
+
+    static string Base(string name) => IsPacked(name) ? name[PackedPrefix.Length..] : name;
 
     /// <param name="limitMs">How long one suite may run before <paramref name="stuck"/> is told (by default the run exits).</param>
     public static async Task RunAsync((string Name, Func<Task> Run)[] suites, bool serial, int? limitMs = null, Action<string>? stuck = null, Action<string>? log = null)

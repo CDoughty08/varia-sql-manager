@@ -10,7 +10,9 @@ const name = (file: string) => relative(renderer, file).replaceAll('\\', '/')
 /** The renderer modules allowed to read pointer modifiers themselves, and why. */
 const allowed: Readonly<Record<string, string>> = {
   'core/gestures.ts': 'GestureService, the one reader',
-  'plans/PlanCanvas.ts': 'the plan canvas\'s Ctrl/⌘+wheel zoom and Shift+wheel pan, a fixed widget in the manner of map viewers'
+  'plans/PlanCanvas.ts': 'the plan canvas\'s Ctrl/⌘+wheel zoom and Shift+wheel pan, a fixed widget in the manner of map viewers',
+  'agent/SchedulesTimeline.tsx': 'the Schedules Timeline’s Ctrl/⌘+wheel zoom and Shift+wheel scroll, a fixed chart widget like the plan canvas',
+  'agent/TimelineView.ts': 'the Schedules Timeline’s Shift+click on a run, which opens its schedule instead of its job (Shift+Enter from the keyboard)'
 }
 
 const modifierRead = /\.(ctrlKey|metaKey|altKey|shiftKey)\b/g

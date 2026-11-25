@@ -577,7 +577,7 @@ Table Properties adds zero extra SQL round-trips:
 - **Storage & Layout**: Data vs. Index `RatioBar`, compression, filegroups, partitioning and space facts, plus a
   natural-height **Partitions** results grid (at most 1,000 partitions, zero nested vertical scrolling) on partitioned tables.
 - **Columns**: Lazy-loaded full-bleed `Columns` results grid (`explorer.peek`).
-- **Indexes & Keys**: Lazy-loaded full-bleed `Indexes & keys` results grid (`explorer.peek` `tableObjects`).
+- **Indexes & Keys**: Lazy-loaded full-bleed `Indexes & Keys` results grid (`explorer.peek` `tableObjects`).
 - **Dependencies**: Lazy-loaded `Uses` and `Used by` clickable links (`explorer.peekDependencies`).
 - **Permissions & RLS**: Natural-height **Permissions** (at most 1,024 rows) and **Row-level security predicates** (SQL Server
   2016 and later) results grids with select, copy with headers, sort and Save Results As and zero nested vertical scrolling.

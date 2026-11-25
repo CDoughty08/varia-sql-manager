@@ -3,11 +3,11 @@
 // schedule edited in place, a shared schedule's preview with Attach, or a removed one's detach or delete choice with Undo. Nothing reaches
 // the server until the job is saved. JobDocumentService keeps every state; this only draws it.
 import { useEffect } from 'react'
-import { jobScheduleProblems, jobScheduleText, ownsSchedule, scheduleFieldsOf, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry } from '../../../shared/actions/agent-schedule.ts'
+import { jobScheduleProblems, jobScheduleText, momentOfText, ownsSchedule, scheduleFieldsOf, type AgentScheduleJob, type AgentScheduleRecord, type AgentSchedulesModel, type JobScheduleEntry } from '../../../shared/actions/agent-schedule.ts'
 import type { AgentJobDocumentModel, AgentJobDraft } from '../../../shared/actions/agent-job.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import {
-  formatRun, freeSlotCheck, freeSlotText, freq, nextRuns, noRunsReason, scheduleMatches, scheduleProblems, scheduleSentence, scheduleText, scheduleWhen, type ScheduledJob
+  agentNextRun, formatRun, linkAnchor, freeSlotCheck, freeSlotText, freq, nextRuns, noRunsReason, sameTiming, scheduleMatches, scheduleProblems, scheduleSentence, scheduleText, scheduleWhen, type AgentMoment, type ScheduledJob
 } from '../../../shared/agent/schedule.ts'
 import Icon from '../Icon'
 import ScheduleEditor from './ScheduleEditor'
@@ -41,12 +41,14 @@ function scheduledJobsOf(shared: AgentSchedulesModel, self: string): { readonly 
   scheduledJobs.set(shared, byJob)
   const known = byJob.get(self)
   if (known) return known
+  const now = momentOfText(shared.now)
   const durations = new Map((shared.durations ?? []).map(item => [item.jobId.toLowerCase(), item.seconds]))
   const records = new Map(shared.schedules.map(record => [record.id, record]))
-  const linked = new Map<string, AgentScheduleRecord[]>()
+  const linked = new Map<string, ScheduledJob['schedules'][number][]>()
   for (const link of shared.links ?? []) {
     const record = records.get(link.scheduleId), job = link.jobId.toLowerCase()
-    if (record) linked.set(job, [...linked.get(job) ?? [], record])
+    const nextRun = record && now ? linkAnchor(link, record, now) : undefined
+    if (record) linked.set(job, [...linked.get(job) ?? [], nextRun ? { ...record, nextRun } : record])
   }
   const others: ScheduledJob[] = (shared.jobs ?? []).filter(job => job.id.toLowerCase() !== self).map(job => {
     const id = job.id.toLowerCase()
@@ -56,12 +58,20 @@ function scheduledJobsOf(shared: AgentSchedulesModel, self: string): { readonly 
   byJob.set(self, made)
   return made
 }
+/** Agent's own next run for this job's saved schedule, while its timing is unchanged (an edit or a new attach restarts the cycle at the save). */
+function savedAnchor(state: JobDocumentState, model: AgentJobDocumentModel, entry: JobScheduleEntry): AgentMoment | undefined {
+  const shared = state.shared?.model, job = model.job?.jobId
+  if (entry.id === undefined || entry.attached || !job || !shared?.links) return undefined
+  const record = shared.schedules.find(item => item.id === entry.id), now = momentOfText(shared.now)
+  // Enabling or disabling a schedule saves it too, which restarts its cycle; only the schedule exactly as saved keeps Agent's.
+  return record && now && sameTiming(entry.fields, record) && entry.fields.enabled === record.enabled ? agentNextRun(shared.links, entry.id, record, now, job) : undefined
+}
 /** The free-slot check, where the shared read knows every job's schedules and durations (sysadmin); undefined otherwise. */
 function freeSlot(state: JobDocumentState, model: AgentJobDocumentModel, entry: JobScheduleEntry, now: ReturnType<JobDocumentService['now']>): string | undefined {
   const shared = state.shared?.model
   if (!shared?.links || !shared.jobs || entry.fields.freqType === freq.agentStart || entry.fields.freqType === freq.idle) return undefined
   const { others, mine } = scheduledJobsOf(shared, model.job?.jobId.toLowerCase() ?? '')
-  return freeSlotText(freeSlotCheck(entry.fields, now, mine, others))
+  return freeSlotText(freeSlotCheck(entry.fields, now, mine, others, 5, savedAnchor(state, model, entry)))
 }
 
 function EntryRow({ entry, selected, record, invalid, onSelect }: { readonly entry: JobScheduleEntry; readonly selected: boolean; readonly record?: AgentScheduleRecord; readonly invalid: boolean; readonly onSelect: () => void }) {
@@ -82,6 +92,7 @@ function EntryRow({ entry, selected, record, invalid, onSelect }: { readonly ent
 function PickPreview(props: Props & { readonly record: AgentScheduleRecord }) {
   const { state, model, draft, editable, service, record } = props
   const now = service.now(state.id)
+  // A preview of attaching it: a new attachment counts from now, whatever cycle the jobs already using it keep.
   const runs = nextRuns(record, now, 5)
   const jobs = otherJobs(state, model, record.id)
   const read = state.scheduleJobs?.[record.id]
@@ -147,7 +158,7 @@ function EntryEditor(props: Props & { readonly entry: JobScheduleEntry; readonly
   </section> : undefined
   return <div className="agent-schedule-entry">
     <ScheduleEditor idPrefix={`agent-schedule-${state.id}-${entry.key.replace(/[^\w-]/g, '_')}`} fields={entry.fields} base={record ? scheduleFieldsOf(record) : undefined}
-      disabled={!editable || !changeable} problems={problems} now={now} freeSlot={freeSlot(state, model, entry, now)} aside={aside} platform={model.platform}
+      disabled={!editable || !changeable} problems={problems} now={now} freeSlot={freeSlot(state, model, entry, now)} aside={aside} platform={model.platform} anchor={savedAnchor(state, model, entry)}
       onChange={fields => service.updateSchedule(state.id, entry.key, fields)} />
     <p><button type="button" disabled={!editable || !detachable} onClick={() => service.removeSchedule(state.id, entry.key)}><Icon name="trash" />Remove from this job</button></p>
     {!detachable && <p className="field-note"><Icon name="lock" />{jobScheduleText.unseen}</p>}

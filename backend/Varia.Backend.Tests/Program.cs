@@ -576,9 +576,11 @@ if (liveGroup is null)
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
     Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)
+        && OfflineSuites.PureManaged.All(suiteNames.Contains) && OfflineSuites.PureManaged.All(name => !OfflineSuites.Alone.Contains(name))
         && Enumerable.Range(1, 8).All(lanes => OfflineSuites.Assign(suiteNames, lanes) is var assigned && assigned.Length == lanes && assigned.SelectMany(lane => lane).Order(StringComparer.Ordinal).SequenceEqual(suiteNames.Order(StringComparer.Ordinal)))
-        && OfflineSuites.Assign(["Host", "Explorer", "LiveScheduler", "Page"], 2) is [["Host", "Page"], ["Explorer", "LiveScheduler"]],
-        "the offline suites have unique names, the ones that must run alone and the weighted ones all exist, and every lane count puts each suite in exactly one lane, longest first onto the lightest lane");
+        && OfflineSuites.Assign(["Host", "Text", "Explorer", "Page"], 2) is [["Host", "Page"], ["Text", "Explorer"]]
+        && OfflineSuites.Assign(["SearchNarrowing", "Packed SearchNarrowing", "Explorer", "Page"], 2) is [["Explorer", "Packed SearchNarrowing"], ["SearchNarrowing", "Page"]],
+        "the offline suites have unique names, the ones that must run alone, pure-managed and weighted ones all exist, and every lane count puts each suite in exactly one lane, longest first onto the lightest lane with raw suites before Packed twins");
     {
         // A suite that never ends is named and stopped, where it used to run the check to CI's 20 minute step timeout.
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -590,23 +592,31 @@ if (liveGroup is null)
             && OfflineSuites.DefaultSuiteLimitMs >= 60_000,
             "an offline suite that does not end is named by the watchdog, which leaves the suites that end alone: " + named);
     }
-    await OfflineSuites.RunAsync(offlineSuites, serial: slowMs > 0);
-    // The result suites again with every complete result packed (ResultStore.DefaultPacking), so every reader, operation and
-    // job meets packed pages through the accessor, and every packed page however small gets its n-gram filter, uncapped (PageFilter), so
-    // every search there passes over the pages it can. Alone, after the first pass: the defaults are process-wide.
+    // The result suites again with every complete result packed (ResultStore.DefaultPacking is AsyncLocal, so packed suites
+    // share the offline lane pool with the raw pass without a mid-run barrier).
     string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "FloatExact", "SearchNarrowing", "PageFilter", "ParallelResult", "CellLength", "Text", "TransposedText"];
     Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
     Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
-    Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = 0;
-    Varia.Backend.Results.ResultStore.DefaultFilterCapped = false;
-    Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result");
-    try { await OfflineSuites.RunAsync([.. offlineSuites.Where(suite => packedPass.Contains(suite.Name)).Select(suite => (OfflineSuites.PackedPrefix + suite.Name, suite.Run))], serial: slowMs > 0); }
-    finally
+    try { Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result"); }
+    finally { Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.Off; }
+    static Func<Task> Packed(Func<Task> run) => async () =>
     {
-        Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.Off;
-        Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = Varia.Backend.Results.PageFilter.MinPageBytes;
-        Varia.Backend.Results.ResultStore.DefaultFilterCapped = true;
-    }
+        Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
+        Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = 0;
+        Varia.Backend.Results.ResultStore.DefaultFilterCapped = false;
+        try { await run(); }
+        finally
+        {
+            Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.Off;
+            Varia.Backend.Results.ResultStore.DefaultFilterMinBytes = Varia.Backend.Results.PageFilter.MinPageBytes;
+            Varia.Backend.Results.ResultStore.DefaultFilterCapped = true;
+        }
+    };
+    (string Name, Func<Task> Run)[] selectedOffline = OfflineSuites.OsScope
+        ? [.. offlineSuites.Where(suite => !OfflineSuites.PureManaged.Contains(suite.Name))]
+        : [.. offlineSuites, .. offlineSuites.Where(suite => packedPass.Contains(suite.Name)).Select(suite => (OfflineSuites.PackedPrefix + suite.Name, Packed(suite.Run)))];
+    if (OfflineSuites.OsScope) Console.WriteLine("Offline OS scope (VARIA_TEST_OFFLINE_SCOPE=os): running " + selectedOffline.Length + " OS-sensitive suites (skipping " + OfflineSuites.PureManaged.Length + " pure-managed suites and the packed pass, covered on Linux).");
+    await OfflineSuites.RunAsync(selectedOffline, serial: slowMs > 0);
     using (var offline = new SqlService())
     {
         try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }

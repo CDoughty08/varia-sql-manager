@@ -106,7 +106,9 @@ describe('Packaging (issue #163)', () => {
     const lock = JSON.parse(await readFile('backend/Varia.Backend/packages.lock.json', 'utf8'))
     for (const rid of rids) expect(Object.keys(lock.dependencies), rid).toContain(`net11.0/${rid}`)
     // Without locked mode, the RID's restore re-resolves packages silently instead of using the lock file.
-    expect(pack).toMatch(/dotnet publish backend\/Varia\.Backend\/Varia\.Backend\.csproj -c Release -r \$\{\{ inputs\.rid \}\} --self-contained true -p:RestoreLockedMode=true -o artifacts\/release-backend\n/)
+    const prepare = await readFile('scripts/package-prepare.mjs', 'utf8')
+    expect(pack).toContain('node scripts/package-prepare.mjs --rid ${{ inputs.rid }}')
+    expect(prepare).toContain('dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${rid} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend')
     expect(readyToRunAssemblies).toContain('Varia.Backend.dll')
     // CI's Linux benchmarks publish the same way on every pull request and hand it to the node bench, which fails unless
     // those assemblies are ReadyToRun (tests/bench/backend.bench.ts).
