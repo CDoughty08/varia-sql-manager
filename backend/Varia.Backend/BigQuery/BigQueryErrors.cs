@@ -81,6 +81,13 @@ internal static partial class BigQueryErrors
     [GeneratedRegex(@"(?:\bvpcServiceControlsUniqueIdentifier: |""uniqueIdentifier""\s*:\s*"")(?<id>[A-Za-z\d_-]{1,128})(?![A-Za-z\d_-])")]
     private static partial Regex PerimeterIdentifier();
 
+    // A PreconditionFailure violation of type VPC_SERVICE_CONTROLS carries the identifier as its description; its fields come in any order.
+    [GeneratedRegex(@"\{[^{}]*""type""\s*:\s*""VPC_SERVICE_CONTROLS""[^{}]*\}")]
+    private static partial Regex PerimeterViolation();
+
+    [GeneratedRegex(@"""description""\s*:\s*""(?<id>[A-Za-z\d_-]{1,128})""")]
+    private static partial Regex ViolationDescription();
+
     /// <summary>The raw responses read for a VPC Service Controls detail at most; Google's error bodies are a few KB.</summary>
     const int PerimeterScan = 65_536;
 
@@ -98,6 +105,7 @@ internal static partial class BigQueryErrors
         if (!PerimeterMessage().IsMatch(message) && (raw is null || !PerimeterDetail().IsMatch(raw))) return false;
         var match = PerimeterIdentifier().Match(message);
         if (!match.Success && raw is not null) match = PerimeterIdentifier().Match(raw);
+        if (!match.Success && raw is not null && PerimeterViolation().Match(raw) is { Success: true } violation) match = ViolationDescription().Match(violation.Value);
         identifier = match.Success ? match.Groups["id"].Value : null;
         return true;
     }

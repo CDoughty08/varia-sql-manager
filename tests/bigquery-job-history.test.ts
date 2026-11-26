@@ -341,6 +341,13 @@ describe('Job History documents', () => {
     await settled()
     expect(execute).toHaveBeenCalledTimes(1)
     expect(service.get(id)?.notice?.text).toBe(jobHistoryText.sqlTruncated)
+    // VPC Service Controls refusing the read is no refused permission: its text stands, and nothing is remembered.
+    documents.activate(id)
+    const fenced = `${perimeterOpening}: the organization's service perimeter does not allow it from this network or account.`
+    api.bigQueryJob.mockResolvedValue({ ok: false, error: fenced, code: 'PERMISSION_DENIED' })
+    await service.openSql(id, false)
+    expect(service.get(id)?.notice).toMatchObject({ tone: 'error', text: fenced })
+    expect(service.actionState(id, 'openSql').enabled).toBe(true)
     // A refused read of another user's job is remembered: Open SQL is then greyed with the reason.
     documents.activate(id)
     api.bigQueryJob.mockResolvedValue({ ok: false, error: 'Access Denied.', code: 'PERMISSION_DENIED' })

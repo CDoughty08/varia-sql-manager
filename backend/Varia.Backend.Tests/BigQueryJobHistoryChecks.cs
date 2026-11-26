@@ -367,6 +367,16 @@ internal static class BigQueryJobHistoryChecks
         sampler.Apply(new BigQueryJobHistoryArgs("mine", Hours: 24, Prices: false));
         var collapsed = await SampleAsync(sampler);
         check(Rows(collapsed) == 7 && Status(collapsed, "held") is 7, "collapsing the script drops its children without listing again");
+
+        // A script's children VPC Service Controls refuses are no empty list: the sample fails naming the perimeter.
+        using var fencedTree = new Harness();
+        await fencedTree.ConnectAsync(key);
+        fencedTree.Fake.On("GET", Jobs, request => request.Uri.Query.Contains("parentJobId=", StringComparison.Ordinal) ? BigQueryFake.Fixture("error-vpc-service-controls", 403)
+            : new BigQueryFake.Reply(200, Timed(request.Uri.Query.Contains("pageToken=jobs-page-2", StringComparison.Ordinal) ? "jobs-list-page-2" : "jobs-list", fencedTree.Now)));
+        using var fencedSampler = fencedTree.Sampler(new("mine", Hours: 24, Expand: [new("script_1", "US")]));
+        var fencedChildren = await SampleAsync(fencedSampler);
+        check(fencedChildren.Errors.Any(error => error.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal)),
+            "an expanded script whose children VPC Service Controls refuses fails the sample naming the perimeter: " + string.Join(" | ", fencedChildren.Errors.Select(error => error.Code + " " + error.Message)));
     }
 
     /// <summary>The newest creation time listed moves only once a listing is whole, and every top-level job moves it, filtered out
@@ -523,6 +533,23 @@ internal static class BigQueryJobHistoryChecks
         check(finished.Errors.Count == 0 && Status(finished, "open") is 0 && shared.Gets("varia_running") == 1 && window is [var only]
             && long.Parse(Regex.Match(only, "maxCreationTime=(\\d+)").Groups[1].Value) - long.Parse(Regex.Match(only, "minCreationTime=(\\d+)").Groups[1].Value) == 1,
             "another user's finished job, where jobs.get is refused, is read by a done listing of its creation millisecond: " + string.Join(" | ", window));
+
+        // VPC Service Controls refusing jobs.get on another user's job is no refused permission: the sample fails naming it.
+        using var fenced = new Harness();
+        await fenced.ConnectAsync(key);
+        var fencedListed = false;
+        fenced.Fake.On("GET", Jobs, request =>
+        {
+            var query = request.Uri.Query;
+            if (query.Contains("projection=minimal", StringComparison.Ordinal) || query.Contains("stateFilter=", StringComparison.Ordinal) || fencedListed) return BigQueryFake.Text("""{"kind":"bigquery#jobList"}""");
+            return new BigQueryFake.Reply(200, Timed(query.Contains("pageToken=jobs-page-2", StringComparison.Ordinal) ? "jobs-list-page-2" : "jobs-list", fenced.Now));
+        }).On("GET", Jobs + "/varia_running", BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        using var fencedAll = fenced.Sampler(new("all", Hours: 24));
+        await SampleAsync(fencedAll);
+        fencedListed = true;
+        var fencedFinished = await SampleAsync(fencedAll);
+        check(fencedFinished.Errors.Any(error => error.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal)),
+            "another user's job whose jobs.get VPC Service Controls refuses fails the sample naming the perimeter: " + string.Join(" | ", fencedFinished.Errors.Select(error => error.Code + " " + error.Message)));
     }
 
     /// <summary>With the cap reached, an open job the filters leave out is still followed, so one that finishes into them shows;

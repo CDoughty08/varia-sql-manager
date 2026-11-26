@@ -392,8 +392,8 @@ type.
   sends.
 - **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
   connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
-  in the project, the credential lacks `bigquery.readsessions.create` or VPC Service Controls blocks the Storage API (the
-  connection stops asking), Google could not
+  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), VPC Service
+  Controls blocks the Storage API (asked again on the next query, which passes once back inside the perimeter), Google could not
   be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
   REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
   (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
@@ -867,7 +867,7 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 | `AUTH_KEY_FILE` | A key or configuration file Varia cannot read or use, a refused shape, a deleted key (`invalid_grant` for a service account), a federated token Google's STS refuses (`invalid_grant` in federation mode), an unreadable subject token | Names the rule or field; choose the file again |
 | `AUTH_IDENTITY` | The credential now signs in as another principal | Reconnect to use the new account |
 | `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect, with BigQuery Job User; `bigquery.datasets.get` for Test Connection) and the project, then Google's own text (left out of Search Objects skips, which name no object). projects.list needs no single permission, so its refusal names none |
-| `PERMISSION_DENIED` (VPC Service Controls) | `accessDenied`, HTTP 403 or a Storage API `PermissionDenied` whose message opens "VPC Service Controls:" or "Request is prohibited by organization's policy", or whose `ErrorInfo` detail is `SECURITY_POLICY_VIOLATED` | "VPC Service Controls blocked this request…": connect from inside the perimeter or ask an administrator, with Google's identifier for the audit log (left out when longer than 128 characters), never a guessed permission and no project, since the blocked resource may be another's. Job History adds no permission advice to it |
+| `PERMISSION_DENIED` (VPC Service Controls) | `accessDenied`, HTTP 403 or a Storage API `PermissionDenied` whose message opens "VPC Service Controls:" or "Request is prohibited by organization's policy", or whose details hold an `ErrorInfo` with reason `SECURITY_POLICY_VIOLATED` or a `PreconditionFailure` violation of type `VPC_SERVICE_CONTROLS` | "VPC Service Controls blocked this request…": connect from inside the perimeter or ask an administrator, with Google's identifier for the audit log (left out when longer than 128 characters), never a guessed permission and no project, since the blocked resource may be another's. Job History adds no permission advice to it, and an Object Explorer node it refused keeps Retry |
 | `API_DISABLED` | `accessNotConfigured`, `SERVICE_DISABLED` | Enable the BigQuery API in the Google Cloud console |
 | `BILLING_DISABLED` | `billingNotEnabled` | Explains the sandbox limits |
 | `QUOTA` | `quotaExceeded`, `rateLimitExceeded`, HTTP 429 | Which kind, with Google's text |

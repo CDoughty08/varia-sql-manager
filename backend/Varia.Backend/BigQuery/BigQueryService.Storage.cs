@@ -104,8 +104,9 @@ internal sealed partial class BigQueryService
         // A sign-in failure is not about Storage Read: REST reads the result and reports it.
         if (SignIn(rpc) is not null || rpc.StatusCode == StatusCode.Unauthenticated) return null;
         var detail = rpc.Status.Detail ?? "";
+        // Not lasting: back inside the perimeter, the next query reads through Storage again.
         if (rpc.StatusCode == StatusCode.PermissionDenied && Perimeter(rpc, out var identifier))
-            return new("perimeter", Slower + "VPC Service Controls blocked the BigQuery Storage API from this network or account. " + BigQueryErrors.PerimeterAdvice(identifier), true);
+            return new("perimeter", Slower + "VPC Service Controls blocked the BigQuery Storage API from this network or account. " + BigQueryErrors.PerimeterAdvice(identifier), false);
         return rpc.StatusCode switch
         {
             StatusCode.PermissionDenied when detail.Contains("SERVICE_DISABLED", StringComparison.Ordinal) || detail.Contains("has not been used", StringComparison.Ordinal)

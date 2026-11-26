@@ -687,7 +687,7 @@ internal static partial class BigQueryExecutionChecks
         var violation = Refusal("Request is denied.", """{"error":{"code":403,"details":[{"@type":"type.googleapis.com/google.rpc.PreconditionFailure","violations":[{"type":"VPC_SERVICE_CONTROLS","description":"Viol-Id_9"}]}]}}""", "bigquery.jobs.create");
         var explorerPerimeter = BigQueryService.ErrorOf(BigQueryErrors.Perimeter("Id_1"));
         var explorerDenied = BigQueryService.ErrorOf(new RequestException("PERMISSION_DENIED", "The account lacks the bigquery.tables.list permission."));
-        check(BigQueryErrors.IsPerimeter(violation) && explorerPerimeter is { Code: "PERMISSION_DENIED", Retryable: true } && explorerDenied is { Retryable: false },
+        check(BigQueryErrors.IsPerimeter(violation) && (violation as RequestException)!.Message.Contains("identifier Viol-Id_9", StringComparison.Ordinal) && explorerPerimeter is { Code: "PERMISSION_DENIED", Retryable: true } && explorerDenied is { Retryable: false },
             $"a PreconditionFailure VPC_SERVICE_CONTROLS violation is a perimeter refusal, and an Explorer node it refused keeps Retry: {(violation as RequestException)?.Message} {explorerPerimeter} {explorerDenied}");
     }
 

@@ -858,7 +858,7 @@ internal static partial class BigQueryExecutionChecks
         var detailFallback = BigQueryService.Fallback(perimeterDetail, "varia-emulator");
         var trailerFallback = BigQueryService.Fallback(perimeterTrailer, "varia-emulator");
         var trailerRead = BigQueryService.ReadFailure(perimeterTrailer, "varia-emulator");
-        check(detailFallback is { Reason: "perimeter", Lasting: true } && detailFallback.Sentence.Contains("identifier Rpc-Id_3", StringComparison.Ordinal)
+        check(detailFallback is { Reason: "perimeter", Lasting: false } && detailFallback.Sentence.Contains("identifier Rpc-Id_3", StringComparison.Ordinal)
             && trailerFallback is { Reason: "perimeter" } && trailerFallback.Sentence.Contains("identifier Trailer-Id_5", StringComparison.Ordinal) && !trailerFallback.Sentence.Contains("readsessions", StringComparison.Ordinal)
             && trailerRead.Code == "PERMISSION_DENIED" && trailerRead.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal) && trailerRead.Message.Contains("Trailer-Id_5", StringComparison.Ordinal)
             && BigQueryService.Fallback(namedLikeIt, "varia-emulator") is { Reason: "permission" } && !BigQueryService.ReadFailure(namedLikeIt, "varia-emulator").Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal),
