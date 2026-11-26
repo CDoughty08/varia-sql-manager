@@ -1242,7 +1242,9 @@ internal static partial class IndexFileChecks
         return (stream.ToArray(), Dump(read, readAt: false));
     }
 
-    private static string GoldenDump(ResourceKey key, int leftOut, ObjectTable table) => key + "|" + leftOut + "\n" + Dump(table);
+    /// <summary>The key as ticks and kind, never through a culture's date format, which differs between Windows, Linux and macOS.</summary>
+    private static string GoldenDump(ResourceKey key, int leftOut, ObjectTable table) => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+        $"{key.Version}|{key.Edition}|{key.Count}|{(key.Latest is { } latest ? latest.Ticks + ":" + latest.Kind : "-")}|{key.Checksum}|{key.Definitions}|{leftOut}\n") + Dump(table);
 
     /// <summary>Writes the committed files of the current format version into <paramref name="folder"/> (the test project's
     /// Fixtures/IndexFile): run once when the format's version changes, never to make a failing check pass.</summary>
@@ -1266,6 +1268,29 @@ internal static partial class IndexFileChecks
     /// the content committed beside them, so a change to the format that keeps its version fails here; any other version's are
     /// refused as that, which is the rule a reader of this version is under when it meets a newer one.</summary>
     private static async Task Golden(Action<bool, string> check)
+    {
+        // Once in the invariant culture (Linux runners) and once in one whose dates and times read like no machine's, so a dump
+        // that formats through the culture fails on every platform, not only where the culture differs from the committer's.
+        var odd = (System.Globalization.CultureInfo)System.Globalization.CultureInfo.InvariantCulture.Clone();
+        (odd.DateTimeFormat.ShortDatePattern, odd.DateTimeFormat.LongTimePattern, odd.DateTimeFormat.AMDesignator, odd.DateTimeFormat.PMDesignator) =
+            ("yyyy'~'dd'~'MM", "HH'h'mm'm'ss", " am", " pm");
+        var before = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            foreach (var culture in new[] { System.Globalization.CultureInfo.InvariantCulture, odd })
+            {
+                System.Globalization.CultureInfo.CurrentCulture = culture;
+                var name = culture == odd ? "an unusual culture" : "the invariant culture";
+                await GoldenIn((ok, message) => check(ok, $"{message} (in {name})"));
+            }
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = before;
+        }
+    }
+
+    private static async Task GoldenIn(Action<bool, string> check)
     {
         var files = Directory.Exists(GoldenFolder) ? Directory.GetFiles(GoldenFolder, "v*.vidx").Order(StringComparer.Ordinal).ToArray() : [];
         var current = 0;
