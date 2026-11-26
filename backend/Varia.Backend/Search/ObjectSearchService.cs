@@ -41,6 +41,10 @@ internal sealed partial class ObjectSearchService : IDisposable
     public const int MaxSkipped = 256;
     /// <summary>The least time between two explorer.index.progress EVENTs of one build.</summary>
     public static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
+    /// <summary>How often a BigQuery build checks whether its principal's throttling changed, to say so when no read finishes.</summary>
+    internal TimeSpan ThrottleWatchEvery { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>How many more ticks a change in throttling is sent again on, since a dropped progress EVENT is never sent again.</summary>
+    internal const int ThrottleRepeats = 2;
     /// <summary>The most kinds one search may name.</summary>
     public const int MaxKinds = 64;
     public static readonly string[] Kinds = ["table", "view", "procedure", "function", "synonym", "sequence", "trigger", "type", "tableType", "databaseTrigger", "login", "serverRole", "credential", "cryptographicProvider", "audit", "serverAuditSpecification", "backupDevice", "linkedServer", "serverTrigger", "database", "user", "databaseRole", "applicationRole", "schema", "assembly", "asymmetricKey", "certificate", "symmetricKey", "columnMasterKey", "columnEncryptionKey", "databaseAuditSpecification", "externalDataSource", "externalFileFormat", "fullTextCatalog", "fullTextStoplist", "partitionScheme", "partitionFunction", "searchPropertyList", "planGuide", "xmlSchemaCollection", "rule", "default", "securityPolicy", "column", "key", "constraint", "index", "statistic", "parameter", "agentJob", "agentAlert", "agentOperator"];

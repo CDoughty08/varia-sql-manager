@@ -293,16 +293,59 @@ internal sealed partial class ObjectSearchService
         var progressed = Stopwatch.StartNew();
         var reported = TimeSpan.MinValue;
         var progressGate = new object();
+        // The last figures reported (sent or held back by ProgressEvery), so a change in throttling alone can be sent with them.
+        var lastDone = 0;
+        var lastTotal = 0;
+        string? lastPhase = null;
+        var sentThrottled = false;
+        // Ticks left on which the watcher sends the last change in throttling again (progress EVENTs are droppable).
+        var throttleRepeats = 0;
+        // 1 while wave 2 is still listing projects' datasets: its names total can still grow.
+        var listingProjects = 0;
         void Report(int done, int total, string phase, bool last)
         {
             if (progress is null) return;
             lock (progressGate)
             {
+                if (last || phase != lastPhase || done >= lastDone) lastDone = done;
+                lastTotal = total;
+                lastPhase = phase;
                 if (!last && progressed.Elapsed - reported < ProgressEvery) return;
-                reported = progressed.Elapsed;
-                progress(new { Type = "explorer.index.progress", Done = done, Total = Math.Max(done, total), Objects = state.Index.Objects, Phase = phase });
+                SendLocked();
             }
         }
+        void SendLocked()
+        {
+            reported = progressed.Elapsed;
+            var throttled = source.Throttled(args.ConnectionId);
+            if (throttled != sentThrottled) throttleRepeats = ThrottleRepeats;
+            sentThrottled = throttled;
+            var growing = lastPhase == "names" && Volatile.Read(ref listingProjects) != 0;
+            progress!(new BigQueryIndexProgress(lastDone, Math.Max(lastDone, lastTotal), state.Index.Objects, lastPhase!, growing ? true : null, throttled ? true : null));
+        }
+        // BigQuery's rate limit can stall every call at once, so no read finishes to report it: a change in throttling is sent by itself.
+        // Progress EVENTs are droppable, so the watcher sends a change again on its next few ticks, in case main missed it.
+        using var watchStop = new CancellationTokenSource();
+        async Task WatchThrottlingAsync(CancellationToken token)
+        {
+            try
+            {
+                using var timer = new PeriodicTimer(ThrottleWatchEvery);
+                while (await timer.WaitForNextTickAsync(token))
+                    lock (progressGate)
+                    {
+                        if (lastPhase is null) continue;
+                        if (source.Throttled(args.ConnectionId) != sentThrottled) SendLocked();
+                        else if (throttleRepeats > 0)
+                        {
+                            throttleRepeats--;
+                            SendLocked();
+                        }
+                    }
+            }
+            catch (Exception) { }
+        }
+        var watcher = progress is null ? Task.CompletedTask : WatchThrottlingAsync(watchStop.Token);
         try
         {
             // A project marked whole: each dataset its listing names takes the project's mark (so a failed read keeps it marked and
@@ -320,6 +363,7 @@ internal sealed partial class ObjectSearchService
                 foreach (var name in list.Datasets) stale.Add((project, name));
             }
             using var slots = new SemaphoreSlim(BigQueryIndexLimits.Details);
+            var admission = new BigQueryDetailAdmission(BigQueryIndexLimits.DetailObjects);
             // One dataset's pass 2 details: the bulk path's rows where they cover an object, free tables.get and routines.get for the rest.
             async Task<ObjectIndexSkip?> DetailAsync((string Project, string Dataset) target, (List<BigQueryEntry> Listed, int[] Read, bool Cut) value,
                 BigQueryBulkDataset? rows, Func<int> tickDone, int wanted, CancellationToken loop, Action? onDetailFailure = null)
@@ -330,20 +374,28 @@ internal sealed partial class ObjectSearchService
                 reused.Clear();
                 ObjectIndexSkip? failed = null;
                 var failures = 0;
-                var tasks = new List<Task>();
+                var calls = new List<int>();
                 // Only what pass 1 counted: an object whose reused details pass 1 could not keep stays as it was held.
                 foreach (var at in value.Read)
                 {
-                    var item = entries[at];
-                    var index = at;
-                    if (rows is not null && BigQueryBulk.Detail(rows, item, definitions) is { } read)
+                    if (rows is not null && BigQueryBulk.Detail(rows, entries[at], definitions) is { } read)
                     {
-                        entries[index] = item with { Detail = read };
+                        entries[at] = entries[at] with { Detail = read };
                         Report(tickDone(), wanted, "details", false);
-                        continue;
                     }
-                    tasks.Add(Task.Run(async () =>
+                    else calls.Add(at);
+                }
+                // A fixed set of workers per dataset takes the objects in turn, so a dataset of 100,000 tables parks at most
+                // Details tasks, not one per object; datasets are admitted by how many objects they read, so the details read but
+                // not yet held (outside the budget) stay bounded however many datasets pass 2 runs at once.
+                using var admitted = calls.Count > 0 ? await admission.EnterAsync(calls.Count, loop) : null;
+                var taken = -1;
+                var workers = Enumerable.Range(0, Math.Min(BigQueryIndexLimits.Details, calls.Count)).Select(_ => Task.Run(async () =>
+                {
+                    for (var next = Interlocked.Increment(ref taken); next < calls.Count; next = Interlocked.Increment(ref taken))
                     {
+                        var index = calls[next];
+                        var item = entries[index];
                         await slots.WaitAsync(loop);
                         try
                         {
@@ -371,9 +423,9 @@ internal sealed partial class ObjectSearchService
                             slots.Release();
                             Report(tickDone(), wanted, "details", false);
                         }
-                    }, loop));
-                }
-                await Task.WhenAll(tasks);
+                    }
+                }, loop)).ToArray();
+                await Task.WhenAll(workers);
                 loop.ThrowIfCancellationRequested();
                 var held = Hold(state, source2, project, dataset, entries, definitions, loop);
                 if (held is not null)
@@ -862,6 +914,7 @@ internal sealed partial class ObjectSearchService
 
                 if (starred.Count > 0 || discovered.Count > 0)
                 {
+                    Volatile.Write(ref listingProjects, 1);
                     lock (state.Gate)
                     {
                         if (Current())
@@ -932,6 +985,10 @@ internal sealed partial class ObjectSearchService
                             starredChannel.Writer.TryComplete(error);
                             wave2StarredStop.Cancel();
                             throw;
+                        }
+                        finally
+                        {
+                            if (discovered.Count == 0) Volatile.Write(ref listingProjects, 0);
                         }
                     }, wave2StarredStop.Token);
                     var starredConsumers = Enumerable.Range(0, BigQueryIndexLimits.Datasets).Select(_ => Task.Run(async () =>
@@ -1025,6 +1082,10 @@ internal sealed partial class ObjectSearchService
                             if (error is not OperationCanceledException) wave2DiscoveredStop.Cancel();
                             throw;
                         }
+                        finally
+                        {
+                            Volatile.Write(ref listingProjects, 0);
+                        }
                     }, wave2DiscoveredStop.Token);
                     var discoveredConsumers = Enumerable.Range(0, BigQueryIndexLimits.Datasets).Select(_ => Task.Run(async () =>
                     {
@@ -1063,6 +1124,7 @@ internal sealed partial class ObjectSearchService
                         // Wave 2 budget early-stop: Wave 1 and already-held Wave 2 datasets stay intact.
                     }
                 }
+                Volatile.Write(ref listingProjects, 0);
                 if (starred.Count > 0 || discovered.Count > 0)
                     Report(listedDone, Volatile.Read(ref wave2Total), "names", true);
 
@@ -1233,6 +1295,8 @@ internal sealed partial class ObjectSearchService
         }
         finally
         {
+            watchStop.Cancel();
+            await watcher;
             lock (state.Gate)
                 if (ReferenceEquals(state.Build, source2)) { state.Build = null; state.Building = false; state.Phase = null; state.InFlightProjects.Clear(); }
             if (!finishedBuild) Ended();

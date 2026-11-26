@@ -42,8 +42,9 @@ export const objectSearchLimits = {
   fuzzyWordChars: 64,
   /** BigQuery's index (BigQueryIndexLimits): pages one listing reads (1,000 items each), datasets listed at once, details read at
    *  once, columns kept per table, the longest column description or routine signature kept, default and maximum discovered projects,
-   *  projects whose datasets are listed at once, and max starred projects passed per build. */
-  bigQuery: { listPages: 500, datasets: 4, details: 8, columns: 10_000, factChars: 1024, maxProjects: 500, maxProjectsCap: 5000, projects: 4, starredProjects: 200 }
+   *  projects whose datasets are listed at once, max starred projects passed per build, listings past their first page at once
+   *  (across builds), and objects whose details pass 2 reads at once across datasets. */
+  bigQuery: { listPages: 500, datasets: 32, details: 64, columns: 10_000, factChars: 1024, maxProjects: 500, maxProjectsCap: 5000, projects: 16, starredProjects: 200, largeListings: 4, detailObjects: 4096 }
 } as const
 
 /** The kinds the index holds, as Object Explorer names them: every kind it lists but the server, return values and the SSIS
@@ -347,11 +348,15 @@ export interface ObjectSearchResult {
 /** A build's progress EVENT, as the backend sends it. */
 export const objectIndexProgressEventSchema = z.object({
   type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0),
-  phase: z.enum(['projects', 'names', 'details']).optional()
+  phase: z.enum(['projects', 'names', 'details']).optional(),
+  /** BigQuery names pass: projects still being listed may add datasets to the total. */
+  growing: z.literal(true).optional(),
+  /** BigQuery: its rate limit is refusing the principal's calls, which retry. */
+  throttled: z.literal(true).optional()
 }).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
 export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
 /** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
-export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details' }
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true }
 
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)

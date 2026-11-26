@@ -46,8 +46,8 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
 - **Lifetime.** Backend memory only, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
   Rebuild Search Index, dropped on disconnect or backend exit. With the setting off nothing else builds one: the search
   says "This server has no index yet." with **Build index** (**Build indexes** on All servers).
-- **Progress.** The status bar shows "Indexing objects N / M" and Stop. A newer build of the same connection stops the
-  older one.
+- **Progress.** The status bar shows "Indexing objects N / M" and Stop (a BigQuery build names its pass instead; see
+  BigQuery below). A newer build of the same connection stops the older one.
 - **Reading.** First the server's objects, in one constant batch on the server's connection, then every online database
   the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), two at a time; an unexpected failure stops the other
   read in flight. Each database is one constant batch of catalog views on the
@@ -346,26 +346,32 @@ A BigQuery connection has an index of its own, searched in every way above (the 
 servers, which spans SQL Server and BigQuery connections together). It lives under the same 512 MiB budget and is built and
 dropped the same way, from BigQuery's free metadata calls only: no job runs and nothing is billed.
 
-- **Three prioritized waves.** Every build reads free REST metadata through the principal's shared limiter (16 calls in
-  flight per principal) so the billing project finishes first and interactive Object Explorer / Properties calls stay
-  responsive:
+- **Three prioritized waves.** Every build reads free REST metadata through the principal's shared limiter (each method
+  paced at BigQuery's per-user rate; docs/bigquery.md, Rate limiter), so the billing project finishes first and
+  interactive Object Explorer / Properties calls stay responsive:
   1. **Billing project (names + details).** Lists the billing project's datasets (`datasets.list`), then its objects
-     (`tables.list`, `routines.list`, `models.list`, four datasets at a time), then reads details (`tables.get` for
+     (`tables.list`, `routines.list`, `models.list`, 32 datasets at a time), then reads details (`tables.get` for
      columns, nested STRUCT fields by path such as `address.city`, descriptions, partitioning, clustering, rows, size and
-     view text, and `routines.get` for routine bodies and signatures, eight at a time; or the opt-in billed bulk path).
+     view text, and `routines.get` for routine bodies and signatures, 64 at a time; or the opt-in billed bulk path).
   2. **Starred and discovered projects (names).** When Options › Object Explorer › Commands › Index all accessible
      BigQuery projects (`objectExplorer.search.bigQueryAccessibleProjects`, on by default) is on, a full build calls
      `projects.list` (up to `objectExplorer.search.bigQueryMaxProjects`, default 500, configurable 1–5,000, sorted
      deterministically) and combines the user's starred projects with all
-     discovered accessible projects. It lists their datasets (four projects at a time) and objects (four datasets at a
+     discovered accessible projects. It lists their datasets (16 projects at a time) and objects (32 datasets at a
      time), swapping each dataset into the index immediately so every table, view, routine, model and dataset across all
      accessible projects becomes searchable within seconds.
-  3. **Starred, then discovered projects (details).** Reads `tables.get` and `routines.get` (eight at a time) for starred
+  3. **Starred, then discovered projects (details).** Reads `tables.get` and `routines.get` (64 at a time) for starred
      projects first, then discovered projects, swapping each dataset as it finishes. If the shared 512 MiB memory budget
      tightens on discovered projects, pass 2 stops early for remaining discovered projects (recording them as names only)
      while keeping Wave 1 and Wave 2 intact.
   The status says "Discovering accessible BigQuery projects…", then "Indexing N of M datasets", then "Reading details of
-  N of M objects"; the finished index line reports the project count when more than one project is indexed.
+  N of M objects"; the finished index line reports the project count when more than one project is indexed. The status
+  bar names the pass the same way ("Listing BigQuery datasets N / M", "Reading BigQuery object details N / M"). While wave
+  2 is still listing projects, more datasets can join the total, so it reads "~M" (Search Objects says "about M"). While
+  BigQuery is refusing calls for its rate limit, the status bar adds "(rate limited)" and Search Objects adds a sentence
+  saying so. Refused calls wait and retry, so the build slows down. A call still has its own 30 s, so only a long throttle
+  turns into skipped datasets or missing details. Builds that count different things (SQL Server databases and BigQuery objects, say) are not added
+  together; the status bar then shows "Indexing objects on N servers…".
 - **Projects.** Starred projects (managed per verified BigQuery principal in Object Explorer) are always indexed with
   details — including public or dataset-ACL projects such as `bigquery-public-data` that `projects.list` does not return.
   Turning off `objectExplorer.search.bigQueryAccessibleProjects` limits indexing to the billing project and starred
@@ -407,9 +413,11 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   and is counted as "details missing". Each metadata call has 30 s. A dataset dropped since its last read leaves the index
   without a skip.
 - **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): up to 500 discovered projects by default (configurable
-  1–5,000 via `objectExplorer.search.bigQueryMaxProjects`), 4 projects listed at
+  1–5,000 via `objectExplorer.search.bigQueryMaxProjects`), 16 projects and 32 datasets listed at once, 64 detail reads at
   once, 200 starred projects, 500 pages of 1,000 per listing, 10,000 columns per table, and 1,024 characters of each
-  column description or routine signature.
+  column description or routine signature. What a listing or a details pass has read stays outside the budget until its
+  dataset is held, so it is bounded too. Only 4 listings across all builds go past their first page at once. Pass 2 admits
+  datasets while the objects they read add up to at most 4,096; a larger dataset reads alone.
 
 ### Billed bulk index
 

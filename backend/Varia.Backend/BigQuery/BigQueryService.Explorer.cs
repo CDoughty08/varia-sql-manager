@@ -122,7 +122,7 @@ internal sealed partial class BigQueryService
 
     async Task<ExplorerChildrenResult> DatasetsAsync(BigQueryConnection connection, ExplorerCatalog catalog, string project, ExplorerRequest request, CancellationToken token)
     {
-        var list = await MetadataAsync(connection, t =>
+        var list = await MetadataAsync(connection, BqMethod.DatasetsList, t =>
         {
             var call = connection.Client.Service.Datasets.List(project);
             call.MaxResults = PageSize(request);
@@ -152,7 +152,7 @@ internal sealed partial class BigQueryService
     async Task<ExplorerChildrenResult> TablesAsync(BigQueryConnection connection, ExplorerCatalog catalog, ObjectRefDto dataset, ExplorerRequest request, CancellationToken token)
     {
         var folder = request.Folder!;
-        var list = await MetadataAsync(connection, t =>
+        var list = await MetadataAsync(connection, BqMethod.TablesList, t =>
         {
             var call = connection.Client.Service.Tables.List(dataset.Project, dataset.Name);
             call.MaxResults = PageSize(request);
@@ -177,7 +177,7 @@ internal sealed partial class BigQueryService
 
     async Task<ExplorerChildrenResult> RoutinesAsync(BigQueryConnection connection, ExplorerCatalog catalog, ObjectRefDto dataset, ExplorerRequest request, CancellationToken token)
     {
-        var list = await MetadataAsync(connection, t =>
+        var list = await MetadataAsync(connection, BqMethod.RoutinesList, t =>
         {
             var call = connection.Client.Service.Routines.List(dataset.Project, dataset.Name);
             call.MaxResults = PageSize(request);
@@ -197,7 +197,7 @@ internal sealed partial class BigQueryService
 
     async Task<ExplorerChildrenResult> ModelsAsync(BigQueryConnection connection, ExplorerCatalog catalog, ObjectRefDto dataset, ExplorerRequest request, CancellationToken token)
     {
-        var list = await MetadataAsync(connection, t =>
+        var list = await MetadataAsync(connection, BqMethod.ModelsList, t =>
         {
             var call = connection.Client.Service.Models.List(dataset.Project, dataset.Name);
             call.MaxResults = PageSize(request);
@@ -223,7 +223,7 @@ internal sealed partial class BigQueryService
         var offset = 0;
         if (request.Cursor is { } cursor && !int.TryParse(cursor.AsSpan(cursor.IndexOf('.', 3) + 1), System.Globalization.NumberStyles.None, null, out offset))
             throw new RequestException("INVALID_PARAMS", "Invalid Object Explorer request: cursor.");
-        var schema = await MetadataAsync(connection, t =>
+        var schema = await MetadataAsync(connection, BqMethod.TablesGet, t =>
         {
             var call = connection.Client.Service.Tables.Get(project, dataset, table);
             call.Fields = "schema";

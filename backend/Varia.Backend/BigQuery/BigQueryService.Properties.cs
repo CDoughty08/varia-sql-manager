@@ -42,16 +42,16 @@ internal sealed partial class BigQueryService
         {
             if (dataset)
             {
-                var found = await MetadataAsync(connection, t => connection.Client.Service.Datasets.Get(args.Project, args.Dataset).ExecuteAsync(t), budget.Token);
+                var found = await MetadataAsync(connection, BqMethod.DatasetsGet, t => connection.Client.Service.Datasets.Get(args.Project, args.Dataset).ExecuteAsync(t), budget.Token);
                 return MapDataset(found, args.Dataset, args.Project + "." + args.Dataset, watch.ElapsedMilliseconds);
             }
             var fullName = args.Project + "." + args.Dataset + "." + args.Name;
             if (routine)
             {
-                var found = await MetadataAsync(connection, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+                var found = await MetadataAsync(connection, BqMethod.RoutinesGet, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
                 return MapRoutine(found, args.Name, fullName, watch.ElapsedMilliseconds);
             }
-            var table = await MetadataAsync(connection, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+            var table = await MetadataAsync(connection, BqMethod.TablesGet, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
             return MapTable(table, args.Name, fullName, watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" })

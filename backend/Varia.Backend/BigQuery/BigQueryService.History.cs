@@ -17,7 +17,7 @@ internal sealed partial class BigQueryService
     /// <summary>One jobs.list page of the connection's billing project, read under <paramref name="limit"/> bytes: a larger page
     /// throws <see cref="BigQueryOverLimit"/>, so the caller asks for fewer jobs or stops for now.</summary>
     internal Task<HistoryPage> ListHistoryAsync(BigQueryConnection connection, HistoryListing listing, string? pageToken, int maxResults, int limit, CancellationToken token, Action<Exception>? throttled = null) =>
-        MetadataAsync(connection, async t =>
+        MetadataAsync(connection, BqMethod.JobsList, async t =>
         {
             var service = connection.Client.Service;
             var request = service.Jobs.List(connection.Options.Project);
@@ -42,7 +42,7 @@ internal sealed partial class BigQueryService
     /// <summary>jobs.get read from its JSON (a job's whole query text is up to 1 MB): the job, or null when BigQuery answered
     /// something that names no job.</summary>
     internal Task<(HistoryJob? Job, BigQueryJobDetail? Detail, long Bytes)> ReadHistoryJobAsync(BigQueryConnection connection, string jobId, string? location, int limit, bool detail, CancellationToken token, Action<Exception>? throttled = null) =>
-        MetadataAsync(connection, async t =>
+        MetadataAsync(connection, BqMethod.JobsGet, async t =>
         {
             var service = connection.Client.Service;
             var request = service.Jobs.Get(connection.Options.Project, jobId);
@@ -132,7 +132,7 @@ internal sealed partial class BigQueryService
         using var lease = connection.Lease() ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         try
         {
-            var answer = await MetadataAsync(connection, t =>
+            var answer = await MetadataAsync(connection, BqMethod.JobsCancel, t =>
             {
                 var request = connection.Client.Service.Jobs.Cancel(connection.Options.Project, args.JobId);
                 request.Location = args.Location;
