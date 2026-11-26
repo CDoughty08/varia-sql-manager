@@ -933,6 +933,57 @@ internal static partial class IndexFileChecks
             source.Connection.Abandon(unit);
         }
 
+        // BigQuery: a dataset with its columns replacing its read without them (a share that is almost all names), with room
+        // above the names' floor and none above the details'. A read charges entry by entry, so its first columns borrow the
+        // names' part and its later names go to the budget; a load charges every name first, and moves what the names' part
+        // paid to the budget when the columns need it. Whatever the read fits, the load fits.
+        {
+            var source = new World();
+            var unit = Dataset(source, DatasetEntries());
+            var cost = source.Budget.Used;
+            var (fitted, failures) = (0, new List<string>());
+            List<BigQueryEntry> With(int extra) => DatasetEntries().Concat(Enumerable.Range(0, extra).Select(at => DatasetEntries()[1] with { Name = "share_" + at, Detail = null, Shards = null })).ToList();
+            // The dataset with 200 more objects, whose records a load charges before any column.
+            var many = With(200);
+            var file = Save(Dataset(new World(), many), IndexUnitKind.Dataset, Sealed);
+            for (var extra = 60; extra <= 260; extra += 5)
+            {
+                // The share: the dataset read without its columns, with as many more names as make up most of what the columns cost.
+                var more = With(extra);
+                (World World, DatabaseIndex Pin, DatabaseIndex Credit) Set()
+                {
+                    var world = new World(new ObjectIndexLimits { DefinitionChars = 2000, MemoryBytes = cost * 64, NamesReserveBytes = cost * 16 });
+                    // Every text the dataset names is pooled already, so only records, slots and facts are the share's or the budget's.
+                    var (pin, credit) = (Dataset(world, DatasetEntries()), Dataset(world, more, children: false));
+                    var floors = (world.Limits.BigQueryNamesFloorBytes + world.Limits.BigQueryDetailsFloor(true, false)) / 2;
+                    world.Budget.Force(world.Budget.Free - floors);
+                    return (world, pin, credit);
+                }
+                var (loadWorld, loadPin, loadCredit) = Set();
+                var (liveWorld, livePin, liveCredit) = Set();
+                var (held, liveHeld) = (loadWorld.Budget.Used, liveWorld.Budget.Used);
+                var liveReader = new BigQueryReader(liveWorld.Limits, liveWorld.Pool, liveCredit, liveWorld.Limits.BigQueryNamesFloorBytes, liveWorld.Limits.BigQueryDetailsFloor(true, false));
+                var live = liveReader.Read("varia-alpha", "sales", many, true, true);
+                var loaded = Load(loadWorld, file, IndexUnitKind.Dataset, Sealed, credit: loadCredit, discovered: true);
+                if (live is not null)
+                {
+                    fitted++;
+                    if (loaded.Value is not { } back || back.Bytes != live.Bytes || back.NameBytes != live.NameBytes || loadWorld.Budget.Used - held != liveWorld.Budget.Used - liveHeld)
+                        failures.Add($"{extra}: {loaded.Problem}, {loaded.Value?.Bytes}/{loaded.Value?.NameBytes} against {live.Bytes}/{live.NameBytes}, {loadWorld.Budget.Used - held} taken against {liveWorld.Budget.Used - liveHeld}");
+                    liveWorld.Connection.Abandon(live);
+                }
+                if (loaded.Value is not null) loadWorld.Connection.Abandon(loaded.Value);
+                if (loadWorld.Budget.Used != held) failures.Add($"{extra}: {loadWorld.Budget.Used - held} bytes left");
+                foreach (var (world, pin, credit) in new[] { (loadWorld, loadPin, loadCredit), (liveWorld, livePin, liveCredit) })
+                {
+                    world.Connection.Abandon(credit);
+                    world.Connection.Abandon(pin);
+                }
+            }
+            check(fitted > 0 && failures.Count == 0, $"a replacement whose share is mostly names loads wherever its read fits ({fitted} of 41 shares fit): {string.Join("; ", failures.Take(4))}");
+            source.Connection.Abandon(unit);
+        }
+
         // BigQuery: below the details' floor, where a discovered project's dataset has no room for columns or text, the load
         // without columns still holds the names, every view and routine text left out, as the read without columns does (of a
         // dataset with no signatures or layout, which are details too: one with them is refused, as its read is).

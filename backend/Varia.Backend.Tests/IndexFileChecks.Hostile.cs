@@ -648,6 +648,9 @@ internal static partial class IndexFileChecks
                     Refused("a description of no entry", raw => raw.Descriptions[^1] = (-1, raw.Descriptions[^1].Text));
                     Refused("a shard group of a column", raw => raw.Shards[0] = (child, raw.Shards[0].Group));
                     Refused("a fact with unknown flags", raw => raw.FactFlags = 0x800);
+                    Refused("a whole fact whose text was left out", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Detailed = true, Whole = true, TextLeftOut = true }));
+                    Refused("a fact left out with no details read", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Detailed = false, Whole = false, TextLeftOut = true }));
+                    Refused("a whole fact carried from another generation", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Detailed = true, Whole = true, Stale = true }));
                     Refused("a shard group of fewer than none", raw => raw.Shards[0] = (raw.Shards[0].At, raw.Shards[0].Group with { Count = -1 }));
                     Refused("a fact longer than the format allows", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Signature = new string('s', IndexFileLimits.FactChars + 1) }), IndexFileProblem.Limits);
                 }

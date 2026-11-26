@@ -261,6 +261,11 @@ internal static class IndexFileUnit
     /// <summary>Whether a text of this use is one something is named by, and so no longer than a name may be.</summary>
     private static bool IsName(byte use) => (use & (byte)(TextUse.Name | TextUse.ChildName)) != 0;
 
+    /// <summary>What a read sets together: details carried from another generation, or whose text was left out for memory, are
+    /// an object's whose details were read and are not whole; and a read without definitions leaves no text out for memory.</summary>
+    private static bool FactFits(in BigQueryObjectFacts fact, bool definitionsLeftOut) =>
+        !(fact.Stale || fact.TextLeftOut) || fact.Detailed && !fact.Whole && !(fact.TextLeftOut && definitionsLeftOut);
+
     private static long FactBytesOf(in BigQueryObjectFacts fact) => BigQueryFacts.ObjectBytes + StringBytes(fact.Signature) + StringBytes(fact.Partitioning) + StringBytes(fact.Clustering);
     private static long ShardBytesOf(Varia.Backend.BigQueryShardsDto group) => BigQueryFacts.ShardBytes + StringBytes(group.Prefix) + StringBytes(group.First) + StringBytes(group.Last);
     private static long DescriptionBytesOf(string description) => BigQueryFacts.DescriptionBytes + IndexMemory.StringBytes(description.Length);
@@ -361,7 +366,7 @@ internal static class IndexFileUnit
             static bool Long(string? value) => value is { Length: > IndexFileLimits.FactChars };
             foreach (var (at, fact) in facts)
             {
-                if ((uint)at >= (uint)entries.Length || (entries[at].Flags & ObjectTable.ChildFlag) != 0) throw Corrupt();
+                if ((uint)at >= (uint)entries.Length || (entries[at].Flags & ObjectTable.ChildFlag) != 0 || !FactFits(fact, unit.DefinitionsLeftOut)) throw Corrupt();
                 if (Long(fact.Signature) || Long(fact.Partitioning) || Long(fact.Clustering)) throw Limits();
             }
             foreach (var (at, description) in descriptions)
@@ -598,40 +603,58 @@ internal static class IndexFileUnit
         public long NameBytes { get; private set; }
         public DatabaseIndex? Credit => credit;
 
-        /// <summary>Charges to <paramref name="share"/> (a part of the replaced read's share) first, the rest to the budget when
-        /// that leaves <paramref name="keepFree"/> free, else to what is left of both parts together (<paramref name="other"/>):
-        /// as a read lends between them once the budget has refused, so a load no larger than what it replaces always fits.</summary>
-        private bool TryCharge(long bytes, long keepFree, ref long share, ref long other)
+        // BigQuery: what each part of the share has paid for its own kind (names from the names' part, details from the rest).
+        private long namesPaid, detailsPaid;
+
+        /// <summary>Charges to the part of the replaced read's share for <paramref name="name"/> first, the rest to the budget
+        /// when that leaves <paramref name="keepFree"/> free, else to what is left of both parts together: as a read lends
+        /// between them once the budget has refused, so a load no larger than what it replaces always fits. A read charges
+        /// entry by entry and a load section by section, so the other part may have paid for what the read would by then
+        /// have put on the budget: that much moves to the budget, above the other kind's floor, before the load is refused.
+        /// SQL Server's reads have one share (<paramref name="name"/> false, no other part).</summary>
+        private bool TryCharge(long bytes, long keepFree, bool name)
         {
             if (bytes <= 0) return true;
+            ref var share = ref name ? ref nameCredit : ref creditLeft;
+            ref var paid = ref name ? ref namesPaid : ref detailsPaid;
             var fromShare = Math.Min(share, bytes);
-            if (bytes > fromShare && !budget.TryTake(bytes - fromShare, keepFree))
+            if (bytes == fromShare || budget.TryTake(bytes - fromShare, keepFree))
             {
-                if (share + other < bytes) return false;
-                other -= bytes - fromShare;
                 share -= fromShare;
-                Credited += bytes;
+                paid += fromShare;
+                Credited += fromShare;
+                Taken += bytes - fromShare;
                 return true;
             }
-            share -= fromShare;
-            Credited += fromShare;
-            Taken += bytes - fromShare;
+            if (!bigQuery) return false;
+            ref var other = ref name ? ref creditLeft : ref nameCredit;
+            ref var otherPaid = ref name ? ref detailsPaid : ref namesPaid;
+            var shortfall = bytes - share - other;
+            if (shortfall > 0)
+            {
+                if (shortfall > otherPaid || !budget.TryTake(shortfall, name ? detailsFloor : namesFloor)) return false;
+                otherPaid -= shortfall;
+                other += shortfall;
+                Credited -= shortfall;
+                Taken += shortfall;
+            }
+            other -= bytes - share;
+            paid += share;
+            share = 0;
+            Credited += bytes;
             return true;
         }
-
-        private long noShare;
-        private bool TryCharge(long bytes, long keepFree, ref long share) => bigQuery ? TryCharge(bytes, keepFree, ref share, ref nameCredit) : TryCharge(bytes, keepFree, ref share, ref noShare);
 
         /// <summary>A BigQuery name's share (a record, its facts, a text's slot): the names' part of the replaced read's share,
         /// else the budget above the names floor (<see cref="BigQueryReader"/>).</summary>
         private bool TryChargeName(long bytes)
         {
-            if (!TryCharge(bytes, namesFloor, ref nameCredit, ref creditLeft)) return false;
+            if (!TryCharge(bytes, namesFloor, name: true)) return false;
             NameBytes += Math.Max(0, bytes);
             return true;
         }
 
-        private bool Charge(long bytes, bool name) => !bigQuery ? TryCharge(bytes, 0, ref creditLeft) : name ? TryChargeName(bytes) : TryCharge(bytes, detailsFloor, ref creditLeft);
+        private bool Charge(long bytes, bool name) => !bigQuery ? TryCharge(bytes, 0, name: false) : name ? TryChargeName(bytes) : TryCharge(bytes, detailsFloor, name: false);
 
         public override object? Text(object value, TextUse use)
         {
@@ -653,7 +676,7 @@ internal static class IndexFileUnit
             var acquired = pool.TryAcquire(value, keepFree);
             if (acquired is not null)
             {
-                if (bigQuery && name ? TryChargeName(IndexMemory.SlotBytes) : TryCharge(IndexMemory.SlotBytes, keepFree, ref creditLeft)) return acquired;
+                if (bigQuery && name ? TryChargeName(IndexMemory.SlotBytes) : TryCharge(IndexMemory.SlotBytes, keepFree, name: false)) return acquired;
                 pool.Release([acquired]);
             }
             if (!Charge(IndexMemory.SlotBytes, name: true)) throw Budget();
@@ -995,6 +1018,7 @@ internal static class IndexFileUnit
                 var clustering = Stated(FactClustering) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var signature = Stated(FactSignature) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed, Stated(FactStale), Stated(FactTextLeftOut));
+                if (!FactFits(fact, Has(DefinitionsLeftOutFlag))) throw Corrupt();
                 // Facts are an object's, never a column's, so a load without children keeps them all.
                 if (Moved(at) < 0 || (entries[Moved(at)].Flags & ObjectTable.ChildFlag) != 0) throw Corrupt();
                 var cost = FactBytesOf(fact);
