@@ -122,6 +122,12 @@ export const gestureCatalog = {
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
   },
+  'explorer.addToSelection': {
+    title: 'Add Server to Selection', description: 'Adds or removes a connected top-level server in the multi-server selection.',
+    kind: 'fixed', scope: 'objectExplorer', place: 'serverRow', action: 'click', target: 'a connection', modifiers: ['mod'],
+    locked: 'Standard multi-selection gesture on top-level connections; Space and Ctrl+Space toggle from the keyboard.',
+    keyboard: ['explorer.toggleMultiSelect']
+  },
   // The column profile's peek: while held over the panel, it shows the other list (only the selected columns, or every column
   // when Selected Columns Only is on). Scoped to the panel: over the grid the same Ctrl is Add to Selection and Ctrl+C.
   'output.profilePeekHover': {

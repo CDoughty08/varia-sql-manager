@@ -141,13 +141,19 @@ function ExplorerFooter({ servers, live }: { readonly servers: number; readonly 
  * inline search row with Filter Settings and Group by Schema (falling back cleanly when disconnected/empty), over the
  * tree of connected servers or a prompt to connect. Filter shows a filled funnel while the selected folder has a filter.
  */
-export default function ExplorerPane({ error, activeConnectionId, activeQueryId }: { readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
+export default function ExplorerPane({ error, activeConnectionId, activeQueryId, onNewMultiServerQuery }: {
+  readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string; readonly onNewMultiServerQuery?: () => void
+}) {
   const { explorer, connections, commands } = useWorkbench()
-  const { selected } = useServiceSnapshot(explorer)
+  const { selected, multiSelected } = useServiceSnapshot(explorer)
   const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections).filter(connection => connection.inExplorer !== false)
   const connect = useCommandEnabled('connection.connect')
   const selectedServer = explorer.menuNode(selected)?.connectionId
+  const multiProvider = explorer.multiSelectProvider
+  const multiSelectionLabel = multiProvider === 'bigquery'
+    ? `${multiSelected.length} BigQuery Projects selected`
+    : `${multiSelected.length} SQL Servers selected`
   // The empty area below the servers: Connect… and Refresh. Rows register their own menus.
   const background = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer' }))
   const live = servers.filter(isLiveConnection).length
@@ -182,6 +188,22 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId 
   return <>
     <div className="explorer-header pane-header" ref={header}><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={headerTools} /><ExplorerMenuButton /></div>
     {searchable ? <ExplorerSearch connectionId={selectedServer} inlineTools={inlineToolbar} /> : <div className="explorer-tools-bar">{inlineToolbar}</div>}
+    {multiSelected.length >= 2 && <div className="oe-multi-bar" role="region" aria-label="Multi-server selection"
+      style={{ height: 26, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 'var(--varia-space-1)', padding: '0 var(--varia-space-2)' }}>
+      <span className="oe-multi-bar-label" style={{ flex: '1 1 0', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--varia-size-xs)', fontWeight: 600 }}>
+        {multiSelectionLabel}
+      </span>
+      <button type="button" className="primary oe-multi-bar-action"
+        style={{ height: 20, padding: '0 var(--varia-space-2)', fontSize: 'var(--varia-size-xs)', lineHeight: 1 }}
+        onClick={() => { if (onNewMultiServerQuery) onNewMultiServerQuery(); else void commands.execute('explorer.newMultiServerQuery', undefined, 'toolbar') }}>
+        New Query
+      </button>
+      <button type="button" className="icon-button oe-multi-bar-clear" aria-label="Clear selection" title="Clear selection (Escape)"
+        style={{ width: 20, height: 20, padding: 2 }}
+        onClick={() => { explorer.clearMultiSelect(); focusTree(header.current) }}>
+        <Icon name="close" />
+      </button>
+    </div>}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} activeQueryId={activeQueryId} /><PeekCard /></ExplorerErrorBoundary>
