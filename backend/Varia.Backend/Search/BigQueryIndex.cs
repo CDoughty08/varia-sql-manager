@@ -493,12 +493,20 @@ internal static partial class BigQueryEntries
             if (!columns.TryGetValue(parent, out var list)) columns[parent] = list = [];
             list.Add(new(table.Name(at), table.Subtype(at) == "struct", table.Typed(at)?.TypeName ?? "?", table.Typed(at) is { } typed && (typed.Flags & TypedFlags.Nullable) != 0, facts.Description(at)));
         }
+        // One string for each long definition, however many objects share it (each unpacking is a copy of the whole text).
+        var unpacked = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        string? Definition(int at)
+        {
+            if (table.StoredDefinition(at) is not { } stored) return null;
+            if (stored is string text) return text;
+            return unpacked.TryGetValue(stored, out var held) ? held : unpacked[stored] = DefinitionText.ToText(stored);
+        }
         for (var at = 0; at < table.Count; at++)
         {
             if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true } fact || !fact.Whole && !carry) continue;
             var modified = table.Modified(at) is { } date ? (long)(date - DateTime.UnixEpoch).TotalMilliseconds : (long?)null;
             var subtype = table.Subtype(at) == "clone" ? "clone" : null;
-            known[Key(table.Kind(at), table.Name(at), facts.Shards(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, table.Definition(at), columns.GetValueOrDefault(at) ?? [],
+            known[Key(table.Kind(at), table.Name(at), facts.Shards(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, Definition(at), columns.GetValueOrDefault(at) ?? [],
                 fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole, Stale: fact.Stale));
         }
         return known;

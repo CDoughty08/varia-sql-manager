@@ -183,7 +183,7 @@ internal static class IndexFile
     {
         if (options.Kind == IndexUnitKind.Resource) return new(null, IndexFileProblem.Kind);
         IndexFileHeader? header = null;
-        var held = new List<object?>();
+        var held = new IndexFileUnit.Segments<object?>();
         IndexFileUnit.PooledAccount? account = null;
         try
         {
@@ -226,7 +226,7 @@ internal static class IndexFile
             header = read;
             Expect(header, IndexUnitKind.Resource, identity.Span);
             var reader = new IndexFileContainer.PayloadReader(new IndexFileContainer.ChunkReader(stream, seal, headerBytes, token));
-            var unit = IndexFileUnit.Load(reader, header, new IndexFileUnit.PlainAccount(mostBytes), true, [], token);
+            var unit = IndexFileUnit.Load(reader, header, new IndexFileUnit.PlainAccount(mostBytes), true, new IndexFileUnit.Segments<object?>(), token);
             if (unit.LeftOut > unit.Table.Count) return new(null, IndexFileProblem.Corrupt, header);
             return new(new(unit.Resource!, new SavedResource(unit.Table, unit.LeftOut)), IndexFileProblem.None, header, unit.Extra);
         }

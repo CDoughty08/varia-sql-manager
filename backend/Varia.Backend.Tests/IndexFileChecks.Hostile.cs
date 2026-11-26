@@ -91,6 +91,10 @@ internal static partial class IndexFileChecks
         public int? DetailEntries;
         /// <summary>Bits added to every fact's flags.</summary>
         public ushort FactFlags;
+        /// <summary>The number of dates stated, where a case states another than the dates'.</summary>
+        public int? DateCount;
+        /// <summary>Leaves out the padding after a long definition's frame.</summary>
+        public bool NoFramePadding;
 
         private bool Detail(in ObjectEntry entry) =>
             (entry.Flags & ObjectTable.ChildFlag) != 0 && entry.Shape < Shapes.Count && Shapes[entry.Shape].Kind is "column" or "index" or "statistic" or "parameter" or "bqColumn";
@@ -221,7 +225,7 @@ internal static partial class IndexFileChecks
             foreach (var entry in Entries) writer.Write(entry.Owner);
             foreach (var entry in Entries) writer.Write(entry.Definition);
             foreach (var entry in Entries) writer.Write(entry.Modified);
-            writer.Write(Dates.Count);
+            writer.Write(DateCount ?? Dates.Count);
             foreach (var (at, value) in Dates)
             {
                 writer.Write(at);
@@ -300,6 +304,7 @@ internal static partial class IndexFileChecks
                     writer.Write(frame.ByteLength);
                     writer.Write(frame.FrameLength);
                     writer.Write(frame.Frame);
+                    if (!NoFramePadding) writer.Write(new byte[Padding(frame.ByteLength, frame.FrameLength)]);
                 }
             writer.Write(Extra.Length);
             writer.Write(Extra);
@@ -487,7 +492,11 @@ internal static partial class IndexFileChecks
                 {
                     var raw = Raw.Of(unit);
                     change(raw);
-                    if (retag) raw.Retag();
+                    if (retag)
+                    {
+                        raw.Retag();
+                        raw.Sort();
+                    }
                     cases++;
                     foreach (var children in new[] { true, false })
                     {
@@ -553,7 +562,10 @@ internal static partial class IndexFileChecks
                 Refused("a parent without a schema", raw => raw.Entries[raw.Entries[child].Owner].Schema = -1, details: passed);
                 Refused("a name that states a definition's use", raw => raw.Tags[raw.Entries[top].Name] = 4, retag: false);
                 Refused("a definition that states a name's use", raw => raw.Tags[raw.Entries[defined].Definition] |= 1, retag: false);
-                Refused("a text longer than the format allows", raw => raw.Texts[raw.Entries[top].Name] = new string('x', IndexFileLimits.TextChars + 1), IndexFileProblem.Limits);
+                Refused("a name longer than a name may be", raw => raw.Texts[raw.Entries[top].Name] = new string('x', IndexFileLimits.NameTextChars + 1), IndexFileProblem.Limits);
+                Refused("a schema longer than a name may be", raw => raw.Texts[raw.Entries[raw.Entries[child].Owner].Schema] = new string('s', IndexFileLimits.NameTextChars + 1), IndexFileProblem.Limits);
+                Refused("a definition longer than the format allows", raw => raw.Texts[raw.Entries[defined].Definition] = new string('d', IndexFileLimits.TextChars + 1), IndexFileProblem.Limits);
+                Refused("more dates than the format allows", raw => raw.DateCount = IndexFileLimits.Dates + 1, IndexFileProblem.Limits);
                 Refused("a shape longer than the format allows", raw => raw.Shapes[0] = (new string('k', IndexFileLimits.ShapeChars + 1), "f", null), IndexFileProblem.Limits);
                 Refused("a name longer than the format allows", raw => raw.Name = new string('n', IndexFileLimits.NameChars + 1), IndexFileProblem.Limits);
                 Refused("unknown unit flags", raw => raw.Flags |= 0x4000);
@@ -589,6 +601,7 @@ internal static partial class IndexFileChecks
                         Refused("a key's columns past the list", raw => raw.Details!.KeyFrom[0] = raw.Details.KeyColumn.Length, details: true);
                         Refused("a key with a negative column count", raw => raw.Details!.KeyCount[0] = -1, details: true);
                         Refused("a key with more columns than the list", raw => raw.Details!.KeyCount[0] = short.MaxValue, details: true);
+                        Refused("a key with more columns than a key has", raw => { raw.Details = raw.Details! with { KeyColumn = new short[IndexFileLimits.KeyColumnsPerKey + 8], KeyOther = new short[IndexFileLimits.KeyColumnsPerKey + 8], KeyColumnFlags = new byte[IndexFileLimits.KeyColumnsPerKey + 8] }; (raw.Details.KeyFrom[0], raw.Details.KeyCount[0]) = (0, IndexFileLimits.KeyColumnsPerKey + 1); }, details: true);
                         Refused("a foreign key to no entry", raw => raw.Details!.KeyReferenced[0] = raw.Entries.Length, details: true);
                         Refused("a foreign key below none", raw => raw.Details!.KeyReferenced[0] = -2, details: true);
                         Refused("a foreign key that is no child", raw => { var key = raw.Details!.KeyAt[0]; raw.Details.KeyReferenced[0] = top; raw.Entries[key].Flags &= unchecked((byte)~ObjectTable.ChildFlag); raw.Entries[key].Owner = -1; }, details: true);
@@ -611,7 +624,10 @@ internal static partial class IndexFileChecks
                     Refused("a shard group of fewer than none", raw => raw.Shards[0] = (raw.Shards[0].At, raw.Shards[0].Group with { Count = -1 }));
                     Refused("a fact longer than the format allows", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Signature = new string('s', IndexFileLimits.FactChars + 1) }), IndexFileProblem.Limits);
                 }
+                // A BigQuery read holds no text that nothing names.
+                if (kind == IndexUnitKind.Dataset) Refused("a text nothing names", raw => raw.Texts.Add("unnamed"));
                 // Texts no entry names are still texts the load holds: each is charged its slot, however many the file states.
+                if (kind == IndexUnitKind.Database)
                 {
                     cases++;
                     var raw = Raw.Of(unit);
@@ -627,6 +643,7 @@ internal static partial class IndexFileChecks
                 }
                 // A million texts no entry names, in a file large enough to hold them (a few hundred KiB, packed): the load holds
                 // only what it is charged for, so a budget too small for their places refuses them before it holds them.
+                if (kind == IndexUnitKind.Database)
                 {
                     cases++;
                     var raw = Raw.Of(unit);
@@ -833,6 +850,22 @@ internal static partial class IndexFileChecks
                 && GC.GetAllocatedBytesForCurrentThread() - allocatedBefore < 32 << 20,
                 "blocks that pack better than the ratio without their padding are refused");
             check(world.Budget.Used == before, "and leave nothing charged");
+
+            // A long definition's frame is under the same rule: one that packs better than 64 to one is padded to that, so
+            // unpacking and checking definitions never costs more than 64 times the file.
+            var flatRows = new[] { new IndexedObject("procedure", "storedProcedures", "dbo", "usp_flat", Definition: new string('a', 200_000)) };
+            var flat1 = new DatabaseIndex("Flat", flatRows, IndexMemory.RecordBytes + 3 * IndexMemory.SlotBytes, 1, 0);
+            var flatFile = Save(flat1, IndexUnitKind.Database, Clear);
+            var flatLoaded = Load(world, flatFile, IndexUnitKind.Database, Clear);
+            var frame = (PackedText)flat1.Table.StoredDefinition(0)!;
+            var unpaddedRaw = Raw.Of(flat1);
+            unpaddedRaw.NoFramePadding = true;
+            check(frame.FrameLength < 200 && flatFile.Length > 200_000 / IndexFileContainer.MaxRatio && flatFile.Length < 200_000 / IndexFileContainer.MaxRatio + 1024
+                && flatLoaded.Value is { } flatBack && Dump(flatBack.Table) == Dump(flat1.Table)
+                && Problem(Forge(Header(flatFile, Clear), Raw.Of(flat1).Write(), Clear)) == IndexFileProblem.None
+                && Problem(Forge(Header(flatFile, Clear), unpaddedRaw.Write(), Clear)) == IndexFileProblem.Corrupt,
+                $"a definition of one repeated letter ({frame.FrameLength} bytes packed) takes a sixty-fourth of its length in the file ({flatFile.Length} bytes), and one without that padding is refused");
+            if (flatLoaded.Value is not null) world.Connection.Abandon(flatLoaded.Value);
             world.Connection.Abandon(small);
         }
     }

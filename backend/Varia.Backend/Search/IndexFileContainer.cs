@@ -90,7 +90,8 @@ internal sealed class IndexFileRefused(IndexFileProblem problem) : Exception
 /// checks must stand alone. Inside the chunks the body is a run of blocks, each u8 codec (0 stored, 1 zstd) | u32 raw bytes |
 /// (zstd: u32 stored bytes) | bytes, so what is already compressed (a <see cref="PackedText"/> frame) is stored as it is.
 /// A zstd block that packs better than <see cref="MaxRatio"/> to one is followed by padding up to that ratio, so a file never
-/// unpacks to more than that many times its size, which bounds the work a file can make a load do by the file's own size
+/// unpacks to more than that many times its size, and a packed definition's frame is padded by the same rule
+/// (<see cref="IndexFileUnit"/>), which bounds the work a file can make a load do by the file's own size
 /// (<see cref="PayloadReader.Backed"/>). What a load keeps or allocates is bounded by the budget, not by this.
 /// </summary>
 internal static class IndexFileContainer
@@ -116,8 +117,9 @@ internal static class IndexFileContainer
 
     public static IndexFileRefused Refused(IndexFileProblem problem) => new(problem);
 
-    /// <summary>The padding after a zstd block of <paramref name="raw"/> bytes stored in <paramref name="stored"/>.</summary>
-    private static int Padding(uint raw, uint stored) => (int)Math.Max(0, (raw + MaxRatio - 1) / MaxRatio - (long)stored);
+    /// <summary>The padding after a zstd block, or a packed definition's frame, of <paramref name="raw"/> bytes stored in
+    /// <paramref name="stored"/>.</summary>
+    public static int Padding(uint raw, uint stored) => (int)Math.Max(0, (raw + MaxRatio - 1) / MaxRatio - (long)stored);
 
     /// <summary>Room for <paramref name="bytes"/> in <paramref name="buffer"/>, keeping what it holds: buffers start small and
     /// grow to their fixed size only for a file that needs it, since most units are a few KiB.</summary>
@@ -320,6 +322,8 @@ internal static class IndexFileContainer
             if (stream.ReadAtLeast(sealedHeader, sealedHeader.Length, throwOnEndOfStream: false) < sealedHeader.Length) throw Refused(IndexFileProblem.Truncated);
             var plain = new byte[(int)length];
             if (!seal.OpenHeader(prefix, sealedHeader, plain)) throw Refused(seal.Encrypted ? IndexFileProblem.Key : IndexFileProblem.Corrupt);
+            // A file past the format's size is refused here, not after the limit's worth of chunks is read.
+            if (stream.CanSeek && stream.Length > IndexFileLimits.FileBytes) throw Refused(IndexFileProblem.Limits);
             return (ParseHeader(plain, seal.Encrypted), seal, PrefixBytes + sealedHeader.Length);
         }
         catch

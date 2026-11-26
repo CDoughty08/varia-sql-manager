@@ -241,14 +241,22 @@ internal static class IndexFileLimits
     public const int ResourceObjects = 1 << 21;
     /// <summary>Distinct texts in one unit's table.</summary>
     public const int Texts = 1 << 26;
-    /// <summary>One text, a name or a definition, in UTF-16 code units: four times the longest definition the index keeps by default.</summary>
-    public const int TextChars = 4 << 20;
+    /// <summary>One text in UTF-16 code units: the longest definition the index keeps by default (<see cref="ObjectIndexLimits.DefinitionChars"/>),
+    /// rounded up.</summary>
+    public const int TextChars = 1 << 20;
+    /// <summary>A text an entry or a type is named by. Search builds a label of an object's names for every candidate, so a
+    /// name is held to what the sources give: the longest is a BigQuery field path, 15 names of 300 characters.</summary>
+    public const int NameTextChars = 5000;
+    /// <summary>Dates outside what an entry's 32 bits hold (before 1970): kept beside the table, uncharged, so few.</summary>
+    public const int Dates = 1 << 16;
     /// <summary>The kind, folder and subtype combinations one unit names (the process knows a few hundred), and each one's length.</summary>
     public const int Shapes = 4096;
     public const int ShapeChars = 64;
     /// <summary>A unit's types (<see cref="ObjectDetails"/> numbers them in 16 bits) and the columns its indexes and keys list.</summary>
     public const int Types = ushort.MaxValue + 1;
     public const int KeyColumns = 1 << 27;
+    /// <summary>The columns of one index or key (SQL Server's most is 32 key columns and 1,023 included ones).</summary>
+    public const int KeyColumnsPerKey = 4096;
     /// <summary>A database's, project's or dataset's name, or a server's version.</summary>
     public const int NameChars = 1024;
     /// <summary>A BigQuery fact's text (a signature, a description, a shard group's prefix), as a read clips it.</summary>
