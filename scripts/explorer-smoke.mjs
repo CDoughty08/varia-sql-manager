@@ -10,7 +10,7 @@ import {
   dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchIndexLines, explorerSearchIndexLine, documentVerb, objectSearchSelected, objectSearchServer, objectSearchServerOptions, objectSearchSummary, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
-import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard } from './fixtures/ui.mjs'
+import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard, toasts } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -2675,7 +2675,8 @@ try {
       const keyFile = JSON.parse(await readFile(join(home, 'search-index-key.json'), 'utf8'))
       expect(Object.keys(keyFile).sort()).toEqual(['key', 'version'])
       await palette('Clear Saved Search Indexes')
-      await expect(page.getByText(/Saved search indexes cleared: [\d,]+ files?, /)).toBeVisible(wait)
+      // The toast itself: the polite live region repeats its sentence for screen readers.
+      await expect(toasts(page).filter({ hasText: /Saved search indexes cleared: [\d,]+ files?, / })).toBeVisible(wait)
       expect(await storeFiles()).toEqual([])
       // Back to the query, which the cleanup below runs in.
       await documentTabs(page).getByRole('tab', { name: queryTab }).click()

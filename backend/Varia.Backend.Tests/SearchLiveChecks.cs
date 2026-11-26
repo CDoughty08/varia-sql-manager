@@ -90,10 +90,16 @@ internal static class SearchLiveChecks
             }
             var resourceEqual = index.Resource is not { } set || service.Search.Store.LoadResource(set.Key, long.MaxValue).Value is { } savedSet && IndexFileChecks.Dump(savedSet.Read.Table) == IndexFileChecks.Dump(set.Table);
             check(equal && resourceEqual, "every unit the real build saved loads back equal to what the index holds");
-            byte[][] distinctive = [.. new[] { hostile, marker, "usp_Find", "srch", database, profile.ServerName ?? "varia-no-server-name", profile.Login ?? "varia-no-login-name", "spt_fallback_db", "sp_who" }
-                .SelectMany(text => new[] { System.Text.Encoding.UTF8.GetBytes(text), System.Text.Encoding.Unicode.GetBytes(text) })];
-            check(files.All(file => File.ReadAllBytes(file) is var content && distinctive.All(text => content.AsSpan().IndexOf(text) < 0)),
-                "no saved file holds an object's, the database's, the server's or the login's name, or a definition's text, in UTF-8 or UTF-16");
+            // Only needles of 8 bytes or more: ciphertext is random, so a shorter one turns up by chance (CI's login "sa" is 2 bytes
+            // in UTF-8, one chance in 65,536 at every position of hundreds of KB). At 8 bytes a chance match is one in 2^64 a position.
+            string[] texts = [hostile, marker, "usp_Find", "srch", database, profile.ServerName ?? "varia-no-server-name", profile.Login ?? "varia-no-login-name", "spt_fallback_db", "sp_who"];
+            var distinctive = texts.Index()
+                .SelectMany(text => new[] { (Label: text.Index + " UTF-8", Bytes: System.Text.Encoding.UTF8.GetBytes(text.Item)), (Label: text.Index + " UTF-16", Bytes: System.Text.Encoding.Unicode.GetBytes(text.Item)) })
+                .Where(needle => needle.Bytes.Length >= 8).ToList();
+            var inFiles = files.SelectMany(file => File.ReadAllBytes(file) is var content ? distinctive.Where(needle => content.AsSpan().IndexOf(needle.Bytes) >= 0).Select(needle => needle.Label) : []).Distinct().ToList();
+            check(distinctive.Count >= 12 && inFiles.Count == 0,
+                "no saved file holds an object's, the database's, the server's or the login's name, or a definition's text, in UTF-8 or UTF-16 ("
+                + distinctive.Count + " needles; found: " + (inFiles.Count == 0 ? "none" : string.Join(", ", inFiles)) + ")");
             check((await service.Search.Store.ClearAsync()) is { Kept: 0 } cleared && cleared.Files == files.Length && Directory.GetFiles(storeFolder).Length == 0, "a clear deletes every file the build saved");
         }
         finally
