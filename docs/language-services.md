@@ -145,7 +145,8 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, how a written name becomes an
   index path, keywords and functions. GoogleSQL's are `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
 - **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
-  `WITH` names, the default dataset's objects, the billing project's datasets and the projects. `x.` lists a project's
+  `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects (billing, starred
+  and discovered accessible projects). `x.` lists a project's
   datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
   item with its range, and a wildcard (`events_*`) or one of its shards within the range reads the newest shard's columns
   (`events_*` reads the `events_YYYYMMDD` group even beside `events_summary`; `ev*` over two groups, or a group and a

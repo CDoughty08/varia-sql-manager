@@ -5,7 +5,7 @@ import { bigQueryAuthenticationLabels, bigQueryKeyFileLabels } from '../../share
 import { bigQueryLimits } from '../../shared/connections'
 import { z } from 'zod'
 import Icon from './Icon'
-import { advancedCostPrompt, advancedCostThreshold, parseCostThreshold, shownCostThreshold, bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, parseExtraProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
+import { advancedCostPrompt, advancedCostThreshold, parseCostThreshold, shownCostThreshold, bigQueryCredentialReady, bigQueryFormOptions, bigQueryReady, byteUnits, joinBytes, mergeProjects, projectError, splitBytes, type ByteUnit } from './bigquery-connect-form'
 
 /** Location's choices: Automatic (the dataset's), the multi-regions, then common regions. Any other a profile names is
  *  listed as well. */
@@ -134,8 +134,8 @@ export function useBigQueryLists(options: BigQueryConnectionOptions, alive: { re
 export type BigQueryLists = ReturnType<typeof useBigQueryLists>
 
 /** How many of BigQuery's advanced settings are set. */
-export function bigQueryAdvancedCount(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'costThreshold' | 'impersonateServiceAccount' | 'extraProjects'>): number {
-  return [options.maximumBytesBilled, options.costPrompt === false, options.costThreshold, options.impersonateServiceAccount, options.extraProjects?.length].filter(Boolean).length
+export function bigQueryAdvancedCount(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'costThreshold' | 'impersonateServiceAccount'>): number {
+  return [options.maximumBytesBilled, options.costPrompt === false, options.costThreshold, options.impersonateServiceAccount].filter(Boolean).length
 }
 
 /** The Advanced tab's accessible summary: how many of BigQuery's advanced settings are set. */
@@ -188,15 +188,13 @@ export interface BigQueryAdvancedDraft {
   readonly amount: string
   readonly unit: ByteUnit
   readonly impersonate: string
-  readonly adding: string
-  readonly extraError: string
   /** Prompt above as typed; undefined until edited, when the field shows the form's or saved threshold. */
   readonly threshold?: string
 }
 /** Initialises BigQuery Advanced draft fields from loaded options (only on load/choose/reset, never while typing). */
 export function bigQueryAdvancedDraftFrom(options: Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'impersonateServiceAccount'>): BigQueryAdvancedDraft {
   const bytes = splitBytes(options.maximumBytesBilled)
-  return { amount: bytes.amount, unit: bytes.unit, impersonate: options.impersonateServiceAccount ?? '', adding: '', extraError: '' }
+  return { amount: bytes.amount, unit: bytes.unit, impersonate: options.impersonateServiceAccount ?? '' }
 }
 /** First validation problem in the BigQuery Advanced draft, or empty when every edited field is valid. */
 export function bigQueryAdvancedValidationError(draft: BigQueryAdvancedDraft): string {
@@ -206,30 +204,28 @@ export function bigQueryAdvancedValidationError(draft: BigQueryAdvancedDraft): s
   if (!threshold.ok) return threshold.error
   const impersonate = draft.impersonate.trim()
   if (impersonate && !serviceAccountSchema.safeParse(impersonate).success) return impersonateFormatError
-  return draft.extraError
+  return ''
 }
 
-/** BigQuery's inline Advanced Properties tab panel: cost cap, prompt and threshold, impersonation, and extra read-only projects. */
-export function BigQueryAdvanced({ options, savedCostPrompt, savedCostThreshold, defaultCostThreshold, projects, locked, draft, onDraftChange, onChange }: {
+/** BigQuery's inline Advanced Properties tab panel: cost cap, prompt and threshold, and impersonation. */
+export function BigQueryAdvanced({ options, savedCostPrompt, savedCostThreshold, defaultCostThreshold, locked, draft, onDraftChange, onChange }: {
   options: BigQueryConnectionOptions
   savedCostPrompt?: false
   /** The saved entry's own threshold (GiB), and Options' (the placeholder). */
   savedCostThreshold?: number
   defaultCostThreshold: number
-  projects: readonly BigQueryProject[]
   locked?: boolean
   draft: BigQueryAdvancedDraft
   onDraftChange(draft: BigQueryAdvancedDraft): void
-  onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'costThreshold' | 'impersonateServiceAccount' | 'extraProjects'>>): void
+  onChange(patch: Partial<Pick<BigQueryConnectionOptions, 'maximumBytesBilled' | 'costPrompt' | 'costThreshold' | 'impersonateServiceAccount'>>): void
 }) {
   const bytesResult = joinBytes(draft.amount, draft.unit)
   const impersonateTrimmed = draft.impersonate.trim()
   const impersonateError = impersonateTrimmed && !serviceAccountSchema.safeParse(impersonateTrimmed).success ? impersonateFormatError : ''
   const thresholdResult = parseCostThreshold(draft.threshold ?? '')
   const thresholdText = draft.threshold ?? String(shownCostThreshold(options, savedCostThreshold) ?? '')
-  const error = (!bytesResult.ok ? bytesResult.error : '') || (!thresholdResult.ok ? thresholdResult.error : '') || impersonateError || draft.extraError
+  const error = (!bytesResult.ok ? bytesResult.error : '') || (!thresholdResult.ok ? thresholdResult.error : '') || impersonateError
   const asking = (options.costPrompt ?? savedCostPrompt) !== false
-  const extra = options.extraProjects ?? []
 
   function updateBytes(nextAmount: string, nextUnit: ByteUnit) {
     onDraftChange({ ...draft, amount: nextAmount, unit: nextUnit })
@@ -247,17 +243,11 @@ export function BigQueryAdvanced({ options, savedCostPrompt, savedCostThreshold,
     if (!trimmed) onChange({ impersonateServiceAccount: undefined })
     else if (serviceAccountSchema.safeParse(trimmed).success) onChange({ impersonateServiceAccount: trimmed })
   }
-  function add() {
-    const parsed = parseExtraProjects([...extra, draft.adding].join(' '), options.project)
-    if (!parsed.ok) { onDraftChange({ ...draft, extraError: parsed.error }); return }
-    onDraftChange({ ...draft, adding: '', extraError: '' })
-    onChange({ extraProjects: parsed.projects.length ? parsed.projects : undefined })
-  }
   function resetAll() {
-    onDraftChange({ amount: '', unit: 'GiB', impersonate: '', adding: '', extraError: '' })
+    onDraftChange({ amount: '', unit: 'GiB', impersonate: '' })
     // When the saved entry chose "Don't ask again" (costPrompt: false), explicit true is needed to turn the prompt back on;
     // likewise 0 clears a saved threshold.
-    onChange({ maximumBytesBilled: undefined, costPrompt: savedCostPrompt === false ? true : undefined, costThreshold: advancedCostThreshold(undefined), impersonateServiceAccount: undefined, extraProjects: undefined })
+    onChange({ maximumBytesBilled: undefined, costPrompt: savedCostPrompt === false ? true : undefined, costThreshold: advancedCostThreshold(undefined), impersonateServiceAccount: undefined })
   }
   return <div className="connect-advanced-panel">
     <div className="connect-advanced-toolbar">
@@ -275,11 +265,6 @@ export function BigQueryAdvanced({ options, savedCostPrompt, savedCostThreshold,
     <fieldset className="property-section"><legend>Identity</legend><div className="property-grid">
       <div className="property-row"><label htmlFor="bq-impersonate">Impersonate service account</label><input className="ui-field" id="bq-impersonate" type="email" maxLength={bigQueryLimits.serviceAccount} disabled={locked} spellCheck={false} placeholder="name@project.iam.gserviceaccount.com" value={draft.impersonate} aria-invalid={!!impersonateError || undefined} aria-describedby="bq-impersonate-note" onChange={event => updateImpersonate(event.target.value)} /></div>
       <p className="field-note" id="bq-impersonate-note">Needs the Service Account Token Creator role on that account.</p>
-    </div></fieldset>
-    <fieldset className="property-section"><legend>Projects</legend><div className="property-grid">
-      <div className="property-row"><label htmlFor="bq-extra-project">Extra projects (read-only)</label><div className="property-input-action"><input className="ui-field" id="bq-extra-project" list="bq-extra-projects" maxLength={bigQueryLimits.project} spellCheck={false} autoComplete="off" placeholder="Project id" value={draft.adding} aria-invalid={!!draft.extraError || undefined} disabled={locked || extra.length >= bigQueryLimits.extraProjects} onChange={event => onDraftChange({ ...draft, adding: event.target.value, extraError: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); add() } }} /><button className="ui-button" data-control-variant="secondary" type="button" disabled={locked || !draft.adding.trim()} onClick={add}>Add</button></div><datalist id="bq-extra-projects">{projects.filter(project => project.id !== options.project && !extra.includes(project.id)).map(project => <option key={project.id} value={project.id} label={project.friendlyName} />)}</datalist></div>
-      {extra.length > 0 && <ul className="bq-extra-projects" aria-label="Extra projects">{extra.map(project => <li key={project}><span>{project}</span><button type="button" className="ui-button icon-button" aria-label={`Remove ${project}`} disabled={locked} onClick={() => onChange({ extraProjects: extra.filter(value => value !== project).length ? extra.filter(value => value !== project) : undefined })}><Icon name="close" /></button></li>)}</ul>}
-      <p className="field-note">Listed for browsing and search. Queries still run, and bill, in {options.project.trim() || 'the connection\'s project'}.</p>
     </div></fieldset>
     {error && <p className="field-note" role="alert" data-tone="warning">{error}</p>}
   </div>

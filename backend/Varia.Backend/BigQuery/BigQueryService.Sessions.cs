@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Text.Json;
 using Google;
 using Google.Apis.Bigquery.v2.Data;
 
@@ -30,9 +31,8 @@ internal sealed class BigQueryTail(string jobId, string? location, bool cancelle
     public bool Holds => !Cancelled && !Finished;
 }
 
-/// <summary>One finished or running child of a script job, as jobs.list reports it (statement type and status only).</summary>
-/// <summary>A script statement's job. TargetProject and TargetDataset: where its DDL acted (statistics' ddlTargetTable, Routine or
-/// Dataset, which the minimal listing carries), for the Search Objects index's stale marks.</summary>
+/// <summary>A script statement's job, as jobs.list's full projection reports it. TargetProject and TargetDataset: where its DDL
+/// acted (statistics' ddlTargetTable, Routine or Dataset), for the Search Objects index's stale marks.</summary>
 internal sealed record BigQueryChild(string Id, string? Location, long Created, bool Done, string? StatementType, ErrorProto? Error, long? DmlAffected, string? Ddl,
     string? TargetProject = null, string? TargetDataset = null);
 
@@ -91,8 +91,15 @@ internal sealed partial class BigQueryService
 
     /// <summary>jobs.list's page size for a script's children, and how many pages a full listing reads before it counts as
     /// cut short (the transaction is then unknown).</summary>
-    internal int ChildPageSize { get; set; } = 1000;
-    internal int MaxChildPages { get; set; } = 100;
+    internal int ChildPageSize { get; set; } = 200;
+    /// <summary>The first page size of a listing between polls, which stops at the first child already read.</summary>
+    internal int IncrementalChildPageSize { get; set; } = 20;
+    internal int MaxChildPages { get; set; } = 500;
+    /// <summary>A children page's byte limit: full jobs carry each statement's SQL (up to 1 MB), so a larger page is asked again
+    /// with a quarter of the jobs (the retries count apart from the pages), and each page that fits doubles the next, up to
+    /// <see cref="ChildPageSize"/> and half any size that was too large. 200 a page over 500 pages reads up to 100,000 short
+    /// statements; long ones fill pages sooner, so fewer are read before the listing counts as cut short.</summary>
+    internal int ChildPageBytes { get; set; } = 16 << 20;
     /// <summary>How long one getQueryResults call waits on a running parent before its children are listed again.</summary>
     internal int ChildPollMs { get; set; } = 2000;
     /// <summary>The wait between jobs.get calls on a job Varia waits to reach DONE.</summary>
@@ -169,45 +176,85 @@ internal sealed partial class BigQueryService
         statistics?.Query?.StatementType is { Length: > 0 and <= 64 } type && type.All(c => char.IsAsciiLetterUpper(c) || c == '_') ? type : null;
 
     /// <summary>
-    /// A job's children (jobs.list with parentJobId, minimal projection), in statement order: ascending creation time, ties
-    /// broken by job id. <paramref name="known"/> makes the listing incremental: BigQuery lists newest first, so paging
-    /// stops at the first child already seen DONE. Otherwise every page is read up to <see cref="MaxChildPages"/>;
-    /// <c>Complete</c> is false when that cut it short. Only jobs naming this parent are kept.
+    /// A job's children (jobs.list with parentJobId), in statement order: ascending creation time, ties broken by job id.
+    /// The full projection, because the minimal one leaves out statistics.query (the statement type, rows affected and DDL
+    /// target). Full jobs carry their configuration and so each statement's SQL: each page is read as JSON under
+    /// <see cref="ChildPageBytes"/>, a page too large is asked again with fewer jobs (see there), and only the fields <see cref="Child"/>
+    /// names are decoded (the SQL is never kept). <paramref name="known"/> makes the listing incremental: BigQuery lists
+    /// newest first, so paging stops at the first child already seen DONE. Otherwise every page is read up to
+    /// <see cref="MaxChildPages"/>; <c>Complete</c> is false when that, or one child too large to read, cut it short. Only
+    /// jobs naming this parent are kept.
     /// </summary>
     internal async Task<(List<BigQueryChild> Children, bool Complete)> ChildrenAsync(BigQueryConnection connection, string project, string parentId, IReadOnlySet<string>? known, CancellationToken token)
     {
         var children = new List<BigQueryChild>();
         string? pageToken = null;
+        // A poll between reads usually finds a few new children, so it starts small; a page that fits doubles the next.
+        var size = known is null ? ChildPageSize : Math.Min(ChildPageSize, IncrementalChildPageSize);
+        // After a page too large, the page grows back to at most half its size, so it settles without asking that size again.
+        var ceiling = ChildPageSize;
+        var shrinks = 0;
         for (var page = 0; ; page++)
         {
             if (page >= MaxChildPages) return (Order(children), false);
-            var request = connection.Client.Service.Jobs.List(project);
+            var service = connection.Client.Service;
+            var request = service.Jobs.List(project);
             request.ParentJobId = parentId;
-            request.MaxResults = ChildPageSize;
+            request.MaxResults = size;
             request.PageToken = pageToken;
-            request.Projection = Google.Apis.Bigquery.v2.JobsResource.ListRequest.ProjectionEnum.Minimal;
-            var answer = await ReadAsync(t => request.ExecuteAsync(t), token);
-            var stop = false;
-            foreach (var item in answer.Jobs ?? [])
+            request.Projection = Google.Apis.Bigquery.v2.JobsResource.ListRequest.ProjectionEnum.Full;
+            BigQueryPage answer;
+            try { answer = await ReadAsync(t => SendRawAsync(service, request, t, ChildPageBytes), token); }
+            catch (BigQueryOverLimit)
             {
-                var id = item.JobReference?.JobId;
-                if (id is not { Length: > 0 and <= 1024 } || item.Statistics?.ParentJobId != parentId) continue;
-                if (known?.Contains(id) == true) { stop = true; continue; }
-                var done = item.State == "DONE" || item.Status?.State == "DONE";
-                var query = item.Statistics?.Query;
-                var (targetProject, targetDataset) = query?.DdlTargetTable is { } table ? (table.ProjectId, table.DatasetId)
-                    : query?.DdlTargetRoutine is { } routine ? (routine.ProjectId, routine.DatasetId)
-                    : query?.DdlTargetDataset is { } dataset ? (dataset.ProjectId, dataset.DatasetId) : (null, null);
-                children.Add(new(id, item.JobReference?.Location, item.Statistics?.CreationTime ?? 0, done, StatementOf(item.Statistics),
-                    done ? item.Status?.ErrorResult ?? item.ErrorResult : null, query?.NumDmlAffectedRows, query?.DdlOperationPerformed,
-                    Bounded(targetProject, 128), Bounded(targetDataset, 1024)));
+                // Long statements make a page of full jobs large: fewer a page, and a single child too large to read cuts the listing short.
+                if (size == 1 || ++shrinks > MaxChildPages) return (Order(children), false);
+                ceiling = Math.Max(1, size / 2);
+                size = Math.Max(1, size / 4);
+                page--;
+                continue;
             }
-            pageToken = answer.NextPageToken is { Length: > 0 and <= BigQueryLimits.PageToken } next && !next.Any(char.IsControl) ? next : null;
+            size = Math.Min(ceiling, size * 2);
+            var stop = false;
+            using (answer)
+            {
+                if (answer.Root.ValueKind == JsonValueKind.Object && answer.Root.TryGetProperty("jobs", out var jobs) && jobs.ValueKind == JsonValueKind.Array)
+                    foreach (var item in jobs.EnumerateArray())
+                    {
+                        if (Child(item, parentId) is not { } child) continue;
+                        if (known?.Contains(child.Id) == true) { stop = true; continue; }
+                        children.Add(child);
+                    }
+                pageToken = BigQueryJobHistory.Text(answer.Root, "nextPageToken") is { Length: > 0 and <= BigQueryLimits.PageToken } next && !next.Any(char.IsControl) ? next : null;
+            }
             if (stop || pageToken is null) return (Order(children), true);
         }
 
-        static string? Bounded(string? name, int max) => name is { Length: > 0 } && name.Length <= max ? name : null;
         static List<BigQueryChild> Order(List<BigQueryChild> list) => [.. list.OrderBy(child => child.Created).ThenBy(child => child.Id, StringComparer.Ordinal)];
+    }
+
+    /// <summary>One jobs.list item as a child of <paramref name="parentId"/>: its id, location, creation time, state, error, and
+    /// statistics.query's statement type, rows affected and DDL target. Null when it names no usable id or another parent. Its
+    /// configuration (the statement's SQL) is never read.</summary>
+    internal static BigQueryChild? Child(JsonElement item, string parentId)
+    {
+        if (item.ValueKind != JsonValueKind.Object) return null;
+        var reference = BigQueryJobHistory.Member(item, "jobReference");
+        var statistics = BigQueryJobHistory.Member(item, "statistics");
+        if (BigQueryJobHistory.Text(reference, "jobId") is not { Length: > 0 and <= 1024 } id || BigQueryJobHistory.Text(statistics, "parentJobId") != parentId) return null;
+        var status = BigQueryJobHistory.Member(item, "status");
+        var done = BigQueryJobHistory.Text(item, "state") == "DONE" || BigQueryJobHistory.Text(status, "state") == "DONE";
+        var query = BigQueryJobHistory.Member(statistics, "query");
+        var target = BigQueryJobHistory.Member(query, "ddlTargetTable") ?? BigQueryJobHistory.Member(query, "ddlTargetRoutine") ?? BigQueryJobHistory.Member(query, "ddlTargetDataset");
+        var failure = done ? BigQueryJobHistory.Member(status, "errorResult") ?? BigQueryJobHistory.Member(item, "errorResult") : null;
+        // Callers read only whether a child failed; its reason and message are kept short.
+        var error = failure is { } e ? new ErrorProto { Reason = Bounded(BigQueryJobHistory.Text(e, "reason"), 64), Message = BigQueryJobHistory.Clip(BigQueryJobHistory.Text(e, "message"), 1024) } : null;
+        return new(id, Bounded(BigQueryJobHistory.Text(reference, "location"), BigQueryLimits.Location), BigQueryJobHistory.Number(statistics, "creationTime") ?? 0, done,
+            StatementOf(new JobStatistics { Query = new JobStatistics2 { StatementType = BigQueryJobHistory.Text(query, "statementType") } }), error,
+            BigQueryJobHistory.Number(query, "numDmlAffectedRows"), Bounded(BigQueryJobHistory.Text(query, "ddlOperationPerformed"), 64),
+            Bounded(BigQueryJobHistory.Text(target, "projectId"), 128), Bounded(BigQueryJobHistory.Text(target, "datasetId"), 1024));
+
+        static string? Bounded(string? name, int max) => name is { Length: > 0 } && name.Length <= max ? name : null;
     }
 
     /// <summary>Polls jobs.get until the job is DONE.</summary>

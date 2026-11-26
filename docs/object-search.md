@@ -127,7 +127,7 @@ the reads held when it is made:
 
 A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQueryLookup`), which the editor reaches over
 `language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
-projects (billing first, extra projects marked when read by name only), a project's datasets, a dataset's objects (a
+projects (billing first, then starred and discovered accessible projects, marked when read by name only), a project's datasets, a dataset's objects (a
 sharded group as its newest shard, a routine with its signature) and an object's facts and columns by field path in
 schema order. Projects, datasets and objects match exactly, else the one name that differs only in case; a wildcard
 (`events_*`, `events_2026*`) or a shard within a date-sharded group's range answers with the group's newest shard; the
@@ -346,23 +346,39 @@ A BigQuery connection has an index of its own, searched in every way above (the 
 servers, which spans SQL Server and BigQuery connections together). It lives under the same 512 MiB budget and is built and
 dropped the same way, from BigQuery's free metadata calls only: no job runs and nothing is billed.
 
-- **Two passes.** Names first: each project's `datasets.list`, then each dataset's `tables.list`, `routines.list` and
-  `models.list`, four datasets at a time, so names are searchable within seconds. Then details: `tables.get` for each
-  table, view, materialized view and external table (columns with types, nested STRUCT fields by path such as
-  `address.city`, descriptions, partitioning, clustering, rows, size and view text) and `routines.get` for each routine
-  (body and signature), eight at a time through the connection's shared metadata limiter (16 calls in flight per
-  principal). The status says "Indexing N of M datasets", then "Reading details of N of M objects"; each dataset becomes
-  searchable with its details as soon as they are read.
-- **Projects.** The billing project is read in both passes; the extra projects by name only, unless Options › Object
-  Explorer › Commands › Index BigQuery extra projects' schemas (`objectExplorer.search.bigQueryExtraProjects`) is on. The
-  index line says how many projects are indexed by name only.
+- **Three prioritized waves.** Every build reads free REST metadata through the principal's shared limiter (16 calls in
+  flight per principal) so the billing project finishes first and interactive Object Explorer / Properties calls stay
+  responsive:
+  1. **Billing project (names + details).** Lists the billing project's datasets (`datasets.list`), then its objects
+     (`tables.list`, `routines.list`, `models.list`, four datasets at a time), then reads details (`tables.get` for
+     columns, nested STRUCT fields by path such as `address.city`, descriptions, partitioning, clustering, rows, size and
+     view text, and `routines.get` for routine bodies and signatures, eight at a time; or the opt-in billed bulk path).
+  2. **Starred and discovered projects (names).** When Options › Object Explorer › Commands › Index all accessible
+     BigQuery projects (`objectExplorer.search.bigQueryAccessibleProjects`, on by default) is on, a full build calls
+     `projects.list` (up to `objectExplorer.search.bigQueryMaxProjects`, default 500, configurable 1–5,000, sorted
+     deterministically) and combines the user's starred projects with all
+     discovered accessible projects. It lists their datasets (four projects at a time) and objects (four datasets at a
+     time), swapping each dataset into the index immediately so every table, view, routine, model and dataset across all
+     accessible projects becomes searchable within seconds.
+  3. **Starred, then discovered projects (details).** Reads `tables.get` and `routines.get` (eight at a time) for starred
+     projects first, then discovered projects, swapping each dataset as it finishes. If the shared 512 MiB memory budget
+     tightens on discovered projects, pass 2 stops early for remaining discovered projects (recording them as names only)
+     while keeping Wave 1 and Wave 2 intact.
+  The status says "Discovering accessible BigQuery projects…", then "Indexing N of M datasets", then "Reading details of
+  N of M objects"; the finished index line reports the project count when more than one project is indexed.
+- **Projects.** Starred projects (managed per verified BigQuery principal in Object Explorer) are always indexed with
+  details — including public or dataset-ACL projects such as `bigquery-public-data` that `projects.list` does not return.
+  Turning off `objectExplorer.search.bigQueryAccessibleProjects` limits indexing to the billing project and starred
+  projects.
 - **Sharded tables.** Tables whose names end in a valid date (`events_20260101`, `events_20260102`, …), two or more with
   the same prefix, are one entry, the newest shard, whose row names the shard count and date range. Its schema is read
   once.
-- **Refresh.** A rebuild lists everything again and reuses what an earlier read knew about an object whose creation time
-  (and, for routines and models, last change) is unchanged, since `tables.list` reports no change time. Refresh on a
-  project or dataset in Object Explorer re-reads that project or dataset whole, on a node below a dataset, that dataset, and
-  on the connection's node, everything (a rebuild).
+- **Refresh.** A rebuild lists everything again, prunes projects no longer accessible (when discovery succeeded and was
+  not cut), and reuses what an earlier read knew about an object whose creation time (and, for routines and models, last
+  change) is unchanged, since `tables.list` reports no change time. Refresh on a project or dataset in Object Explorer
+  re-reads that project or dataset whole (including starred, discovered and session projects), starring a project reads
+  that project, Refresh on a node below a dataset reads that dataset, and Refresh on the connection's node rebuilds
+  everything.
   DDL run from a query tab (CREATE, ALTER, DROP, UNDROP, and LOAD DATA, which can create a table or change its schema; not row
   access policies, search or vector indexes, reservations or project options, which change nothing the index lists)
   marks the datasets it changed stale, read from the job: a statement's target (its table, routine or dataset), and for a
@@ -380,29 +396,35 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   number, so a mark set after its tab closed is read at the next search, run or build; a dataset whose read failed keeps its
   mark for the next rebuild without asking again. A stale-only build that failed, or was cancelled other than by Stop, is asked
   again at the next hint; one you Stop waits for a newer mark. Marked datasets are re-read whole, or by a build already running
-  when it reaches them. A dataset DDL names in an extra project is marked like any other, and one in a project the index does
+  when it reaches them. A dataset DDL names in a starred or discovered project is marked like any other, and one in a project the index does
   not read is not marked; only the whole-project mark (targets unknown) is the billing project's alone. A refresh
   asked while a build runs waits for it; after a rebuild fails, only another rebuild runs.
-- **Failures.** A project whose datasets cannot be listed, or a dataset whose objects cannot, is skipped with BigQuery's
-  reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …); a dataset whose objects' details could
-  not all be read keeps their names and is counted as "details missing". Each metadata call has 30 s. A dataset dropped
-  since its last read leaves the index without a skip.
-- **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): 500 pages of 1,000 per listing, 10,000 columns per
-  table, and 1,024 characters of each column description or routine signature.
+- **Failures.** On the billing project and starred projects, any project or dataset listing failure is reported as a skip
+  with BigQuery's reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …). On auto-discovered
+  projects, `API_DISABLED`, `PERMISSION_DENIED` and `NOT_FOUND` on `datasets.list` are silently ignored so non-BigQuery
+  GCP projects do not pollute the skip list, while operational failures (`TIMEOUT`, `QUOTA`, `AUTH_EXPIRED`,
+  `CONNECTION_LOST`, `TOO_LARGE`) still report. A dataset whose objects' details could not all be read keeps their names
+  and is counted as "details missing". Each metadata call has 30 s. A dataset dropped since its last read leaves the index
+  without a skip.
+- **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): up to 500 discovered projects by default (configurable
+  1–5,000 via `objectExplorer.search.bigQueryMaxProjects`), 4 projects listed at
+  once, 200 starred projects, 500 pages of 1,000 per listing, 10,000 columns per table, and 1,024 characters of each
+  column description or routine signature.
 
 ### Billed bulk index
 
 Options › Text Editor › GoogleSQL › General › Read the search index's details with billed INFORMATION_SCHEMA queries
-(`textEditor.googleSql.bulkIndex`, off by default) replaces most of pass 2's per-object calls with three region-scoped
-queries per location, which is faster for projects with thousands of objects:
+(`textEditor.googleSql.bulkIndex`, off by default) replaces most of pass 2's per-object calls for the billing project and
+starred projects with three region-scoped queries per location, which is faster for projects with thousands of objects
+(auto-discovered projects always use free REST calls so enabling bulk indexing never bills scans across an entire org):
 
 - `INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` joined with `COLUMNS` and `TABLES` (columns and nested fields with types,
   descriptions, order and nullability, and whether a table is a clone or snapshot), `VIEWS` (view text) and `ROUTINES`
   (routine bodies). With definitions off (`objectExplorer.search.definitions`), only the column query runs.
 - **Cost.** BigQuery bills each query at least 10 MiB for every INFORMATION_SCHEMA view it reads (the column query reads
   three) and never answers them from cache. So a full build first asks `bigquery.indexEstimate`: the locations of the
-  billing project's datasets (and the extra projects' when their schemas are indexed), up to 64, each query dry-run
-  free, each counted as every view's floor plus its bytes. The estimate then goes through the same cost prompts as
+  billing project's and starred projects' datasets, up to 64, each query dry-run free, each counted as every view's floor
+  plus its bytes. The estimate then goes through the same cost prompts as
   Execute, which ask only above the cost threshold or when the estimate may be low. The estimate shown is the build's
   budget: a location's queries run one at a time, each capped at what is left of the budget less the later queries'
   floors (or at the connection's or Options' maximum bytes billed, Query Execution › BigQuery › Cost, when lower). The
@@ -434,10 +456,13 @@ Searching and hits:
   only its own engine's kinds; a server none of the chosen types apply to answers no hits. A clone in a project read by
   name only is listed as a table (only its details say it is a clone).
 - **Names and definitions.** Name search covers dataset, object and column names (a column by its field path); definition
-  search covers view and materialized view text and routine bodies. A Database scope does not apply to BigQuery.
+  search covers view and materialized view text and routine bodies. Opening Search Objects from a BigQuery project or
+  dataset node scopes the tab to that project or dataset with a removable chip; switching servers or choosing All servers
+  clears the scope so mixed SQL Server and BigQuery searches work together.
 - **A hit's row** shows its name without the dataset, and the project, dataset and folder, then a column's type or a
   sharded table's shards. Reveal walks project › dataset › folder › object (a column through its table and the record
-  columns above it).
+  columns above it); if the hit's project is not yet in Object Explorer, Reveal adds it for the current session (unstarred)
+  before walking to the object.
 - **Its menu** has New Query (a GoogleSQL query tab on the hit's connection, in its dataset when that is in the billing
   project), Preview Rows (tables), Script As and Copy (Name, and Fully Qualified Name: the backtick-quoted path). The
   details pane shows its free facts, a view's text or a routine's body, and a table's columns ([The details
@@ -446,9 +471,9 @@ Searching and hits:
 ## Protocol
 
 `explorer.index` (no deadline, cancellable, droppable `explorer.index.progress` EVENTs with `{ done, total, objects }`, and
-BigQuery's `phase`,
+BigQuery's `phase` — `projects`, `names` or `details` —
 relayed only to the requesting window, at most 4 a second) and `explorer.search` (15 s) run on the explorer lane and are
 cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Failures are values: an invalid pattern
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
-takes BigQuery's `extraDetails`, `scope` (a project, or a project's dataset) and `stale` (SQL Server refuses them), and
+takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a project, or a project's dataset), `stale` and `bulk` (SQL Server refuses them), and
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).

@@ -132,10 +132,11 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
 
-/** A BigQuery index's summary: datasets in place of databases, the pass a build is in (names, then details), and the projects
- *  read by name only. */
+/** A BigQuery index's summary: datasets in place of databases, the pass a build is in (projects, names, then details), how
+ *  many projects it covers, and the projects read by name only. */
 export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
   if (entry?.requestId && entry.phase === 'estimate') return 'Estimating the billed INFORMATION_SCHEMA read of the index’s details…'
+  if (entry?.requestId && entry.phase === 'projects') return 'Discovering accessible BigQuery projects…'
   if (entry?.requestId) return entry.phase === 'details'
     ? `Reading details of ${numbers.format(entry.done)} of ${count(entry.total, 'object')}…`
     : `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`
@@ -144,9 +145,15 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
   const datasets = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.details).length
   const details = status.skipped.filter(skip => skip.details).length
-  const projects = status.skipped.filter(skip => !skip.database).length
+  const projects = status.skipped.filter(skip => !skip.database && !!skip.project).length
+  const globalSkips = status.skipped.filter(skip => !skip.database && !skip.project)
   const namesOnly = status.namesOnly?.length ?? 0
-  const skipped = (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
+  const isMemorySkip = (skip: { readonly code: string; readonly message: string }) => skip.code === 'TOO_LARGE' && /memory limit/i.test(skip.message)
+  const memoryStopped = globalSkips.some(isMemorySkip)
+  const listTruncated = globalSkips.some(skip => skip.code === 'TOO_LARGE' && !isMemorySkip(skip))
+  const discoveryFailed = globalSkips.some(skip => skip.code !== 'TOO_LARGE')
+  const globalNote = (listTruncated ? ' · project list truncated' : '') + (memoryStopped ? ' · index memory limit reached' : '') + (discoveryFailed ? ' · project discovery skipped' : '')
+  const skipped = globalNote + (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
     + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '')
   // The billed bulk path: where it read, and a location whose queries failed (its datasets were read with the free calls instead).
@@ -154,7 +161,8 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const billed = bulk ? (bulk.locations ? ` · details read with INFORMATION_SCHEMA in ${count(bulk.locations, 'location')}` : '')
     + (bulk.failed ? ` · the billed read failed in ${count(bulk.failed, 'location')}${bulk.code ? ` (${bulk.code})` : ''}, read with free calls instead` : '') : ''
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
-  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${skipped}${billed}`
+  const across = status.projects && status.projects > 1 ? ` across ${count(status.projects, 'project')}` : ''
+  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${across}${skipped}${billed}`
 }
 
 /**
@@ -172,7 +180,7 @@ export function unindexedServers(servers: readonly string[], indexes: Readonly<R
 /** Whether the index line should stay in view: a build running or failed, or an index that leaves objects out (not ready, with
  *  databases skipped, or names only). A healthy index's detail is a click away. */
 export function indexIncomplete(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): boolean {
-  return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions
+  return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions || !!status.namesOnly?.length
 }
 
 /** What a finished server index leaves out, in a few words, or undefined when it holds everything (a build still running is
@@ -185,12 +193,24 @@ export function indexGap(entry: IndexEntry): string | undefined {
   const bigQuery = status.provider === 'bigquery'
   const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent && !skip.details).length
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
+  const globalSkips = bigQuery ? status.skipped.filter(skip => !skip.database && !skip.project) : []
+  const isMemorySkip = (skip: { readonly code: string; readonly message: string }) => skip.code === 'TOO_LARGE' && /memory limit/i.test(skip.message)
+  const memoryStopped = globalSkips.some(isMemorySkip)
+  const listTruncated = globalSkips.some(skip => skip.code === 'TOO_LARGE' && !isMemorySkip(skip))
+  const discoveryFailed = globalSkips.some(skip => skip.code !== 'TOO_LARGE')
+  const projectSkips = bigQuery ? status.skipped.some(skip => !skip.database && !!skip.project) : status.skipped.some(skip => !skip.database)
+  const namesOnly = status.namesOnly?.length ?? 0
   const gaps = [
     databases ? `${count(databases, bigQuery ? 'dataset' : 'database')} skipped` : '',
-    status.skipped.some(skip => !skip.database) ? bigQuery ? 'projects skipped' : 'server objects skipped' : '',
+    listTruncated ? 'project list truncated' : '',
+    memoryStopped ? 'index memory limit reached' : '',
+    discoveryFailed ? 'project discovery skipped' : '',
+    projectSkips ? bigQuery ? 'projects skipped' : 'server objects skipped' : '',
     status.skipped.some(skip => skip.details) ? 'details missing' : '',
     status.skipped.some(skip => skip.agent) ? 'SQL Server Agent objects skipped' : '',
-    partial ? `children left out of ${count(partial, bigQuery ? 'dataset' : 'database')}` : '', status.definitions ? '' : 'names only'
+    partial ? `children left out of ${count(partial, bigQuery ? 'dataset' : 'database')}` : '',
+    namesOnly ? `names only in ${count(namesOnly, 'project')}` : '',
+    status.definitions ? '' : 'names only'
   ].filter(Boolean)
   return gaps.length ? gaps.join(', ') : undefined
 }
@@ -209,7 +229,12 @@ export function groupNote(group: ServerGroup, entry: IndexEntry | undefined): st
   if (group.error) return group.error
   const result = group.result
   if (result?.problem && !group.pending) return result.problem
-  return [result && !result.problem ? count(result.total, 'result') : '', entry?.requestId ? `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}…` : '',
+  const indexing = entry?.requestId
+    ? (entry.phase === 'projects' ? 'discovering projects…'
+      : entry.phase === 'estimate' ? 'estimating…'
+      : `indexing ${numbers.format(entry.done)} of ${numbers.format(entry.total)}…`)
+    : ''
+  return [result && !result.problem ? count(result.total, 'result') : '', indexing,
     group.pending ? 'searching…' : ''].filter(Boolean).join(' · ')
 }
 
@@ -223,7 +248,14 @@ export function allServersSummary(document: SearchDocumentState, indexes: Readon
   for (const group of groups) {
     const entry = indexes[group.connectionId]
     if (group.pending) parts.push(`${group.label} searching…`)
-    if (entry?.requestId) parts.push(`${group.label} still indexing (${numbers.format(entry.done)} of ${count(entry.total, 'database')})`)
+    if (entry?.requestId) {
+      if (entry.phase === 'projects') parts.push(`${group.label} still discovering projects`)
+      else if (entry.phase === 'estimate') parts.push(`${group.label} estimating bulk index`)
+      else {
+        const unit = entry.phase === 'details' ? 'object' : (entry.status?.provider === 'bigquery' || entry.phase === 'names' ? 'dataset' : 'database')
+        parts.push(`${group.label} still indexing (${numbers.format(entry.done)} of ${count(entry.total, unit)})`)
+      }
+    }
     if (group.error) parts.push(`${group.label} could not be searched`)
   }
   if (result?.partial) parts.push('a search stopped early; narrow it to see everything')
@@ -253,6 +285,18 @@ export function DatabaseScope({ database, onClear }: { readonly database: string
   return <div className="object-search-database-scope" role="group" aria-label="Database scope">
     <span>Database</span><button type="button" className="chip" title="Search all databases" aria-label={`Clear database scope: ${displayText(database)}`} onClick={onClear}>
       <Icon name="database" /><bdi>{displayText(database)}</bdi><Icon name="close" />
+    </button>
+  </div>
+}
+
+/** A visible, removable BigQuery project or dataset scope so a project- or dataset-menu search never silently narrows the connection's results. */
+export function BigQueryScope({ project, dataset, onClear }: { readonly project: string; readonly dataset?: string; readonly onClear: () => void }) {
+  const hasDataset = dataset !== undefined
+  const label = hasDataset ? displayText(`${project}.${dataset}`) : displayText(project)
+  return <div className="object-search-database-scope" role="group" aria-label={hasDataset ? 'Dataset scope' : 'Project scope'}>
+    <span>{hasDataset ? 'Dataset' : 'Project'}</span>
+    <button type="button" className="chip" title={hasDataset ? 'Search all datasets and projects' : 'Search all projects'} aria-label={`Clear ${hasDataset ? 'dataset' : 'project'} scope: ${label}`} onClick={onClear}>
+      <Icon name={hasDataset ? 'database' : 'project'} /><bdi>{label}</bdi><Icon name="close" />
     </button>
   </div>
 }
@@ -625,7 +669,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         </div>
         {pane && inlineTools}
       </div>
-      {!pane && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
+      {!pane && !spanning && state.database !== undefined && <DatabaseScope database={state.database} onClear={() => { focusInput(); set({ database: undefined }) }} />}
+      {!pane && !spanning && state.project !== undefined && <BigQueryScope project={state.project} dataset={state.dataset} onClear={() => { focusInput(); set({ project: undefined, dataset: undefined }) }} />}
       {showHits && <>
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} providers={providers} />
           : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} providers={providers} />}

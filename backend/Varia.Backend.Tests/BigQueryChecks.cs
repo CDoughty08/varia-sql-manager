@@ -647,6 +647,27 @@ internal static partial class BigQueryChecks
         var discovered = await harness.Call("connections.databases", user);
         check(discovered.Code == "ok" && Datasets(discovered.Result).SequenceEqual(["archive@us-east1", "sales@", "staging@US"]) && harness.Fake.To(BigQueryFake.Jobs).Any() is false,
             $"connections.databases with BigQuery's options lists the project's datasets for the Connect dialog without creating any job: {discovered.Code} {discovered.Message}");
+        // bigquery.connectionProjects: lists projects on a live BigQuery handle through the shared rate limiter.
+        var connected = await harness.Call("connections.connect", user);
+        var connectionId = Text(connected.Result, "id");
+        var connFirst = await harness.Call("bigquery.connectionProjects", new JsonObject { ["connectionId"] = connectionId });
+        var connListed = harness.Fake.To(BigQueryFake.Projects).Last();
+        var connProjects = connFirst.Code == "ok" ? connFirst.Result.GetProperty("projects").EnumerateArray().Select(project => Text(project, "id") + "=" + Text(project, "friendlyName")).ToArray() : [];
+        var connSecond = await harness.Call("bigquery.connectionProjects", new JsonObject { ["connectionId"] = connectionId, ["pageToken"] = "page-2" });
+        var connBadToken = await harness.Call("bigquery.connectionProjects", new JsonObject { ["connectionId"] = connectionId, ["pageToken"] = "page\n2" });
+        var connUnknown = await harness.Call("bigquery.connectionProjects", new JsonObject { ["connectionId"] = Guid.NewGuid().ToString() });
+        var directDisconnected = false;
+        try { await harness.Service.BigQuery.ConnectionProjectsAsync(new BigQueryConnectionProjectsArgs(Guid.NewGuid().ToString()), CancellationToken.None); }
+        catch (RequestException error) { directDisconnected = error.Code == "NOT_CONNECTED"; }
+        check(connFirst.Code == "ok" && connProjects.SequenceEqual(["varia-alpha=Varia Alpha", "example.com:varia-beta=Beta  project"]) && Text(connFirst.Result, "nextPageToken") == "page-2"
+            && connListed.Uri.Query.Contains("maxResults=1000", StringComparison.Ordinal) && connListed.Header("Authorization") == "Bearer ya29.fake-access-token"
+            && connSecond.Code == "ok" && connSecond.Result.GetProperty("projects").EnumerateArray().Select(project => Text(project, "id")).SequenceEqual(["bigquery-public-data"])
+            && !connSecond.Result.TryGetProperty("nextPageToken", out _) && connBadToken.Code == "INVALID_PARAMS" && connUnknown.Code == "UNSUPPORTED_PROVIDER" && directDisconnected
+            && harness.Service.LaneOf("bigquery.connectionProjects") == Protocol.RequestLane.Metadata && !harness.Service.Sensitive("bigquery.connectionProjects"),
+            $"bigquery.connectionProjects pages projects on a live connection with shared mapping, metadata lane and provider/connection guards: {connFirst.Code} {connSecond.Code} {connBadToken.Code} {connUnknown.Code} {directDisconnected}");
+        var deniedConn = await deniedHarness.Call("connections.connect", user);
+        var connRefused = await deniedHarness.Call("bigquery.connectionProjects", new JsonObject { ["connectionId"] = Text(deniedConn.Result, "id") });
+        check(connRefused.Code == "PERMISSION_DENIED", $"bigquery.connectionProjects maps 403 to PERMISSION_DENIED: {connRefused.Code} {connRefused.Message}");
         Clean(check, harness.Fake, "pre-connect");
         Clean(check, denied, "pre-connect refused");
     }
@@ -665,8 +686,10 @@ internal static partial class BigQueryChecks
             && !fake.To(".*/jobs").Any() && estimate is { Faked: true },
             $"emulator mode connects anonymously with no probe, and estimates are faked: {code} {message} {info}");
         var projects = await harness.Call("bigquery.projects", Args(anonymous));
-        check(projects.Code == "ok" && projects.Result.GetProperty("projects").EnumerateArray().Select(project => Text(project, "id")).SequenceEqual(["varia-emulator"]),
-            $"emulator mode lists the emulator's projects, which name only their id: {projects.Code} {projects.Message}");
+        var connProjects = await harness.Call("bigquery.connectionProjects", new JsonObject { ["connectionId"] = Text(info, "id") });
+        check(projects.Code == "ok" && projects.Result.GetProperty("projects").EnumerateArray().Select(project => Text(project, "id")).SequenceEqual(["varia-emulator"])
+            && connProjects.Code == "ok" && connProjects.Result.GetProperty("projects").EnumerateArray().Select(project => Text(project, "id")).SequenceEqual(["varia-emulator"]),
+            $"emulator mode lists the emulator's projects, which name only their id: {projects.Code} {projects.Message} / {connProjects.Code}");
         check(fake.Seen.All(request => request.Header("Authorization") is null && request.Uri.Host == "localhost"), "emulator mode sends no credential and nothing beyond the emulator's address");
         var google = await harness.Call("connections.connect", AdcConnect(BigQueryCredentialChecks.User(), options => options["project"] = "varia-emulator"));
         check(google.Code == "INVALID_PARAMS", $"emulator mode refuses real credential material: {google.Code}");

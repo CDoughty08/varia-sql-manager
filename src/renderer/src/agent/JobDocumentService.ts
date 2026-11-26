@@ -551,15 +551,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
     if (at >= 0) this.moveStepTo(id, key, at + delta)
   }
-  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down): the selected step can move one place that way. */
-  canMoveSelectedStep(id: string, delta: -1 | 1): boolean {
-    const steps = this.get(id)?.draft?.steps.steps ?? [], selected = this.selectedStep(id)
-    const at = selected ? steps.indexOf(selected) : -1
+  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down, and a Flow step's menu): the step can move one place that way. */
+  canMoveStep(id: string, key: string, delta: -1 | 1): boolean {
+    const steps = this.get(id)?.draft?.steps.steps ?? [], at = steps.findIndex(step => step.key === key)
     return this.canEditSteps(id) && at >= 0 && at + delta >= 0 && at + delta < steps.length
-  }
-  moveSelectedStep(id: string, delta: -1 | 1): void {
-    const selected = this.selectedStep(id)
-    if (selected && this.canMoveSelectedStep(id, delta)) this.moveStepBy(id, selected.key, delta)
   }
   /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
   deleteStepOf(id: string, key: string): void {
@@ -570,7 +565,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const steps = result.draft.steps
     const next = steps[Math.min(result.deletion.position, steps.length - 1)]
     this.updateDraft(id, { steps: result.draft })
-    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
+    // The last step gone, the docked editor has nothing to edit: it closes, rather than coming back on the next step added.
+    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined }, ...steps.length ? {} : { stepEditor: undefined } })
   }
   undoDeleteStep(id: string): void {
     const state = this.get(id)
@@ -1123,6 +1119,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     for (const view of this.views.values()) view.stop()
     this.views.clear()
+    // The step editors' models live for their document's life, outside the service: documents still open go with it.
+    for (const id of Object.keys(this.getSnapshot().documents)) disposeStepModels(id)
     this.history.dispose()
     this.requests.clear()
     this.previews.clear()

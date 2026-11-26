@@ -13,7 +13,7 @@ import type { BigQueryConnectionProfile, BigQueryLibraryView, PickedKeyFile } fr
 import type { ProviderId } from '../../shared/providers'
 import type { BigQueryAuthenticationMode } from '../../shared/auth'
 import { BigQueryAdvanced, BigQueryConnectFields, accountText, bigQueryAdvancedCount, bigQueryAdvancedDraftFrom, bigQueryAdvancedSummary, bigQueryAdvancedValidationError, useBigQueryLists, type BigQueryAdvancedDraft } from './BigQueryConnectFields'
-import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, parseExtraProjects, savedCostPrompt, savedCostThreshold, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPreferences, shownCostThreshold, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
+import { bigQueryCredentialReady, bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, lastServerType, savedCostPrompt, savedCostThreshold, serverTypeLabels, switchServerType, undoServerType, withAuthentication, withoutCostPreferences, shownCostThreshold, type ServerTypeState, bigQueryFormShape } from './bigquery-connect-form'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import { dialogWindowKinds } from '../../shared/popouts'
 import Icon from './Icon'
@@ -315,7 +315,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   const [dialogWidth, setDialogWidth] = useState<number>(dialogWindowKinds.connect.width)
   const [railWidth, setRailWidth] = useState(() => loadRailWidth(dialogWindowKinds.connect.width))
   const [draggingSplit, setDraggingSplit] = useState(false)
-  // Lifted Advanced drafts so switching tabs preserves invalid values, errors, and pending BigQuery extra-project text.
+  // Lifted Advanced drafts so switching tabs preserves invalid values and errors.
   const [sqlAdvancedDraft, setSqlAdvancedDraft] = useState<SqlAdvancedDraft>({})
   const sqlAdvancedEdited = useRef(new Set<string>())
   const [bigQueryAdvancedDraft, setBigQueryAdvancedDraft] = useState<BigQueryAdvancedDraft>(() => bigQueryAdvancedDraftFrom(initial.provider === 'bigquery' ? initial : bigQueryDefaults()))
@@ -815,18 +815,12 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     if (type === 'bigquery') {
       // BigQuery's form: an edited saved entry, or a new connection whose settings no entry has yet.
       if (!bigQueryEdited.current) return undefined
-      let effective = bigQuery
-      if (bigQueryAdvancedDraft.adding.trim()) {
-        const parsed = parseExtraProjects([...(bigQuery.extraProjects ?? []), bigQueryAdvancedDraft.adding].join(' '), bigQuery.project)
-        if (!parsed.ok) return bigQuerySelected ? { bigQueryTarget: bigQuerySelected } : loaded && bigQueryReady(bigQuery) ? {} : undefined
-        effective = { ...bigQuery, extraProjects: parsed.projects.length ? parsed.projects : undefined }
-      }
-      const form = bigQueryShape(effective, bigQueryReconnect, effective.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, effective), effective.costThreshold ?? savedCostThreshold(bigQueryLibrary.profiles, effective))
+      const form = bigQueryShape(bigQuery, bigQueryReconnect, bigQuery.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, bigQuery), bigQuery.costThreshold ?? savedCostThreshold(bigQueryLibrary.profiles, bigQuery))
       const baseline = bigQueryBaseline.current
       if (!bigQueryAdvancedError && baseline && form === bigQueryShape(baseline.options, baseline.autoReconnect, baseline.options.costPrompt ?? savedCostPrompt(bigQueryLibrary.profiles, baseline.options), baseline.options.costThreshold ?? savedCostThreshold(bigQueryLibrary.profiles, baseline.options))) return undefined
       if (bigQuerySelected) return !bigQueryAdvancedError && form === bigQueryShape(bigQuerySelected.options, bigQuerySelected.autoReconnect ?? 'inherit') ? undefined : { bigQueryTarget: bigQuerySelected }
-      const key = bigQueryKey(effective)
-      if (!loaded || !key || !bigQueryReady(effective) || bigQueryLibrary.profiles.some(profile => connectionKey(profile.options) === key)) return undefined
+      const key = bigQueryKey(bigQuery)
+      if (!loaded || !key || !bigQueryReady(bigQuery) || bigQueryLibrary.profiles.some(profile => connectionKey(profile.options) === key)) return undefined
       return {}
     }
     // An alias found by its labels is no longer found once they change: the entry the edits began on still owns them.
@@ -933,33 +927,19 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
       setPickedKeyName({ keyFile: picked.keyFile, name: picked.name }); bigQueryUpdate({ keyFile: picked.keyFile })
     } catch (reason) { if (alive.current) setError(message(reason)) }
   }
-  /** BigQuery's form as main takes it, with the environment as stored and any pending Extra projects included, or undefined after saying why it cannot be. */
+  /** BigQuery's form as main takes it, with the environment as stored, or undefined after saying why it cannot be. */
   function bigQueryLabelled(from: BigQueryConnectionOptions = bigQuery): BigQueryConnectionOptions | undefined {
     if (bigQueryAdvancedError) {
       setError(bigQueryAdvancedError); setProperties('advanced')
       return undefined
     }
-    let next = from
-    if (from === bigQuery && bigQueryAdvancedDraft.adding.trim()) {
-      const parsed = parseExtraProjects([...(from.extraProjects ?? []), bigQueryAdvancedDraft.adding].join(' '), from.project)
-      if (!parsed.ok) {
-        setBigQueryAdvancedDraft(current => ({ ...current, extraError: parsed.error }))
-        setProperties('advanced')
-        setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#bq-extra-project')?.focus(), 0)
-        return undefined
-      }
-      const extraProjects = parsed.projects.length ? parsed.projects : undefined
-      next = { ...from, extraProjects }
-      setBigQuery(current => ({ ...current, extraProjects }))
-      setBigQueryAdvancedDraft(current => ({ ...current, adding: '', extraError: '' }))
-    }
-    const environment = parseEnvironment(next.environment)
+    const environment = parseEnvironment(from.environment)
     if (!environment.ok) {
       setError(environment.error); setProperties('properties')
       setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#connect-environment-custom')?.focus(), 0)
       return undefined
     }
-    try { return bigQueryFormOptions({ ...next, environment: environment.environment }) } catch (reason) { setError(message(reason)); return undefined }
+    try { return bigQueryFormOptions({ ...from, environment: environment.environment }) } catch (reason) { setError(message(reason)); return undefined }
   }
   /** Saves BigQuery's form (or a History row's star) to History; with `how`, it stays there though it never connected. */
   async function saveBigQuery(favorite?: boolean, profile?: BigQueryConnectionProfile, how?: 'save'): Promise<'saved' | false> {
@@ -1551,7 +1531,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
                 </fieldset>
               </>}
               {properties === 'advanced' && (isBigQuery
-                ? <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} savedCostThreshold={bigQuerySavedCostThreshold} defaultCostThreshold={defaultCostThreshold} projects={bigQueryLists.projects} locked={locked} draft={bigQueryAdvancedDraft} onDraftChange={bigQueryDraftChange} onChange={bigQueryUpdate} />
+                ? <BigQueryAdvanced options={bigQuery} savedCostPrompt={bigQuerySavedCostPrompt} savedCostThreshold={bigQuerySavedCostThreshold} defaultCostThreshold={defaultCostThreshold} locked={locked} draft={bigQueryAdvancedDraft} onDraftChange={bigQueryDraftChange} onChange={bigQueryUpdate} />
                 : <SqlAdvancedPanel value={options.advanced ?? {}} draft={sqlAdvancedDraft} edited={sqlAdvancedEdited.current} errors={sqlAdvancedErrors} error={sqlAdvancedError} executionTimeout={executionTimeout} locked={locked} onChange={(next, nextDraft) => { setSqlAdvancedDraft(nextDraft); if (next !== undefined) update({ advanced: next }); else { markEdited(); setError(''); setNotice(''); setLastRemoved(undefined); setTested(undefined) } }} onReset={() => { sqlAdvancedEdited.current.clear(); setSqlAdvancedDraft({}); update({ advanced: {} }) }} />)}
               {properties === 'string' && !isBigQuery && <div className="connection-preview">
                 <div className="connect-preview-header">

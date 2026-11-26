@@ -111,6 +111,29 @@ export class ConnectionOpenService {
 
   get mutationPending(): boolean { return !!this.mutation || this.mutationSettlements > 0 }
 
+  /** Verified BigQuery principal and billing project for a live, unfenced connection handle in the current backend generation. */
+  bigQueryHandle(connectionId: string): { readonly principal: string; readonly billingProject: string } | undefined {
+    const generation = this.deps.generation()
+    if (generation === undefined) return undefined
+    const owner = this.handles.get(handleKey({ id: connectionId, generation }))
+    if (!owner || owner.fenced || owner.closing) return undefined
+    const principal = owner.info.authentication?.principal
+    return principal?.provider === 'bigquery' ? { principal: principal.principal, billingProject: principal.project } : undefined
+  }
+
+  /** Verified principals of all live, unfenced BigQuery connection handles in the current backend generation. */
+  liveBigQueryPrincipals(): ReadonlySet<string> {
+    const generation = this.deps.generation()
+    const principals = new Set<string>()
+    if (generation === undefined) return principals
+    for (const owner of this.handles.values()) {
+      if (owner.fenced || owner.closing || owner.info.generation !== generation) continue
+      const principal = owner.info.authentication?.principal
+      if (principal?.provider === 'bigquery') principals.add(principal.principal)
+    }
+    return principals
+  }
+
   constructor(private readonly deps: ConnectionOpenDeps) { this.reuse = this.coordinator() }
 
   async connect(options: ProviderConnectionOptions, contextValue: unknown): Promise<Settled> {

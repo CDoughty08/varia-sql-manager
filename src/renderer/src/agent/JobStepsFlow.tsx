@@ -50,7 +50,7 @@ const retriesText = (step: AgentStepDraft) => step.retryAttempts > 0 ? `${step.r
 
 /** Edges whose action differs from the job as read: drawn in the accent and tagged "changed" (a new step's are not, being all new). */
 function changedEdges(draft: AgentStepsDraft, model: AgentJobDocumentModel): Set<string> {
-  const original = new Map(initialStepsDraft(model.steps, model.job?.startStepId).steps.map(step => [step.key, step]))
+  const original = new Map(initialStepsDraft(model.steps, model.job?.startStepId, model.stepsTruncated).steps.map(step => [step.key, step]))
   const changed = new Set<string>()
   draft.steps.forEach((step, at) => {
     const was = step.from === undefined ? undefined : original.get(step.key)
@@ -102,7 +102,7 @@ function Check({ check, editable, service, id }: { readonly check: FlowCheck; re
 }
 
 export default function JobStepsFlow({ state, model, draft, editable, service, switcher, editor }: FlowProps) {
-  const { theme, commands, menuTargets } = useWorkbench()
+  const { theme, commands, menuTargets, platform } = useWorkbench()
   const colors = useServiceSnapshot(theme).active.colors
   const steps = draft.steps.steps
   const selectedStep = service.selectedStep(state.id)
@@ -193,7 +193,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
       released.current = { reveal: false }
       canvas.current = new FlowCanvas({
         root: element, model: now.canvasModel, colors: now.palette, selected: now.selected, focused: now.focused, editable: now.editable,
-        ...camera ? { camera } : {}, revealSelected: reveal,
+        ...camera ? { camera } : {}, revealSelected: reveal, platform,
         select: index => { const step = latest.current.steps[index]; if (step) service.selectStep(latest.current.state.id, step.key) },
         open: index => { const step = latest.current.steps[index]; if (step) service.openStepEditor(latest.current.state.id, step.key) },
         connect: (from, which, to) => {
@@ -220,9 +220,10 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   useEffect(() => { if (selected < 0) return; if (canvas.current) canvas.current.reveal(selected); else released.current.reveal = true }, [selected])
   useLayoutEffect(() => place(cameraRef.current))
   // The docked editor narrows the graph, as closing it widens it: the graph is placed again for its new width (Fit when it no longer fits).
-  const editingNow = !!state.stepEditor
+  // Watched on what the layout shows (an editor needs a step), so deleting the last step under the editor places it too.
+  const editing = !!state.stepEditor && !!selectedStep
   const firstPlace = useRef(true)
-  useEffect(() => { if (firstPlace.current) { firstPlace.current = false; return } canvas.current?.recenter() }, [editingNow])
+  useEffect(() => { if (firstPlace.current) { firstPlace.current = false; return } canvas.current?.recenter() }, [editing])
 
   // A keyboard menu opens on the tree's active item (the selected step); a pointer menu on the canvas is the menu of the step under the pointer,
   // and none over empty canvas, an edge or a pill (it never acts on a selected step that may be off screen).
@@ -249,7 +250,6 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
 
   const missing = truncated ? [] : flow.edges.filter(edge => edge.target.kind === 'missing')
   const problemCount = checks.length + missing.length
-  const editing = !!state.stepEditor && !!selectedStep
   const fact = selectedStep ? flowStepFact(selectedStep, model) : undefined
   const loopOf = (edge: FlowEdge) => edge.loop
   const edgeOf = (which: FlowWhich) => flow.edges[selected * 2 + (which === 'success' ? 0 : 1)]

@@ -72,10 +72,22 @@ internal sealed partial class ObjectSearchService : IDisposable
         public readonly LookupLedger Ledger = new();
         /// <summary>A BigQuery connection's index (ObjectSearchService.BigQuery): datasets in place of databases.</summary>
         public bool BigQuery;
-        /// <summary>BigQuery's pass while building: names, then details.</summary>
+        /// <summary>BigQuery's pass while building: projects, names, then details.</summary>
         public string? Phase;
-        /// <summary>BigQuery's projects indexed by name only (extra projects unless their details were asked for).</summary>
+        /// <summary>BigQuery's projects indexed by name only (when memory budget stopped wave 3 early).</summary>
         public List<string>? NamesOnly;
+        /// <summary>BigQuery's starred projects from the last full build (under Gate, excluding billing).</summary>
+        public List<string> StarredProjects = [];
+        /// <summary>BigQuery's auto-discovered projects from the last full build (under Gate, excluding billing and starred).</summary>
+        public List<string> DiscoveredProjects = [];
+        /// <summary>BigQuery's discovered projects kept with some datasets held after Wave 2 memory early-stop cut remaining datasets (under Gate).</summary>
+        public HashSet<string> PartialProjects = new(StringComparer.Ordinal);
+        /// <summary>Per-project dataset-listing skips (errors or dataset-list truncation) kept independently of the 256-entry displayed SkipList (under Gate).</summary>
+        public Dictionary<string, ObjectIndexSkip> ProjectListingSkips = new(StringComparer.Ordinal);
+        /// <summary>Per-dataset read skips (object-listing, detail, or budget failures) kept independently of the 256-entry displayed SkipList (under Gate).</summary>
+        public Dictionary<(string Project, string Dataset), ObjectIndexSkip> DatasetSkips = [];
+        /// <summary>Projects currently being discovered or listed by an active build, so mid-build DDL marks land before discovery commits (under Gate).</summary>
+        public HashSet<string> InFlightProjects = new(StringComparer.Ordinal);
         /// <summary>BigQuery's last full build's bulk path, when it ran.</summary>
         public BigQueryBulkStatus? Bulk;
         /// <summary>BigQuery datasets DDL changed since their last read, by project and dataset (under Gate): the next build re-reads them whole.</summary>
@@ -278,7 +290,7 @@ internal sealed partial class ObjectSearchService : IDisposable
         if (bigQuery ? args.Database is not null : args.Project is not null || args.Dataset is not null) throw Invalid(bigQuery ? "database." : "project.");
         token.ThrowIfCancellationRequested();
         if (!bigQuery) host.Profile(args.ConnectionId);
-        if (!states.TryGetValue(args.ConnectionId, out var state)) return new([], 0, false, 0, new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null));
+        if (!states.TryGetValue(args.ConnectionId, out var state)) return new([], 0, false, 0, new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null, Projects: bigQuery ? 0 : null));
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
@@ -361,11 +373,12 @@ internal sealed partial class ObjectSearchService : IDisposable
             {
                 // Datasets: those this build lists while it runs, else those the index holds and those it skipped.
                 var held = databases.Count(value => value.Dataset is not null);
+                var projects = databases.Where(value => value.Dataset is not null).Select(value => value.Database).Distinct(StringComparer.Ordinal).Count();
                 var skipped = state.Skipped.ToList();
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
-                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, state.StaleMark);
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark);
             }
             return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),

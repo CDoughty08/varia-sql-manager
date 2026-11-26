@@ -7,7 +7,7 @@ import { resultsRemoteQuerySchema } from '../shared/bigquery/remote-view'
 import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryPropertiesSchema } from '../shared/bigquery/objects'
 import { jobKeySchema, queryAttachParamsSchema } from '../shared/bigquery/jobs'
 import { jobHistoryCancelResultSchema, jobHistoryDetailsSchema, jobHistoryGetParamsSchema, jobHistoryJobParamsSchema } from '../shared/bigquery/history'
-import { bigQueryAccountSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
+import { bigQueryAccountSchema, bigQueryConnectionProjectsParamsSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
@@ -53,6 +53,7 @@ export const requestSchemas = {
   'connections.disconnect': z.object({ connectionId }).strict(),
   'bigquery.account': bigQueryCredentialParamsSchema,
   'bigquery.projects': bigQueryProjectsParamsSchema,
+  'bigquery.connectionProjects': bigQueryConnectionProjectsParamsSchema,
   'bigquery.dryRun': bigQueryDryRunRequestSchema,
   'bigquery.properties': bigQueryPropertiesRequestSchema,
   'bigquery.jobs.get': jobHistoryGetParamsSchema,
@@ -124,6 +125,7 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
     'A connection answer must match its provider.'),
   'bigquery.account': bigQueryAccountSchema,
   'bigquery.projects': bigQueryProjectListSchema,
+  'bigquery.connectionProjects': bigQueryProjectListSchema,
   'bigquery.dryRun': bigQueryDryRunResultSchema,
   'bigquery.properties': bigQueryPropertiesSchema,
   'bigquery.jobs.get': jobHistoryDetailsSchema,

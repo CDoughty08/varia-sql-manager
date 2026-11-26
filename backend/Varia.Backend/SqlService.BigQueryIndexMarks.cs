@@ -112,13 +112,12 @@ internal sealed partial class SqlService
         }
     }
 
-    /// <summary>Spends marks on the index: only datasets of the projects it indexes (the billing project and the extra projects), since
-    /// a mark on another project no build would ever read.</summary>
+    /// <summary>Spends marks on the index: only datasets of projects the index reads (the billing project and any starred, discovered or held project), since
+    /// a mark on an unindexed project no build would read.</summary>
     private void Record(string connectionId, BigQueryConnection connection, string project, BigQueryIndexMarks marks)
     {
-        var indexed = new HashSet<string>(connection.Options.ExtraProjects ?? [], StringComparer.Ordinal) { connection.Options.Project };
         foreach (var (markProject, markDataset) in marks.Datasets)
-            if (indexed.Contains(markProject)) search.MarkStale(connectionId, markProject, markDataset);
+            search.MarkStaleIfTracked(connectionId, connection.Options.Project, markProject, markDataset);
         if (marks.WholeProject) search.MarkProjectStale(connectionId, project);
     }
 

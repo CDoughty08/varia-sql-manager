@@ -238,6 +238,10 @@ export const contextKeys = {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...providerIds],
     description: "The engine of the server the Object Explorer node the menu is for is on: 'sqlserver' or 'bigquery', or '' for the empty area. Items whose `providers` lack it are left out."
   },
+  explorerBigQueryProjectRole: {
+    type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', 'billing', 'starred', 'session'],
+    description: "The role of the BigQuery project node the menu is for: 'billing', 'starred', or 'session' (shown for this session only), or '' for any other node."
+  },
   agentRole: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...agentRoleValues],
     description: "The login's SQL Server Agent role on the server of the Object Explorer node the menu is for, when that node is an Agent node: 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' (not read yet) or 'profileFailed'; '' for any other node."

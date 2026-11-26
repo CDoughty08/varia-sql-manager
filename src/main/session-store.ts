@@ -6,6 +6,7 @@ import { documentKinds, type DocumentKind } from '../shared/contracts'
 import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
+import { bigQueryProjectSchema } from '../shared/connections'
 import { providerIds } from '../shared/providers'
 import { jobKeySchema } from '../shared/bigquery/jobs'
 import { isKeptAgentKind, keptAgentKinds, keptAgentLimits, type KeptAgentKind } from '../shared/agent/kept'
@@ -89,6 +90,46 @@ const posix = process.platform !== 'win32'
 /** What a quarantine of either file (or of jobs.json, `job-records.ts`) leaves (`json-file.ts`'s `quarantine`), and a write a crash interrupted (`writeBytesAtomic`'s temporary file). */
 const leftover = /^((session|previous|jobs)\.json\.invalid-[0-9a-f-]{36}\.json|\.varia-[0-9a-f-]{36}\.tmp)$/i
 const dayMs = 86_400_000
+
+/** Legacy BigQuery `extraProjects` stripped from a pre-upgrade session on disk, keyed by target ID (for seal verification and post-seal migration). */
+const legacyExtraProjectsByRecord = new WeakMap<SessionRecord, ReadonlyMap<string, readonly string[]>>()
+/** Returns legacy BigQuery `extraProjects` stripped from `record` on read, keyed by target ID (never persisted again). */
+export function legacyBigQueryExtraProjects(record: SessionRecord | undefined): ReadonlyMap<string, readonly string[]> | undefined {
+  return record ? legacyExtraProjectsByRecord.get(record) : undefined
+}
+
+/**
+ * Tolerates pre-upgrade `session.json` / `previous.json` files whose BigQuery workspace targets still carry `extraProjects`:
+ * strips `extraProjects` from each target's options and retains the raw arrays keyed by target ID so `ConnectionWorkspaceSealer`
+ * can verify the pre-upgrade HMAC seal and main can migrate them only after seal verification.
+ */
+function migrateLegacySession(raw: unknown): { value: unknown; extraByTarget?: ReadonlyMap<string, readonly string[]> } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { value: raw }
+  const record = raw as Record<string, unknown>
+  const workspace = record.workspace
+  if (!workspace || typeof workspace !== 'object' || Array.isArray(workspace)) return { value: raw }
+  const ws = workspace as Record<string, unknown>
+  if (!Array.isArray(ws.targets)) return { value: raw }
+  const extraByTarget = new Map<string, readonly string[]>()
+  let migrated = false
+  const targets = ws.targets.map(target => {
+    if (!target || typeof target !== 'object' || Array.isArray(target)) return target
+    const entry = target as Record<string, unknown>
+    const options = entry.options
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return target
+    const opts = options as Record<string, unknown>
+    if (opts.provider !== 'bigquery' || !Object.hasOwn(opts, 'extraProjects')) return target
+    const extra = opts.extraProjects
+    // Pre-upgrade bigQueryLimits.extraProjects was 16; oversized or malformed arrays still quarantine.
+    if (extra !== undefined && (!Array.isArray(extra) || extra.length > 16 || !extra.every(item => typeof item === 'string' && bigQueryProjectSchema.safeParse(item).success))) return target
+    migrated = true
+    if (Array.isArray(extra) && typeof entry.id === 'string') extraByTarget.set(entry.id, [...extra])
+    const { extraProjects: _extraProjects, ...rest } = opts
+    return { ...entry, options: rest }
+  })
+  if (!migrated) return { value: raw }
+  return { value: { ...record, workspace: { ...ws, targets } }, ...extraByTarget.size ? { extraByTarget } : {} }
+}
 
 export interface SessionStoreOptions {
   readonly now?: () => Date
@@ -272,8 +313,13 @@ export class SessionStore {
   private async read(path: string): Promise<SessionRecord | undefined> {
     const read = await readJsonFile(path, sessionLimits.totalBytes)
     if (read.kind === 'missing') return undefined
-    const parsed = read.kind === 'ok' ? storedSessionSchema.safeParse(read.value) : undefined
-    if (parsed?.success) return this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
+    const migrated = read.kind === 'ok' ? migrateLegacySession(read.value) : undefined
+    const parsed = migrated ? storedSessionSchema.safeParse(migrated.value) : undefined
+    if (parsed?.success) {
+      const record = this.options.pathsRefused ? { ...parsed.data, documents: parsed.data.documents.map(withoutFile) } : parsed.data
+      if (migrated?.extraByTarget?.size) legacyExtraProjectsByRecord.set(record, migrated.extraByTarget)
+      return record
+    }
     await quarantine(path)
     return undefined
   }

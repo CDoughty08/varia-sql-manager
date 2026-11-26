@@ -203,15 +203,15 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   (in a job with more steps than Varia reads, a go-to past them or the last read step's next step), or along a lane beside the column (success on the left, failure on
   the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow (its own place on the step's side, apart from a jump back to it), a loop is tagged
   ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs (not said in a job with more steps than Varia reads, where
-  Reached from adds "perhaps steps Varia does not read" and a Start past the steps read is named under Flow checks), and an action changed since the job was read is drawn in the
+  Reached from adds "perhaps steps Varia does not read", and a Start past the steps read is named under Flow checks with no step read, in List or Flow, tagged Start step), and an action changed since the job was read is drawn in the
   accent and tagged "changed". Beside the graph: the selected step's summary (with **Reached from**), the **Flow checks** and the key.
   The checks are warnings that never block Save, and List tags the same steps: a step that never runs (Make Start step when its paths
   lead to the current Start step), a loop (Agent does not count passes), a loop with no way out, and the last step going to the next
   step (Quit reporting success). Click selects; double-click, Enter or Edit step docks List's step editor beside the graph (Close
-  editor goes back); right-click or Shift+F10 opens the step's menu (Edit step, Start job at this step, Make Start step, On success ›
-  and On failure › with SSMS's four actions and every other step, Add step after ›, Move up, Move down, Delete step; on macOS, whose
+  editor goes back); right-click (Control+click on macOS) or Shift+F10 opens the step's menu, whose items all act on that step (Edit step, Start job at this step, Make Start step, On success ›
+  and On failure › with SSMS's four actions and every other step, Add step after ›, Move up, Move down, Delete step (Delete on the graph, also ⌘⌫ on macOS); on macOS, whose
   native menus show no items built when they open, On success…, On failure… and Add step after… pick from the same lists). Dragging a
-  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list; released off the canvas, it does nothing. Steps are reordered in List or with Move
+  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list; released off the canvas, or without moving, it does nothing. Steps are reordered in List or with Move
   up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
   visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
   readers have the whole graph; arrows move the selection, and the selection and a keyboard menu's step come into view by moving the graph, across and up or down. A pointer menu is

@@ -4,6 +4,7 @@ import { IndexCompletionService } from '../languages/IndexCompletionService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
 import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
+import { BigQueryStarredService, bindBigQueryExplorerSync } from '../services/bigquery-starred'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
 import { indexDefinitionOpener } from '../languages/bigquery-definition'
@@ -186,6 +187,8 @@ export interface Workbench extends Disposable {
   /** BigQuery tabs' estimates, dry-run diagnostics and cost prompts (docs/bigquery.md, Cost). */
   readonly bigQueryCost: BigQueryCostService
   readonly costPrompts: CostPromptService
+  /** Per-principal BigQuery Starred Projects shown in Object Explorer. */
+  readonly bigQueryStarred: BigQueryStarredService
   readonly queries: QueryService
   readonly connections: ConnectionService
   readonly connectionTargets: ConnectionTargetService
@@ -378,7 +381,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const reducedMotion = followReducedMotion(document.documentElement, { enabled: () => api.followSystemMotion || settings.get('environment.reduceMotionWithSystem'), subscribe: settings.subscribe,
     media: typeof matchMedia === 'function' ? matchMedia(reducedMotionQuery) : undefined })
   if (api.testMode) Object.assign(window, { __variaMotion: { refresh: () => reducedMotion.refresh() } })
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32' }), databaseList = new DatabaseListService(api, connections, events)
+  const bigQueryStarred = new BigQueryStarredService({ api })
+  let onBigQueryStarredLoaded: (() => void) | undefined
+  const loadBigQueryStarred = (connectionId: string, principal: string) => {
+    void bigQueryStarred.load(connectionId, principal).then(() => { if (!disposed) onBigQueryStarredLoaded?.() }, onUnexpectedError)
+  }
+  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
   const updates = new UpdateService(api)
@@ -488,7 +496,19 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A tab holding BigQuery jobs it does not follow re-attaches once its connection is live (docs/bigquery.md, Re-attaching to jobs).
   let reattachQueued = false
   const reattachSoon = () => { if (reattachQueued) return; reattachQueued = true; queueMicrotask(() => { reattachQueued = false; queries.reattach() }) }
-  const reattachSubscriptions = [connections.subscribe(reattachSoon), documents.subscribe(reattachSoon)]
+  // Sync open BigQuery query tabs' explicitly referenced projects into Object Explorer's session projects on restore/open/connect
+  // and while editing (debounced), and load starred projects bound to each verified live BigQuery connection so legacy migrated
+  // projects claimed by main appear immediately without exposing other accounts.
+  const bigQueryExplorerSync = bindBigQueryExplorerSync({
+    connections, documents, events, explorer,
+    loadStarred: (connectionId, principalId) => { loadBigQueryStarred(connectionId, principalId) },
+    forgetPrincipal: principalId => { bigQueryStarred.forgetPrincipal(principalId) }
+  })
+  const reattachSubscriptions = [
+    connections.subscribe(reattachSoon),
+    documents.subscribe(reattachSoon),
+    () => bigQueryExplorerSync.dispose()
+  ]
   const resultSelection = new ResultSelectionService(results)
   const targets = new TargetService(documents, queries, connections, files, connectionTargets, (connectionId, dataset) => databaseList.get(connectionId).find(entry => entry.name === dataset)?.location)
   const serverDrop = new ServerDropService({ documents, queries, targets, connections })
@@ -636,9 +656,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const objectSearch = new ObjectSearchService({
     api, documents, connections, settings, targetIdOf, events,
+    starredProjects: connectionId => {
+      const connection = connections.get(connectionId)
+      const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
+      return principal ? bigQueryStarred.starredFor(principal) : []
+    },
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-object-search="${CSS.escape(id)}"] [data-object-search-focus]`)?.focus())
   })
+  onBigQueryStarredLoaded = () => {
+    for (const connection of connections.liveBigQuery()) objectSearch.syncBigQueryStarred(connection.id)
+  }
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
   const bigQueryProperties = new BigQueryPropertiesService({
@@ -770,6 +798,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     indexCompletion,
     bigQueryCost,
     costPrompts,
+    bigQueryStarred,
     queries,
     connections,
     backend,
@@ -947,6 +976,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       documents.dispose()
       backend.dispose()
       explorer.dispose()
+      bigQueryStarred.dispose()
       databaseList.dispose()
       scripting.dispose()
       actions.dispose()

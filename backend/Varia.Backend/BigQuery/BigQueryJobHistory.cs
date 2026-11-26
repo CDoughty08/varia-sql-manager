@@ -263,15 +263,15 @@ internal static class BigQueryJobHistory
 
     internal static string? Clip(string? text, int max) => text is null ? null : text.Length <= max ? text : text[..(char.IsHighSurrogate(text[max - 2]) ? max - 2 : max - 1)] + "…";
 
-    static JsonElement? Member(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e && e.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object ? value : null;
+    internal static JsonElement? Member(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e && e.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object ? value : null;
 
-    static string? Text(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e && e.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    internal static string? Text(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e && e.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     static bool? Bool(JsonElement? element, string name) => element is { ValueKind: JsonValueKind.Object } e && e.TryGetProperty(name, out var value)
         ? value.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => null } : null;
 
     /// <summary>A count BigQuery writes as an int64 string (or a number), within JavaScript's safe integers; null otherwise.</summary>
-    static long? Number(JsonElement? element, string name)
+    internal static long? Number(JsonElement? element, string name)
     {
         if (element is not { ValueKind: JsonValueKind.Object } e || !e.TryGetProperty(name, out var value)) return null;
         long number;

@@ -7,7 +7,7 @@ namespace Varia.Backend.BigQuery;
 
 /// <summary>
 /// Object Explorer for BigQuery handles (docs/bigquery.md, Object Explorer): explorer.children through BigQuery's free REST
-/// listers, never a job. The connection node lists the billing project and the extra projects; a project its datasets
+/// listers, never a job. The connection node lists the billing project (starred and session projects are managed in Object Explorer); a project its datasets
 /// (datasets.list); a dataset its six static folders; Tables, Views, Materialized Views and External Tables page tables.list
 /// filtered by type; Routines routines.list; Models models.list; a table-like object's Columns and a STRUCT column's fields
 /// come from tables.get. Every call goes through the principal's limiter (<see cref="MetadataAsync"/>); a failure is an
@@ -99,14 +99,9 @@ internal sealed partial class BigQueryService
         new(new NodeRefDto("object", value), ExplorerLabels.Clip(label, ExplorerLabels.MaxLabel), catalog.IconFor(value.Kind, subtype), hasChildren,
             sublabel is null ? null : ExplorerLabels.Clip(sublabel, ExplorerLabels.MaxSublabel), Subtype: subtype);
 
-    /// <summary>The billing project, then the extra projects in the order the connection lists them.</summary>
-    static ExplorerChildrenResult Projects(BigQueryConnection connection, ExplorerCatalog catalog)
-    {
-        var nodes = new List<ExplorerNode> { Node(catalog, new("bqProject", Name: connection.Options.Project), connection.Options.Project, true, sublabel: "billing project") };
-        foreach (var extra in connection.Options.ExtraProjects ?? [])
-            if (extra != connection.Options.Project) nodes.Add(Node(catalog, new("bqProject", Name: extra), extra, true));
-        return new(nodes, 0, Total: nodes.Count);
-    }
+    /// <summary>The billing project; starred and session projects are managed in Object Explorer without changing connection identity.</summary>
+    static ExplorerChildrenResult Projects(BigQueryConnection connection, ExplorerCatalog catalog) =>
+        new([Node(catalog, new("bqProject", Name: connection.Options.Project), connection.Options.Project, true, sublabel: "billing project")], 0, Total: 1);
 
     static ExplorerChildrenResult Folders(ExplorerCatalog catalog, ObjectRefDto owner) =>
         new([.. catalog.StaticFolders(owner.Kind, null, Profile).Select(id => new ExplorerNode(new NodeRefDto("folder", Owner: owner, Folder: id), catalog.Folder(id)!.Label, "folder", true))], 0);

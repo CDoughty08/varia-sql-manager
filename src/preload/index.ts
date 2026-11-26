@@ -77,6 +77,9 @@ const api: VariaApi = {
   disconnect: connectionId => request('connections.disconnect', { connectionId }),
   bigQueryAccount: params => request('bigquery.account', params),
   bigQueryProjects: params => request('bigquery.projects', params),
+  bigQueryConnectionProjects: params => request('bigquery.connectionProjects', params),
+  loadBigQueryStarredProjects: input => ipcRenderer.invoke('varia:bigquery-starred-projects', input),
+  setBigQueryProjectStar: input => ipcRenderer.invoke('varia:bigquery-star-project', input),
   bigQueryDryRun: params => request('bigquery.dryRun', params),
   bigQueryProperties: params => request('bigquery.properties', params),
   bigQueryJob: params => request('bigquery.jobs.get', params),
@@ -92,9 +95,11 @@ const api: VariaApi = {
   explorerPeekDependencies: params => request('explorer.peekDependencies', params),
   explorerPeekDefinition: params => request('explorer.peekDefinition', params),
   explorerDependencies: params => request('explorer.dependencies', params),
-  // Only the four fields cross to the page, whatever main sent.
+  // Only the known progress fields cross to the page, whatever main sent.
   onExplorerIndexProgress: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({ requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects })
+    const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({
+      requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}
+    })
     ipcRenderer.on('varia:explorer-index-progress', listener)
     return () => { ipcRenderer.removeListener('varia:explorer-index-progress', listener) }
   },

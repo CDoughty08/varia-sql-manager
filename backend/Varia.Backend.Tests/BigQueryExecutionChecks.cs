@@ -218,7 +218,7 @@ internal static partial class BigQueryExecutionChecks
 
         string Id(BigQueryFake.Request request) => request.Url[(request.Url.LastIndexOf('/') + 1)..];
 
-        /// <summary>The script child's statistics as jobs.list (minimal) gives them: ChildStatistics' query, with its statement type.</summary>
+        /// <summary>The script child's statistics as jobs.list (full projection) gives them: ChildStatistics' query, with its statement type.</summary>
         JsonObject ListedChildStatistics(string parent, int n = 1)
         {
             var query = (ListChildTarget ? ChildStatistics?["query"]?.DeepClone().AsObject() : null) ?? new JsonObject();

@@ -51,7 +51,7 @@ export interface ResolveOptions {
   readonly target?: Partial<TargetKeys>
   /** Passed to every command item: enablement, and the handler when the item runs. */
   readonly args?: CommandArgs
-  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'>
+  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'> & Partial<Pick<CommandService, 'titleFor'>>
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
   /** A dynamic submenu's items; a context menu's receive its target's arguments. */
   readonly dynamic?: { readonly [K in DynamicSubmenu]?: (args?: CommandArgs) => readonly DynamicMenuItem[] }

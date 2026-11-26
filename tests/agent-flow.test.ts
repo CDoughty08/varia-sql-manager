@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { flowActionWords, flowChecks, flowLayout, flowNeverRuns, flowReachedFrom, stepsFlow, type FlowMetrics } from '../src/shared/agent/flow'
+import { initialAgentJobDraft } from '../src/shared/actions/agent-job'
 import { agentStepProblems, initialStepsDraft, newStepDraft, type AgentStepDraft, type AgentStepsDraft, type StepAction } from '../src/shared/agent/steps'
 
 // The mocks' "Finance nightly load" (docs/mockups/sql-server-agent.html › rxFin): a step that never runs (1), the Start step (2), a loop
@@ -56,6 +57,8 @@ describe('the steps flow', () => {
     expect(flow.reachable).toEqual([false, false])
     expect(flowLayout(flow, metrics).start).toBeUndefined()
     expect(flowChecks(past, flow).filter(check => check.kind === 'neverRuns')).toEqual([])
+    // Nor is a step drawn or announced so: with no Start step, nothing is known to reach it.
+    expect([flowNeverRuns(flow, 0), flowNeverRuns(flow, 1)]).toEqual([false, false])
   })
   it('reads a long chain without overflowing', () => {
     const many = job(Array.from({ length: 5000 }, (_, at) => [`S${at}`, 'next', 'qf'] as [string, Go, Go]))
@@ -155,8 +158,12 @@ describe('the flow layout', () => {
   it("keeps a cut job's Start and reachability open where a step not read could change them", () => {
     // A 51-step job read to step 50 that starts at step 51, which jumps back to step 2: the draft as Varia builds it falls back to step 1.
     const records = Array.from({ length: 50 }, (_, at) => ({ id: at + 1, name: `Step ${at + 1}`, subsystem: 'TSQL', onSuccessAction: 2, onFailAction: 2 }))
-    const draft = initialStepsDraft(records, 51)
-    expect(draft.startKey).toBe('s1')
+    // Read whole, a start that names no step falls back to step 1; cut, the start past the steps read is kept, so List tags no step either.
+    expect(initialStepsDraft(records, 51).startKey).toBe('s1')
+    const draft = initialStepsDraft(records, 51, true)
+    expect(draft.startKey).toBe('s51')
+    expect(initialAgentJobDraft({ job: { startStepId: 51 } as never, login: 'sa', steps: records, stepsTruncated: true }).steps.startKey).toBe('s51')
+    expect(stepsFlow(draft, true).start).toBe(-1)
     const flow = stepsFlow(draft, true, 51)
     expect(flow).toMatchObject({ start: -1, startUnread: 51, partial: true })
     expect(flowLayout(flow, metrics).start).toBeUndefined()
@@ -170,6 +177,9 @@ describe('the flow layout', () => {
     // The whole job read: a step nothing reaches never runs.
     const whole = stepsFlow(job([['A', 'qs', 'qf'], ['B', 'qs', 'qf']]))
     expect(flowNeverRuns(whole, 1)).toBe(true)
-    expect(flowReachedFrom(whole, 1)).toBe('No step')
+    expect(flowReachedFrom(whole, 1)).toBe('No step')    // A loop's way out to a step not read says so, rather than calling it missing.
+    const loop = job([['A', 'next', 'qf'], ['B', 1, 60]])
+    const checks = flowChecks(loop, stepsFlow(loop, true))
+    expect(checks.find(check => check.kind === 'loop')?.detail).toContain('step 2 fails (to step 60, which Varia does not read)')
   })
 })
