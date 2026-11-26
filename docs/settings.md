@@ -47,7 +47,7 @@ from Microsoft's documentation, so Varia keeps its own.
 - Activity Monitor (`activityMonitor`)
 - SQL Server Integration Services (`integrationServices`)
 
-A node without a page id is a category: selecting it shows its first page. Drag the navigation splitter (or resize with keyboard arrows) to adjust the rail width. The search box (Ctrl+E, ⌘E on macOS) searches across every page into grouped **Search Results** with match highlighting, and **Modified** filters to customized rows with per-row reset. Use **Apply** to save without closing, **OK** to save and close, or **Reset Page** to restore the active page's defaults; closing with unsaved changes asks before discarding.
+A node without a page id is a category: selecting it shows its first page. Drag the navigation splitter (or resize with keyboard arrows) to adjust the rail width. The search box (Ctrl+E, ⌘E on macOS) searches across every page into grouped **Search Results** with match highlighting, and **Modified** filters to the edits not saved yet (values saved earlier, in Options or elsewhere, are not counted); a row whose value differs from its default shows a dot and a reset button. Use **Apply** to save without closing, **OK** to save and close, or **Reset Page** to restore the active page's defaults; closing with unsaved changes asks before discarding.
 
 ## Settings
 

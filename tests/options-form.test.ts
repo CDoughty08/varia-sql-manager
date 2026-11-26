@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ancestorIds, clampOptionsRailWidth, commitOptions, customizedSettings, draftFrom, firstPage, followValues, pageForm, patchFrom, pendingSettingsCount, resetPage, resetSetting, rowDisabled, rowNotes, setDraftValue, settingGridRow, themePatchFrom, themePreferenceChanged, treeRows, validateDraft, type OptionsDraft, type SettingRow
+  ancestorIds, clampOptionsRailWidth, commitOptions, draftFrom, firstPage, followValues, pageForm, patchFrom, pendingSettingsCount, resetPage, resetSetting, rowDisabled, rowNotes, setDraftValue, settingGridRow, themePatchFrom, themePreferenceChanged, treeRows, unsavedSettings, validateDraft, type OptionsDraft, type SettingRow
 } from '../src/renderer/src/settings/options-form'
 import { highlightParts, normalizeQuery, searchAllOptions, searchPages } from '../src/renderer/src/settings/search'
 import { defaultThemePreference } from '../src/shared/theme/format'
@@ -218,10 +218,14 @@ describe('Options v2 search, reset, rail clamping and Apply/theme commit', () =>
     expect(searchAllOptions('unicorn', 'darwin', defs)?.pages).toHaveLength(1)
   })
 
-  it('resets a single setting and tracks customized and pending counts', () => {
+  it('resets a single setting and tracks unsaved and pending counts', () => {
     let next = set(draft, 'queryExecution.executionTimeout', '30')
     next = set(next, 'textEditor.sql.wordWrap', 'true')
-    expect(customizedSettings(next, 'win32').map(def => def.key)).toEqual(['textEditor.sql.wordWrap', 'queryExecution.executionTimeout'])
+    expect(unsavedSettings(next, draft, 'win32').map(def => def.key)).toEqual(['textEditor.sql.wordWrap', 'queryExecution.executionTimeout'])
+    // Saved values that differ from their defaults are not unsaved edits; an edit back to the saved value is none either.
+    expect(unsavedSettings(next, next, 'win32')).toEqual([])
+    expect(unsavedSettings(set(next, 'textEditor.sql.wordWrap', 'false'), next, 'win32').map(def => def.key)).toEqual(['textEditor.sql.wordWrap'])
+    expect(unsavedSettings(set(set(next, 'textEditor.sql.wordWrap', 'false'), 'textEditor.sql.wordWrap', 'true'), next, 'win32')).toEqual([])
     expect(pendingSettingsCount(defaultSettings, next)).toBe(2)
 
     const singleReset = resetSetting(next, 'queryExecution.executionTimeout')

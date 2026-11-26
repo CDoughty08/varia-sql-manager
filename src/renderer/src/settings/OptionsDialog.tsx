@@ -14,9 +14,9 @@ import { followPointerDrag } from '../kit/pointer-drag'
 import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
 import {
-  ancestorIds, clampOptionsRailWidth, commitOptions, customizedSettings, draftFrom, followValues, firstPage, loadOptionsRailWidth,
+  ancestorIds, clampOptionsRailWidth, commitOptions, draftFrom, followValues, firstPage, loadOptionsRailWidth,
   optionsRailLimits, pageForm, patchFrom, pendingSettingsCount, resetPage, resetSetting, rowNotes, saveOptionsRailWidth, setDraftValue,
-  settingGridRow, settingRow, themePatchFrom, themePreferenceChanged, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
+  settingGridRow, settingRow, themePatchFrom, themePreferenceChanged, treeRows, unsavedSettings, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
 import { highlightParts, normalizeQuery, searchAllOptions } from './search'
@@ -266,9 +266,11 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const [formElement, setForm] = useState<HTMLFormElement | null>(null)
 
   const searchResult = useMemo(() => searchAllOptions(query, platform), [query, platform])
-  const customizedList = useMemo(() => customizedSettings(draft, platform), [draft, platform])
+  // Modified means edited here and not saved yet: values saved earlier, in Options or elsewhere, are not called out.
+  const stored = useMemo(() => draftFrom(values), [values])
+  const customizedList = useMemo(() => unsavedSettings(draft, stored, platform), [draft, stored, platform])
   const customizedSet = useMemo(() => new Set(customizedList.map(def => def.key as SettingKey)), [customizedList])
-  const customizedTheme = !!themeState && themePreferenceChanged(themeDraft, defaultThemePreference)
+  const customizedTheme = !!themeState && themePreferenceChanged(themeDraft, storedTheme)
   const totalCustomized = customizedList.length + (customizedTheme ? 1 : 0) + (stagedShortcuts > 0 ? 1 : 0)
 
   const pageCounts = useMemo(() => {
@@ -648,7 +650,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
             <span className="options-title">{searchResult ? 'Search Results' : 'Modified Settings'}</span>
           </h3>
           {unifiedEntries.length === 0
-            ? <p className="options-empty" role="status">{query.trim() ? 'No settings match.' : 'No customized settings or shortcuts yet.'}</p>
+            ? <p className="options-empty" role="status">{query.trim() ? 'No settings match.' : 'No unsaved changes.'}</p>
             : <div className="options-form options-search-results">
               {unifiedEntries.map(entry => <div key={entry.pageId} className="options-search-group">
                 <button type="button" className="options-search-crumb" onClick={() => showPage(entry.pageId)}>{entry.path} ›</button>

@@ -135,9 +135,12 @@ export function resetSetting(draft: OptionsDraft, key: SettingKey, defs: readonl
   if (!def || draft[key] === def.default) return draft
   return { ...draft, [key]: def.default }
 }
-/** Visible settings whose current value in `draft` differs from their catalogue default. */
-export const customizedSettings = (draft: OptionsDraft, platform: Platform, defs: readonly SettingDef[] = settingDefs): SettingDef[] =>
-  visibleSettings(platform, defs).filter(def => draft[def.key as SettingKey] !== def.default)
+/**
+ * The Modified filter: visible settings edited in the dialog and not yet saved, so `draft` differs from what main stored.
+ * A value saved earlier counts as nothing, even when it differs from its default (the row's reset still shows that).
+ */
+export const unsavedSettings = (draft: OptionsDraft, stored: OptionsDraft, platform: Platform, defs: readonly SettingDef[] = settingDefs): SettingDef[] =>
+  visibleSettings(platform, defs).filter(def => draft[def.key as SettingKey] !== stored[def.key as SettingKey])
 /** Count of settings whose draft value differs from `stored`. */
 export function pendingSettingsCount(stored: SettingsValues, draft: OptionsDraft): number {
   let count = 0
