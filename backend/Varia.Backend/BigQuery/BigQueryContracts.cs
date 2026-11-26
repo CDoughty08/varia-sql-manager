@@ -67,7 +67,7 @@ internal static partial class BigQueryLimits
     public static partial Regex DatasetId();
     [GeneratedRegex(@"^[A-Za-z0-9-]+\z")]
     public static partial Regex LocationId();
-    [GeneratedRegex(@"^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z", RegexOptions.IgnoreCase)]
     public static partial Regex Uuid();
     // zod's z.email() shape, narrowed: one @, no spaces or control characters.
     // zod's z.email() pattern exactly, so every address the backend accepts passes main's check of its answer.

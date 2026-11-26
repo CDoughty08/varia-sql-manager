@@ -190,7 +190,7 @@ export class BackendSupervisor {
     const provider = requestProvider(method, params, id => this.providers.get(id))
     if (!methodAllows(method, provider)) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedProvider)
     if (!optionsAllow(method, provider, params)) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
-    if (method === 'query.executeMulti') this.validateMultiTargets(params)
+    if (method === 'query.executeMulti') this.validateMultiTargets(params, undefined, false)
     this.start()
     const local = this.answerLocally(method, params)
     if (local) return local.value as BackendMethods[M]['result']
@@ -199,7 +199,7 @@ export class BackendSupervisor {
     // A request that waited out a restart (its idle-session wait) for a connection of the generation it ended: lost with it.
     const named = idOf(params, 'connectionId')
     if (named !== undefined && this.lost.has(named) && method !== 'connections.disconnect') throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
-    const multiProviders = method === 'query.executeMulti' ? this.validateMultiTargets(params, connection.generation) : undefined
+    const multiProviders = method === 'query.executeMulti' ? this.validateMultiTargets(params, connection.generation, true) : undefined
     const sessionId = method === 'query.execute' || method === 'query.attach' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
       ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
@@ -391,11 +391,11 @@ export class BackendSupervisor {
     }
     if (unavailable) throw this.unavailable()
     if (connectionId !== undefined && this.lost.has(connectionId)) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
-    if (method === 'query.executeMulti') this.validateMultiTargets(params, this.connection?.generation)
+    if (method === 'query.executeMulti') this.validateMultiTargets(params, this.connection?.generation, true)
     return undefined
   }
 
-  private validateMultiTargets(params: unknown, expectedGeneration?: number): { hasSqlServer: boolean; hasBigQuery: boolean } {
+  private validateMultiTargets(params: unknown, expectedGeneration?: number, checkConnectionState = true): { hasSqlServer: boolean; hasBigQuery: boolean } {
     const options = (params ?? {}) as Partial<MultiQueryOptions>
     const targets = Array.isArray(options.targets) ? options.targets : []
     const seen = new Set<string>()
@@ -403,8 +403,14 @@ export class BackendSupervisor {
     for (const target of targets) {
       if (seen.has(target.connectionId)) throw new BackendError('INVALID_REQUEST', 'Targets must use distinct connections.')
       seen.add(target.connectionId)
-      if (this.lost.has(target.connectionId)) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
-      if (expectedGeneration !== undefined && this.live.get(target.connectionId) !== expectedGeneration) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+      if (checkConnectionState) {
+        if (this.lost.has(target.connectionId)) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+        if (expectedGeneration !== undefined) {
+          const liveGeneration = this.live.get(target.connectionId)
+          if (liveGeneration === undefined) throw new BackendError('NOT_CONNECTED', 'Connect to each target server first.')
+          if (liveGeneration !== expectedGeneration) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+        }
+      }
       const provider = this.providers.get(target.connectionId)
       if (provider === undefined) { allKnown = false; continue }
       if (provider === 'sqlserver') {
@@ -415,16 +421,16 @@ export class BackendSupervisor {
         if (target.database !== undefined) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
       }
     }
+    if ((options.mode === 'transaction' || options.mode === 'fireAndForget') && hasSqlServer && hasBigQuery)
+      throw new BackendError('UNSUPPORTED_PROVIDER', sentences.multiTargetMixedProviders)
+    if (options.stopOnError !== undefined && (options.mode !== 'fireAndForget' || hasBigQuery))
+      throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+    if (options.sequential !== undefined && options.mode !== 'fireAndForget')
+      throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
     if (allKnown) {
-      if ((options.mode === 'transaction' || options.mode === 'fireAndForget') && hasSqlServer && hasBigQuery)
-        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.multiTargetMixedProviders)
       if (options.mode === 'crossEngineReadOnly' && (!hasSqlServer || !hasBigQuery))
         throw new BackendError('UNSUPPORTED_PROVIDER', sentences.crossEngineNeedsBoth)
       if (!hasBigQuery && (options.preflightDryRun !== undefined || options.prices !== undefined || options.residence !== undefined || options.windowCacheMiB !== undefined))
-        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
-      if (options.stopOnError !== undefined && (options.mode !== 'fireAndForget' || hasBigQuery))
-        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
-      if (options.sequential !== undefined && options.mode !== 'fireAndForget')
         throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
     }
     return { hasSqlServer, hasBigQuery }

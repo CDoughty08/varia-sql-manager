@@ -8,7 +8,7 @@ export type GoogleSqlTokenKind = 'whitespace' | 'comment' | 'string' | 'quotedId
  *  runs to its line's end, so a caret at its end is still inside it. */
 export interface GoogleSqlToken { readonly kind: GoogleSqlTokenKind; readonly start: number; readonly end: number; readonly open?: boolean }
 
-const wordStart = /[A-Za-z_]/, wordPart = /[A-Za-z0-9_]/, digit = /[0-9]/, space = /[ \t\r\n\f\v]/
+const wordStart = /[A-Za-z_]/, wordPart = /[A-Za-z0-9_]/, digit = /[0-9]/, space = /[ \t\r\n\f\v\u00A0\uFEFF]/
 const number = /0[xX][0-9A-Fa-f]+|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/y
 
 /** The length of a string prefix (`r`, `b`, `rb`, `br`, any case) when one starts a string literal at `at`, else 0. */
@@ -28,8 +28,8 @@ function quoted(text: string, at: number, quote: string, triple: boolean): { end
   while (index < text.length) {
     const char = text[index]
     // A backslash cannot carry a single-quoted string onto the next line (the tokenizer ends it there too).
-    if (char === '\\' && (triple || text[index + 1] !== '\n')) { index += 2; continue }
-    if (!triple && char === '\n') return { end: index, open: true }
+    if (char === '\\' && (triple || (text[index + 1] !== '\n' && text[index + 1] !== '\r'))) { index += 2; continue }
+    if (!triple && (char === '\n' || char === '\r')) return { end: index, open: true }
     if (char === quote && (!triple || (text[index + 1] === quote && text[index + 2] === quote))) return { end: index + (triple ? 3 : 1), open: false }
     index++
   }
@@ -48,8 +48,9 @@ export function scanGoogleSql(text: string): GoogleSqlToken[] {
       while (end < text.length && space.test(text[end])) end++
       push('whitespace', end)
     } else if (char === '#' || (char === '-' && next === '-')) {
-      const newline = text.indexOf('\n', at)
-      push('comment', newline < 0 ? text.length : newline, true)
+      let end = at + (char === '#' ? 1 : 2)
+      while (end < text.length && text[end] !== '\n' && text[end] !== '\r') end++
+      push('comment', end, true)
     } else if (char === '/' && next === '*') {
       const close = text.indexOf('*/', at + 2)
       push('comment', close < 0 ? text.length : close + 2, close < 0)
@@ -99,6 +100,7 @@ const callName = (chain: readonly string[]) => chain.length === 1 && reserved.ha
  */
 export function googleSqlCallContext(text: string, offset: number): GoogleSqlCallContext | undefined {
   const frames: Frame[] = []
+  let openParens = 0, openSquares = 0
   let chain: string[] | undefined, last: GoogleSqlToken | undefined, lastText = '', beforeLastText = ''
   for (const token of scanGoogleSql(text.slice(0, offset))) {
     if (token.kind === 'whitespace') continue
@@ -107,20 +109,28 @@ export function googleSqlCallContext(text: string, offset: number): GoogleSqlCal
       if (token.kind === 'comment') continue
     }
     const value = text.slice(token.start, token.end)
-    if (token.kind === 'word') chain = last?.kind === 'punctuation' && lastText === '.' && chain ? [...chain, value] : [value]
-    else if (token.kind === 'punctuation') {
+    if (token.kind === 'word') {
+      if (last?.kind === 'punctuation' && lastText === '.' && chain) chain.push(value)
+      else chain = [value]
+    } else if (token.kind === 'punctuation') {
       if (value === '.') { if (last?.kind !== 'word') chain = undefined }
       else {
         const name = value === '(' && last?.kind === 'word' && chain ? callName(chain) : undefined
-        if (value === '(') frames.push({ bracket: '(', open: token.start, commas: 0, ...name ? { name } : {} })
-        else if (value === '[') frames.push({ bracket: '[', open: token.start, commas: 0 })
+        if (value === '(') { frames.push({ bracket: '(', open: token.start, commas: 0, ...name ? { name } : {} }); openParens++ }
+        else if (value === '[') { frames.push({ bracket: '[', open: token.start, commas: 0 }); openSquares++ }
         // `t.range < 5` compares a field; only a bare ARRAY, STRUCT or RANGE opens a type's angle brackets.
         else if (value === '<' && last?.kind === 'word' && beforeLastText !== '.' && angleOwners.has(lastText.toUpperCase())) frames.push({ bracket: '<', open: token.start, commas: 0 })
         else if (value === '>' && frames.at(-1)?.bracket === '<') frames.pop()
         else if (value === ')' || value === ']') {
           const opening = value === ')' ? '(' : '['
-          const index = frames.findLastIndex(frame => frame.bracket === opening)
-          if (index >= 0) frames.length = index
+          if ((opening === '(' ? openParens : openSquares) > 0) {
+            while (frames.length > 0) {
+              const popped = frames.pop()!
+              if (popped.bracket === '(') openParens--
+              else if (popped.bracket === '[') openSquares--
+              if (popped.bracket === opening) break
+            }
+          }
         } else if (value === ',' && frames.length) frames[frames.length - 1].commas++
         chain = undefined
       }

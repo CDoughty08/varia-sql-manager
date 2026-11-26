@@ -56,7 +56,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         + "SET CONCAT_NULL_YIELDS_NULL ON; SET QUOTED_IDENTIFIER ON; SET NUMERIC_ROUNDABORT OFF; SET TEXTSIZE 2147483647;";
     // The summary must fit the 16 MiB response limit: descriptors get 8 MiB, messages (1,000,000 characters, with their
     // kinds) and the error text the rest, with room to spare.
-    private const long MaxSummaryDescriptorBytes = 8L * 1024 * 1024;
+    internal const long MaxSummaryDescriptorBytes = 8L * 1024 * 1024;
     private const int MaxActualPlans = 64;
     private const long MaxActualPlanBytes = 8L * 1024 * 1024;
 
@@ -72,11 +72,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal const int MaxEarlyStops = 256;
     internal static readonly TimeSpan EarlyStopLifetime = TimeSpan.FromMinutes(1);
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
+    internal int OpenSessionCount => sessions.Count;
     private readonly ConcurrentDictionary<string, string> activeSessions = new(StringComparer.Ordinal);
     internal bool TryBeginSessionRun(string sessionId, string queryId) => activeSessions.TryAdd(sessionId, queryId);
     internal void EndSessionRun(string sessionId, string queryId) => activeSessions.TryRemove(new KeyValuePair<string, string>(sessionId, queryId));
     internal IMultiQueryCoordinator? MultiQueryCoordinator { get; set; }
     internal IResultCombiner? ResultCombiner { get; set; }
+    internal void UnregisterQuery(string queryId, RunningQuery running) => queries.TryRemove(new(queryId, running));
+    internal bool IsQueryRegistered(string queryId) => queries.ContainsKey(queryId);
+    internal Task OpenConnectionAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, EntraPoolAuthentication> entraPools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
@@ -138,16 +142,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal Action? IndexCountersRead { get; set; }
     private object? health;
 
-    private sealed class RunningQuery(IReadOnlySet<string> connectionIds, string sessionId, CancellationTokenSource source)
+    internal sealed class RunningQuery(IReadOnlySet<string> connectionIds, string sessionId, CancellationTokenSource source)
     {
         public RunningQuery(string connectionId, string sessionId, CancellationTokenSource source)
             : this(new HashSet<string>(StringComparer.Ordinal) { connectionId }, sessionId, source) { }
         public IReadOnlySet<string> ConnectionIds { get; } = connectionIds;
         public string SessionId { get; } = sessionId;
         public CancellationTokenSource Source { get; } = source;
-        public bool UserCancelled { get; private set; }
+        private volatile bool userCancelled;
+        private volatile bool detached;
+        private volatile bool superseded;
+        private volatile bool abandoned;
+        public bool UserCancelled => userCancelled;
         public Plans.LivePlanTarget? PlanTarget;
-        public void Cancel() { UserCancelled = true; TryCancel(Source); }
+        public void Cancel() { userCancelled = true; TryCancel(Source); }
         /// <summary>A BigQuery query's job may be left running (query.cancel with detach); false for every other query.</summary>
         public bool Detachable { get; set; }
         /// <summary>A multi-server query with BigQuery targets abandons BigQuery HTTP calls on shutdown without exposing detach.</summary>
@@ -156,17 +164,17 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         /// its job running, or cancels it only for Cancel the job.</summary>
         public bool ReadsOutside { get; set; }
         /// <summary>Leave it running: the request ends with status detached and its job carries on in BigQuery.</summary>
-        public bool Detached { get; private set; }
+        public bool Detached => detached;
         /// <summary>A later query.attach took this attachment's job over: the request ends with status superseded.</summary>
-        public bool Superseded { get; private set; }
+        public bool Superseded => superseded;
         /// <summary>The backend is stopping: the job carries on in BigQuery for a later re-attach.</summary>
-        public bool Abandoned { get; private set; }
+        public bool Abandoned => abandoned;
         /// <summary>Whether the job must be left alone as the request ends.</summary>
-        public bool LeavesJob => Detached || Superseded || Abandoned;
-        public void Abandon() => Abandoned = true;
+        public bool LeavesJob => detached || superseded || abandoned;
+        public void Abandon() => abandoned = true;
         /// <summary>A query already stopped stays stopped: its job was cancelled, so there is nothing to leave running.</summary>
-        public void Detach() { if (UserCancelled) return; Detached = true; TryCancel(Source); }
-        public void Supersede() { Superseded = true; TryCancel(Source); }
+        public void Detach() { if (userCancelled) return; detached = true; TryCancel(Source); }
+        public void Supersede() { superseded = true; TryCancel(Source); }
         /// <summary>Completes when the request has ended (query.attach waits for an attachment it supersedes).</summary>
         public TaskCompletionSource Ended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -971,7 +979,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return new { Disconnected = removed };
     }
 
-    private SqlConnection CreateConnection(string id, string? database = null, bool stateful = false)
+    internal SqlConnection CreateConnection(string id, string? database = null, bool stateful = false)
     {
         if (!connections.TryGetValue(id, out var connectionString))
             throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
@@ -1138,7 +1146,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
     }
 
-    private ServerProfile Profile(string connectionId) =>
+    internal ServerProfile Profile(string connectionId) =>
         connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
 
     /// <summary>Object Explorer's own pool: the connection's settings under a distinct program name (as SSMS does), so its
@@ -1289,15 +1297,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             || args.TimeoutSeconds is < 0 or > 86400 || args.StartLine is < 1 or > 1_000_000 || !Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _))
             throw new RequestException("INVALID_PARAMS", "Query text, ID, session, timeout, or row limit is invalid.");
         if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection)
-        {
-            if (queries.ContainsKey(args.QueryId)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
-            if (!TryBeginSessionRun(args.SessionId, args.QueryId)) throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
-            try
-            {
-                return args.Preview is { } preview ? await PreviewBigQueryAsync(args, preview, bigQueryConnection, context) : await ExecuteBigQueryAsync(args, bigQueryConnection, context);
-            }
-            finally { EndSessionRun(args.SessionId, args.QueryId); }
-        }
+            return args.Preview is { } preview ? await PreviewBigQueryAsync(args, preview, bigQueryConnection, context) : await ExecuteBigQueryAsync(args, bigQueryConnection, context);
         if (args.Preview is not null) throw new RequestException("INVALID_PARAMS", "Preview Rows through tabledata.list applies only to BigQuery connections.");
         if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
@@ -1612,7 +1612,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                                             currentSet.CountRow();
                                             events.RowsChanged();
                                             if (args.MaxRows > 0 && storedRows >= args.MaxRows) currentSet.Skip(TruncationReason.RowLimit);
-                                            else if (collector.Stopped is not TruncationReason.None and var refused) { currentSet.Skip(refused); budget!.Stop(refused); }
+                                            else if (collector.Stopped is not TruncationReason.None and var refused) { currentSet.Skip(refused); budget!.Stop(refused, collector.RefusedBytes); }
                                             else if (currentSet.BeginRow() is { } row)
                                             {
                                                 bool cut;
@@ -2567,6 +2567,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (left.Kind != "rows" || right.Kind != "rows")
             throw new RequestException("INVALID_PARAMS", NotTablesSentence);
         if (!left.IsComplete || !right.IsComplete) throw new RequestException("RESULT_OPEN", "Compare the results after they finish loading.");
+        if (left.Budget.Executing) throw new RequestException("BUSY", "Compare the results after the query finishes executing.");
         // The one-row layout's data and previous-value columns and suffix fit a page's columns (D12): the renderer asks for
         // two rows itself past that, so there is no silent fallback here.
         if (entry && ResultDiffer.Pairs(left.Columns, right.Columns, left.Wires, right.Wires).Length > UnifiedDiff.MaxEntryPairs)
@@ -2788,9 +2789,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var set = Stored(store.Find(args.ResultId) ?? throw Unavailable(args.ResultId));
         // Only a query's own rows (a group's Table): a pivot's figures, a diff's or a live table's columns are not data to
         // summarise, and a pivot is never made of a pivot.
-        if (set.Kind is not "rows") throw new RequestException("INVALID_PARAMS", "Only a query's results can be pivoted.");
+        if (set.Kind is not ("rows" or "combined")) throw new RequestException("INVALID_PARAMS", "Only a query's results can be pivoted.");
         var spec = PivotSpecOf(args, set);
         if (!set.IsComplete) throw new RequestException("RESULT_OPEN", "Pivot the results after they finish loading.");
+        if (set.Budget.Executing) throw new RequestException("BUSY", "Pivot the results after the query finishes executing.");
         ThrowIfStopped(set.Budget);
         var view = args.ViewId is { } viewId ? FindView(args.ResultId, viewId) : null;
         const string tooLarge = "There is not enough result memory to pivot these rows. Close other results and try again.";
@@ -2851,9 +2853,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         finally { store.Return(set.Budget, working + figures.Held); }
     }
 
+    private static bool IsSafeMultiText(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > maxLength) return false;
+        foreach (var rune in value.EnumerateRunes())
+            if (Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator) return false;
+        return true;
+    }
+
     private async Task<QueryMultiResult> ExecuteMultiAsync(QueryMultiArgs args, RequestContext? context)
     {
-        if (!Guid.TryParse(args.QueryId, out _) || !Guid.TryParse(args.SessionId, out _)
+        if (string.IsNullOrEmpty(args.QueryId) || !BigQueryLimits.Uuid().IsMatch(args.QueryId)
+            || string.IsNullOrEmpty(args.SessionId) || !BigQueryLimits.Uuid().IsMatch(args.SessionId)
             || (args.JobKey is not null && !BigQueryLimits.Uuid().IsMatch(args.JobKey))
             || args.Mode is not ("transaction" or "fireAndForget" or "crossEngineReadOnly")
             || args.MaxRows is not >= 0 || args.MaxResultSets is < 1 or > 1000
@@ -2885,15 +2896,15 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         }
         var seenConnections = new HashSet<string>(StringComparer.Ordinal);
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
-        var hasSqlServer = false;
-        var hasBigQuery = false;
         foreach (var target in args.Targets)
         {
             if (target is null
-                || string.IsNullOrWhiteSpace(target.TargetKey) || target.TargetKey.Length > 64
-                || !Guid.TryParse(target.ConnectionId, out _)
-                || string.IsNullOrWhiteSpace(target.Label) || target.Label.Length > 128
-                || (target.Environment is not null && !ConnectionSettings.IsEnvironmentLabel(target.Environment))
+                || !IsSafeMultiText(target.TargetKey, 64)
+                || string.IsNullOrEmpty(target.ConnectionId) || !BigQueryLimits.Uuid().IsMatch(target.ConnectionId)
+                || !IsSafeMultiText(target.Label, 128)
+                || (target.Environment is not null && (!IsSafeMultiText(target.Environment, 32)
+                    || !string.Equals(target.Environment.Trim(), target.Environment, StringComparison.Ordinal)
+                    || !ConnectionSettings.IsEnvironmentLabel(target.Environment)))
                 || (target.Database is not null && (string.IsNullOrWhiteSpace(target.Database) || target.Database.Length > 128))
                 || (target.Dataset is not null && (target.Dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(target.Dataset)))
                 || target.MaximumBytesBilled is < 1 or > MaxSafeInteger
@@ -2901,6 +2912,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 throw new RequestException("INVALID_PARAMS", "One or more multi-server targets are invalid.");
             if (!seenConnections.Add(target.ConnectionId) || !seenKeys.Add(target.TargetKey))
                 throw new RequestException("INVALID_PARAMS", "Multi-server targets must have distinct connections and target keys.");
+        }
+        var hasSqlServer = false;
+        var hasBigQuery = false;
+        var hasMissing = false;
+        foreach (var target in args.Targets)
+        {
             if (bigQuery.Find(target.ConnectionId) is not null)
             {
                 hasBigQuery = true;
@@ -2914,17 +2931,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             }
             else
             {
-                throw new RequestException("NOT_CONNECTED", "Connect to each target server first.");
+                hasMissing = true;
             }
         }
         if (args.Mode is "transaction" or "fireAndForget" && hasSqlServer && hasBigQuery)
             throw new RequestException("UNSUPPORTED_PROVIDER", "Transaction and Fire and Forget require all targets to use the same database engine.");
+        if (args.StopOnError is not null && (args.Mode != "fireAndForget" || hasBigQuery))
+            throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error applies only to SQL Server Fire and Forget.");
+        if (hasMissing)
+            throw new RequestException("NOT_CONNECTED", "Connect to each target server first.");
         if (args.Mode == "crossEngineReadOnly" && (!hasSqlServer || !hasBigQuery))
             throw new RequestException("UNSUPPORTED_PROVIDER", "Cross-Engine SELECT requires at least one SQL Server target and at least one BigQuery target.");
         if (!hasBigQuery && (args.PreflightDryRun is not null || args.Prices is not null || args.Residence is not null || args.WindowCacheMiB is not null))
             throw new RequestException("UNSUPPORTED_PROVIDER", "BigQuery execution options apply only when a BigQuery target is included.");
-        if (args.StopOnError is not null && (args.Mode != "fireAndForget" || hasBigQuery))
-            throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error applies only to SQL Server Fire and Forget.");
         if (MultiQueryCoordinator is { } coordinator) return await coordinator.ExecuteAsync(args, context);
         throw new RequestException("BACKEND_ERROR", "Multi-server query execution is not available in this build.");
     }
@@ -2940,24 +2959,82 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var sources = new List<ResultSetBuffer>(args.ResultIds.Length);
         foreach (var id in args.ResultIds) sources.Add(Stored(store.Find(id) ?? throw Unavailable(id)));
         var first = sources[0];
-        if (first.Budget.Executing) throw new RequestException("BUSY", "Cannot combine results while the query is still executing.");
         foreach (var set in sources)
         {
             if (!ReferenceEquals(first.Budget, set.Budget))
                 throw new RequestException("INVALID_PARAMS", "Only result sets of the same query can be combined.");
             if (set.Kind != "rows")
                 throw new RequestException("INVALID_PARAMS", "Only table result sets can be combined.");
+            if (set.IsReleased)
+                throw Unavailable(set.ResultId);
             if (!set.IsComplete)
                 throw new RequestException("RESULT_OPEN", "Combine results after they finish loading.");
             if (set.TargetKey is null)
                 throw new RequestException("INVALID_PARAMS", "Only multi-server result sets can be combined.");
         }
+        if (first.Budget.Executing) throw new RequestException("BUSY", "Cannot combine results while the query is still executing.");
         ThrowIfStopped(first.Budget);
         if (ResultCombiner is { } combiner)
         {
-            var output = await combiner.CombineAsync(store, first.Budget, sources, first.Index, first.BatchNumber, first.Iteration, args.StatementName, true, Token(context));
-            var buffer = output.Buffer ?? throw new RequestException("BACKEND_ERROR", "The combined result could not be stored.");
-            return new ResultsCombineResult(buffer.Describe());
+            var token = Token(context);
+            var revisions = new long[sources.Count];
+            var tokens = new CancellationToken[sources.Count + 1];
+            tokens[0] = token;
+            for (var i = 0; i < sources.Count; i++)
+            {
+                revisions[i] = sources[i].Revision;
+                tokens[i + 1] = sources[i].Released;
+            }
+            void ThrowIfSourceGone()
+            {
+                for (var i = 0; i < sources.Count; i++)
+                {
+                    if (sources[i].IsReleased) throw Unavailable(sources[i].ResultId);
+                    if (sources[i].IsRemote || sources[i].Revision != revisions[i]) throw RemoteRefused();
+                }
+            }
+            CombineOutput output;
+            using (var work = CancellationTokenSource.CreateLinkedTokenSource(tokens))
+            {
+                try
+                {
+                    output = await combiner.CombineAsync(store, first.Budget, sources, first.Index, first.BatchNumber, first.Iteration, args.StatementName, true, work.Token);
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    ThrowIfSourceGone();
+                    throw;
+                }
+                catch (RequestException error) when (error.Code == "TOO_LARGE")
+                {
+                    ThrowIfSourceGone();
+                    ThrowIfStopped(first.Budget);
+                    throw;
+                }
+            }
+            var buffer = output.Buffer;
+            void Release()
+            {
+                if (buffer is not null && store.Release([buffer.ResultId]) > 0) ReportMemory();
+            }
+            try
+            {
+                ThrowIfSourceGone();
+                token.ThrowIfCancellationRequested();
+                if (buffer is null)
+                {
+                    ThrowIfStopped(first.Budget);
+                    throw new RequestException("BACKEND_ERROR", "The combined result could not be stored.");
+                }
+                // Main owns the combined result only once it receives the answer: one not sent goes at once.
+                if (context is not null) context.Unsent = context.Dropped = Release;
+                return new ResultsCombineResult(buffer.Describe());
+            }
+            catch
+            {
+                Release();
+                throw;
+            }
         }
         throw new RequestException("BACKEND_ERROR", "Result combination is not available in this build.");
     }
@@ -3131,7 +3208,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>"Changed database context to 'x'." (5701) and "Changed language setting to x." (5703): SQL Server sends
     /// them for USE, a session's login, and the toolbar's database change, and SSMS leaves them out of Messages.</summary>
-    private static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
+    internal static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
     /// <summary>PRINT arrives as number 0 and RAISERROR as 50000 or a user message's number (above 50000): what the script itself
     /// printed, which opens the Messages strip. Every other informational number is SQL Server's own (8153's NULL warning,
     /// STATISTICS output, DBCC, sp_rename's caution).</summary>
@@ -3257,7 +3334,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Sends an attention for a command when its token is cancelled. Cancel throws when the connection has broken, and
     /// a callback's exception would escape on the deadline's timer thread, ending the backend, or out of the loops that
     /// cancel every query of a connection.</summary>
-    private static void Attention(object? command)
+    internal static void Attention(object? command)
     {
         try { ((SqlCommand)command!).Cancel(); }
         catch (Exception error) when (error is InvalidOperationException or SqlException or ObjectDisposedException) { }
@@ -3287,7 +3364,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     }
 
     /// <summary>Adds a running query unless its id is taken; a Stop that came first cancels it at once.</summary>
-    private bool Register(string queryId, RunningQuery running)
+    internal bool Register(string queryId, RunningQuery running)
     {
         bool early;
         lock (cancelGate)

@@ -36,10 +36,11 @@ const database = name
 // A BigQuery dataset id (src/shared/connections.ts); SQL Server refuses one (methods.ts, queryOptionsAllow).
 const dataset = bigQueryDatasetSchema
 const lineNumber = z.number().int().min(1).max(1_000_000)
+const hiddenMultiControl = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 const multiQueryTargetSchema = z.object({
-  targetKey: z.string().min(1).max(64).refine(value => value.trim().length > 0),
+  targetKey: z.string().min(1).max(64).refine(value => value.trim().length > 0 && !hiddenMultiControl.test(value)),
   connectionId,
-  label: z.string().min(1).max(128).refine(value => value.trim().length > 0),
+  label: z.string().min(1).max(128).refine(value => value.trim().length > 0 && !hiddenMultiControl.test(value)),
   environment: environmentSchema.optional(),
   database: database.optional(),
   dataset: dataset.optional(),

@@ -460,7 +460,7 @@ internal sealed class ResultSetBuffer
     private bool Reserve(long bytes, bool mayWait = false)
     {
         var step = Math.Max(bytes, ResultStore.ReserveStep);
-        if (store.TryReserve(Budget, step, false, out var reason) || (step > bytes && store.TryReserve(Budget, step = bytes, false, out reason)))
+        if (store.TryReserve(Budget, step, false, out var reason, out var refusedBytes) || (step > bytes && store.TryReserve(Budget, step = bytes, false, out reason, out refusedBytes)))
         {
             slack += step;
             charged += step;
@@ -477,7 +477,7 @@ internal sealed class ResultSetBuffer
         // The first refusal ends the set, as it ends a query's: a later, smaller row must not be stored past the gap,
         // because stored rows are a prefix of the rows read. A derived set ends only itself.
         if (Derived || SwitchesOnRefusal) refused = reason;
-        else Budget.Stop(reason);
+        else Budget.Stop(reason, refusedBytes);
         return false;
     }
 

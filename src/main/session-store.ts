@@ -7,7 +7,7 @@ import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
 import { bigQueryProjectSchema } from '../shared/connections'
-import { providerIds } from '../shared/providers'
+import { providerIds, providerOf, type ProviderId } from '../shared/providers'
 import { jobKeySchema } from '../shared/bigquery/jobs'
 import { isKeptAgentKind, keptAgentKinds, keptAgentLimits, type KeptAgentKind } from '../shared/agent/kept'
 import { workspaceSealSchema, type WorkspaceSeal } from './connection-workspace-seal'
@@ -34,14 +34,15 @@ const multiTargetSchema = z.object({
   .refine(target => target.provider === 'bigquery' || target.database.length <= sessionLimits.databaseChars, 'A database name has at most 128 characters.')
 const multiFields = {
   multiMode: z.enum(['same', 'cross']).optional(),
-  multiTargets: z.array(multiTargetSchema).min(1).max(sessionLimits.multiTargets).optional(),
+  multiTargets: z.array(multiTargetSchema).max(sessionLimits.multiTargets).optional(),
   crossView: z.enum(['split', 'file']).optional()
 }
-const multiShaped = (document: { kind: string; targetId?: string; attachWanted?: boolean; jobKey?: string; multiMode?: 'same' | 'cross'; multiTargets?: readonly { targetId?: string }[]; crossView?: 'split' | 'file' }) => {
+const multiShaped = (document: { kind: string; targetId?: string; attachWanted?: boolean; jobKey?: string; multiMode?: 'same' | 'cross'; multiTargets?: readonly { targetId?: string; provider: ProviderId }[]; crossView?: 'split' | 'file' }) => {
   if (document.multiMode === undefined) return document.multiTargets === undefined && document.crossView === undefined
   if (document.multiTargets === undefined || document.kind !== 'sql') return false
   if (document.crossView !== undefined && document.multiMode !== 'cross') return false
   if (document.targetId !== undefined || document.attachWanted !== undefined || document.jobKey !== undefined) return false
+  if (document.multiMode === 'same' && new Set(document.multiTargets.map(target => target.provider)).size > 1) return false
   const definedIds = document.multiTargets.map(target => target.targetId).filter((id): id is string => id !== undefined)
   return new Set(definedIds).size === definedIds.length
 }
@@ -54,9 +55,10 @@ const databaseFits = (document: { provider?: string; database?: string }) => doc
 const associated = (document: { kind: string; targetId?: string; attachWanted?: boolean; database?: string }) => document.targetId
   ? (document.kind === 'sql' || isKeptAgentKind(document.kind)) && document.attachWanted !== undefined && document.database !== undefined
   : document.attachWanted === undefined
-const targetsPresent = (session: { documents: readonly { targetId?: string; multiTargets?: readonly { targetId?: string }[] }[]; workspace?: { targets: readonly { id: string }[] } }) => {
-  const ids = new Set(session.workspace?.targets.map(target => target.id))
-  return session.documents.every(document => (!document.targetId || ids.has(document.targetId)) && (document.multiTargets ?? []).every(target => !target.targetId || ids.has(target.targetId)))
+const targetsPresent = (session: { documents: readonly { targetId?: string; multiTargets?: readonly { targetId?: string; provider: ProviderId }[] }[]; workspace?: { targets: readonly { id: string; options: { readonly provider?: ProviderId } }[] } }) => {
+  const providers = new Map((session.workspace?.targets ?? []).map(target => [target.id, providerOf(target.options)] as const))
+  return session.documents.every(document => (!document.targetId || providers.has(document.targetId))
+    && (document.multiTargets ?? []).every(target => !target.targetId || providers.get(target.targetId) === target.provider))
 }
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({

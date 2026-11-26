@@ -11,11 +11,111 @@ internal enum MultiCommitOutcome
     InDoubt
 }
 
+internal sealed record MultiCommitResult(
+    MultiCommitOutcome Outcome,
+    MultiTargetError? Error = null);
+
+internal sealed record MultiTargetPreflightOutcome(
+    string TargetKey,
+    bool Passed,
+    MultiTargetError? Error = null,
+    long? EstimatedBytes = null);
+
 internal sealed record ReadOnlySqlViolation(int Line, int Column, int EndLine, int EndColumn, string Keyword, string Message);
+
+/// <summary>Thread-safe shared result-set count and summary-descriptor byte quota across all targets and auto-combined sets of one multi-server run.</summary>
+internal interface IMultiQueryQuota
+{
+    int MaxResultSets { get; }
+    long MaxSummaryDescriptorBytes { get; }
+    int KeptResultSets { get; }
+    int DiscardedResultSets { get; }
+    /// <summary>Claims the next global result-set index when both result-set count and summary descriptor byte caps allow it.</summary>
+    bool TryAllocate(long descriptorBytes, out int index, out bool descriptorOversize);
+    /// <summary>Refunds a previously claimed slot, index, and descriptor byte charge when storing the result set fails or is skipped.</summary>
+    void Release(int index, long descriptorBytes);
+    void RecordDiscarded(int count = 1);
+}
+
+internal sealed class MultiQueryQuota(int maxResultSets, long maxSummaryDescriptorBytes) : IMultiQueryQuota
+{
+    private readonly object gate = new();
+    private readonly PriorityQueue<int, int> recycled = new();
+    private readonly HashSet<int> recycledSet = [];
+    private int nextIndex;
+    private int kept;
+    private int discarded;
+    private long descriptorBytes;
+
+    public int MaxResultSets { get; } = maxResultSets;
+    public long MaxSummaryDescriptorBytes { get; } = maxSummaryDescriptorBytes;
+    public int KeptResultSets { get { lock (gate) return kept; } }
+    public int DiscardedResultSets { get { lock (gate) return discarded; } }
+
+    public bool TryAllocate(long bytes, out int index, out bool descriptorOversize)
+    {
+        if (bytes < 0) bytes = 0;
+        lock (gate)
+        {
+            if (kept >= MaxResultSets)
+            {
+                index = -1;
+                descriptorOversize = false;
+                return false;
+            }
+            if (bytes > MaxSummaryDescriptorBytes - descriptorBytes)
+            {
+                index = -1;
+                descriptorOversize = true;
+                return false;
+            }
+            if (recycled.TryDequeue(out var reused, out _))
+            {
+                recycledSet.Remove(reused);
+                index = reused;
+            }
+            else if (nextIndex < MaxResultSets)
+            {
+                index = nextIndex++;
+            }
+            else
+            {
+                index = -1;
+                descriptorOversize = false;
+                return false;
+            }
+            kept++;
+            descriptorBytes += bytes;
+            descriptorOversize = false;
+            return true;
+        }
+    }
+
+    public void Release(int index, long bytes)
+    {
+        lock (gate)
+        {
+            if (index >= 0 && index < nextIndex && recycledSet.Add(index))
+            {
+                recycled.Enqueue(index, index);
+                if (kept > 0) kept--;
+                if (bytes > 0) descriptorBytes = Math.Max(0, descriptorBytes - bytes);
+            }
+        }
+    }
+
+    public void RecordDiscarded(int count = 1)
+    {
+        if (count <= 0) return;
+        lock (gate) discarded += count;
+    }
+}
 
 internal sealed record MultiTargetContext(
     string QueryId,
     string SessionId,
+    string Mode,
+    bool PreflightDryRun,
     MultiQueryTargetArgs Target,
     string Provider,
     string Sql,
@@ -30,6 +130,8 @@ internal sealed record MultiTargetContext(
     string? Residence,
     int? WindowCacheMiB,
     string? JobKey,
+    IMultiQueryQuota Quota,
+    Func<bool> IsAbandoned,
     QueryBudget Budget,
     QueryMessages Messages,
     QueryEventSink Events);
@@ -37,7 +139,8 @@ internal sealed record MultiTargetContext(
 internal sealed record MultiTargetPhase1Result(
     MultiTargetOutcome Outcome,
     IReadOnlyList<ResultSetBuffer> ResultSets,
-    bool NeedsCommit);
+    bool NeedsCommit,
+    int DiscardedResultSets = 0);
 
 internal sealed record MultiTargetPhase1Outcome(
     MultiTargetPhase1Result Result,
@@ -54,14 +157,14 @@ internal interface IMultiQueryCoordinator
 
 internal interface IMultiTargetPhase2Handle : IAsyncDisposable
 {
-    Task<MultiCommitOutcome> CommitAsync(CancellationToken token);
+    Task<MultiCommitResult> CommitAsync(CancellationToken token);
     Task RollbackAsync(CancellationToken token);
 }
 
 internal interface IMultiTargetRunner
 {
     string Provider { get; }
-    Task PreflightAsync(IReadOnlyList<MultiTargetContext> targets, CancellationToken token);
+    Task<IReadOnlyList<MultiTargetPreflightOutcome>> PreflightAsync(IReadOnlyList<MultiTargetContext> targets, CancellationToken token);
     Task<MultiTargetPhase1Outcome> ExecutePhase1Async(MultiTargetContext target, CancellationToken token);
 }
 

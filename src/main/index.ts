@@ -638,34 +638,36 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
   }
 }
 
-function multiJobRecorder(queryId: string, jobKey: string, targets: RpcMethods['query.executeMulti']['params']['targets']) {
-  const seen = new Set<string>()
+function multiJobRecorder(_queryId: string, jobKey: string, targets: RpcMethods['query.executeMulti']['params']['targets']) {
+  const seenScoped = new Set<string>()
   const targetOfJob = new Map<string, string>()
   const targetConnections = new Map(targets.map(target => [target.targetKey, target.connectionId] as const))
-  const entry = { jobKey, seen }
-  requestJobKeys.set(queryId, entry)
   const generation = rendererGeneration
+  const scopedKey = (project: string, jobId: string) => `${project}:${jobId}`
   return {
     event(event: QueryEvent): void {
       if (event.type !== 'query.job') return
       const targetConnectionId = event.targetKey !== undefined ? targetConnections.get(event.targetKey) : undefined
-      if (event.targetKey !== undefined) targetOfJob.set(event.jobId, event.targetKey)
+      const scoped = scopedKey(event.project, event.jobId)
+      if (event.targetKey !== undefined) targetOfJob.set(scoped, event.targetKey)
       const resolvedProfileId = event.targetKey !== undefined ? profileOf(targetConnectionId ?? '') : undefined
-      seen.add(event.jobId); jobRecords.record(jobKey, event, resolvedProfileId)
+      seenScoped.add(scoped); jobRecords.record(jobKey, event, resolvedProfileId)
       if (targetConnectionId !== undefined) noteJobConnection(jobConnections, event.jobId, targetConnectionId, () => jobRecords.list().map(record => record.jobId), jobLimits.records)
     },
     summary(result: QueryMultiResult): void {
       if (generation !== rendererGeneration) return
       const targetStatus = new Map(result.targets.map(target => [target.targetKey, target.status] as const))
       jobRecords.drop(jobKey, record => {
-        if (!seen.has(record.jobId)) return false
-        const key = targetOfJob.get(record.jobId)
+        const scoped = scopedKey(record.project, record.jobId)
+        if (!seenScoped.has(scoped)) return false
+        const key = targetOfJob.get(scoped)
         const status = key === undefined ? undefined : targetStatus.get(key)
         if (status === undefined) return record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'
-        return record.state === 'done' || status !== 'commitInDoubt'
+        if (status === 'failed' || status === 'commitInDoubt') return record.state === 'done'
+        return record.state === 'done' || status === 'cancelled' || status === 'timedOut' || status === 'rolledBack'
       })
     },
-    end(): void { if (requestJobKeys.get(queryId) === entry) requestJobKeys.delete(queryId) }
+    end(): void {}
   }
 }
 

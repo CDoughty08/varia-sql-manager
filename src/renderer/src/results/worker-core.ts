@@ -216,9 +216,8 @@ export class ResultsWorkerCore {
   /** A long request's progress goes to the page request it serves, while that request still waits for its answer. */
   private progress(rid: number, phase: OperationPhase, percent: number | undefined): void {
     const sort = this.sorts.get(rid)
-    const combine = this.combines.get(rid)
-    // A sort, pivot, diff or combine the page gave up reports nothing more.
-    const id = sort ? (sort.cancelled ? undefined : sort.id) : combine ? (combine.cancelled ? undefined : combine.id) : this.diffs.get(rid)?.cancelled ? undefined : this.profiles.get(rid) ?? this.distincts.get(rid) ?? this.identities.get(rid)
+    // A sort, pivot or diff the page gave up reports nothing more.
+    const id = sort ? (sort.cancelled ? undefined : sort.id) : this.diffs.get(rid)?.cancelled ? undefined : this.profiles.get(rid) ?? this.distincts.get(rid) ?? this.identities.get(rid)
     if (id !== undefined) this.post({ type: 'progress', id, phase, ...percent === undefined ? {} : { percent } })
   }
 

@@ -33,13 +33,14 @@ const multiTargetRecoverySchema = z.object({
   .refine(target => target.provider === 'bigquery' || target.database.length <= recoveryLimits.databaseChars, 'A database name has at most 128 characters.')
 const multiFields = {
   multiMode: z.enum(['same', 'cross']).optional(),
-  multiTargets: z.array(multiTargetRecoverySchema).min(1).max(recoveryLimits.multiTargets).optional(),
+  multiTargets: z.array(multiTargetRecoverySchema).max(recoveryLimits.multiTargets).optional(),
   crossView: z.enum(['split', 'file']).optional()
 }
-const multiShaped = (value: { kind: string; jobKey?: string; targetId?: string; multiMode?: 'same' | 'cross'; multiTargets?: readonly unknown[]; crossView?: 'split' | 'file' }) => {
+const multiShaped = (value: { kind: string; jobKey?: string; targetId?: string; multiMode?: 'same' | 'cross'; multiTargets?: readonly { provider: string }[]; crossView?: 'split' | 'file' }) => {
   if (value.multiMode === undefined) return value.multiTargets === undefined && value.crossView === undefined
   if (value.multiTargets === undefined || value.kind !== 'sql') return false
   if (value.crossView !== undefined && value.multiMode !== 'cross') return false
+  if (value.multiMode === 'same' && new Set(value.multiTargets.map(target => target.provider)).size > 1) return false
   return value.jobKey === undefined && value.targetId === undefined
 }
 // Lower-case, as crypto.randomUUID() makes them: a record has one file name, so the caps, the list and the purge all see it.

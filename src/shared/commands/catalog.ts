@@ -533,12 +533,12 @@ export const commandCatalog = {
   },
   'explorer.selectAllSqlServers': {
     title: 'Select All SQL Servers', category: 'Object Explorer', keywords: ['select', 'all', 'sql', 'servers', 'multi'],
-    precondition: 'hasConnection', unavailableHint: noServer, providers: ['sqlserver'],
+    precondition: 'hasConnection', unavailableHint: noServer, providers: ['sqlserver'], providerContext: 'own',
     menus: [{ menu: 'explorer.context', group: '7_select', order: 1, mnemonic: 's', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected && explorerProvider == 'sqlserver' && explorerSameEngineMultiple" }]
   },
   'explorer.selectAllBigQueryProjects': {
     title: 'Select All BigQuery Projects', category: 'Object Explorer', keywords: ['select', 'all', 'bigquery', 'projects', 'multi'],
-    precondition: 'hasConnection', unavailableHint: noServer, providers: ['bigquery'],
+    precondition: 'hasConnection', unavailableHint: noServer, providers: ['bigquery'], providerContext: 'own',
     menus: [{ menu: 'explorer.context', group: '7_select', order: 2, mnemonic: 's', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected && explorerProvider == 'bigquery' && explorerSameEngineMultiple" }]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,

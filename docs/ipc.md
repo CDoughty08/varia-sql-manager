@@ -2312,9 +2312,10 @@ close; a backend loss ends its streams but keeps the port.
 { t: 'distinctClose'; rid; generation; resultId: u32; snapshotIds: u32[1..limits.distinct.maxClose] }
 { t: 'live'; rid; generation; params: live.subscribe params }
 { t: 'liveUpdate'; rid; generation; params: live.update params }
+{ t: 'combine'; rid; generation; resultIds: distinct u32[2..32]; statementName?: string[1..128] }
 ```
 
-Every request naming a result (all but credit, cancel, close, live and liveUpdate; diff checks both ids; a `close` of unowned
+Every request naming a result (all but credit, cancel, close, live and liveUpdate; diff checks both ids and combine checks every id in `resultIds`; a `close` of unowned
 or earlier-generation ids answers `{ closed: 0, usedBytes: 0 }`) must name the current generation and a result the renderer owns (from a
 query summary or event, at most 100,000 per generation), else `RESULT_UNAVAILABLE`; at most 64 requests may be
 outstanding. A `live` request needs the current, ready generation (`RESULT_UNAVAILABLE`) and a subscription id not

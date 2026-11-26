@@ -41,6 +41,8 @@ internal sealed class ForXmlCollector : IDisposable
     public bool Truncated { get; private set; }
     /// <summary>Set when the budget refused memory for more text: nothing is stored, for this reason.</summary>
     public TruncationReason Stopped { get; private set; }
+    /// <summary>The budget figure in force at the refusal that stopped this collector, if any.</summary>
+    public long RefusedBytes { get; private set; }
     public int Length => length;
     /// <summary>Characters of the whole value, kept or not: the stored cell's full length.</summary>
     public long TotalChars { get; private set; }
@@ -122,9 +124,10 @@ internal sealed class ForXmlCollector : IDisposable
         if (needed > 0)
         {
             var step = Math.Max(needed, ResultStore.ReserveStep);
-            if (!store.TryReserve(budget, step, false, out var reason) && (step == needed || !store.TryReserve(budget, step = needed, false, out reason)))
+            if (!store.TryReserve(budget, step, false, out var reason, out var refusedBytes) && (step == needed || !store.TryReserve(budget, step = needed, false, out reason, out refusedBytes)))
             {
                 Stopped = reason;
+                RefusedBytes = refusedBytes;
                 return false;
             }
             reserved += step;

@@ -1129,6 +1129,8 @@ export class ResultClient implements Disposable {
     const rolledBackPreview = values.rolledBackPreview ?? previous.rolledBackPreview
     if (rolledBackPreview !== undefined) next.rolledBackPreview = rolledBackPreview
     this.publish(state, next)
+    if (state.base === undefined && rolledBackPreview !== undefined && rolledBackPreview !== current.rolledBackPreview)
+      for (const view of [...this.views.values()]) if (view.base === state.id) this.publish(view, { ...view.snapshot, rolledBackPreview })
   }
 
   private publish(state: ResultState, snapshot: ResultSnapshot): void {
