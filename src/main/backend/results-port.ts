@@ -264,12 +264,12 @@ export class ResultsPortHost {
 
   /** Retain the newest samples for a port opened after the backend's initial reports or after a reload. A summary's budget
    *  has no detail: the last event's stays with it, so a page opened after it still has the Nerd metrics. Every index event
-   *  carries its own. */
-  private rememberMemory(feature: MemoryFeature, { generation, seq, usedBytes, globalBytes, detail, index }: MemoryReport) {
+   *  carries its own, and the saved index's figures (`store`) once main has configured it. */
+  private rememberMemory(feature: MemoryFeature, { generation, seq, usedBytes, globalBytes, detail, index, store }: MemoryReport) {
     const latest = this.latestMemory.get(feature)
     if (generation !== this.generation || this.status === 'restarting' || seq <= (latest?.seq ?? 0)) return
     const kept = detail ?? (latest?.generation === generation ? latest.detail : undefined)
-    const message = { t: 'memory', feature, generation, seq, usedBytes, globalBytes, ...kept ? { detail: kept } : {}, ...index ? { index } : {} } as const
+    const message = { t: 'memory', feature, generation, seq, usedBytes, globalBytes, ...kept ? { detail: kept } : {}, ...index ? { index } : {}, ...store ? { store } : {} } as const
     this.latestMemory.set(feature, message)
     return message
   }

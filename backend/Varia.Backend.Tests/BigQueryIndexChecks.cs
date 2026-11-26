@@ -1319,15 +1319,18 @@ internal static partial class BigQueryIndexChecks
         }
     }
 
-    sealed class UnusedHost : IObjectSearchHost
+    internal sealed class UnusedHost : IObjectSearchHost
     {
         public Varia.Backend.Explorer.ServerProfile Profile(string connectionId) => throw new NotSupportedException();
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId, string? database) => throw new NotSupportedException();
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => throw new NotSupportedException();
     }
 
-    sealed class FakeBudgetSource(IReadOnlyList<string> discoveredProjects, int tablesPerDiscovered, int columnsPerTable) : IBigQueryIndexSource
+    internal sealed class FakeBudgetSource(IReadOnlyList<string> discoveredProjects, int tablesPerDiscovered, int columnsPerTable) : IBigQueryIndexSource
     {
+        /// <summary>The connection's verified principal, whose saved index its datasets are; none by default, so nothing is saved.</summary>
+        public string? PrincipalId { get; set; }
+        public string? Principal(string connectionId) => PrincipalId;
         private int discoveredDatasetCalls, discoveredObjectCalls, discoveredDetailCalls;
         public int DiscoveredDatasetCalls => Volatile.Read(ref discoveredDatasetCalls);
         public int DiscoveredObjectCalls => Volatile.Read(ref discoveredObjectCalls);

@@ -519,6 +519,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .options-filter-bar + .options-heading { padding-top: 6px; }
 .options-crumb { display: block; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 400; color: var(--varia-descriptionForeground); }
 .options-note { margin: 0 20px 10px; line-height: 1.5; color: var(--varia-descriptionForeground); }
+.options-note[data-tone="warning"] { display: flex; align-items: baseline; gap: var(--varia-space-2); color: var(--varia-foreground); }
+.options-note[data-tone="warning"] > [data-icon] { flex: none; color: var(--varia-warningForeground); }
 .options-form { padding: 0 20px 18px; }
 .options-search-results { display: flex; flex-direction: column; gap: var(--varia-space-4); }
 .options-search-group { display: flex; flex-direction: column; gap: var(--varia-space-1); }
@@ -1855,6 +1857,10 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .memory-ring[data-packed]::after { content: ''; grid-area: 1 / 1; background: conic-gradient(currentColor var(--memory-read), transparent 0); opacity: .6; }
 .memory-ring[data-packed]::before { grid-area: 1 / 1; }
 .memory-packed { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.memory-store { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-0) var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.memory-store-label, .memory-store-usage { white-space: nowrap; }
+.memory-store-label { color: var(--varia-foreground); }
+.memory-store[data-store="clearText"] .memory-store-state, .memory-store[data-store="unavailable"] .memory-store-state { color: var(--varia-warningForeground); }
 .memory-packed-chip { padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); font-weight: 600; white-space: nowrap; }
 /* Nerd metrics: collapsed by default, its open state a setting. Parts take the chart palette, so a part keeps its colour
    in the bars, the legend and the rows. */

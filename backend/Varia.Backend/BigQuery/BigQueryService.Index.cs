@@ -19,6 +19,8 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
 
     string IBigQueryIndexSource.BillingProject(string connectionId) => Connection(connectionId).Options.Project;
 
+    string? IBigQueryIndexSource.Principal(string connectionId) => Find(connectionId)?.Principal.PrincipalId;
+
     bool IBigQueryIndexSource.Throttled(string connectionId) => Find(connectionId) is { } connection && Limiter.IsThrottled(connection.Principal.PrincipalId);
 
     async Task<BigQueryProjectDiscovery> IBigQueryIndexSource.AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token)

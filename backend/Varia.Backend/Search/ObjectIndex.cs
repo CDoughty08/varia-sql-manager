@@ -83,6 +83,18 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public bool FailedPart { get; set; }
     /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
     public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
+    /// <summary>What the store keeps in the read's file beside the unit (<see cref="IndexStore"/>), set by its builder before
+    /// the read is held: Sync in the header, which a listing of saved units reads without the body (what the builder will
+    /// compare with the source to tell how stale the file is), and Extra in the body. Both are the builder's own bytes.</summary>
+    public ReadOnlyMemory<byte> Sync { get; set; }
+    public ReadOnlyMemory<byte> Extra { get; set; }
+    /// <summary>Whether holding the read queues its save. False (set before it is held) for a read its builder knows no file
+    /// may stand for, and for one the store loaded, whose file it already is.</summary>
+    public bool SaveWhenHeld { get; set; } = true;
+    /// <summary>A BigQuery dataset's: the store's stale count as its read began (<see cref="IndexStore.StaleSeq"/>). DDL that
+    /// marks the dataset stale after it, from any connection of the principal, keeps the read from being saved. MaxValue: not
+    /// checked.</summary>
+    public long StaleSeen { get; set; } = long.MaxValue;
 
     /// <summary>What its lookup arrays (<see cref="TableLookup"/>) hold of the budget: 0 until the first lookup builds them.</summary>
     public long LookupBytes { get { lock (gate) return lookupBytes; } }
@@ -299,6 +311,10 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private DatabaseIndex? server;
     private DatabaseIndex? agent;
     public bool Disposed { get; private set; }
+    /// <summary>Told of every read this index holds and of every unit it drops as gone (<see cref="IndexStoreSink"/>), under the
+    /// index's gate so the store hears of a unit's reads in the order they were held; null while nothing is saved for the
+    /// connection (no store, or no server and account established for it).</summary>
+    public IndexStoreSink? Sink { get; set; }
 
     public IReadOnlyCollection<DatabaseIndex> Databases { get { lock (gate) return [.. databases.Values]; } }
     public ResourceSet? Resource { get { lock (gate) return resource; } }
@@ -331,6 +347,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
             Settle(agent, value);
             agent = value;
+            Sink?.Held(IndexUnitKind.Agent, value);
         }
     }
 
@@ -342,6 +359,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
             Settle(server, value);
             server = value;
+            Sink?.Held(IndexUnitKind.Server, value);
         }
     }
 
@@ -360,6 +378,8 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
 
     private void Drop(DatabaseIndex value, long bytes)
     {
+        // A save still queued for it would keep alive memory the budget no longer counts.
+        Sink?.Released(value);
         value.Credit();
         budget.Release(bytes);
         value.Dropped(budget);
@@ -375,8 +395,25 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             // A disconnected index keeps nothing, and the same set put again gives back its second reference.
             if (Disposed || ReferenceEquals(resource, value)) drop = value;
             else { drop = resource; resource = value; }
+            // The set held again counts as used: the store saves it once and marks its file after that.
+            if (!Disposed && value is not null) Sink?.HeldResource(value);
         }
         if (drop is not null) resources?.Release(drop);
+    }
+
+    /// <summary>Tells the sink again of everything held (the store has just started saving: <see cref="IndexStore.Opened"/>),
+    /// but for the reads <paramref name="current"/> refuses (a BigQuery dataset DDL has marked stale since it was read).</summary>
+    public void Announce(Func<DatabaseIndex, bool> current)
+    {
+        lock (gate)
+        {
+            if (Disposed || Sink is not { } sink) return;
+            foreach (var value in databases.Values)
+                if (current(value)) sink.Held(value);
+            if (server is not null) sink.Held(IndexUnitKind.Server, server);
+            if (agent is not null) sink.Held(IndexUnitKind.Agent, agent);
+            if (resource is not null) sink.HeldResource(resource);
+        }
     }
 
     /// <summary>Releases a freshly built read that was never placed in the index (e.g. superseded build), returning only the net bytes it took.</summary>
@@ -390,15 +427,22 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             databases.Remove(value.Key, out var old);
             Settle(old, value);
             databases[value.Key] = value;
+            Sink?.Held(value);
         }
     }
 
-    /// <summary>Drops the reads <paramref name="keep"/> refuses (a BigQuery listing's datasets and projects that are gone).</summary>
-    public void KeepWhere(Func<DatabaseIndex, bool> keep)
+    /// <summary>Drops the reads <paramref name="keep"/> refuses. <paramref name="gone"/> when the source no longer has them (a
+    /// listing's datasets that are gone), so what was saved of them goes too; not when they only left what this connection
+    /// indexes (a project no longer starred), which another connection of the principal may still use.</summary>
+    public void KeepWhere(Func<DatabaseIndex, bool> keep, bool gone)
     {
         lock (gate)
             foreach (var (key, value) in databases.Where(pair => !keep(pair.Value)).ToList())
-                if (databases.Remove(key, out var old)) Drop(old, old.Bytes);
+                if (databases.Remove(key, out var old))
+                {
+                    Drop(old, old.Bytes);
+                    if (gone) Sink?.Gone(old);
+                }
     }
 
     /// <summary>The read held under <paramref name="key"/> (<see cref="DatabaseIndex.Key"/>), or null.</summary>
@@ -407,12 +451,16 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate) return databases.GetValueOrDefault(key);
     }
 
-    /// <summary>Drops the databases a new listing no longer names.</summary>
+    /// <summary>Drops the databases a new listing no longer names, and what was saved of them.</summary>
     public void Keep(IReadOnlySet<string> names)
     {
         lock (gate)
             foreach (var name in databases.Keys.Where(name => !names.Contains(name)).ToList())
-                if (databases.Remove(name, out var old)) Drop(old, old.Bytes);
+                if (databases.Remove(name, out var old))
+                {
+                    Drop(old, old.Bytes);
+                    Sink?.Gone(old);
+                }
     }
 
     public void Dispose()

@@ -53,8 +53,57 @@ internal static class SearchLiveChecks
             (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
                 new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, caseSensitive, wholeWord, regex, scope, Database: inDatabase), json), json);
 
+        // The saved index (IndexStore), on a temporary folder under a key of the checks' own: the first build saves what it reads.
+        var storeRoot = Directory.CreateTempSubdirectory("varia-index-store-live-").FullName;
+        var storeFolder = Path.Combine(storeRoot, IndexStoreLimits.FolderName);
+        var storeKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        service.Search.Store.Configure(new("encrypted", storeFolder, IndexStoreLimits.DefaultDiskMiB, Convert.ToBase64String(storeKey)));
+        await service.Search.Store.Idle();
+
         var events = new List<JsonElement>();
         var built = await service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, value => events.Add(JsonSerializer.SerializeToElement(value, json)));
+        try
+        {
+            // A real build's units, each saved under the scope the connection itself established, and each loading back equal.
+            await service.Search.Store.Idle();
+            var profile = ((IObjectSearchHost)service).Profile(connectionId);
+            var scope = service.Search.ScopeOf(connectionId, profile);
+            var index = service.Search.IndexOf(connectionId)!;
+            var savedReads = index.Held.Where(read => !read.FailedPart).ToList();
+            var listed = scope is null ? [] : service.Search.Store.List(scope);
+            var files = Directory.GetFiles(storeFolder);
+            check(scope is not null && profile.ServerName is { Length: > 0 } && profile.PrincipalId is { Length: > 0 },
+                "the connect probe established the server's own name and the account, which is whose saved index this is");
+            check(listed.Count == savedReads.Count && savedReads.Count >= 2 && files.Length == savedReads.Count + (index.Resource is null ? 0 : 1) && service.Search.Store.Counts.Failed == 0
+                && files.All(file => IndexStoreNames.IsUnit(Path.GetFileName(file))) && service.Search.Store.Status is { Mode: "encrypted" } storeStatus && storeStatus.Files == files.Length,
+                "a real build saves every unit it holds, and the shared system objects once (" + files.Length + " files, " + files.Sum(file => new FileInfo(file).Length) + " bytes for " + savedReads.Count + " reads)");
+            var again = new IndexFileChecks.World(new ObjectIndexLimits { MemoryBytes = 4L << 30, NamesReserveBytes = 1L << 30 });
+            var equal = true;
+            foreach (var read in savedReads)
+            {
+                var kind = ReferenceEquals(read, index.Server) ? IndexUnitKind.Server : ReferenceEquals(read, index.Agent) ? IndexUnitKind.Agent : IndexUnitKind.Database;
+                var unit = listed.SingleOrDefault(item => item.Kind == kind && item.Database == read.Database);
+                if (unit is null) { equal = false; continue; }
+                var loaded = service.Search.Store.Load(unit, again.Connection, again.Limits, again.Pool);
+                equal &= loaded.Value is { } value && IndexFileChecks.Dump(value) == IndexFileChecks.Dump(read) && unit.Header.Children == !read.ChildrenLeftOut;
+                if (loaded.Value is { } put) again.Connection.Abandon(put);
+            }
+            var resourceEqual = index.Resource is not { } set || service.Search.Store.LoadResource(set.Key, long.MaxValue).Value is { } savedSet && IndexFileChecks.Dump(savedSet.Read.Table) == IndexFileChecks.Dump(set.Table);
+            check(equal && resourceEqual, "every unit the real build saved loads back equal to what the index holds");
+            byte[][] distinctive = [.. new[] { hostile, marker, "usp_Find", "srch", database, profile.ServerName ?? "varia-no-server-name", profile.Login ?? "varia-no-login-name", "spt_fallback_db", "sp_who" }
+                .SelectMany(text => new[] { System.Text.Encoding.UTF8.GetBytes(text), System.Text.Encoding.Unicode.GetBytes(text) })];
+            check(files.All(file => File.ReadAllBytes(file) is var content && distinctive.All(text => content.AsSpan().IndexOf(text) < 0)),
+                "no saved file holds an object's, the database's, the server's or the login's name, or a definition's text, in UTF-8 or UTF-16");
+            check((await service.Search.Store.ClearAsync()) is { Kept: 0 } cleared && cleared.Files == files.Length && Directory.GetFiles(storeFolder).Length == 0, "a clear deletes every file the build saved");
+        }
+        finally
+        {
+            // The rest of the suite builds without a store: nothing more is written.
+            service.Search.Store.Configure(new("disabled", storeFolder, IndexStoreLimits.DefaultDiskMiB));
+            await service.Search.Store.Idle();
+            try { Directory.Delete(storeRoot, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
         check(built.Status is { State: "ready", Definitions: true } && built.Status.Indexed >= 1 && built.Status.Objects >= 4,
             "a build reads every database it can (" + built.Status.Indexed + " of " + built.Status.Databases + ", " + built.Status.Objects + " objects, " + built.ElapsedMs + " ms)");
         check(events.Count >= 2 && events[0].GetProperty("type").GetString() == "explorer.index.progress" && events[^1].GetProperty("done").GetInt32() == built.Status.Databases,

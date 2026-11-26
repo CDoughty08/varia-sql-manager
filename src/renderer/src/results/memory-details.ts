@@ -1,5 +1,5 @@
-import type { IndexMemoryDetail, ResultMemoryDetail, ResultMemoryEntry } from '../../../shared/contracts'
-import { formatCount } from './status'
+import type { IndexMemoryDetail, IndexStoreMode, IndexStoreStatus, ResultMemoryDetail, ResultMemoryEntry } from '../../../shared/contracts'
+import { formatBytes, formatCount } from './status'
 import { numberedName } from './ResultsService'
 
 const GiB = 1073741824, MiB = 1048576
@@ -12,6 +12,7 @@ export function panelBytes(scale: number): BytesFormat {
   return value => value <= 0 ? '0 MB' : value < MiB ? '<1 MB' : `${formatCount(Math.round(value / MiB))} MB`
 }
 const dash = '—'
+const plural = (count: number, one: string, many: string) => `${formatCount(count)} ${count === 1 ? one : many}`
 /** A whole percentage, rounded; never 100 while some part is missing, nor 0 while there is some. */
 const percent = (part: number, whole: number) => {
   const value = whole > 0 ? 100 * part / whole : 0
@@ -156,6 +157,29 @@ export function resultTargets(
   return targets
 }
 
+/** The saved index's line in the Memory panel's Search Indexer part: what is on disk against the limit while the store
+ *  saves, and how it stands (encrypted, unencrypted by the user's choice, or why nothing is saved). */
+export interface IndexStoreLine {
+  readonly mode: IndexStoreMode
+  readonly icon: 'lock' | 'unlock' | 'circle-slash' | 'warning'
+  /** "1,204 files · 312 MB / 2,048 MB", only while the store saves: each figure in its own unit, as the status bar shows
+   *  bytes, since what is saved is usually a small part of the limit. */
+  readonly usage?: string
+  readonly state: string
+}
+const storeStates: Readonly<Record<IndexStoreMode, Pick<IndexStoreLine, 'icon' | 'state'>>> = {
+  encrypted: { icon: 'lock', state: 'Encrypted' },
+  clearText: { icon: 'unlock', state: 'Not encrypted (your choice in Options)' },
+  disabled: { icon: 'circle-slash', state: 'Off in Options' },
+  noKeyStore: { icon: 'circle-slash', state: 'Off: this system has no key store' },
+  unavailable: { icon: 'warning', state: 'Unavailable: its folder cannot be used' }
+}
+export function indexStoreLine(store: IndexStoreStatus): IndexStoreLine {
+  const saves = store.mode === 'encrypted' || store.mode === 'clearText'
+  const bytes = (value: number) => value <= 0 ? '0 MB' : formatBytes(value)
+  return { mode: store.mode, ...storeStates[store.mode], ...saves ? { usage: `${plural(store.files, 'file', 'files')} · ${bytes(store.bytes)} / ${bytes(store.limitBytes)}` } : {} }
+}
+
 /** The Search Indexer part of Nerd metrics, from an explorer.index.memory event's detail. */
 export interface IndexNerdModel {
   /** "2 connections · 48,210 objects". */
@@ -167,7 +191,6 @@ export interface IndexNerdModel {
   readonly bytes: BytesFormat
 }
 
-const plural = (count: number, one: string, many: string) => `${formatCount(count)} ${count === 1 ? one : many}`
 
 /** What the index holds: how much of its definitions is packed and what that saved, where its budget goes, and how much the
  *  shared pool shares. As with results, nothing is invented: a figure with nothing behind it yet shows a dash. */

@@ -1,4 +1,4 @@
-import type { IndexMemoryDetail, MemoryOrder, ResultMemoryDetail } from '../../../shared/contracts'
+import type { IndexMemoryDetail, IndexStoreStatus, MemoryOrder, ResultMemoryDetail } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport } from '../../../shared/ipc/port-messages'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -9,8 +9,10 @@ import { formatBytes } from './status'
 
 /** A budget's figures. Results also has what the store holds (`detail`, from the backend's events; a summary's budget keeps
  *  the last one) and the backend generation it came from, whose result ids it names; the index what it holds (`index`, from
- *  its latest event). */
-export type MemoryUsage = Pick<MemoryReport, 'usedBytes' | 'globalBytes'> & { readonly detail?: ResultMemoryDetail; readonly generation?: number; readonly index?: IndexMemoryDetail }
+ *  its latest event) and the saved index on disk (`store`, from the same event; absent until main has configured it). */
+export type MemoryUsage = Pick<MemoryReport, 'usedBytes' | 'globalBytes'> & { readonly detail?: ResultMemoryDetail; readonly generation?: number; readonly index?: IndexMemoryDetail; readonly store?: IndexStoreStatus }
+const sameStore = (a: IndexStoreStatus | undefined, b: IndexStoreStatus | undefined) =>
+  a === b || !!a && !!b && a.mode === b.mode && a.files === b.files && a.bytes === b.bytes && a.limitBytes === b.limitBytes
 const unavailable: MemoryUsage = { usedBytes: 0, globalBytes: 0 }
 /** Samples of the share of rows compression gave back the Nerd metrics sparkline keeps, one per event with a new detail:
  *  ten minutes, its window, at the busiest pace events come (about one a second while results stream). */
@@ -45,10 +47,11 @@ export class MemoryUsageService extends SnapshotStore<MemoryUsage> implements Di
     const current = this.getSnapshot()
     const detail = seq === 0 ? undefined : memory.detail ?? (current.generation === generation ? current.detail : undefined)
     const next: MemoryUsage = seq === 0 ? unavailable
-      : { usedBytes: Math.max(0, memory.usedBytes), globalBytes: memory.globalBytes > 0 ? memory.globalBytes : current.globalBytes, ...detail ? { detail, generation } : {}, ...memory.index ? { index: memory.index } : {} }
+      : { usedBytes: Math.max(0, memory.usedBytes), globalBytes: memory.globalBytes > 0 ? memory.globalBytes : current.globalBytes, ...detail ? { detail, generation } : {}, ...memory.index ? { index: memory.index } : {},
+        ...memory.store ? { store: sameStore(memory.store, current.store) ? current.store : memory.store } : {} }
     if (seq === 0 && this.ring.length > 0) this.ring = new MetricRing(savedHistorySamples, 1)
     if (memory.detail && detail === memory.detail) this.ring.push(this.now(), [savedPercent(memory.detail)])
-    if (next.usedBytes !== current.usedBytes || next.globalBytes !== current.globalBytes || next.detail !== current.detail || next.index !== current.index) this.publish(next)
+    if (next.usedBytes !== current.usedBytes || next.globalBytes !== current.globalBytes || next.detail !== current.detail || next.index !== current.index || next.store !== current.store) this.publish(next)
   }
   dispose(): void { this.subscriptions.forEach(subscription => subscription.dispose()); this.clearListeners() }
 }

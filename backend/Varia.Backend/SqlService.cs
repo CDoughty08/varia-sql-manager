@@ -40,7 +40,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "ssis.describe", "ssis.execute", "ssis.catalogSetup", "ssis.execution", "ssis.packageRuns",
         "bigquery.account", "bigquery.projects", "bigquery.connectionProjects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "agent.profile", "agent.historyMessage", "agent.errorLogs", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel",
-        "results.diffSeek", "language.parse", "language.lookup"
+        "results.diffSeek", "language.parse", "language.lookup", "explorer.indexStore.configure", "explorer.indexStore.clear"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -118,6 +118,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     private long reportedIndexBytes = -1;
     /// <summary>The index's limit as last sent: a build that changes it (explorer.index's memoryLimitMiB) sends a report.</summary>
     private long reportedIndexLimit = -1;
+    private long reportedStoreChanges = -1;
     private long indexMemorySeq;
     private long reportedIndexFinished = -1;
     /// <summary>The index detail last sent: a walk whose event was refused is still unsent, so the next check sends it.</summary>
@@ -464,7 +465,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "bigquery.jobs.cancel" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "bigquery.jobs.cancel" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear" or "explorer.indexStore.configure" or "explorer.indexStore.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -476,7 +477,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
     /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
-    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects", "bigquery.cancelJobs"];
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects", "bigquery.cancelJobs", "explorer.indexStore.configure"];
     public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
@@ -613,6 +614,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
         "actions.execute" => await ExecuteActionWithLanguagePausedAsync(Read<ActionArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
+        "explorer.indexStore.configure" => ConfigureIndexStore(Read<IndexStoreConfigureArgs>(parameters, json)),
+        "explorer.indexStore.clear" => await ClearIndexStoreAsync(Read<IndexStoreClearArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
         "ssis.catalogSetup" => await ssis.CatalogSetupAsync(Read<SsisCatalogSetupArgs>(parameters, json), Token(context)),
@@ -875,6 +878,31 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw;
         }
     }
+
+    /// <summary>explorer.indexStore.configure, which only main sends, as each backend becomes ready and when its settings
+    /// change: where the saved Search Objects index lives, under which key, and within what limit (<see cref="IndexStore.Configure"/>).
+    /// The Memory panel's figure follows by an explorer.index.memory event.</summary>
+    private IndexStoreStatus ConfigureIndexStore(IndexStoreConfigureArgs args)
+    {
+        var status = search.Store.Configure(args);
+        ReportIndexMemory(wait: false);
+        return status;
+    }
+
+    /// <summary>explorer.indexStore.clear (Clear Saved Search Indexes): every file of the saved index is deleted; the indexes
+    /// held in memory stay, and their next builds save again.</summary>
+    private async Task<object> ClearIndexStoreAsync(IndexStoreClearArgs _)
+    {
+        // Not configured yet (main waits for its settings, or for a key store that has not answered): the backend does not know
+        // the folder, and "nothing to clear" would not be true.
+        if (!search.Store.Configured) throw new RequestException("NOT_READY", "The saved search indexes cannot be cleared yet: Varia is still waiting for the system key store or its settings. Nothing was deleted.");
+        var cleared = await search.Store.ClearAsync();
+        ReportIndexMemory(wait: false);
+        return cleared;
+    }
+
+    string? IObjectSearchHost.HomeDatabase(string connectionId) =>
+        connections.TryGetValue(connectionId, out var connectionString) ? DatabaseOf(connectionId, connectionString) : null;
 
     /// <summary>Help › Clear Entra ID Token Cache.</summary>
     private object ClearEntra(EntraCacheArgs _)
@@ -3044,11 +3072,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             IndexCountersRead?.Invoke();
             var used = search.MemoryUsed;
             var limit = search.Budget.Limit;
+            // The saved index's figures ride the same event: files written or swept since the last one send it again.
+            var storeChanges = search.Store.Changes;
             var now = IndexDetailClock();
             // A read held changes no byte (its records and texts were charged while it ran), so a last walk that still shows
             // reading is walked again once the interval has passed, though nothing else moved.
             var due = walkedIndexDetail is { Detail.ReadingBytes: > 0 } last && now - last.WalkedAt >= IndexDetailWalkMs;
-            var sent = used == reportedIndexBytes && finished == reportedIndexFinished && limit == reportedIndexLimit;
+            var sent = used == reportedIndexBytes && finished == reportedIndexFinished && limit == reportedIndexLimit && storeChanges == reportedStoreChanges;
             if (publish is null || sent && !due && ReferenceEquals(walkedIndexDetail?.Detail, reportedIndexDetail)) return;
             // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
             // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
@@ -3075,7 +3105,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 walkedIndexDetail = (used, builds, forgets, reportedIndexDetail!, walkedAt, walkedUsed);
                 return;
             }
-            if (!publish(new IndexMemoryEvent(used, limit, indexMemorySeq + 1, detail))) return;
+            if (!publish(new IndexMemoryEvent(used, limit, indexMemorySeq + 1, detail, search.Store.Status))) return;
+            reportedStoreChanges = storeChanges;
             indexMemorySeq++;
             reportedIndexBytes = used;
             reportedIndexLimit = limit;

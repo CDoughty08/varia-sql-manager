@@ -393,7 +393,7 @@ describe('menu state', () => {
       // list menu, header and history (Back, Forward); View has All Operations.
       'ssis.activeOperations', 'ssis.allExecutions', 'ssis.allValidations', 'ssis.stopOperation', 'ssis.refreshOperations', 'ssis.pauseOperations', 'ssis.copyOperations', 'ssis.copyOperationsWithHeaders', 'ssis.openExecution', 'ssis.goBack', 'ssis.goForward', 'ssis.packageExecutions', 'ssis.lastRun',
       // Search Objects' header and status bar verbs; Search Objects… itself is in View.
-      'explorer.rebuildIndex', 'explorer.stopIndexing',
+      'explorer.rebuildIndex', 'explorer.stopIndexing', 'explorer.clearSavedIndexes',
       // Object Explorer's Group by Schema: its toolbar button and the palette.
       'explorer.groupBySchema',
       // Reordering servers: the server's menu, Alt+Up/Down in the tree, dragging and the palette.

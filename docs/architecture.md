@@ -53,6 +53,21 @@ only when a summary line stops being true.
     key file only by the reference main's picker returned and sees only its file name. BigQuery connects go through
     `ConnectionOpenService` like SQL Server's, with the same target pins. `VARIA_TEST_BIGQUERY_ENDPOINT`
     (a loopback emulator) reaches only unpackaged backends and uses anonymous credentials.
+  - The saved Search Objects index (docs/object-search.md, Saved index). Its key is 32 random bytes main makes on first
+    use and keeps only as `safeStorage` ciphertext in `search-index-key.json` (atomic, 0600; a file that does not parse,
+    or a ciphertext the key store no longer opens, is quarantined and a new key made: `src/main/search-index-key.ts`).
+    Only main holds the key. Each backend gets it in memory, in the sensitive main-only `explorer.indexStore.configure`
+    (`IndexStoreConfig`, `src/main/backend/index-store.ts`), with the store's folder (`SearchIndex` directly under the
+    user-data directory; the backend refuses a folder of any other name) and its disk limit. No renderer sees the key,
+    its ciphertext or the folder: the page learns only the store's mode and figures (`explorer.index.memory`'s `store`),
+    whether a key store exists, and a clear's three counts, each through a strict schema. No usable key store (judged as
+    for Remember password) means no key and nothing saved, unless `objectExplorer.search.saveUnencrypted` opts in to
+    clear text; a second value kept in clear (`names`) then only keys the hashes that name files. On disk there is one
+    file per unit (`IndexFile`, AES-256-GCM), named by HMACs of whose unit it is under a key derived from the data key,
+    never by a server's, database's, project's, dataset's, login's or principal's name. The store's sweep only deletes,
+    and only regular files directly in its own folder under its own names (`IndexStoreNames.IsUnit`, `IsTemporary`): a
+    link or reparse point is neither followed nor deleted, the folder itself must be a real directory, and a file that
+    cannot be deleted is skipped as a value. Nothing logs a name, a path or the key.
   - New Login's password lives only in `ObjectDialogService`'s secret slot (`setSecret`, never the snapshot), travels
     only in the sensitive `actions.execute`, reaches SQL only as one parameter in a constant batch, and is scrubbed from
     replies; Script writes `<password>`.
@@ -71,7 +86,7 @@ only when a summary line stops being true.
   most one backend generation and never re-sent. UI result caches are 256 windows and 16 Mi units; the worker cache is
   64 MiB.
 - **Failures are values.** IPC returns `{ ok: false, error }`, and the UI stays responsive.
-- **Preferences files** (`settings.json`, `appearance.json`, `mssql-connections.json`, `workspace-layouts.json`, `inspector-vitals.json`, `mssql-saved-passwords.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
+- **Preferences files** (`settings.json`, `appearance.json`, `mssql-connections.json`, `workspace-layouts.json`, `inspector-vitals.json`, `mssql-saved-passwords.json` (0600), `search-index-key.json` (0600), `shortcuts.json`, `window-state.json`) are written atomically (`src/main/json-file.ts`); unreadable files are
   quarantined, never overwritten. `src/main/shortcut-store.ts` re-reads before every write, refuses a stale save with
   `STALE` by revision, salvages damaged entries and keeps unknown records verbatim.
 
@@ -618,8 +633,9 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `.depth`, each cut marked. A node already above on its branch is a cycle leaf; another database's or a linked server's
   object is a leaf; neither is read. Closing the dialog or changing its choice cancels running reads (`explorerCancel`)
   and drops their answers.
-- **Search Objects' index** (`backend/Varia.Backend/Search/`, docs/object-search.md) lives only in backend memory, one per
-  connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
+- **Search Objects' index** (`backend/Varia.Backend/Search/`, docs/object-search.md) is held in backend memory, one per
+  connection, dropped on disconnect; each read it holds is also saved to disk by the `IndexStore` (the end of this
+  bullet), which no build reads back yet. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
   `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database with its editor metadata, `ObjectDetails`, and the lookup arrays the
   editor's in-process `IndexLookup` builds on first use, names, definitions, by
   `IndexMemory`'s estimates) is under one budget for all connections (`IndexBudget`; `objectExplorer.search.memoryLimitMiB`, 512 MiB by default,
@@ -642,7 +658,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   cost prompts, and the rows must fill the same entries pass 2 would (`BigQueryIndexChecks.Bulk`).
   `IndexFile` (`IndexFileContainer` for the header, encryption and chunks, `IndexFileUnit` for the content; their doc
   comments are the layout) saves one unit of the index (a `DatabaseIndex`, or the shared resource set) to a versioned file
-  and loads it back; no build calls it yet, so nothing is written. Its rules: a file is untrusted, so every length is
+  and loads it back; only the `IndexStore` calls it. Its rules: a file is untrusted, so every length is
   checked against `IndexFileLimits` and charged to the budget before anything is allocated by it, and every reference a
   search or a lookup follows is checked before a table exists (in clear text nothing else vouches for the content); a load
   takes texts from the `StringPool` and charges as the reader that made the unit charges (a new field must be charged the
@@ -650,6 +666,27 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
   change bumps `IndexFileContainer.Version` and commits that version's files (`Fixtures/IndexFile`, written by the test
   program's `--write-index-goldens`), which `IndexFileChecks` loads on every run.
+  The `IndexStore` (`IndexStore.cs`, `IndexStoreNames.cs`; the security boundary's bullet has the key, the folder and what
+  the sweep may delete) is that folder of files, configured only by main's `explorer.indexStore.configure`. Its rules:
+  a connection's index tells its `Sink` of every read it holds and of every unit its source no longer has, under the
+  index's own gate, so the store hears of a unit's reads in order: a read reaches the index only through
+  `ConnectionIndex.Put`, `PutServer`, `PutAgent` or `PutResource`, and a drop says whether the source lost the unit
+  (`Keep`, `KeepWhere(gone: true)`, which delete its file) or it only left what this connection indexes. Whose files a
+  connection's are is its `IndexStoreScope`, made only from what the connection established about itself (the server's
+  own name and the account's SID or Entra ids, with the connection's database where the catalog is one database's view;
+  BigQuery's verified principal alone); a connection without one saves nothing. A read that failed part way, a read its
+  builder marks (`SaveWhenHeld`: a BigQuery dataset DDL marked stale while it was being read) and a read the store itself
+  loaded are not saved; a read without children or without definitions is saved as such in its header; DDL that marks a
+  BigQuery dataset stale deletes its file and, by the principal's own marks in the store (`IndexStore.MarkStale`,
+  `DatabaseIndex.StaleSeen`), keeps every connection of the principal from saving a read begun before it. One thread
+  writes, one file at a time, below normal priority, one queue entry per unit, so a save never delays a build, a search or
+  a disconnect (a shared set already saved is marked used by that thread too); a read its index drops is withdrawn from the
+  queue (`IndexStore.Released`), so the queue never holds memory the index budget has given back; a stop cancels the write, which
+  `IndexFile.Replace` makes all or nothing. When a configuration starts the store saving (the first one, a new key, saving
+  turned on again), `IndexStore.Opened` has `ObjectSearchService.SaveHeld` announce what every index holds, so a read held
+  before main configured the store is not lost until its next build. What a builder will later compare with its source goes in
+  `DatabaseIndex.Sync` (BigQuery's `BigQuerySync`; SQL Server's is empty until a fingerprint is added), which a listing
+  of saved units reads from the headers alone.
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`

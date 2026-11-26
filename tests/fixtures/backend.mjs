@@ -562,11 +562,21 @@ function memoryDetail(used) {
 const indexedConnections = new Set()
 let lastIndexBytes = -1
 let indexMemorySeq = 0
-function reportIndexMemory() {
+/** The saved index as main configured it (explorer.indexStore.configure): a store that saves holds 12 files of 3 MiB for
+ *  each indexed connection, until explorer.indexStore.clear. */
+let indexStore
+let indexStoreSaved = new Set()
+function indexStoreStatus() {
+  if (!indexStore) return undefined
+  const saves = indexStore.mode === 'encrypted' || indexStore.mode === 'clearText'
+  return { mode: indexStore.mode, files: saves ? 12 * indexStoreSaved.size : 0, bytes: saves ? 3 * 1024 * 1024 * indexStoreSaved.size : 0, limitBytes: indexStore.limitMiB * 1024 * 1024 }
+}
+function reportIndexMemory(force = false) {
   const usedBytes = indexedConnections.size * 16 * 1024 * 1024
-  if (lastIndexBytes === usedBytes) return
+  if (lastIndexBytes === usedBytes && !force) return
   lastIndexBytes = usedBytes
-  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq, detail: indexMemoryDetail(indexedConnections.size) })
+  const store = indexStoreStatus()
+  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq, detail: indexMemoryDetail(indexedConnections.size), ...store ? { store } : {} })
 }
 /** What the index holds (IndexMemoryReport), per connection: 16 MiB of 2 records, 5 names and 9 definitions, its 1,200 packed
  *  definitions 42 MiB of text in 6 MiB of frames. */
@@ -2603,6 +2613,19 @@ async function workbench(id, method, params, credit) {
       return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
+    case 'explorer.indexStore.configure': {
+      indexStore = { mode: params.mode, limitMiB: params.limitMiB }
+      const status = indexStoreStatus()
+      reportIndexMemory(true)
+      return respond(id, status)
+    }
+    case 'explorer.indexStore.clear': {
+      const before = indexStoreStatus() ?? { files: 0, bytes: 0 }
+      // What is indexed now is saved again only by its next build.
+      indexStoreSaved = new Set()
+      reportIndexMemory(true)
+      return respond(id, { files: before.files, bytes: before.bytes, kept: 0 })
+    }
     case 'results.setMemoryLimit': return respond(id, { applied: false, globalBytes: 256 * 1024 * 1024, queryBytes: 128 * 1024 * 1024 })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
     case 'live.update': return liveUpdate(id, params)
@@ -2916,6 +2939,7 @@ GO
       event({ type: 'explorer.index.progress', done: 0, total: 1, objects: 0 })
       event({ type: 'explorer.index.progress', done: 1, total: 1, objects: searchObjects.length })
       indexedConnections.add(params.connectionId)
+      indexStoreSaved.add(params.connectionId)
       reportIndexMemory()
       return respond(id, { status: indexStatus(params.definitions !== false), elapsedMs: 2 })
     }

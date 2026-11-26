@@ -163,6 +163,12 @@ if (args is ["--seal-packing-checks"])
     Console.WriteLine("Passed " + passed + " seal packing checks.");
     return;
 }
+if (args is ["--index-store-checks"])
+{
+    await IndexStoreChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " index store checks.");
+    return;
+}
 if (args is ["--index-file-checks"])
 {
     await IndexFileChecks.RunAsync(Check);
@@ -554,6 +560,7 @@ if (liveGroup is null)
         ("Peek", () => PeekChecks.RunAsync(Check)),
         ("Search", Sync(() => SearchChecks.Run(Check))),
         ("IndexFile", () => IndexFileChecks.RunAsync(Check)),
+        ("IndexStore", () => IndexStoreChecks.RunAsync(Check)),
         ("Scripting", () => ScriptingChecks.RunAsync(Check)),
         ("Action", () => ActionChecks.RunAsync(Check)),
         ("ServerFiles", () => ServerFilesChecks.RunAsync(Check)),

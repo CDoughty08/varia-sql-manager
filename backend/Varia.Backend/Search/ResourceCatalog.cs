@@ -17,6 +17,8 @@ internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int module
     public int Cut { get; } = cut;
     /// <summary>The part of <see cref="Cut"/> left out whole because the index's memory ran out.</summary>
     public int LeftOut { get; } = leftOut;
+    /// <summary>When the set was shared (UTC), which is when its read finished: what its saved file states.</summary>
+    public DateTime ReadAt { get; } = DateTime.UtcNow;
 }
 
 /// <summary>What a shared read answers: the objects, and for a set loaded from a file (<see cref="IndexFile.LoadResource"/>) how

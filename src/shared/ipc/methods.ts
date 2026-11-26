@@ -209,6 +209,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, providers: ['bigquery'] },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
+  // The saved index's folder, key and limit, from main as each backend becomes ready: it checks them and queues a sweep.
+  'explorer.indexStore.configure': { ...control, ...both, sensitive: true },
+  // Clear Saved Search Indexes: deletes the store's files, a few thousand at most, off the frame loop.
+  'explorer.indexStore.clear': { ...control, ...both, deadlineMs: 60_000 },
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
   // Both engines: each source names its own (src/shared/live/catalog.ts), which main (optionsAllow) and the backend check.
   'live.subscribe': { kind: 'stream', lane: 'live', deadlineMs: 0, creditedEvents: true, ...both },
@@ -218,7 +222,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
 }
 
 /** Methods only main sends, on its own behalf: no renderer schema (requestSchemas) or port schema accepts them. */
-export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize', 'bigquery.endIdleSessions', 'bigquery.cancelJobs'] as const satisfies readonly BackendMethod[]
+export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize', 'bigquery.endIdleSessions', 'bigquery.cancelJobs',
+  'explorer.indexStore.configure', 'explorer.indexStore.clear'] as const satisfies readonly BackendMethod[]
 
 /** Every method main may call; a backend whose HELLO lacks one of them is from a different build. `debug.*` methods
  *  exist only in a backend started with test hooks, so HELLO need not list them. */

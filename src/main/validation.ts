@@ -13,7 +13,7 @@ import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
-import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
+import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectSearchLimits, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
@@ -199,6 +199,19 @@ export const localSaveRequestSchema = z.object({
 /** results.setMemoryLimit, which only main sends (Tools › Options' result memory limit): whole GiB, 0 automatic, at most
  *  1024 as the setting allows. The backend clamps it as at launch (ResultStore.GlobalBytesFor) and checks the same bounds. */
 export const resultsMemoryLimitSchema = z.object({ limitGiB: z.number().int().min(0).max(1024) }).strict()
+/** explorer.indexStore.configure, which only main sends (the saved Search Objects index): the folder is main's own, at most
+ *  2,048 characters; the key is 32 bytes in base64, present exactly when the mode saves; the limit is within the setting's
+ *  bounds. The backend checks all of it again (IndexStore.Configure). */
+export const indexStoreConfigureSchema = z.object({
+  mode: z.enum(['encrypted', 'clearText', 'disabled', 'noKeyStore']),
+  folder: z.string().min(1).max(objectSearchLimits.store.folderChars).refine(value => !value.includes('\0'), 'The folder holds no NUL.'),
+  limitMiB: z.number().int().min(objectSearchLimits.store.diskMiB.min).max(objectSearchLimits.store.diskMiB.max),
+  key: z.base64().length(objectSearchLimits.store.keyChars).refine(value => Buffer.from(value, 'base64').length === 32, 'The key is 32 bytes.').optional()
+}).strict().refine(value => (value.key !== undefined) === (value.mode === 'encrypted' || value.mode === 'clearText'), 'A key comes exactly with a mode that saves.')
+/** Whether the system has a key store, as main tells the page (varia:index-store-storage). */
+export const secretStorageStateSchema = z.object({ available: z.boolean(), reason: z.enum(['no-keyring', 'unknown-backend', 'unavailable']).optional() }).strict()
+/** explorer.indexStore.clear's answer as main hands it to the page: three counts, nothing else. */
+export const indexStoreClearedSchema = z.object({ files: z.number().int().min(0), bytes: z.number().int().min(0), kept: z.number().int().min(0) }).strict()
 /** varia:results-save. The name only suggests the file; the path comes from main's save dialog. `suggestedSuffix`, the end
  *  of the name that tells results apart ('-Result2-Pivot'), is kept whole when main shortens the name. */
 export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName), suggestedSuffix: z.string().min(1).max(limits.jobs.suggestedName).optional(), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)

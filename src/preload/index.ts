@@ -63,6 +63,8 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:connection-bindings-changed', listener) }
   },
   clearEntraTokenCache: () => ipcRenderer.invoke('varia:entra-cache-clear'),
+  clearSavedSearchIndexes: () => ipcRenderer.invoke('varia:index-store-clear'),
+  searchIndexStorage: () => ipcRenderer.invoke('varia:index-store-storage'),
   discoverServers: scope => request('connections.discover', { scope }),
   previewConnection: options => request('connections.preview', options),
   loadConnectionLibrary: () => ipcRenderer.invoke('varia:connections-load'),
