@@ -1,11 +1,13 @@
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Numerics;
 using Reader = Varia.Backend.Search.IndexFileContainer.PayloadReader;
 using Writer = Varia.Backend.Search.IndexFileContainer.PayloadWriter;
 
 namespace Varia.Backend.Search;
 
 /// <summary>How a table's entries name one of its texts. A load charges a text by it as the read that made the table did (a
-/// name must fit, a definition may be left out), and a load without children keeps only the first and third.</summary>
+/// name must fit, a definition may be left out), and a load without children keeps only the texts with the first or the third.</summary>
 [Flags]
 internal enum TextUse : byte
 {
@@ -44,40 +46,46 @@ internal sealed record LoadedUnit(string Name, string? Dataset, ObjectTable Tabl
 
 /// <summary>
 /// An index file's content, inside the container's blocks (<see cref="IndexFileContainer"/>): the unit's own fields, the shapes
-/// its entries name (by value: <see cref="ObjectShapes"/> ids are a process's own), its texts, its entries column by column, its
-/// out-of-range dates, its <see cref="ObjectDetails"/>, BigQuery's facts, and the caller's opaque bytes. Lookup arrays are not
-/// saved; a load builds none.
+/// its entries name (by value: <see cref="ObjectShapes"/> ids are a process's own), its entries column by column, its
+/// out-of-range dates, its <see cref="ObjectDetails"/>, BigQuery's facts, its texts, and the caller's opaque bytes. Lookup
+/// arrays are not saved; a load builds none.
 /// <code>
 /// unit:     u16 flags | text name | (text dataset) | i32 modules, cut, left out |
 ///           (resource: i32 edition | i64 count | u8 has latest | i64 latest | i32 checksum)
 /// shapes:   i32 n, each text kind | text folder | u8 has subtype | (text subtype)
-/// tags:     i32 texts | u8 tag[texts] (form: 1 string, 2 packed; then its TextUse)
-/// entries:  i32 n | i32 how many are detail children | u8 flags[n] | u16 shape[n] | i32 name[n] | schema[n] | owner[n] |
+/// texts:    i32 own strings | i32 strings | i32 own long definitions | i32 texts
+/// entries:  i32 n | i32 how many are detail children | (u8 flags, u16 shape)[n] | i32 name[n] | schema[n] | owner[n] |
 ///           definition[n] | u32 modified[n]
 /// dates:    i32 n, each i32 entry | i64 ticks and kind
 /// details:  i32 types, typed, keys, key columns | ObjectDetails' arrays in its order
 /// facts:    (BigQuery) i32 n, each i32 entry | i64 created | u16 flags | its optional values; then descriptions and shard groups
-/// texts:    each string in id order: i32 chars, UTF-16 | i32 packed | i32 chars[], bytes[], frame bytes[] | the frames, stored
+/// strings:  each, in id order: u8 use | i32 chars | UTF-16
+/// long:     each long definition, in id order: u8 use | i32 chars | i32 bytes | i32 frame bytes | the frame (stored blocks)
 /// extra:    i32 n | bytes
 /// </code>
-/// The texts come last, strings before long definitions, so a load has charged everything that must fit (entries, details,
-/// facts, then names) before the first definition, which may be left out, asks for room. The entries state how many of them a
-/// read without children leaves out (<see cref="DetailChild"/>), and their flags and shapes come first, so a load charges the
-/// entries it keeps before it has anywhere to put them, and a load without children never holds the ones it does not keep.
-/// A text a table gave back (<see cref="ObjectTable.WithTexts"/>) is not written: every text id in a file has a text, so every
-/// place in a loaded table's text array is one the load was charged for.
+/// A file numbers a table's texts afresh, by what a load does with them: the strings a read without children keeps (names,
+/// and short definitions of what it keeps), the other strings, the long definitions it keeps, the others. So a text's form
+/// and whether a load without children keeps it follow from its id, and nothing is held per text before the text itself is
+/// read. The texts come last, so a load has charged everything that must fit (entries, details, facts) before the first
+/// name, and every name before the first long definition, which may be left out.
+/// <para>What a load holds it charges first. Entries: the file states how many a read without children leaves out
+/// (<see cref="DetailChild"/>) and their flags and shapes come first, so the entries kept are charged before there is
+/// anywhere to put them, and a load without children never holds the others (a bit each says which they were). Details: by
+/// their counts. Texts: each as it is read, its slot before its place in the table, whether or not the text itself is kept.
+/// What is not charged is bounded by <see cref="IndexFileLimits"/> alone: the shapes, the caller's extra bytes, a bit or
+/// two for each entry, and one text at a time.</para>
 /// A file is untrusted, and in clear text nothing below vouches for it, so <see cref="Load"/> checks everything a search or a
-/// lookup relies on (<see cref="CheckEntries"/>, <see cref="CheckDetails"/>) before a table exists, and <see cref="Write"/>
+/// lookup relies on (<see cref="CheckEntries"/>, <see cref="CheckDetails"/>) before a table exists, and <see cref="Prepare"/>
 /// refuses a unit those checks would refuse, so no file is written that cannot be loaded.
 /// </summary>
 internal static class IndexFileUnit
 {
     private const ushort ChildrenLeftOutFlag = 1, DefinitionsLeftOutFlag = 2, DetailedFlag = 4, FailedPartFlag = 8, CaseKnownFlag = 16, CaseSensitiveFlag = 32, DottedIFlag = 64,
         FactsFlag = 128, DatasetFlag = 256, UnitFlags = 511;
-    private const byte NoText = 0, StringText = 1, PackedForm = 2;
     private const ushort FactDetailed = 1, FactWhole = 2, FactColumnsCut = 4, FactRows = 8, FactBytes = 16, FactListed = 32, FactPartitioning = 64, FactClustering = 128,
         FactSignature = 256, FactStale = 512, FactFlags = 1023;
     private const byte EntryFlags = ObjectTable.SystemFlag | ObjectTable.CutFlag | ObjectTable.ChildFlag;
+    private const byte OwnUses = (byte)(TextUse.Name | TextUse.Definition), Uses5 = 31;
     /// <summary>What a read's charge may exceed its content's by: rows it charged and then left out (a child whose parent the
     /// login cannot see). Past as much again as the content, and this, a file's stated charge is not believed.</summary>
     private const long ChargeSlack = 64 * 1024;
@@ -105,22 +113,50 @@ internal static class IndexFileUnit
 
     // ---- Checks: the rules a table must keep for Search and the lookups, shared by the writer and the loader ----
 
-    /// <summary>Every entry's references are in range and of the right form (<paramref name="tags"/>, by text): a name and a
-    /// schema are strings, a definition any text held; only a definition is cut; a child's parent is not a child and has a
-    /// schema; and the table a history table is shown below has one too and is itself shown below none, so no walk from an
-    /// entry to its owner goes further than two steps.</summary>
-    public static void CheckEntries(ReadOnlySpan<ObjectEntry> entries, ReadOnlySpan<byte> tags, int shapeCount)
+    /// <summary>What a text id names: nothing (out of range, or a text the table gave back), a string, or a long definition.</summary>
+    internal interface ITextForms
     {
-        var texts = tags.Length;
+        const int None = 0, String = 1, Long = 2;
+        int Form(int id);
+    }
+
+    /// <summary>A file's texts: the strings first, then the long definitions.</summary>
+    private readonly struct FileForms(int strings, int texts) : ITextForms
+    {
+        public int Form(int id) => (uint)id >= (uint)texts ? ITextForms.None : id < strings ? ITextForms.String : ITextForms.Long;
+    }
+
+    /// <summary>A table's texts as it holds them.</summary>
+    private readonly struct TableForms(IReadOnlyList<object?> texts) : ITextForms
+    {
+        public int Form(int id) => (uint)id >= (uint)texts.Count ? ITextForms.None : texts[id] switch { null => ITextForms.None, string => ITextForms.String, _ => ITextForms.Long };
+    }
+
+    /// <summary>The counts a unit states of its definitions are within what its entries could account for (a read counts a
+    /// definition for a row it may then leave out, so not exactly), so that sums of them never overflow.</summary>
+    private static void CheckCounts(int modules, int cut, int leftOut, int entries)
+    {
+        var most = 2L * entries + 4096;
+        if (modules < 0 || cut < 0 || leftOut < 0 || leftOut > cut || modules > most || cut > most) throw Corrupt();
+    }
+
+    /// <summary>Every entry's references are in range and of the right form: a name and a schema are strings, a definition any
+    /// text held (none at all in a unit read without definitions); only a definition is cut; a child's parent is not a child and
+    /// has a schema; the table a history table is shown below has one too and is itself shown below none, so no walk from an
+    /// entry to its owner goes further than two steps; and a BigQuery dataset's children are its columns.</summary>
+    public static void CheckEntries<TForms>(ReadOnlySpan<ObjectEntry> entries, TForms forms, int shapeCount, bool[] detailShape, bool dataset, bool definitions)
+        where TForms : struct, ITextForms
+    {
         for (var at = 0; at < entries.Length; at++)
         {
             ref readonly var entry = ref entries[at];
             if ((entry.Flags & ~EntryFlags) != 0 || entry.Shape >= shapeCount) throw Corrupt();
-            if ((uint)entry.Name >= (uint)texts || (tags[entry.Name] & 3) != StringText) throw Corrupt();
-            if (entry.Schema != -1 && ((uint)entry.Schema >= (uint)texts || (tags[entry.Schema] & 3) != StringText)) throw Corrupt();
-            if (entry.Definition != -1 && ((uint)entry.Definition >= (uint)texts || (tags[entry.Definition] & 3) == NoText)) throw Corrupt();
+            if (forms.Form(entry.Name) != ITextForms.String) throw Corrupt();
+            if (entry.Schema != -1 && forms.Form(entry.Schema) != ITextForms.String) throw Corrupt();
+            if (entry.Definition != -1 && (!definitions || forms.Form(entry.Definition) == ITextForms.None)) throw Corrupt();
             if ((entry.Flags & ObjectTable.CutFlag) != 0 && entry.Definition < 0) throw Corrupt();
             var child = (entry.Flags & ObjectTable.ChildFlag) != 0;
+            if (child && dataset && !detailShape[entry.Shape]) throw Corrupt();
             if (entry.Owner == -1)
             {
                 if (child) throw Corrupt();
@@ -133,43 +169,32 @@ internal static class IndexFileUnit
         }
     }
 
-    /// <summary>The side dates are exactly those of the entries whose 32 bits say "elsewhere", in entry order.</summary>
-    private static void CheckDates(ReadOnlySpan<ObjectEntry> entries, int dates)
-    {
-        var elsewhere = 0;
-        foreach (ref readonly var entry in entries)
-            if (entry.Modified == uint.MaxValue) elsewhere++;
-        if (elsewhere != dates) throw Corrupt();
-    }
-
     /// <summary>The details index only what the table holds, in the order <see cref="ObjectDetails"/> searches: a type's name
-    /// and schema are strings, a typed entry's type exists, entries are sorted, a key's columns lie within the column list, and a
-    /// key that names a table is a child (its own table is its parent).</summary>
-    public static void CheckDetails(ObjectDetails.Parts parts, ReadOnlySpan<ObjectEntry> entries, ReadOnlySpan<byte> tags)
+    /// and schema are strings, a typed entry's type exists, each entry is typed once and has one list of key columns, in entry
+    /// order, a key's columns lie within the column list, and a key that names a table is a child (its own table is its parent).</summary>
+    public static void CheckDetails<TForms>(ObjectDetails.Parts parts, ReadOnlySpan<ObjectEntry> entries, TForms forms) where TForms : struct, ITextForms
     {
-        var texts = tags.Length;
         var types = parts.TypeName.Length;
         if (types > IndexFileLimits.Types || parts.KeyColumn.Length > IndexFileLimits.KeyColumns || parts.TypedAt.Length > IndexFileLimits.Objects
             || parts.KeyAt.Length > IndexFileLimits.Objects) throw IndexFileContainer.Refused(IndexFileProblem.Limits);
         for (var type = 0; type < types; type++)
         {
-            var (name, schema) = (parts.TypeName[type], parts.TypeSchema[type]);
-            if ((uint)name >= (uint)texts || (tags[name] & 3) != StringText) throw Corrupt();
-            if (schema != -1 && ((uint)schema >= (uint)texts || (tags[schema] & 3) != StringText)) throw Corrupt();
+            if (forms.Form(parts.TypeName[type]) != ITextForms.String) throw Corrupt();
+            if (parts.TypeSchema[type] != -1 && forms.Form(parts.TypeSchema[type]) != ITextForms.String) throw Corrupt();
             if ((parts.TypeFlags[type] & ~ObjectDetails.TypeFlagsMask) != 0) throw Corrupt();
         }
         var last = -1;
         for (var item = 0; item < parts.TypedAt.Length; item++)
         {
             var at = parts.TypedAt[item];
-            if (at < last || (uint)at >= (uint)entries.Length || parts.TypedType[item] >= types) throw Corrupt();
+            if (at <= last || at >= entries.Length || parts.TypedType[item] >= types) throw Corrupt();
             last = at;
         }
         last = -1;
         for (var item = 0; item < parts.KeyAt.Length; item++)
         {
             var at = parts.KeyAt[item];
-            if (at < last || (uint)at >= (uint)entries.Length) throw Corrupt();
+            if (at <= last || at >= entries.Length) throw Corrupt();
             last = at;
             var (from, count, referenced) = (parts.KeyFrom[item], parts.KeyCount[item], parts.KeyReferenced[item]);
             if (from < 0 || count < 0 || (long)from + count > parts.KeyColumn.Length) throw Corrupt();
@@ -214,6 +239,12 @@ internal static class IndexFileUnit
         return uses;
     }
 
+    /// <summary>A text's use is one a text of its form can have, and is the one its place among the file's texts says: the
+    /// texts a read without children keeps come first among the strings, and first among the long definitions.</summary>
+    private static bool UseFits(byte use, bool longDefinition, bool own) =>
+        use <= Uses5 && ((use & (byte)TextUse.DetailFirst) == 0 || (use & (byte)TextUse.Name) != 0)
+        && (!longDefinition || (use & (byte)(TextUse.Name | TextUse.ChildName)) == 0) && (use & OwnUses) != 0 == own;
+
     private static long FactBytesOf(in BigQueryObjectFacts fact) => BigQueryFacts.ObjectBytes + StringBytes(fact.Signature) + StringBytes(fact.Partitioning) + StringBytes(fact.Clustering);
     private static long ShardBytesOf(Varia.Backend.BigQueryShardsDto group) => BigQueryFacts.ShardBytes + StringBytes(group.Prefix) + StringBytes(group.First) + StringBytes(group.Last);
     private static long DescriptionBytesOf(string description) => BigQueryFacts.DescriptionBytes + IndexMemory.StringBytes(description.Length);
@@ -222,10 +253,12 @@ internal static class IndexFileUnit
     // ---- Writing ----
 
     /// <summary>What the unit's table and facts need of the format, worked out once before anything is written.</summary>
-    /// <param name="TextIds">Where the table gave texts back: each text's id in the file, which has none of those (-1).</param>
+    /// <param name="TextIds">Each of the table's texts' id in the file (-1 for a text the table gave back, which is not written).</param>
+    /// <param name="Order">The table's text for each id of the file, and <paramref name="Uses"/> its use.</param>
     /// <param name="Charge">The charge the header states: the unit's, kept within what a load believes.</param>
-    internal sealed record Plan(byte[] Tags, int[]? TextIds, long Charge, ObjectShapes.Shape[] Shapes, ushort[] ShapeIds, int DetailEntries, ObjectDetails.Parts? Details, KeyValuePair<int, DateTime>[] Dates,
-        KeyValuePair<int, BigQueryObjectFacts>[] Facts, KeyValuePair<int, string>[] Descriptions, KeyValuePair<int, Varia.Backend.BigQueryShardsDto>[] Shards);
+    internal sealed record Plan(int[] TextIds, int[] Order, byte[] Uses, int OwnStrings, int Strings, int OwnLong, long Charge, ObjectShapes.Shape[] Shapes, ushort[] ShapeIds,
+        int DetailEntries, ObjectDetails.Parts? Details, KeyValuePair<int, DateTime>[] Dates, KeyValuePair<int, BigQueryObjectFacts>[] Facts, KeyValuePair<int, string>[] Descriptions,
+        KeyValuePair<int, Varia.Backend.BigQueryShardsDto>[] Shards);
 
     /// <summary>Checks <paramref name="unit"/> against the format's limits and rules: refused as Limits or Unsupported, so that
     /// whatever is written loads.</summary>
@@ -236,12 +269,15 @@ internal static class IndexFileUnit
         var entries = table.Entries;
         var texts = table.Texts;
         var resource = unit.Kind == IndexUnitKind.Resource;
+        var dataset = unit.Kind == IndexUnitKind.Dataset;
         if (entries.Length > (resource ? IndexFileLimits.ResourceObjects : IndexFileLimits.Objects) || texts.Count > IndexFileLimits.Texts || extraBytes > IndexFileLimits.ExtraBytes
             || unit.Name.Length > IndexFileLimits.NameChars || unit.Dataset is { Length: > IndexFileLimits.NameChars }) throw Limits();
         try
         {
-            if (resource != unit.Resource is not null || unit.Kind == IndexUnitKind.Dataset != (unit.Dataset is not null) || unit.Kind == IndexUnitKind.Dataset != (unit.Facts is not null)
-                || unit.Modules < 0 || unit.Cut < 0 || unit.LeftOut < 0 || unit.LeftOut > unit.Cut || unit.Bytes < 0 || unit.ReadAt.Kind != DateTimeKind.Utc) throw Corrupt();
+            if (unit.Kind is < IndexUnitKind.Database or > IndexUnitKind.Resource || resource != unit.Resource is not null || dataset != (unit.Dataset is not null) || dataset != (unit.Facts is not null)
+                || unit.Detailed && (!dataset || unit.ChildrenLeftOut) || resource && (unit.ChildrenLeftOut || unit.FailedPart || unit.CaseSensitive is not null || unit.DottedI)
+                || unit.ReadAt.Kind != DateTimeKind.Utc) throw Corrupt();
+            CheckCounts(unit.Modules, unit.Cut, unit.LeftOut, entries.Length);
             // The shapes the entries name, numbered in the order they first appear.
             var all = table.Shapes;
             var local = new int[all.Count];
@@ -257,47 +293,53 @@ internal static class IndexFileUnit
                 local[entry.Shape] = used.Count;
                 used.Add(shape);
             }
-            var tags = new byte[texts.Count];
-            for (var id = 0; id < tags.Length; id++)
-            {
-                var text = texts[id];
+            foreach (var text in texts)
                 if (text is not null && DefinitionText.Length(text) > IndexFileLimits.TextChars) throw Limits();
-                tags[id] = text switch { null => NoText, string => StringText, _ => PackedForm };
-            }
-            CheckEntries(entries, tags, all.Count);
-            var details = table.Details?.ToParts();
-            if (details is not null) CheckDetails(details, entries, tags);
             var detailShape = new bool[all.Count];
             for (var id = 0; id < detailShape.Length; id++) detailShape[id] = DetailChild(all[id].Kind);
-            var uses = Uses(entries, detailShape, details, tags.Length);
-            // The texts the file holds: all but those the table gave back, numbered afresh where there are any of those.
-            var held = 0;
-            int[]? textIds = null;
-            for (var id = 0; id < tags.Length; id++)
+            var forms = new TableForms(texts);
+            CheckEntries(entries, forms, all.Count, detailShape, dataset, !unit.DefinitionsLeftOut);
+            var details = table.Details?.ToParts();
+            if (details is not null) CheckDetails(details, entries, forms);
+            var detailEntries = 0;
+            foreach (ref readonly var entry in entries)
+                if ((entry.Flags & ObjectTable.ChildFlag) != 0 && detailShape[entry.Shape]) detailEntries++;
+
+            // The file's text ids: the strings a read without children keeps, the other strings, the long definitions it
+            // keeps, the others; each group in the table's order. A text the table gave back names nothing and is not written.
+            var uses = Uses(entries, detailShape, details, texts.Count);
+            var textIds = new int[texts.Count];
+            Span<int> groups = stackalloc int[4];
+            int Group(int id) => texts[id] is string ? (uses[id] & OwnUses) != 0 ? 0 : 1 : (uses[id] & (byte)TextUse.Definition) != 0 ? 2 : 3;
+            for (var id = 0; id < textIds.Length; id++)
             {
-                // A long definition is never a name, and a text given back names nothing.
-                if (tags[id] == PackedForm && (uses[id] & (byte)(TextUse.Name | TextUse.ChildName)) != 0 || tags[id] == NoText && uses[id] != 0) throw Corrupt();
-                if (tags[id] == NoText)
-                {
-                    if (textIds is null)
-                    {
-                        textIds = new int[tags.Length];
-                        for (var before = 0; before < id; before++) textIds[before] = before;
-                    }
-                    textIds[id] = -1;
-                    continue;
-                }
-                if (textIds is not null) textIds[id] = held;
-                tags[held++] = (byte)(tags[id] | uses[id] << 2);
+                if (texts[id] is null ? uses[id] != 0 : texts[id] is not string && (uses[id] & (byte)(TextUse.Name | TextUse.ChildName)) != 0) throw Corrupt();
+                if (texts[id] is not null) groups[Group(id)]++;
             }
-            Array.Resize(ref tags, held);
+            var (ownStrings, strings, ownLong) = (groups[0], groups[0] + groups[1], groups[2]);
+            Span<int> next = [0, ownStrings, strings, strings + ownLong];
+            var order = new int[strings + ownLong + groups[3]];
+            var fileUses = new byte[order.Length];
+            for (var id = 0; id < textIds.Length; id++)
+            {
+                textIds[id] = texts[id] is null ? -1 : next[Group(id)]++;
+                if (textIds[id] < 0) continue;
+                order[textIds[id]] = id;
+                fileUses[textIds[id]] = uses[id];
+            }
+
             var dates = (table.Dates ?? new Dictionary<int, DateTime>()).OrderBy(pair => pair.Key).ToArray();
-            CheckDates(entries, dates.Length);
+            var elsewhere = 0;
+            foreach (ref readonly var entry in entries)
+                if (entry.Modified == uint.MaxValue) elsewhere++;
+            if (elsewhere != dates.Length) throw Corrupt();
             foreach (var (at, _) in dates)
                 if ((uint)at >= (uint)entries.Length || entries[at].Modified != uint.MaxValue) throw Corrupt();
             var facts = unit.Facts?.Objects.OrderBy(pair => pair.Key).ToArray() ?? [];
             var descriptions = unit.Facts?.Descriptions.OrderBy(pair => pair.Key).ToArray() ?? [];
             var shards = unit.Facts?.ShardGroups.OrderBy(pair => pair.Key).ToArray() ?? [];
+            // A unit read without its children holds none of what a load without children leaves out.
+            if (unit.ChildrenLeftOut && (detailEntries != 0 || details is not null || descriptions.Length != 0)) throw Corrupt();
             static bool Long(string? value) => value is { Length: > IndexFileLimits.FactChars };
             foreach (var (at, fact) in facts)
             {
@@ -316,17 +358,14 @@ internal static class IndexFileUnit
             }
             var ids = new ushort[all.Count];
             for (var id = 0; id < ids.Length; id++) ids[id] = (ushort)Math.Max(0, local[id]);
-            var detailEntries = 0;
-            foreach (ref readonly var entry in entries)
-                if ((entry.Flags & ObjectTable.ChildFlag) != 0 && detailShape[entry.Shape]) detailEntries++;
             // What the content costs, as a load will work it out. A read's charge is that and what it charged for rows it then
             // left out: a charge below its content is no read's, and one far above it (a read that failed part way, with most
             // of its rows still waiting for their parent) is stated as the most a load believes.
-            var whole = entries.Length * IndexMemory.RecordBytes + held * IndexMemory.SlotBytes + (table.Details?.Bytes ?? 0) + facts.Sum(pair => FactBytesOf(pair.Value))
+            var whole = entries.Length * IndexMemory.RecordBytes + order.Length * IndexMemory.SlotBytes + (table.Details?.Bytes ?? 0) + facts.Sum(pair => FactBytesOf(pair.Value))
                 + descriptions.Sum(pair => DescriptionBytesOf(pair.Value)) + shards.Sum(pair => ShardBytesOf(pair.Value));
             if (resource ? unit.Bytes != entries.Length * IndexMemory.RecordBytes + (table.Details?.Bytes ?? 0) : unit.Bytes < whole) throw Corrupt();
             var charge = resource ? unit.Bytes : Math.Min(unit.Bytes, 2 * whole + ChargeSlack);
-            return new(tags, textIds, charge, [.. used], ids, detailEntries, details, dates, facts, descriptions, shards);
+            return new(textIds, order, fileUses, ownStrings, strings, ownLong, charge, [.. used], ids, detailEntries, details, dates, facts, descriptions, shards);
         }
         catch (IndexFileRefused refused) when (refused.Problem == IndexFileProblem.Corrupt)
         {
@@ -338,6 +377,8 @@ internal static class IndexFileUnit
     {
         var table = unit.Table;
         var entries = table.Entries;
+        var textIds = plan.TextIds;
+        int Id(int id) => id < 0 ? id : textIds[id];
         writer.UInt16((ushort)((unit.ChildrenLeftOut ? ChildrenLeftOutFlag : 0) | (unit.DefinitionsLeftOut ? DefinitionsLeftOutFlag : 0) | (unit.Detailed ? DetailedFlag : 0)
             | (unit.FailedPart ? FailedPartFlag : 0) | (unit.CaseSensitive is not null ? CaseKnownFlag : 0) | (unit.CaseSensitive == true ? CaseSensitiveFlag : 0)
             | (unit.DottedI ? DottedIFlag : 0) | (unit.Facts is not null ? FactsFlag : 0) | (unit.Dataset is not null ? DatasetFlag : 0)));
@@ -364,27 +405,23 @@ internal static class IndexFileUnit
             if (shape.Subtype is { } subtype) writer.Text(subtype);
         }
 
-        var texts = table.Texts;
-        var textIds = plan.TextIds;
-        int Id(int id) => id < 0 || textIds is null ? id : textIds[id];
-        writer.Int32(plan.Tags.Length);
-        writer.Bytes(plan.Tags);
+        writer.Int32(plan.OwnStrings);
+        writer.Int32(plan.Strings);
+        writer.Int32(plan.OwnLong);
+        writer.Int32(plan.Order.Length);
 
         writer.Int32(entries.Length);
         writer.Int32(plan.DetailEntries);
-        var flags = new byte[Batch];
+        var triples = new byte[3 * Batch];
         for (var from = 0; from < entries.Length; from += Batch)
         {
             var run = entries.Slice(from, Math.Min(Batch, entries.Length - from));
-            for (var at = 0; at < run.Length; at++) flags[at] = run[at].Flags;
-            writer.Bytes(flags.AsSpan(0, run.Length));
-        }
-        var shapeIds = new ushort[Batch];
-        for (var from = 0; from < entries.Length; from += Batch)
-        {
-            var run = entries.Slice(from, Math.Min(Batch, entries.Length - from));
-            for (var at = 0; at < run.Length; at++) shapeIds[at] = plan.ShapeIds[run[at].Shape];
-            writer.UInt16s(shapeIds.AsSpan(0, run.Length));
+            for (var at = 0; at < run.Length; at++)
+            {
+                triples[3 * at] = run[at].Flags;
+                BinaryPrimitives.WriteUInt16LittleEndian(triples.AsSpan(3 * at + 1), plan.ShapeIds[run[at].Shape]);
+            }
+            writer.Bytes(triples.AsSpan(0, 3 * run.Length));
         }
         var values = new int[Batch];
         for (var column = 0; column < 5; column++)
@@ -411,8 +448,8 @@ internal static class IndexFileUnit
         writer.Int32(details?.KeyColumn.Length ?? 0);
         if (details is not null)
         {
-            writer.Int32s(textIds is null ? details.TypeName : [.. details.TypeName.Select(Id)]);
-            writer.Int32s(textIds is null ? details.TypeSchema : [.. details.TypeSchema.Select(Id)]);
+            writer.Int32s([.. details.TypeName.Select(Id)]);
+            writer.Int32s([.. details.TypeSchema.Select(Id)]);
             writer.Int32s(details.TypeId);
             writer.Bytes(details.TypeSystem);
             writer.Bytes(details.TypeFlags);
@@ -467,22 +504,26 @@ internal static class IndexFileUnit
             }
         }
 
-        var packed = new List<PackedText>();
-        for (var id = 0; id < texts.Count; id++)
+        var texts = table.Texts;
+        for (var id = 0; id < plan.Strings; id++)
         {
             if ((id & (Batch - 1)) == 0) token.ThrowIfCancellationRequested();
-            if (texts[id] is string text) writer.Text(text);
-            else if (texts[id] is PackedText frame) packed.Add(frame);
+            writer.Byte(plan.Uses[id]);
+            writer.Text((string)texts[plan.Order[id]]!);
         }
-        writer.Int32(packed.Count);
-        foreach (var frame in packed) writer.Int32(frame.Length);
-        foreach (var frame in packed) writer.Int32(frame.ByteLength);
-        foreach (var frame in packed) writer.Int32(frame.FrameLength);
-        foreach (var frame in packed)
+        // The long definitions are compressed already: their frames, and the few bytes before each, go in as they are.
+        writer.AsIs(true);
+        for (var id = plan.Strings; id < plan.Order.Length; id++)
         {
             token.ThrowIfCancellationRequested();
-            writer.Frame(frame.Frame);
+            var frame = (PackedText)texts[plan.Order[id]]!;
+            writer.Byte(plan.Uses[id]);
+            writer.Int32(frame.Length);
+            writer.Int32(frame.ByteLength);
+            writer.Int32(frame.FrameLength);
+            writer.Bytes(frame.Frame);
         }
+        writer.AsIs(false);
 
         writer.Int32(extra.Length);
         writer.Bytes(extra);
@@ -504,7 +545,8 @@ internal static class IndexFileUnit
     /// <summary>What a load takes of the index's memory, and how it holds a text.</summary>
     internal abstract class Account
     {
-        /// <summary>The copy of <paramref name="value"/> the load holds; null when a text that may be left out does not fit.</summary>
+        /// <summary>Charges the text's place in the table, then answers the copy of <paramref name="value"/> the load holds: null
+        /// when a text that may be left out does not fit (its place stays, empty).</summary>
         public abstract object? Text(object value, TextUse use);
         public abstract void Records(long own, long detailChildren);
         public abstract void Details(long bytes);
@@ -547,8 +589,6 @@ internal static class IndexFileUnit
             return true;
         }
 
-        private bool TryCharge(long bytes, long keepFree) => TryCharge(bytes, keepFree, ref creditLeft);
-
         /// <summary>A BigQuery name's share (a record, its facts, a text's slot): the names' part of the replaced read's share,
         /// else the budget above the names floor (<see cref="BigQueryReader"/>).</summary>
         private bool TryChargeName(long bytes)
@@ -558,7 +598,7 @@ internal static class IndexFileUnit
             return true;
         }
 
-        private bool Charge(long bytes, bool name) => !bigQuery ? TryCharge(bytes, 0) : name ? TryChargeName(bytes) : TryCharge(bytes, detailsFloor);
+        private bool Charge(long bytes, bool name) => !bigQuery ? TryCharge(bytes, 0, ref creditLeft) : name ? TryChargeName(bytes) : TryCharge(bytes, detailsFloor, ref creditLeft);
 
         public override object? Text(object value, TextUse use)
         {
@@ -567,14 +607,11 @@ internal static class IndexFileUnit
             // then left out (a child whose parent the login cannot see): taken as a name is, though the load does without it
             // when it does not fit.
             var name = (use & (TextUse.Name | TextUse.DetailFirst)) == TextUse.Name || use == TextUse.None && value is string;
+            // Its place in the table is the load's whether or not the text is: charged as a record is, not as a definition.
+            if (!Charge(IndexMemory.SlotBytes, name)) throw Budget();
             // A definition gives way to names.
             var keepFree = !bigQuery ? needed || name ? 0 : limits.NamesReserveBytes : name ? namesFloor : needed ? detailsFloor : Math.Max(detailsFloor, limits.NamesReserveBytes);
             var acquired = pool.TryAcquire(value, keepFree);
-            if (acquired is not null && !(bigQuery && name ? TryChargeName(IndexMemory.SlotBytes) : TryCharge(IndexMemory.SlotBytes, keepFree)))
-            {
-                pool.Release([acquired]);
-                acquired = null;
-            }
             if (acquired is null && needed) throw Budget();
             return acquired;
         }
@@ -614,7 +651,8 @@ internal static class IndexFileUnit
     }
 
     /// <summary>The shared resource set's load: nothing is pooled or charged here, since <see cref="ResourceCatalog"/> does both
-    /// when it shares the table, as it does a read's. What that will cost is only kept within <paramref name="most"/>.</summary>
+    /// when it shares the table, as it does a read's. What that will cost is kept within <paramref name="most"/>, as a budget
+    /// would keep it: before anything is held.</summary>
     internal sealed class PlainAccount(long most) : Account
     {
         private long total;
@@ -638,6 +676,36 @@ internal static class IndexFileUnit
         public override void Rest(long bytes) { }
     }
 
+    /// <summary>Which of a file's entries a load without children keeps, and where: a bit for each, so the load never holds
+    /// the entries it reads past. A second bit remembers which of those had a definition cut at its limit.</summary>
+    private sealed class Places(int count)
+    {
+        private readonly ulong[] kept = new ulong[(count + 63) / 64];
+        private readonly ulong[] cut = new ulong[(count + 63) / 64];
+        private readonly int[] before = new int[(count + 63) / 64];
+
+        public void Keep(int at) => kept[at >> 6] |= 1UL << (at & 63);
+        public void Cut(int at) => cut[at >> 6] |= 1UL << (at & 63);
+        public bool WasCut(int at) => (cut[at >> 6] & 1UL << (at & 63)) != 0;
+
+        /// <summary>Counts the kept entries before each word of bits, once every entry is marked.</summary>
+        public void Number()
+        {
+            for (int word = 0, total = 0; word < kept.Length; word++)
+            {
+                before[word] = total;
+                total += BitOperations.PopCount(kept[word]);
+            }
+        }
+
+        /// <summary>The kept entry's place among the kept, or -1 for one read past.</summary>
+        public int Of(int at)
+        {
+            var (word, bit) = (kept[at >> 6], 1UL << (at & 63));
+            return (word & bit) == 0 ? -1 : before[at >> 6] + BitOperations.PopCount(word & (bit - 1));
+        }
+    }
+
     /// <summary>
     /// Reads a unit's content, checking it as it goes and charging <paramref name="account"/> before it keeps anything.
     /// <paramref name="held"/> receives every text the account answered (a failed load gives those back). Without
@@ -654,12 +722,11 @@ internal static class IndexFileUnit
         if ((unitFlags & ~UnitFlags) != 0) throw Corrupt();
         bool Has(ushort flag) => (unitFlags & flag) != 0;
         var dataset = kind == IndexUnitKind.Dataset;
-        if (Has(DatasetFlag) != dataset || Has(FactsFlag) != dataset || Has(DetailedFlag) && !dataset || Has(CaseSensitiveFlag) && !Has(CaseKnownFlag)
+        if (Has(DatasetFlag) != dataset || Has(FactsFlag) != dataset || Has(DetailedFlag) && (!dataset || Has(ChildrenLeftOutFlag)) || Has(CaseSensitiveFlag) && !Has(CaseKnownFlag)
             || resource && (unitFlags & ~DefinitionsLeftOutFlag) != 0 || header.Definitions == Has(DefinitionsLeftOutFlag) || header.Children == Has(ChildrenLeftOutFlag)) throw Corrupt();
         var name = reader.Text(IndexFileLimits.NameChars);
         var datasetName = dataset ? reader.Text(IndexFileLimits.NameChars) : null;
         var (modules, cut, leftOut) = (reader.Int32(), reader.Int32(), reader.Int32());
-        if (modules < 0 || cut < 0 || leftOut < 0 || leftOut > cut) throw Corrupt();
         ResourceKey? key = null;
         if (resource)
         {
@@ -680,70 +747,59 @@ internal static class IndexFileUnit
             detailShape[id] = DetailChild(shapeKind);
         }
 
-        // The texts' forms and uses: what the entries are checked against, and how each text will be charged. Each text takes
-        // at least its tag and a length in the content to come, which bounds what is allocated by their number.
-        var textCount = reader.Count(IndexFileLimits.Texts);
-        reader.Backed(textCount * 5L);
-        var tags = new byte[textCount];
-        reader.Bytes(tags);
-        var packedCount = 0;
-        const byte OwnUses = (byte)(TextUse.Name | TextUse.Definition);
-        foreach (var tag in tags)
-        {
-            var (form, use) = (tag & 3, tag >> 2);
-            // Every id has a text, so every place in the loaded table's texts is one the load is charged for.
-            if (form is not (StringText or PackedForm) || use > 31 || (use & (byte)TextUse.DetailFirst) != 0 && (use & (byte)TextUse.Name) == 0
-                || form == PackedForm && (use & (byte)(TextUse.Name | TextUse.ChildName)) != 0) throw Corrupt();
-            if (form == PackedForm) packedCount++;
-        }
+        // The texts, by number alone: the strings a read without children keeps, all the strings, the long definitions it
+        // keeps, all the texts. A text's id says its form and whether this load keeps it; nothing is held for them yet.
+        var (ownStrings, strings, ownLong, textCount) = (reader.Count(IndexFileLimits.Texts), reader.Count(IndexFileLimits.Texts), reader.Count(IndexFileLimits.Texts), reader.Count(IndexFileLimits.Texts));
+        if (ownStrings > strings || (long)strings + ownLong > textCount) throw Corrupt();
+        // A string is its use, its length and its text; a long definition its use, three lengths and its frame.
+        reader.Backed(strings * 5L + (textCount - strings) * 14L);
+        var forms = children ? new FileForms(strings, textCount) : new FileForms(ownStrings, ownStrings + ownLong);
+        // A file's text id as this load holds it: itself, or without children its place among the texts kept.
+        int Text(int id) => children || id < ownStrings ? id : id >= strings && id - strings < ownLong ? ownStrings + (id - strings) : int.MinValue;
 
         // Entries. The file states how many are detail children, so the entries this load keeps are charged before there is
-        // anywhere to put them; their flags and shapes, which come first, then say which they are. Without children the others
-        // are read past: moved says where each of the file's entries is kept, or -1.
+        // anywhere to put them; their flags and shapes, which come first, then say which they are. Without children the
+        // others are read past: places says which of the file's entries are kept, and where.
         var count = reader.Count(resource ? IndexFileLimits.ResourceObjects : IndexFileLimits.Objects);
         var detailEntries = reader.Count(count, IndexFileProblem.Corrupt);
-        if (count != header.Objects) throw Corrupt();
-        var ownEntries = count - detailEntries;
+        if (count != header.Objects || Has(ChildrenLeftOutFlag) && detailEntries != 0) throw Corrupt();
+        CheckCounts(modules, cut, leftOut, count);
         // An entry is 23 bytes of the content to come.
         reader.Backed(count * 23L);
+        var ownEntries = count - detailEntries;
         account.Records(ownEntries, children ? detailEntries : 0);
         var entries = new ObjectEntry[children ? count : ownEntries];
-        var moved = children ? null : new int[count];
-        var fileFlags = children ? null : new byte[count];
-        var bytes = new byte[Batch];
+        var places = children ? null : new Places(count);
+        var triples = new byte[3 * Batch];
+        var (kept, details) = (0, 0);
         for (var from = 0; from < count; from += Batch)
         {
-            var run = bytes.AsSpan(0, Math.Min(Batch, count - from));
+            var run = triples.AsSpan(0, 3 * Math.Min(Batch, count - from));
             reader.Bytes(run);
-            if (fileFlags is not null) run.CopyTo(fileFlags.AsSpan(from));
-            else
-                for (var at = 0; at < run.Length; at++) entries[from + at].Flags = run[at];
-        }
-        var shapeIds = new ushort[Batch];
-        var kept = 0;
-        for (var from = 0; from < count; from += Batch)
-        {
-            var run = shapeIds.AsSpan(0, Math.Min(Batch, count - from));
-            reader.UInt16s(run);
-            for (var at = 0; at < run.Length; at++)
+            for (var at = 0; at < run.Length / 3; at++)
             {
-                if (run[at] >= shapeCount) throw Corrupt();
-                if (moved is null)
+                var (entryFlags, shape) = (run[3 * at], BinaryPrimitives.ReadUInt16LittleEndian(run[(3 * at + 1)..]));
+                if (shape >= shapeCount) throw Corrupt();
+                var detail = (entryFlags & ObjectTable.ChildFlag) != 0 && detailShape[shape];
+                if (detail) details++;
+                if (places is null) (entries[from + at].Flags, entries[from + at].Shape) = (entryFlags, shape);
+                else if (detail)
                 {
-                    entries[from + at].Shape = run[at];
-                    if ((entries[from + at].Flags & ObjectTable.ChildFlag) == 0 || !detailShape[run[at]]) kept++;
-                    continue;
+                    if ((entryFlags & ObjectTable.CutFlag) != 0) places.Cut(from + at);
                 }
-                var detail = (fileFlags![from + at] & ObjectTable.ChildFlag) != 0 && detailShape[run[at]];
-                moved[from + at] = detail ? -1 : kept;
-                if (detail) continue;
-                // More entries to keep than the file stated, and the load charged.
-                if (kept == entries.Length) throw Corrupt();
-                (entries[kept].Flags, entries[kept].Shape) = (fileFlags[from + at], run[at]);
-                kept++;
+                else
+                {
+                    // More entries to keep than the file stated, and the load charged.
+                    if (kept == entries.Length) throw Corrupt();
+                    (entries[kept].Flags, entries[kept].Shape) = (entryFlags, shape);
+                    places.Keep(from + at);
+                    kept++;
+                }
             }
         }
-        if (kept != ownEntries) throw Corrupt();
+        if (details != detailEntries) throw Corrupt();
+        places?.Number();
+        int Moved(int at) => places is null ? at : places.Of(at);
         var values = new int[Batch];
         var elsewhere = 0;
         for (var column = 0; column < 5; column++)
@@ -755,34 +811,32 @@ internal static class IndexFileUnit
                 for (var at = 0; at < run.Length; at++)
                 {
                     var value = run[at];
-                    var to = moved is null ? from + at : moved[from + at];
+                    var to = Moved(from + at);
                     if (to < 0)
                     {
                         // A column's expression goes with the column: no longer a module, nor cut. Its date, if it has one
                         // elsewhere, goes too.
                         if (column == 3 && value >= 0) modules--;
-                        if (column == 3 && (fileFlags![from + at] & ObjectTable.CutFlag) != 0) cut--;
+                        if (column == 3 && places!.WasCut(from + at)) cut--;
                         if (column == 4 && unchecked((uint)value) == uint.MaxValue) elsewhere++;
                         continue;
                     }
                     ref var entry = ref entries[to];
                     switch (column)
                     {
-                        case 0: entry.Name = value; break;
-                        case 1: entry.Schema = value; break;
+                        case 0: entry.Name = Text(value); break;
+                        case 1: entry.Schema = value == -1 ? -1 : Text(value); break;
                         case 2:
                             // An owner is named by its place in the file: kept, it is named by its place among the kept.
-                            if (moved is not null && value != -1 && ((uint)value >= (uint)count || (value = moved[value]) < 0)) throw Corrupt();
+                            if (places is not null && value != -1 && ((uint)value >= (uint)count || (value = places.Of(value)) < 0)) throw Corrupt();
                             entry.Owner = value;
                             break;
-                        case 3: entry.Definition = value; break;
+                        case 3: entry.Definition = value == -1 ? -1 : Text(value); break;
                         default: entry.Modified = unchecked((uint)value); break;
                     }
                 }
             }
-        fileFlags = null;
-        CheckEntries(entries, tags, shapeCount);
-        int Moved(int at) => moved is null ? at : moved[at];
+        CheckEntries(entries, forms, shapeCount, detailShape, dataset, !Has(DefinitionsLeftOutFlag));
 
         // Dates: one for each entry whose 32 bits say "elsewhere", in entry order.
         var keptElsewhere = 0;
@@ -809,6 +863,7 @@ internal static class IndexFileUnit
         ObjectDetails.Parts? parts = null;
         // On disk a type is 14 bytes, a typed entry 13, a key 14 and a key column 5 (the arrays read below).
         var detailContent = typeCount * 14L + typedCount * 13L + keyCount * 14L + keyColumnCount * 5L;
+        if (Has(ChildrenLeftOutFlag) && detailContent != 0) throw Corrupt();
         reader.Backed(detailContent);
         if (!children) reader.Skip(detailContent);
         else if (detailBytes > 0)
@@ -836,20 +891,12 @@ internal static class IndexFileUnit
             reader.Int16s(parts.KeyColumn);
             reader.Int16s(parts.KeyOther);
             reader.Bytes(parts.KeyColumnFlags);
-            CheckDetails(parts, entries, tags);
+            CheckDetails(parts, entries, forms);
         }
         token.ThrowIfCancellationRequested();
 
-        // The uses the file states decide how each text is charged, so they must be the entries' own. Without the details
-        // and the entries read past (a load without children), only the uses of what it keeps can be told.
-        var uses = Uses(entries, detailShape, parts, textCount);
-        var compared = children ? (byte)31 : OwnUses;
-        for (var id = 0; id < textCount; id++)
-            if ((tags[id] >> 2 & compared) != (uses[id] & compared)) throw Corrupt();
-
         // What the content holds whole, for the charge the file states.
-        var whole = count * IndexMemory.RecordBytes + detailBytes;
-        whole += textCount * IndexMemory.SlotBytes;
+        var whole = count * IndexMemory.RecordBytes + detailBytes + textCount * IndexMemory.SlotBytes;
 
         Dictionary<int, BigQueryObjectFacts>? objects = null;
         Dictionary<int, string>? descriptions = null;
@@ -880,6 +927,7 @@ internal static class IndexFileUnit
                 objects[Moved(at)] = fact;
             }
             var descriptionCount = reader.Count(count, IndexFileProblem.Corrupt);
+            if (Has(ChildrenLeftOutFlag) && descriptionCount != 0) throw Corrupt();
             descriptions = [];
             for (int item = 0, last = -1; item < descriptionCount; item++)
             {
@@ -889,7 +937,7 @@ internal static class IndexFileUnit
                 last = at;
                 var description = reader.Text(IndexFileLimits.FactChars);
                 // A description is a column's: it goes with the columns.
-                if (moved is not null ? moved[at] >= 0 : (entries[at].Flags & ObjectTable.ChildFlag) == 0 || !detailShape[entries[at].Shape]) throw Corrupt();
+                if (places is not null ? places.Of(at) >= 0 : (entries[at].Flags & ObjectTable.ChildFlag) == 0 || !detailShape[entries[at].Shape]) throw Corrupt();
                 whole += DescriptionBytesOf(description);
                 if (!children) continue;
                 account.Description(DescriptionBytesOf(description));
@@ -913,47 +961,36 @@ internal static class IndexFileUnit
             }
         }
 
-        // Texts, last: names first (the strings), then long definitions. With children they are held by id; without, the
-        // texts kept are numbered afresh (map: a file's id to the kept one, or -1), and only the uses a load without children
-        // can tell from its entries say how each is charged.
-        bool Kept(byte tag) => children || (tag >> 2 & OwnUses) != 0;
-        var map = children ? null : new int[textCount];
-        if (children) SetCount(held, textCount);
-        else Array.Fill(map!, -1);
-        var leftOutTexts = 0;
-        void Hold(int id, object value)
+        // Texts, last, one at a time: each is charged its place in the table before it has one, so the table's texts are
+        // never more than the load has paid for. Names come first (the strings), then long definitions. The use each states
+        // says how it is charged; it is checked against the entries once all are read. Without children, only the uses a load
+        // without children can tell from its entries count, and the texts it does not keep are read past.
+        var compared = children ? Uses5 : OwnUses;
+        var stated = new List<byte>();
+        var leftOutTexts = false;
+        void Hold(object value, byte use)
         {
-            var copy = account.Text(value, (TextUse)(tags[id] >> 2 & compared));
-            if (copy is null) leftOutTexts++;
-            if (map is null) held[id] = copy;
-            else if (copy is not null)
-            {
-                map[id] = held.Count;
-                held.Add(copy);
-            }
+            var copy = account.Text(value, (TextUse)(use & compared));
+            leftOutTexts |= copy is null;
+            held.Add(copy);
+            stated.Add(use);
         }
-        for (var id = 0; id < textCount; id++)
+        for (var id = 0; id < strings; id++)
         {
             if ((id & (Batch - 1)) == 0) token.ThrowIfCancellationRequested();
-            if ((tags[id] & 3) != StringText) continue;
-            var chars = reader.Count(IndexFileLimits.TextChars);
-            if (Kept(tags[id])) Hold(id, reader.Chars(chars));
+            var (use, chars) = (reader.Byte(), reader.Count(IndexFileLimits.TextChars));
+            if (!UseFits(use, longDefinition: false, own: id < ownStrings)) throw Corrupt();
+            if (children || id < ownStrings) Hold(reader.Chars(chars), use);
             else reader.Skip(2L * chars);
         }
-        if (reader.Int32() != packedCount) throw Corrupt();
-        var (lengths, byteLengths, frameLengths) = (new int[packedCount], new int[packedCount], new int[packedCount]);
-        reader.Int32s(lengths);
-        reader.Int32s(byteLengths);
-        reader.Int32s(frameLengths);
         var scratch = new PackedText.Scratch();
-        for (int id = 0, item = 0; id < textCount; id++)
+        for (var id = strings; id < textCount; id++)
         {
-            if ((tags[id] & 3) != PackedForm) continue;
             token.ThrowIfCancellationRequested();
-            var (length, byteLength, frameLength) = (lengths[item], byteLengths[item], frameLengths[item]);
-            item++;
+            var (use, length, byteLength, frameLength) = (reader.Byte(), reader.Int32(), reader.Int32(), reader.Int32());
+            if (!UseFits(use, longDefinition: true, own: id - strings < ownLong)) throw Corrupt();
             if (length <= 0 || length > IndexFileLimits.TextChars || byteLength < length || byteLength > 3L * length || frameLength <= 0 || frameLength > PackedText.MaxFrameLength(byteLength)) throw Corrupt();
-            if (!Kept(tags[id]))
+            if (!children && id - strings >= ownLong)
             {
                 reader.Skip(frameLength);
                 continue;
@@ -961,36 +998,27 @@ internal static class IndexFileUnit
             reader.Backed(frameLength);
             var frame = new byte[frameLength];
             reader.Bytes(frame);
-            Hold(id, PackedText.FromFrame(frame, length, byteLength, scratch) ?? throw Corrupt());
-        }
-        // A text left out for memory leaves no empty place behind: the texts held move up, so the table's text array is
-        // exactly the texts the load was charged a slot for.
-        if (map is null && leftOutTexts > 0)
-        {
-            map = new int[textCount];
-            var next = 0;
-            for (var id = 0; id < textCount; id++) map[id] = held[id] is null ? -1 : next++;
-            held.RemoveAll(text => text is null);
+            Hold(PackedText.FromFrame(frame, length, byteLength, scratch) ?? throw Corrupt(), use);
         }
 
-        // Each kept entry, and each type, names its texts by where they are held now. An entry whose definition was not kept
-        // loses it, as a read that could not keep a definition counts it: cut, and left out for memory.
-        for (var at = 0; map is not null && at < entries.Length; at++)
+        // The uses the file stated decided how each text was charged, so they must be the entries' own.
+        var uses = Uses(entries, detailShape, parts, held.Count);
+        for (var id = 0; id < uses.Length; id++)
+            if ((stated[id] & compared) != (uses[id] & compared)) throw Corrupt();
+
+        // An entry whose definition was left out for memory loses it, as a read that could not keep a definition counts it:
+        // cut, and left out for memory. (A name is never left out: the load is refused instead.)
+        for (var at = 0; leftOutTexts && at < entries.Length; at++)
         {
             ref var entry = ref entries[at];
-            if ((entry.Name = map[entry.Name]) < 0 || entry.Schema >= 0 && (entry.Schema = map[entry.Schema]) < 0) throw Corrupt();
-            if (entry.Definition < 0 || (entry.Definition = map[entry.Definition]) >= 0) continue;
+            if (entry.Definition < 0 || held[entry.Definition] is not null) continue;
             if ((entry.Flags & ObjectTable.CutFlag) == 0) cut++;
             entry.Flags &= unchecked((byte)~ObjectTable.CutFlag);
+            entry.Definition = -1;
             modules--;
             leftOut++;
             // An object whose text the load left out is not whole: the next build reads it again (BigQueryReader).
             if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false };
-        }
-        for (var type = 0; map is not null && parts is not null && type < parts.TypeName.Length; type++)
-        {
-            if ((parts.TypeName[type] = map[parts.TypeName[type]]) < 0) throw Corrupt();
-            if (parts.TypeSchema[type] >= 0 && (parts.TypeSchema[type] = map[parts.TypeSchema[type]]) < 0) throw Corrupt();
         }
         (modules, cut) = (Math.Max(0, modules), Math.Max(0, cut));
         leftOut = Math.Min(leftOut, cut);
@@ -1003,20 +1031,12 @@ internal static class IndexFileUnit
 
         // The charge the file states is the read's: its content, and what the read charged for rows it then left out. The
         // shared set's is its records and details, which the catalog works out again.
-        var stated = header.MemoryBytes;
-        if (resource ? stated != count * IndexMemory.RecordBytes + detailBytes : stated < whole || stated - whole > whole + ChargeSlack) throw Corrupt();
-        if (children && !resource) account.Rest(stated - whole);
+        var charge = header.MemoryBytes;
+        if (resource ? charge != count * IndexMemory.RecordBytes + detailBytes : charge < whole || charge - whole > whole + ChargeSlack) throw Corrupt();
+        if (children && !resource) account.Rest(charge - whole);
 
         var table = ObjectTable.FromParts(entries, held.ToArray(), shapeList, dates, parts is null ? null : ObjectDetails.FromParts(parts));
         return new(name, datasetName, table, dataset ? new BigQueryFacts(objects!, descriptions!, shards!) : null, modules, cut, leftOut, Has(ChildrenLeftOutFlag) || !children,
             Has(DefinitionsLeftOutFlag), Has(DetailedFlag) && children, Has(FailedPartFlag), Has(CaseKnownFlag) ? Has(CaseSensitiveFlag) : null, Has(DottedIFlag), key, extra);
-    }
-
-    /// <summary>Gives <paramref name="list"/> <paramref name="count"/> empty places, to be filled by id.</summary>
-    private static void SetCount(List<object?> list, int count)
-    {
-        list.Capacity = count;
-        System.Runtime.InteropServices.CollectionsMarshal.SetCount(list, count);
-        System.Runtime.InteropServices.CollectionsMarshal.AsSpan(list).Clear();
     }
 }

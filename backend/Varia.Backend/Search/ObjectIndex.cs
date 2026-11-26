@@ -229,17 +229,18 @@ internal sealed class ObjectIndexLimits
 }
 
 /// <summary>Bounds on one saved unit of the index (<see cref="IndexFile"/>). A file is untrusted input: the loader checks every
-/// length and count against these before it allocates anything by them, and the writer refuses a unit past them rather than
-/// write a file no reader takes. Beyond these, whatever a load keeps is charged to the index's budget as a read's is.</summary>
+/// length and count against these, and the writer refuses a unit past them rather than write a file no reader takes. What a
+/// load keeps it charges to the index's budget first, as a read does; these bound the little it does not charge (the shapes,
+/// the caller's bytes, one text at a time, a bit or two for each entry a load without children reads past).</summary>
 internal static class IndexFileLimits
 {
     /// <summary>One file, header and body.</summary>
     public const long FileBytes = 4L << 30;
     /// <summary>Entries in one unit's table, and in the shared resource set's (which is charged whatever the budget holds).</summary>
-    public const int Objects = 1 << 26;
+    public const int Objects = 1 << 25;
     public const int ResourceObjects = 1 << 21;
     /// <summary>Distinct texts in one unit's table.</summary>
-    public const int Texts = 1 << 27;
+    public const int Texts = 1 << 26;
     /// <summary>One text, a name or a definition, in UTF-16 code units: four times the longest definition the index keeps by default.</summary>
     public const int TextChars = 4 << 20;
     /// <summary>The kind, folder and subtype combinations one unit names (the process knows a few hundred), and each one's length.</summary>
@@ -250,8 +251,8 @@ internal static class IndexFileLimits
     public const int KeyColumns = 1 << 27;
     /// <summary>A database's, project's or dataset's name, or a server's version.</summary>
     public const int NameChars = 1024;
-    /// <summary>A BigQuery fact's text (a signature, a description, a shard group's prefix): well above <see cref="BigQueryIndexLimits.FactChars"/>.</summary>
-    public const int FactChars = 4096;
+    /// <summary>A BigQuery fact's text (a signature, a description, a shard group's prefix), as a read clips it.</summary>
+    public const int FactChars = BigQueryIndexLimits.FactChars;
     /// <summary>The caller's identity and sync state in the header, and the opaque bytes it may keep in the body.</summary>
     public const int IdentityBytes = 1024;
     public const int SyncBytes = 1 << 20;

@@ -347,12 +347,16 @@ internal static partial class IndexFileChecks
                     .Append('|').Append(facts.Shards(at) is { } shards ? JsonSerializer.Serialize(shards, Json) : "-");
             text.Append('\n');
         }
-        // The texts held, in order: a text the table gave back (a definition left out for memory) is no reader's.
+        // The texts held, whatever their ids (which no reader sees: a file numbers them its own way, and a text the table gave
+        // back, a definition left out for memory, is no reader's).
         var (names, definitions) = (table.NameTexts(), table.DefinitionTexts());
-        for (int id = 0, held = 0; texts && id < table.Texts.Count; id++)
+        var lines = new List<string>();
+        for (var id = 0; texts && id < table.Texts.Count; id++)
             if (table.Texts[id] is { } stored)
-                text.Append('t').Append(held++).Append('|').Append(stored is string value ? "S" + value.Length + ":" + Hash(value) : "P" + DefinitionText.Length(stored) + ":" + Hash(DefinitionText.ToText(stored)))
-                    .Append(names[id] ? "|name" : "").Append(definitions[id] ? "|definition" : "").Append('\n');
+                lines.Add("t|" + (stored is string value ? "S" + value.Length + ":" + Hash(value) : "P" + DefinitionText.Length(stored) + ":" + Hash(DefinitionText.ToText(stored)))
+                    + (names[id] ? "|name" : "") + (definitions[id] ? "|definition" : ""));
+        lines.Sort(StringComparer.Ordinal);
+        foreach (var line in lines) text.Append(line).Append('\n');
         if (table.Details is { } details)
             text.Append("details|").Append(details.Types).Append('|').Append(details.TypedCount).Append('|').Append(details.KeyCount).Append('|').Append(details.KeyColumns).Append('|').Append(details.Bytes)
                 .Append('|').Append(string.Join(",", details.ForeignKeys().Select(key => key.At + ">" + key.Referenced))).Append('\n');
@@ -635,7 +639,7 @@ internal static partial class IndexFileChecks
             var second = new ConnectionIndex(world.Budget, world.Catalog, world.Pool);
             var loaded = Load(world, file, kind, Sealed).Value!;
             check(world.Budget.Used == used + loaded.Bytes && loaded.Bytes == unit.Bytes && world.Pool.Stats == (stats.Texts, 2 * stats.References, stats.Bytes)
-                && loaded.Pooled.Zip(unit.Pooled).All(pair => ReferenceEquals(pair.First, pair.Second)),
+                && loaded.Pooled.ToHashSet(ReferenceEqualityComparer.Instance).SetEquals(unit.Pooled),
                 $"{name} loaded beside its read holds the pool's own texts: no text twice, one more reference each, and only its records charged again");
             if (kind == IndexUnitKind.Server) second.PutServer(loaded);
             else if (kind == IndexUnitKind.Agent) second.PutAgent(loaded);
@@ -669,6 +673,27 @@ internal static partial class IndexFileChecks
                 check(later.Budget.Used == used && later.Pool.Stats == stats && replacement.Value.CreditFrom is null, $"swapping the loaded {name} in moves the share over: nothing is charged twice");
             }
             check(Load(later, file, kind, Sealed).Problem == IndexFileProblem.Budget && later.Budget.Used == used && later.Pool.Stats == stats, $"without that share the full budget refuses {name}, and nothing is taken");
+            if (kind == IndexUnitKind.Database && replacement.Value is { } holding)
+            {
+                // A larger unit refused part way through a load that had the share: the read it would have replaced keeps it all.
+                var larger = new World();
+                var grown = Save(await Database(larger, extraTables: 60), IndexUnitKind.Database, Sealed);
+                var dump = Dump(holding);
+                var refusedLarger = Load(later, grown, kind, Sealed, credit: holding);
+                var untouched = later.Budget.Used == used && later.Pool.Stats == stats && Dump(holding) == dump;
+                var fits = Load(later, file, kind, Sealed, credit: holding);
+                check(refusedLarger.Problem == IndexFileProblem.Budget && untouched && fits.Value is { } again && again.Credited == again.Bytes && later.Budget.Used == used,
+                    $"a load refused part way with the replaced read's share leaves that read and its share as they were: {refusedLarger.Problem}, then {fits.Problem}");
+                if (fits.Value is not null) later.Hold(fits.Value, kind);
+            }
+            // A stream that cannot seek loads the same unit: only the early refusal by the file's length is not there.
+            {
+                var streamed = new World();
+                using var forward = new Failing(file, int.MaxValue);
+                var read1 = IndexFile.Load(forward, new IndexLoadOptions(Sealed, kind, Identity, Discovered: false), streamed.Limits, streamed.Pool);
+                check(read1.Value is not null && Dump(read1.Value) == Dump(unit), $"{name} loads from a stream that cannot seek: {read1.Problem}");
+                if (read1.Value is not null) streamed.Connection.Abandon(read1.Value);
+            }
             later.Connection.Dispose();
             check(later.Empty, $"dropping the replacement of {name} leaves nothing");
 
@@ -717,7 +742,22 @@ internal static partial class IndexFileChecks
                 && Enumerable.Range(0, loaded.Table.Count).All(at => !loaded.Table.HasDefinition(at) && !loaded.Table.DefinitionCut(at))
                 && loaded.Table.Rows().Select(row => row.Label).SequenceEqual(unit.Table.Rows().Select(row => row.Label)),
                 $"a database loaded with no room above the names' reserve keeps every name and counts each definition as left out for memory, as its read would: {loaded.Modules} modules, {loaded.Cut} cut, {loaded.LeftOut} left out against {live.Cut} and {live.LeftOut}");
-            check(world.Budget.Used == loaded.Bytes + loaded.Pooled.Sum(StringPool.Cost) && loaded.Bytes < unit.Bytes, "a definition left out on load is not charged: not its text, nor its slot");
+            check(world.Budget.Used == loaded.Bytes + loaded.Pooled.Sum(StringPool.Cost) && loaded.Bytes == unit.Bytes && loaded.Pooled.Length < unit.Pooled.Length
+                && loaded.Table.Texts.Count == unit.Table.Texts.Count, "a definition left out on load costs its place in the table, which stays, and not its text");
+
+            // Without its children as well: the two together are the read without children under the same reserve.
+            var both = new World();
+            both.Limits.NamesReserveBytes = long.MaxValue / 4;
+            var bare = Load(both, file, IndexUnitKind.Database, Clear, children: false).Value!;
+            var bareWorld = new World();
+            bareWorld.Limits.NamesReserveBytes = long.MaxValue / 4;
+            var bareLive = await Database(bareWorld, children: false);
+            check(bare.Table.Rows().SequenceEqual(bareLive.Table.Rows()) && (bare.Modules, bare.Cut, bare.LeftOut) == (bareLive.Modules, bareLive.Cut, bareLive.LeftOut) && bare is { Modules: 0, ChildrenLeftOut: true }
+                && both.Budget.Used == bare.Bytes + bare.Pooled.Sum(StringPool.Cost),
+                $"a database loaded without its children and with no room for definitions is the read without children under that reserve: {bare.Modules} modules, {bare.Cut} cut, {bare.LeftOut} left out against {bareLive.Cut} and {bareLive.LeftOut}");
+            both.Connection.Abandon(bare);
+            bareWorld.Connection.Abandon(bareLive);
+            check(both.Empty && bareWorld.Empty, "and they give everything back");
             world.Connection.Abandon(loaded);
             starved.Connection.Abandon(live);
             source.Connection.Abandon(unit);

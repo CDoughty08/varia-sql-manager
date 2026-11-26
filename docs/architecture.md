@@ -643,10 +643,12 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `IndexFile` (`IndexFileContainer` for the header, encryption and chunks, `IndexFileUnit` for the content; their doc
   comments are the layout) saves one unit of the index (a `DatabaseIndex`, or the shared resource set) to a versioned file
   and loads it back; no build calls it yet, so nothing is written. Its rules: a file is untrusted, so every length is
-  checked against `IndexFileLimits` and charged to the budget before anything is allocated by it, and every reference a
-  search or a lookup follows is checked before a table exists (in clear text nothing else vouches for the content); a load
-  takes texts from the `StringPool` and charges as the reader that made the unit charges (a new field must be charged the
-  same way, BigQuery's under its floors); every failure is an `IndexFileProblem` value with everything taken given back;
+  checked against `IndexFileLimits`, whatever a load keeps is charged to the budget before there is anywhere to keep it
+  (what it does not charge is bounded by those limits alone), and every reference a search or a lookup follows is checked
+  before a table exists (in clear text nothing else vouches for the content); a load takes texts from the `StringPool` and
+  charges as the reader that made the unit charges (a new field must be charged the same way, BigQuery's under its
+  floors); the writer refuses whatever the loader would; every failure is an `IndexFileProblem` value with everything
+  taken given back;
   a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
   change bumps `IndexFileContainer.Version` and commits that version's files (`Fixtures/IndexFile`, written by the test
   program's `--write-index-goldens`), which `IndexFileChecks` loads on every run.
