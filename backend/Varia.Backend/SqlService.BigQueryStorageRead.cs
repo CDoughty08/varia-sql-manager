@@ -24,7 +24,7 @@ internal sealed partial class SqlService
     internal const int InFlightBatches = 2;
 
     /// <summary>A batch a stream read, with the bytes charged for it; or a refusal of the budget, which stops the read.</summary>
-    private sealed record ArrowChunk(ReadOnlyMemory<byte> Batch, long Rows, long Charge, TruncationReason Refusal = TruncationReason.None);
+    private sealed record ArrowChunk(ReadOnlyMemory<byte> Batch, long Rows, long Charge, TruncationReason Refusal = TruncationReason.None, long RefusedBytes = 0);
 
     /// <summary>The read session for a result REST would page through, or null to read it through REST: a script (whose
     /// rows are its last statement's), a result smaller than StorageReadMinBytes, Storage Read off, or a fallback, which
@@ -104,7 +104,7 @@ internal sealed partial class SqlService
                     {
                         if (window is not null && SwitchesOn(set, chunk.Refusal)) { switched = true; switchedFor = chunk.Refusal; break; }
                         set.Skip(chunk.Refusal);
-                        if (!set.Derived) budget.Stop(chunk.Refusal);
+                        if (!set.Derived) budget.Stop(chunk.Refusal, chunk.RefusedBytes);
                         storing = false;
                         break;
                     }
@@ -114,11 +114,11 @@ internal sealed partial class SqlService
                     var decoded = ArrowColumnPlan.DecodedBytes(batch);
                     if (decoded > chunk.Batch.Length)
                     {
-                        if (!store.TryReserve(budget, decoded, true, out var refusal))
+                        if (!store.TryReserve(budget, decoded, true, out var refusal, out var refusedBytes))
                         {
                             if (window is not null && SwitchesOn(set, refusal)) { switched = true; switchedFor = refusal; break; }
                             set.Skip(refusal);
-                            if (!set.Derived) budget.Stop(refusal);
+                            if (!set.Derived) budget.Stop(refusal, refusedBytes);
                             storing = false;
                             break;
                         }
@@ -200,9 +200,9 @@ internal sealed partial class SqlService
                     var charge = 2L * bytes.Length;
                     await slots.WaitAsync(token);
                     // The slot goes with the chunk to the reader, which gives it back; a chunk never queued gives it back here.
-                    if (!store.TryReserve(budget, charge, true, out var refusal))
+                    if (!store.TryReserve(budget, charge, true, out var refusal, out var refusedBytes))
                     {
-                        try { await queue.WriteAsync(new ArrowChunk(default, 0, 0, refusal), token); }
+                        try { await queue.WriteAsync(new ArrowChunk(default, 0, 0, refusal, refusedBytes), token); }
                         catch { slots.Release(); throw; }
                         return;
                     }

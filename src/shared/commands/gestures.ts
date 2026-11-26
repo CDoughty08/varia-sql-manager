@@ -83,7 +83,7 @@ export const gestureCatalog = {
   },
   'grid.secondaryClick': {
     title: 'Context Menu Click', description: 'Control+click is a right-click on macOS: it opens the context menu and keeps a selected block.',
-    kind: 'fixed', scope: 'resultsGrid', alsoIn: ['tableDesigner'], action: 'click', target: 'a cell or header', modifiers: ['ctrl'], platforms: ['darwin'],
+    kind: 'fixed', scope: 'resultsGrid', alsoIn: ['tableDesigner', 'objectExplorer'], action: 'click', target: 'a cell or header', modifiers: ['ctrl'], platforms: ['darwin'],
     locked: 'macOS treats Control+click as a right-click.'
   },
   'grid.addSortKey': {

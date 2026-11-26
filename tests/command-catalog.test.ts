@@ -92,7 +92,7 @@ describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
     // Includes generated Script As commands and internal lifecycle commands.
-    expect(commandIds).toHaveLength(457)
+    expect(commandIds).toHaveLength(465)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -278,7 +278,7 @@ describe('context keys', () => {
     expect(contextRecord('darwin', { isMac: false })).toMatchObject({ isMac: false, isWindows: false, isLinux: false })
     expect(contextRecord('darwin')).toMatchObject({ isMac: true, isWindows: false, isLinux: false })
     expect(keysOfScope('target')).toEqual([
-      'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeNameless', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux', 'explorerProvider', 'explorerBigQueryProjectRole', 'agentRole',
+      'explorerNode', 'explorerServerLost', 'explorerMultiSelected', 'explorerSameEngineMultiple', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerNodePeekable', 'explorerNodeDependencies', 'explorerFolderInsertable', 'explorerNodeNameless', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux', 'explorerProvider', 'explorerBigQueryProjectRole', 'agentRole',
       'outputView', 'outputGridTransposable', 'outputGridBare', 'outputLiveFilterable', 'outputLiveRows', 'outputLiveSortable', 'pane', 'paneFloating', 'panePopout', 'explorerToolsLost', 'explorerToolsFloating', 'explorerToolsPopout', 'documentTabFloating', 'searchHitSchema', 'searchHitBigQuery', 'outputGridComparison'
     ])
     expect(isContextKey('__proto__')).toBe(false)

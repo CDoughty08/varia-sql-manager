@@ -13,9 +13,9 @@ import { isKeptAgentKind, keptAgentKinds, keptAgentLimits, type KeptAgentKind } 
 
 const fits = (value: { kind: DocumentKind | KeptAgentKind; text: string }) => value.text.length <= (isKeptAgentKind(value.kind) ? keptAgentLimits.stateChars : fileKinds[value.kind].maxChars)
 /** A SQL Server Agent document's copy (AG-6g) is its state: never a file, a provider or a job key. */
-const agentShaped = (value: { kind: string; fileId?: string; path?: string; fileSha256?: string; provider?: string; jobKey?: string; targetId?: string }) => !isKeptAgentKind(value.kind)
+const agentShaped = (value: { kind: string; fileId?: string; path?: string; fileSha256?: string; provider?: string; jobKey?: string; targetId?: string; multiMode?: string; multiTargets?: readonly unknown[]; crossView?: string }) => !isKeptAgentKind(value.kind)
   ? value.targetId === undefined
-  : (value.fileId === undefined && value.path === undefined && value.fileSha256 === undefined && value.provider === undefined && value.jobKey === undefined)
+  : (value.fileId === undefined && value.path === undefined && value.fileSha256 === undefined && value.provider === undefined && value.jobKey === undefined && value.multiMode === undefined && value.multiTargets === undefined && value.crossView === undefined)
 const keptKind = z.enum([...documentKinds, ...keptAgentKinds])
 const eol = z.enum(['crlf', 'lf'])
 const name = z.string().min(1).max(recoveryLimits.nameChars)
@@ -24,19 +24,38 @@ const database = z.string().min(1).max(recoveryLimits.datasetChars)
 const provider = z.enum(providerIds)
 /** SQL Server's 128 characters, and BigQuery's 1,024 for a dataset on BigQuery records only. */
 const databaseFits = (value: { provider?: string; database?: string }) => value.provider === 'bigquery' || (value.database ?? '').length <= recoveryLimits.databaseChars
+const multiTargetRecoverySchema = z.object({
+  provider,
+  database: z.string().max(recoveryLimits.datasetChars),
+  enabled: z.boolean(),
+  lastServer: server.optional()
+}).strict()
+  .refine(target => target.provider === 'bigquery' || target.database.length <= recoveryLimits.databaseChars, 'A database name has at most 128 characters.')
+const multiFields = {
+  multiMode: z.enum(['same', 'cross']).optional(),
+  multiTargets: z.array(multiTargetRecoverySchema).max(recoveryLimits.multiTargets).optional(),
+  crossView: z.enum(['split', 'file']).optional()
+}
+const multiShaped = (value: { kind: string; jobKey?: string; targetId?: string; multiMode?: 'same' | 'cross'; multiTargets?: readonly { provider: string }[]; crossView?: 'split' | 'file' }) => {
+  if (value.multiMode === undefined) return value.multiTargets === undefined && value.crossView === undefined
+  if (value.multiTargets === undefined || value.kind !== 'sql') return false
+  if (value.crossView !== undefined && value.multiMode !== 'cross') return false
+  if (value.multiMode === 'same' && new Set(value.multiTargets.map(target => target.provider)).size > 1) return false
+  return value.jobKey === undefined && value.targetId === undefined
+}
 // Lower-case, as crypto.randomUUID() makes them: a record has one file name, so the caps, the list and the purge all see it.
 const recordId = z.uuid().regex(/^[0-9a-f-]{36}$/, 'An AutoRecover id is a lower-case uuid.')
 /** varia:recovery-write: the query's text, at most its kind's limit, and what the dialog shows about it. */
 export const recoveryWriteSchema = z.object({
-  id: recordId, name, kind: keptKind, fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), provider: provider.optional(), jobKey: jobKeySchema.optional(), targetId: z.uuid().optional(), text: z.string().max(maxDocumentCharacters)
-}).strict().refine(fits, 'The query is too large for AutoRecover.').refine(databaseFits, 'A database name has at most 128 characters.').refine(agentShaped, 'A SQL Server Agent document keeps only its state.')
+  id: recordId, name, kind: keptKind, fileId: z.uuid().optional(), eol, server: server.optional(), database: database.optional(), provider: provider.optional(), jobKey: jobKeySchema.optional(), targetId: z.uuid().optional(), text: z.string().max(maxDocumentCharacters), ...multiFields
+}).strict().refine(fits, 'The query is too large for AutoRecover.').refine(databaseFits, 'A database name has at most 128 characters.').refine(agentShaped, 'A SQL Server Agent document keeps only its state.').refine(multiShaped, 'Multi-server query targets must match the tab mode.')
 export const recoveryDiscardSchema = z.object({ ids: z.array(recordId).min(1).max(recoveryLimits.discardIds) }).strict()
 export const recoveryTakeSchema = z.object({ id: recordId }).strict()
 
 /** One record, `<id>.json`. `owner` is the main process (`instance`) and renderer generation that wrote or took it.
  *  Version 2 (0.10.0, `WorkbenchAutoRecover/`) adds the query's provider and its file's disk fingerprint (`fileSha256`, the
- *  version its text was based on, so Save can tell a change made while Varia was closed); a version 1 record (0.9.0's
- *  `AutoRecover/`) reads as version 2, SQL Server's, without a fingerprint. */
+ *  version its text was based on, so Save can tell a change made while Varia was closed); version 3 adds multi-server /
+ *  cross-engine target hints (`multiMode`, `multiTargets`, `crossView`). Older records read forward as version 3. */
 const recordFields = {
   id: recordId, owner: z.object({ instance: z.uuid(), generation: z.int().min(0) }).strict(),
   name, kind: z.enum(documentKinds), path: z.string().min(1).max(recoveryLimits.pathChars).optional(), eol, server: server.optional(), database: database.optional(),
@@ -44,9 +63,14 @@ const recordFields = {
 }
 const v1RecordSchema = z.object({ ...recordFields, version: z.literal(1), database: z.string().min(1).max(recoveryLimits.databaseChars).optional() }).strict().refine(fits)
 const v2RecordSchema = z.object({ ...recordFields, version: z.literal(2), kind: keptKind, provider: provider.optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(), jobKey: jobKeySchema.optional(), targetId: z.uuid().optional() }).strict().refine(fits).refine(databaseFits).refine(agentShaped)
-export const recoveryRecordSchema = z.union([v2RecordSchema, v1RecordSchema.transform(record => ({ ...record, version: 2 as const }))])
+const v3RecordSchema = z.object({ ...recordFields, version: z.literal(3), kind: keptKind, provider: provider.optional(), fileSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(), jobKey: jobKeySchema.optional(), targetId: z.uuid().optional(), ...multiFields }).strict().refine(fits).refine(databaseFits).refine(agentShaped).refine(multiShaped)
+export const recoveryRecordSchema = z.union([
+  v3RecordSchema,
+  v2RecordSchema.transform(record => ({ ...record, version: 3 as const })),
+  v1RecordSchema.transform(record => ({ ...record, version: 3 as const }))
+])
 const recordSchema = recoveryRecordSchema
-export type RecoveryRecord = z.infer<typeof v2RecordSchema>
+export type RecoveryRecord = z.infer<typeof v3RecordSchema>
 
 // In any case: this version names records only in lower case, but one in upper case (written by hand, or by a build
 // before that rule) still counts against the caps and is purged; `list` quarantines it rather than offer it.
@@ -142,10 +166,19 @@ export class RecoveryStore {
       if (mine !== undefined && mine !== generation) throw new Error('This AutoRecover copy belongs to an earlier window.')
       if (mine === undefined && await stat(this.path(request.id)).then(() => true, () => false)) throw new Error('This AutoRecover copy belongs to an earlier window.')
       const record: RecoveryRecord = {
-        version: 2, id: request.id, owner: { instance: this.instance, generation }, name: request.name, kind: request.kind,
+        version: 3, id: request.id, owner: { instance: this.instance, generation }, name: request.name, kind: request.kind,
         ...request.path && request.path.length <= recoveryLimits.pathChars ? { path: request.path, fileSha256: request.fileSha256 } : {}, eol: request.eol,
         ...request.server ? { server: request.server } : {}, ...request.database ? { database: request.database } : {}, ...request.provider ? { provider: request.provider } : {}, ...request.jobKey ? { jobKey: request.jobKey } : {},
-        ...request.targetId ? { targetId: request.targetId } : {}, savedAt: this.now().toISOString(), text: request.text
+        ...request.targetId ? { targetId: request.targetId } : {},
+        ...request.multiMode ? { multiMode: request.multiMode } : {},
+        ...request.multiTargets ? {
+          multiTargets: request.multiTargets.map(target => ({
+            provider: target.provider, database: target.database, enabled: target.enabled,
+            ...target.lastServer ? { lastServer: target.lastServer } : {}
+          }))
+        } : {},
+        ...request.crossView ? { crossView: request.crossView } : {},
+        savedAt: this.now().toISOString(), text: request.text
       }
       const bytes = Buffer.from(JSON.stringify(record) + '\n')
       if (bytes.length > recoveryLimits.recordBytes) throw new Error('The query is too large for AutoRecover.')

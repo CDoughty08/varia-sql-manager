@@ -19,6 +19,7 @@ internal sealed class LiveBudget(long limit)
 internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, long maxBytes = long.MaxValue)
 {
     internal long used;
+    private readonly object stopGate = new();
     private int stopped;
     private long refusedBytes, stoppedBytes;
     public string SessionId { get; } = sessionId;
@@ -67,11 +68,20 @@ internal sealed class QueryBudget(string sessionId, LiveBudget? live = null, lon
         lock (sealing) sets = [.. sealing];
         return sets.Any(set => set.SealPackable);
     }
-    internal void Stop(TruncationReason reason)
+    internal void Stop(TruncationReason reason) => Stop(reason, 0);
+
+    internal void Stop(TruncationReason reason, long refusedBytes)
     {
-        // The refusal that stops a query comes just before its Stop, on the same thread.
-        if (Interlocked.CompareExchange(ref stopped, (int)reason, 0) == 0 && reason is TruncationReason.QueryBudget or TruncationReason.GlobalBudget)
-            Volatile.Write(ref stoppedBytes, Interlocked.Read(ref refusedBytes));
+        lock (stopGate)
+        {
+            if (stopped != 0) return;
+            if (reason is TruncationReason.QueryBudget or TruncationReason.GlobalBudget)
+            {
+                var bytes = refusedBytes > 0 ? refusedBytes : Interlocked.Read(ref this.refusedBytes);
+                Volatile.Write(ref stoppedBytes, bytes);
+            }
+            Volatile.Write(ref stopped, (int)reason);
+        }
     }
 
     private readonly object allowGate = new();
@@ -572,16 +582,17 @@ internal sealed partial class ResultStore
     /// <param name="derived">A set made from stored results (<see cref="ResultSetBuffer.Derived"/>): a refusal returns null
     /// without stopping the query.</param>
     public ResultSetBuffer? Open(QueryBudget query, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns, IReadOnlyList<WireKind> wires, bool transfer = false,
-        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false, string? name = null)
+        IReadOnlyList<ColumnLength>? lengths = null, bool derived = false, string? name = null, string? targetKey = null, string? targetLabel = null, string? targetEnvironment = null,
+        string? targetProvider = null, int? statementSlot = null)
     {
         // A live set's pages stay off the large object heap; see LiveBudget.
         var sealBytes = query.Live is null ? SealBytes : LiveSealBytes;
         if (query.Stopped != TruncationReason.None) return null;
         var metadata = 512 + columns.Sum(column => 2L * column.Name.Length + 64);
         if (transfer) Force(query, metadata);
-        else if (!TryReserve(query, metadata, false, out var reason))
+        else if (!TryReserve(query, metadata, false, out var reason, out var refusedBytes))
         {
-            if (!derived) query.Stop(reason);
+            if (!derived) query.Stop(reason, refusedBytes);
             return null;
         }
         lock (gate)
@@ -591,7 +602,16 @@ internal sealed partial class ResultStore
                 Return(query, metadata);
                 throw new RequestException("BACKEND_ERROR", "Result identifiers are exhausted. Restart the SQL backend.");
             }
-            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths) { Derived = derived, ResultName = name };
+            var set = new ResultSetBuffer(this, query, nextId++, index, batchNumber, iteration, kind, columns, wires, metadata, sealBytes, lengths)
+            {
+                Derived = derived,
+                ResultName = name,
+                TargetKey = targetKey,
+                TargetLabel = targetLabel,
+                TargetEnvironment = targetEnvironment,
+                TargetProvider = targetProvider,
+                StatementSlot = statementSlot
+            };
             sets[set.ResultId] = set;
             return set;
         }
@@ -601,12 +621,15 @@ internal sealed partial class ResultStore
     /// seals, and by working and spare memory of some size), the query's half of the budget, for a live table its subscription's limit (QueryBudget) and the live share
     /// (GlobalBudget), then the global budget.</summary>
     public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason) =>
-        // One reading of the figures for the whole reservation: a concurrent Resize applies to the next one.
-        TryReserve(query, bytes, checkSystem, Volatile.Read(ref figures), out reason);
+        TryReserve(query, bytes, checkSystem, Volatile.Read(ref figures), out reason, out _);
 
-    private bool TryReserve(QueryBudget query, long bytes, bool checkSystem, Figures budget, out TruncationReason reason)
+    public bool TryReserve(QueryBudget query, long bytes, bool checkSystem, out TruncationReason reason, out long refusedBytes) =>
+        // One reading of the figures for the whole reservation: a concurrent Resize applies to the next one.
+        TryReserve(query, bytes, checkSystem, Volatile.Read(ref figures), out reason, out refusedBytes);
+
+    private bool TryReserve(QueryBudget query, long bytes, bool checkSystem, Figures budget, out TruncationReason reason, out long refusedBytes)
     {
-        if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; return false; }
+        if (checkSystem && IsSystemMemoryLow()) { reason = TruncationReason.SystemMemory; refusedBytes = 0; return false; }
         var queryLimit = QueryLimit(query, budget);
         // Each share is claimed before the next is checked and given back on a later refusal, so concurrent reservations (a
         // query's Storage Read streams) never pass a limit together. The query's share is claimed only when it fits.
@@ -615,6 +638,7 @@ internal sealed partial class ResultStore
             if (current + bytes > queryLimit)
             {
                 query.Refused(queryLimit);
+                refusedBytes = queryLimit;
                 reason = TruncationReason.QueryBudget;
                 return false;
             }
@@ -628,6 +652,7 @@ internal sealed partial class ResultStore
                 Interlocked.Add(ref live.used, -bytes);
                 Interlocked.Add(ref query.used, -bytes);
                 query.Refused(live.Limit);
+                refusedBytes = live.Limit;
                 reason = TruncationReason.QueryBudget;
                 return false;
             }
@@ -637,6 +662,7 @@ internal sealed partial class ResultStore
                 Interlocked.Add(ref live.used, -bytes);
                 Interlocked.Add(ref query.used, -bytes);
                 query.Refused(budget.Live);
+                refusedBytes = budget.Live;
                 reason = TruncationReason.GlobalBudget;
                 return false;
             }
@@ -647,6 +673,7 @@ internal sealed partial class ResultStore
             {
                 Interlocked.Add(ref query.used, -bytes);
                 query.Refused(budget.Global);
+                refusedBytes = budget.Global;
                 if (live is not null)
                 {
                     Interlocked.Add(ref liveUsed, -bytes);
@@ -658,6 +685,7 @@ internal sealed partial class ResultStore
             if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) break;
         }
         reason = TruncationReason.None;
+        refusedBytes = 0;
         return true;
     }
 
@@ -682,7 +710,7 @@ internal sealed partial class ResultStore
         var limit = QueryLimit(query, budget);
         if (query.UsedBytes + bytes > limit - limit / 8 || UsedBytes + bytes > budget.Global - budget.Global / 8) return false;
         // The same reading as the eighth left free: a lowering in between cannot let spare memory take that eighth.
-        return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, budget, out _);
+        return TryReserve(query, bytes, checkSystem ?? bytes >= WorkCheckBytes, budget, out _, out _);
     }
 
     /// <summary>Working memory at this size or more is refused while the operating system reports high memory load, as a

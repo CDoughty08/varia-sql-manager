@@ -99,7 +99,7 @@ describe('object action catalogue', () => {
     expect(entries['explorer.tasks.restoreDatabase']).toMatchObject({ title: 'Restore Database…', palette: false, precondition: entries['explorer.restoreDatabase'].precondition })
     expect(entries['explorer.tasks.restoreFiles']).toMatchObject({ title: 'Restore Files and Filegroups…', palette: false, precondition: entries['explorer.restoreFiles'].precondition })
     expect(entries['explorer.restoreFiles'].menus).toEqual([{ menu: 'explorer.context', group: '0_new', order: 4, mnemonic: 'e', when: "explorerActionRestoreFiles != '' && explorerNode == 'folder'" }])
-    expect(entries['explorer.tasks.restoreFiles'].menus).toEqual([{ menu: 'explorer.tasks.restore', group: '1_restore', order: 2, title: 'Files and Filegroups…', mnemonic: 'f', when: "explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background'" }])
+    expect(entries['explorer.tasks.restoreFiles'].menus).toEqual([{ menu: 'explorer.tasks.restore', group: '1_restore', order: 2, title: 'Files and Filegroups…', mnemonic: 'f', when: "explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background' && !explorerMultiSelected" }])
     expect(Object.keys(entries)).toContain('explorer.selectTopRows')
     expect(new Set(commandIds).size).toBe(commandIds.length)
     for (const [id, entry] of Object.entries(entries)) {
@@ -118,14 +118,14 @@ describe('object action catalogue', () => {
     // A login's Disable and Enable: the palette's title names the login, the menu's is SSMS's one word; no keys, as in SSMS.
     expect(entries['explorer.disable']).toEqual({ title: 'Disable Login', category: 'Object Explorer', icon: 'circle-slash', keywords: ['login', 'account', 'block', 'deactivate'],
       unavailableHint: 'Select an enabled login in Object Explorer.', precondition: "backendReady && explorerActionDisable == 'enabled'",
-      menus: [{ menu: 'explorer.context', group: '6_state', order: 1, title: 'Disable', mnemonic: 'b', when: "explorerActionDisable != '' && explorerNode != 'background'" }] })
+      menus: [{ menu: 'explorer.context', group: '6_state', order: 1, title: 'Disable', mnemonic: 'b', when: "explorerActionDisable != '' && explorerNode != 'background' && !explorerMultiSelected" }] })
     expect(entries['explorer.enable']).toMatchObject({ title: 'Enable Login', icon: 'pass', unavailableHint: 'Select a disabled login in Object Explorer.', precondition: "backendReady && explorerActionEnable == 'enabled'",
-      menus: [{ menu: 'explorer.context', group: '6_state', order: 1, title: 'Enable', mnemonic: 'b', when: "explorerActionEnable != '' && explorerNode != 'background'" }] })
+      menus: [{ menu: 'explorer.context', group: '6_state', order: 1, title: 'Enable', mnemonic: 'b', when: "explorerActionEnable != '' && explorerNode != 'background' && !explorerMultiSelected" }] })
     expect(entries['explorer.disable'].keybindings ?? entries['explorer.enable'].keybindings).toBeUndefined()
     // Unlock… (D4d): after Disable or Enable in the state group, U as its access key, a padlock, and no keys.
     expect(entries['explorer.unlock']).toEqual({ title: 'Unlock Login…', category: 'Object Explorer', icon: 'unlock', keywords: ['login', 'account', 'locked', 'lockout', 'password', 'policy'],
       unavailableHint: 'Select a SQL Server login in Object Explorer.', precondition: "backendReady && explorerActionUnlock == 'enabled'",
-      menus: [{ menu: 'explorer.context', group: '6_state', order: 2, title: 'Unlock…', mnemonic: 'u', when: "explorerActionUnlock != '' && explorerNode != 'background'" }] })
+      menus: [{ menu: 'explorer.context', group: '6_state', order: 2, title: 'Unlock…', mnemonic: 'u', when: "explorerActionUnlock != '' && explorerNode != 'background' && !explorerMultiSelected" }] })
   })
   it('derives a login\'s rows from logins.ts: Disable and Rename by subtype, and Enable in place of Disable while it is disabled', () => {
     // selectTop rename delete properties disable enable unlock. Properties (D2c) opens Login Properties on every login. Unlock is offered on SQL Server logins (sa included) whatever their state, greyed on SQL Server's own and

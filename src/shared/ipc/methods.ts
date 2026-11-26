@@ -105,6 +105,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'tables.columns': metadata,
   // The script's own timeout ends it inside the backend (status timedOut); main only guards against a lost answer.
   'query.execute': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 30) * 1000, ...both },
+  // Multi-server and cross-engine execution: coordinated barrier + rollback takes up to 30 s more margin than single-server.
+  'query.executeMulti': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: params => params.timeoutSeconds === 0 ? 0 : (params.timeoutSeconds + 60) * 1000, ...both },
   'query.cancel': { ...control, ...both },
   // A re-attached BigQuery job runs like a query, as long as BigQuery takes; Stop is query.cancel.
   'query.attach': { kind: 'unary', lane: 'query', deadlineMs: 0, backstopMs: () => 0, providers: ['bigquery'] },
@@ -142,6 +144,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'results.profile': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Groups and aggregates stored rows in memory off the frame loop, then stores the pivot as a result; Stop cancels it.
   'results.pivot': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
+  // Combines 2 to 32 complete rows results of the same query into one stored result (`kind: 'combined'`).
+  'results.combine': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // Groups a column's stored values in memory off the frame loop, as a filter compares them; a newer request cancels it.
   'results.distinct': { kind: 'unary', lane: 'results', deadlineMs: 120_000, ...both },
   // A window of a kept snapshot; a new search scans its values once, in memory, off the frame loop.
@@ -236,6 +240,18 @@ export const providerParamMethods = ['connections.connect', 'connections.databas
 export function requestProvider(method: BackendMethod, params: unknown, providerOfConnection: (id: string) => ProviderId | undefined): ProviderId | undefined {
   const record = params !== null && typeof params === 'object' ? params as Record<string, unknown> : {}
   if ((providerParamMethods as readonly string[]).includes(method)) return record.provider === 'bigquery' ? 'bigquery' : 'sqlserver'
+  if (method === 'query.executeMulti') {
+    if (record.mode === 'crossEngineReadOnly' || !Array.isArray(record.targets) || record.targets.length === 0) return undefined
+    let first: ProviderId | undefined
+    for (const target of record.targets) {
+      const id = target !== null && typeof target === 'object' ? (target as Record<string, unknown>).connectionId : undefined
+      const provider = typeof id === 'string' ? providerOfConnection(id) : undefined
+      if (provider === undefined) return undefined
+      if (first === undefined) first = provider
+      else if (first !== provider) return undefined
+    }
+    return first
+  }
   // A language request names its connection in its context.
   const context = record.context !== null && typeof record.context === 'object' ? record.context as Record<string, unknown> : {}
   const connectionId = typeof record.connectionId === 'string' ? record.connectionId : typeof context.connectionId === 'string' ? context.connectionId : undefined
@@ -253,6 +269,13 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method === 'live.subscribe') {
     const source = (params as { source?: unknown }).source
     return typeof source === 'string' && isLiveSource(source) && providersOf(liveSources[source]).includes(provider)
+  }
+  if (method === 'query.executeMulti') {
+    const options = params as Partial<BackendMethods['query.executeMulti']['params']>
+    const targets = Array.isArray(options.targets) ? options.targets : []
+    if (provider === 'bigquery') return options.stopOnError === undefined && targets.every(target => target?.database === undefined)
+    return options.preflightDryRun === undefined && options.prices === undefined && options.residence === undefined && options.windowCacheMiB === undefined
+      && targets.every(target => target?.dataset === undefined && target?.maximumBytesBilled === undefined)
   }
   if (method !== 'query.execute') return true
   const options = params as Partial<BackendMethods['query.execute']['params']>

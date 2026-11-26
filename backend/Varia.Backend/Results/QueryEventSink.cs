@@ -69,6 +69,52 @@ internal sealed class QueryEventSink : IDisposable
         }
     }
 
+    /// <summary>resultSet.meta: non-droppable metadata update for a stored result (e.g. rolledBackPreview after Phase 2 rollback).</summary>
+    public void ResultSetMeta(uint resultId, bool rolledBackPreview)
+    {
+        lock (gate)
+        {
+            if (stopped) return;
+            Emit(new ResultSetMetaEvent(resultId, rolledBackPreview), droppable: false);
+        }
+    }
+
+    private const int MaxTargetStateErrorCodeChars = 64;
+    private const int MaxTargetStateErrorMessageChars = 2000;
+
+    private static string TruncateSafe(string value, int maxChars)
+    {
+        if (value.Length <= maxChars) return value;
+        var len = maxChars;
+        if (len > 0 && char.IsHighSurrogate(value[len - 1])) len--;
+        return value[..len];
+    }
+
+    /// <summary>multiQuery.targetState: per-target execution state; terminal phases flush messages and are non-droppable.</summary>
+    public void TargetState(MultiQueryTargetStateEvent state)
+    {
+        var normalizedCode = string.IsNullOrWhiteSpace(state.ErrorCode)
+            ? null
+            : TruncateSafe(state.ErrorCode, MaxTargetStateErrorCodeChars);
+        var normalizedMessage = state.ErrorMessage is null
+            ? null
+            : TruncateSafe(state.ErrorMessage, MaxTargetStateErrorMessageChars);
+        if (!string.Equals(normalizedCode, state.ErrorCode, StringComparison.Ordinal)
+            || !string.Equals(normalizedMessage, state.ErrorMessage, StringComparison.Ordinal))
+        {
+            state = state with { ErrorCode = normalizedCode, ErrorMessage = normalizedMessage };
+        }
+        lock (gate)
+        {
+            if (stopped) return;
+            var terminal = IsTerminalPhase(state.Phase);
+            if (terminal) FlushMessages();
+            Emit(state, droppable: !terminal);
+        }
+    }
+
+    private static bool IsTerminalPhase(string phase) => phase is "succeeded" or "committed" or "rolledBack" or "commitInDoubt" or "failed" or "cancelled" or "timedOut" or "skipped";
+
     public void Closed(ResultSetBuffer set)
     {
         lock (gate)

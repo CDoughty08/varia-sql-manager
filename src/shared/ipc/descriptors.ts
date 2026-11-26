@@ -25,7 +25,7 @@ export const refusedResultNameChars = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u
 export const truncationSchema = z.enum(['rowLimit', 'queryBudget', 'globalBudget', 'systemMemory'])
 /** A descriptor as the backend sends it, before main adds the generation. */
 export const backendDescriptorSchema = z.object({
-  resultId: u32, index: z.number().int().min(0).max(limits.maxResultSets.max), batchNumber: count, iteration: count, kind: z.enum(['rows', 'executionPlan', 'diff', 'pivot']),
+  resultId: u32, index: z.number().int().min(0).max(limits.maxResultSets.max), batchNumber: count, iteration: count, kind: z.enum(['rows', 'executionPlan', 'diff', 'pivot', 'combined']),
   columns: z.array(columnSchema).min(1).max(limits.page.maxColumns), rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncatedCells: count,
   state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean(),
   name: z.string().min(1).max(resultNameChars).refine(value => !refusedResultNameChars.test(value) && value.trim() === value).optional(),
@@ -33,5 +33,9 @@ export const backendDescriptorSchema = z.object({
   // total, and the revision each switch between them bumps.
   residence: z.enum(['memory', 'remote']).optional(), rowsTotal: count.optional(), revision: z.number().int().min(0).max(0x7fffffff).optional(),
   // A windowed result's projected size in memory, which Load into memory is offered under.
-  projectedBytes: count.optional()
+  projectedBytes: count.optional(),
+  // Multi-server: target key (absent for single-server and combined sets), 0-based statement slot, and rollback preview notice.
+  targetKey: z.string().min(1).max(64).optional(),
+  statementSlot: z.number().int().min(0).max(limits.maxResultSets.max - 1).optional(),
+  rolledBackPreview: z.boolean().optional()
 }).strict()

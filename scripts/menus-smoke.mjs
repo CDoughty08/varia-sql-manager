@@ -872,7 +872,7 @@ try {
   await submitConnect(explorerConnect.window, explorerConnect.dialog)
   // A server: its own items, and New Query on its connection with focus in the new query.
   const serverA = await openExplorerRowMenu('server-a')
-  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'Copy Name', 'Move Up', 'Move Down', 'Refresh'])
+  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', 'New Query', 'Activity Monitor', 'Search Objects…', 'New Cross-Engine SELECT…', 'Copy Name', 'Move Up', 'Move Down', 'Refresh'])
   await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
   await explorerMenu.getByRole('menuitem', { name: 'New Query', exact: true }).click()
@@ -1366,7 +1366,7 @@ try {
   // Only the open menu's token counts: a choice from the table's older menu does not run on the server's.
   await (await explorerRow(page, 'server-a')).click({ button: 'right' })
   await expect.poll(async () => (await popups()).length).toBe(4)
-  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', '---', 'New Query', 'Activity Monitor', 'Search Objects…', '---', 'Copy Name', '---', 'Move Up', 'Move Down', '---', 'Refresh'])
+  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Disconnect and Remove from Explorer', 'Environment…', '---', 'New Query', 'Activity Monitor', 'Search Objects…', 'New Cross-Engine SELECT…', '---', 'Copy Name', '---', 'Move Up', 'Move Down', '---', 'Refresh'])
   const queriesBefore = await tabs().count()
   await application.evaluate(() => { globalThis.variaPopups[2].menu.getMenuItemById('explorer.copyName').click() })
   await pick('explorer.newQuery')

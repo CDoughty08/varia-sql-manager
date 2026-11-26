@@ -117,8 +117,14 @@ internal sealed partial class SqlService
                 }
             }
         }
+        if (!TryBeginSessionRun(args.SessionId, args.QueryId))
+        {
+            Unregister();
+            throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
+        }
         if (!bigQueryTabs.TryAdd(args.SessionId, 0))
         {
+            EndSessionRun(args.SessionId, args.QueryId);
             Unregister();
             throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
         }
@@ -126,6 +132,7 @@ internal sealed partial class SqlService
         if (bigQuery.Find(args.ConnectionId) != connection)
         {
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            EndSessionRun(args.SessionId, args.QueryId);
             Unregister();
             throw new RequestException("NOT_CONNECTED", "The connection was closed.");
         }
@@ -664,6 +671,7 @@ internal sealed partial class SqlService
                 session.Queue.Release();
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            EndSessionRun(args.SessionId, args.QueryId);
             running.Ended.TrySetResult();
         }
         if (summary is not null && BigQueryCost.Summary(summary, args.Prices != false) is { } cost) messages.Add(cost);
@@ -742,7 +750,7 @@ internal sealed partial class SqlService
                 // so a small capped result is not refused (or switched to windowed) for a page mostly read past.
                 if (args.MaxRows > 0 && page.RowCount > 0 && args.MaxRows - storedRows < page.RowCount)
                     charge = (long)Math.Ceiling((double)charge * Math.Max(0, args.MaxRows - storedRows) / page.RowCount);
-                if (!store.TryReserve(budget, charge, true, out var refusal))
+                if (!store.TryReserve(budget, charge, true, out var refusal, out var refusedBytes))
                 {
                     // The page does not fit beside the rows already stored, so neither would its rows.
                     charge = 0;
@@ -750,7 +758,7 @@ internal sealed partial class SqlService
                     if (window is not null && SwitchesOn(set, refusal) && SwitchToWindowed(set, window, events, messages!, refusal)) return;
                     set.Skip(refusal);
                     // A derived set (a view or value list in BigQuery) stops only itself: its source keeps its budget.
-                    if (!set.Derived) budget.Stop(refusal);
+                    if (!set.Derived) budget.Stop(refusal, refusedBytes);
                     storing = false;
                 }
                 try

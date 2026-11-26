@@ -36,8 +36,14 @@ internal sealed partial class SqlService
         using var cancellation = new CancellationTokenSource(BigQueryPreviewLimit);
         var running = new RunningQuery(args.ConnectionId, args.SessionId, cancellation);
         if (!Register(args.QueryId, running)) throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
+        if (!TryBeginSessionRun(args.SessionId, args.QueryId))
+        {
+            queries.TryRemove(new(args.QueryId, running));
+            throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
+        }
         if (!bigQueryTabs.TryAdd(args.SessionId, 0))
         {
+            EndSessionRun(args.SessionId, args.QueryId);
             queries.TryRemove(new(args.QueryId, running));
             throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
         }
@@ -45,6 +51,7 @@ internal sealed partial class SqlService
         if (bigQuery.Find(args.ConnectionId) != connection)
         {
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            EndSessionRun(args.SessionId, args.QueryId);
             queries.TryRemove(new(args.QueryId, running));
             throw new RequestException("NOT_CONNECTED", "The connection was closed.");
         }
@@ -114,6 +121,7 @@ internal sealed partial class SqlService
                 events.Closed(set);
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            EndSessionRun(args.SessionId, args.QueryId);
         }
         var output = messages.Snapshot();
         var descriptors = sets.Select(set => set.Describe()).ToList();
@@ -149,10 +157,10 @@ internal sealed partial class SqlService
             }, token);
             total = page.TotalRows ?? total;
             var charge = page.Cost(plan.Columns.Count);
-            if (!store.TryReserve(budget, charge, true, out var refusal))
+            if (!store.TryReserve(budget, charge, true, out var refusal, out var refusedBytes))
             {
                 set.Skip(refusal);
-                budget.Stop(refusal);
+                budget.Stop(refusal, refusedBytes);
                 stopping = true;
                 break;
             }

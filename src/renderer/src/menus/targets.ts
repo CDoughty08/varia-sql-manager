@@ -19,7 +19,7 @@ import { turnableKinds } from '../results/ResultsService'
  * whose connection was lost with its backend generation, whether it is a folder with a filter, and whether it is a folder
  * with names to copy (a fully loaded Columns folder).
  */
-export interface ExplorerMenuNode extends ObjectMenuNode { readonly id: number; readonly filtered?: boolean; readonly insertable?: boolean }
+export interface ExplorerMenuNode extends ObjectMenuNode { readonly id: number; readonly filtered?: boolean; readonly insertable?: boolean; readonly multiSelected?: boolean; readonly sameEngineMultiple?: boolean }
 /** An object a menu is for, with or without a tree row: whether its server's connection was lost with its backend generation. */
 export interface ObjectMenuNode extends ExplorerTarget { readonly lost: boolean }
 /**
@@ -194,6 +194,8 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
   return {
     explorerNode: target?.kind === 'explorer' ? target.node?.kind ?? 'background' : '',
     explorerServerLost: target?.kind === 'explorer' && !!target.node?.lost,
+    explorerMultiSelected: target?.kind === 'explorer' && !!target.node?.multiSelected,
+    explorerSameEngineMultiple: target?.kind === 'explorer' && !!target.node?.sameEngineMultiple,
     explorerFolder: target?.kind === 'explorer' && target.node?.kind === 'folder' ? target.node.folder ?? '' : '',
     explorerFolderFilterable: target?.kind === 'explorer' && filterable(target.node),
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,

@@ -1,6 +1,6 @@
 // Messages between the UI thread (ResultClient) and the results worker. The worker also owns the results port to main
 // (src/shared/ipc/port-messages.ts).
-import type { BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, ResolvedViewFilter, ResultsCombineResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -111,6 +111,8 @@ export type WorkerRequest =
   /** A BigQuery result switched residence under a new revision (resultSet.residence): its cached pages are stale and go, and
    *  reads in flight end, so waiting windows answer short and the grid reads the rows again. */
   | { readonly type: 'revise'; readonly key: ResultKey }
+  /** Combines 2 to 32 complete rows results of the same query into one stored result (`kind: 'combined'`). */
+  | { readonly type: 'combine'; readonly id: number; readonly generation: number; readonly resultIds: readonly number[]; readonly statementName?: string }
 
 /** Worker → UI. A window's `flags` buffer and a measure's `widths` buffer are transferred. */
 export type WorkerResponse =
@@ -136,3 +138,4 @@ export type WorkerResponse =
   /** How far the long request `id` has got (op.progress, relayed by main). */
   | { readonly type: 'progress'; readonly id: number; readonly phase: OperationPhase; readonly percent?: number }
   | { readonly type: 'liveUpdated'; readonly id: number; readonly result: LiveUpdateResult }
+  | { readonly type: 'combined'; readonly id: number; readonly result: ResultsCombineResult }

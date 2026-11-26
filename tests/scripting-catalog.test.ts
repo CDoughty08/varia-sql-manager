@@ -249,7 +249,7 @@ describe('scripting catalogue', () => {
     expect(entries['explorer.scriptAs']).toEqual({
       providers: ['sqlserver', 'bigquery'], title: 'Script as', nativeId: 'explorer.scriptAs', dynamicTitle: 'scriptAs',
       placements: [
-        { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" },
+        { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background' && !explorerMultiSelected" },
         // A Search Objects result's menu stands in the result's keys for the selection's.
         { menu: 'search.hit.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != ''" }
       ]
