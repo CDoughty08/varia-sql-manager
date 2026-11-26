@@ -153,6 +153,11 @@ internal sealed partial class ObjectSearchService : IDisposable
     }
 
     public ObjectIndexLimits Limits { get; }
+    /// <summary>A check's hook: called when a BigQuery build's names pass has held a dataset's read (or left it as it was, or
+    /// given it up for the listing's error).</summary>
+    internal Action<string, string>? NamesHeld { get; set; }
+    /// <summary>A check's hook: called when a BigQuery build's names pass stops reading new discovered datasets for memory.</summary>
+    internal Action? NamesStopped { get; set; }
 
     /// <summary>explorer.index's memoryLimitMiB, checked: the limit every connection's index shares from this build on, with the
     /// names' reserve (and so BigQuery's floors) in proportion. Nothing held is dropped: a rebuild charges its predecessor's
@@ -166,7 +171,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         {
             if (Limits.MemoryBytes == bytes && budget.Limit == bytes) return;
             // Reads running on other connections take no lock: the reserve (and the floors that follow from it) is never larger
-            // than the limit in force allows, so a read between the two writes is refused nothing it would have been given.
+            // than the limit in force allows, so a read between the two writes is refused nothing it would have been given
+            // (it may for that instant be given what the smaller reserve allows under the larger limit).
             if (bytes < budget.Limit) Limits.NamesReserveBytes = reserve;
             budget.Limit = bytes;
             Limits.MemoryBytes = bytes;
@@ -456,22 +462,30 @@ internal sealed partial class ObjectSearchService : IDisposable
                 var held = databases.Count(value => value.Dataset is not null);
                 var projects = databases.Where(value => value.Dataset is not null).Select(value => value.Database).Distinct(StringComparer.Ordinal).Count();
                 var skipped = state.Skipped.ToList();
-                var (bigQueryLeftOut, bigQueryLeftOutIn) = (databases.Sum(value => value.LeftOut), databases.Count(value => value.LeftOut > 0));
+                var (bigQueryLeftOut, bigQueryLeftOutIn) = (Total(databases.Select(value => value.LeftOut)), databases.Count(value => value.LeftOut > 0));
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
-                    state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
+                    state.Building ? state.Indexed : held, state.Index.Objects, Total(databases.Select(value => value.Modules)), Total(databases.Select(value => value.Cut)), skipped, state.Definitions,
                     state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped,
                     bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null);
             }
             // LeftOutIn counts databases only: the server's own objects and the system objects are in none.
-            var leftOut = databases.Sum(value => value.LeftOut) + (state.Index.Resource?.LeftOut ?? 0) + (state.Index.Server?.LeftOut ?? 0);
+            var leftOut = Total(databases.Select(value => value.LeftOut).Append(state.Index.Resource?.LeftOut ?? 0).Append(state.Index.Server?.LeftOut ?? 0));
             var leftOutIn = databases.Count(value => value.LeftOut > 0);
             // A stopped first build that read only the server's own objects still holds an index.
             return new(state.Building ? "building" : state.Built || databases.Count > 0 || state.Index.Objects > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
-                state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
-                databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
+                state.Index.Objects, Total(databases.Select(value => value.Modules).Append(state.Index.Resource?.Modules ?? 0).Append(state.Index.Server?.Modules ?? 0)),
+                Total(databases.Select(value => value.Cut).Append(state.Index.Resource?.Cut ?? 0).Append(state.Index.Server?.Cut ?? 0)), state.Skipped.ToList(), state.Definitions,
                 state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null, LeftOutIn: leftOutIn > 0 ? leftOutIn : null);
         }
+    }
+
+    /// <summary>A sum of units' counts, held to an int: many large units (some loaded from files) never make a status throw.</summary>
+    internal static int Total(IEnumerable<int> counts)
+    {
+        long sum = 0;
+        foreach (var count in counts) sum += count;
+        return (int)Math.Min(int.MaxValue, sum);
     }
 
     /// <summary>Reads each database, at most <paramref name="degree"/> at once (each read still waits for one of the index's
@@ -747,9 +761,10 @@ internal sealed partial class ObjectSearchService : IDisposable
             if (state.Index.Resource is { } held && held.Key == key)
             {
                 // The set this connection holds is current. One whose definitions were left out for memory is read again once
-                // there is room above the names' reserve, so raising the limit and rebuilding brings them back; one another
+                // there is room above the names' reserve (as much again as the set's records take, so a build at the reserve's
+                // edge does not read it again for nothing), so raising the limit and rebuilding brings them back; one another
                 // connection has already retired is exchanged for the newer set whatever the room, since that costs nothing.
-                if (held.LeftOut == 0 || resources.Current(held) && budget.Free < Limits.NamesReserveBytes) return null;
+                if (held.LeftOut == 0 || resources.Current(held) && budget.Free < Limits.NamesReserveBytes + held.Bytes) return null;
                 resources.Retire(held);
             }
             // The shared read has its own connection and lifetime: other connections may wait for it, so stopping this build (or

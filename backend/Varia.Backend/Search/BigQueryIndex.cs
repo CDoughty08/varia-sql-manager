@@ -161,16 +161,17 @@ internal sealed record BigQueryColumn(string Path, bool Record, string Type, boo
 /// <c>Carried</c>: an earlier read's details that were not whole, held only until pass 2 reads the object again; never reused either.
 /// <c>Stale</c>: carried from an object created or changed since (the same name, another generation): dropped, not kept, when
 /// pass 2 cannot read the object or its new details do not fit.
+/// <c>TextLeftOut</c>: carried from a read that left the object's text out for memory, which the read holding it still counts.
 internal sealed record BigQueryDetail(string? Subtype, long? Modified, string? Definition, IReadOnlyList<BigQueryColumn> Columns, long? Rows = null, long? Bytes = null,
     string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false, bool Bulk = false, bool Carried = false,
-    bool Stale = false);
+    bool Stale = false, bool TextLeftOut = false);
 
 /// <summary>An object's facts beside its entry: when it was created (what a refresh compares), whether pass 2 read it, and what it read.</summary>
-/// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for the names' reserve), so a later build may reuse it.
+/// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for memory, <c>TextLeftOut</c>), so a later build may reuse it.
 /// <c>Listed</c>: the listing's last change to the millisecond (routines and models), which the index's dates keep only to the second.
 /// <c>Stale</c>: its details are carried from an earlier generation of the object (<see cref="BigQueryDetail.Stale"/>).
 internal readonly record struct BigQueryObjectFacts(long Created, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null, string? Signature = null,
-    bool Whole = true, bool ColumnsCut = false, long? Listed = null, bool Stale = false);
+    bool Whole = true, bool ColumnsCut = false, long? Listed = null, bool Stale = false, bool TextLeftOut = false);
 
 /// <summary>
 /// A BigQuery read's facts beside its <see cref="ObjectTable"/> (by entry): creation times and whether details were read, rows, size,
@@ -213,16 +214,20 @@ internal sealed class BigQueryFacts(Dictionary<int, BigQueryObjectFacts> objects
 /// shared <see cref="StringPool"/>'s and every record is charged to the budget, from the share of the read it replaces first, as
 /// SQL Server's <see cref="DatabaseReader"/> charges; a read past the budget answers null. What it takes beyond that share must
 /// leave a floor of the budget free, so BigQuery never crowds out SQL Server's definitions (<see cref="ObjectIndexLimits.BigQueryNamesFloorBytes"/>):
-/// <paramref name="namesFloor"/> for the dataset, its objects and their facts, and <paramref name="detailsFloor"/>, which is
-/// higher and so gives way first, for columns (a read past it answers null; what the service holds then is
-/// <see cref="ObjectSearchService"/>'s Hold) and for view and routine text (left out, counted as cut). The replaced read's share is
-/// two: its names' part pays for names and the rest for details, so a new name never pushes a held column out of the share,
-/// and names the dataset already holds are never charged twice while the read runs.
+/// <paramref name="namesFloor"/> for the dataset, its objects and their records, and <paramref name="detailsFloor"/>, never
+/// lower and so the first to give way, for what pass 2 reads: columns, signatures and layout (a read past it answers null; what
+/// the service holds then is <see cref="ObjectSearchService"/>'s Hold) and view and routine text (left out, counted as cut).
+/// The replaced read's share is two: its names' part pays for names first and the rest for details first, so a new name
+/// does not push a held column out of the share and held names are never charged twice while the read runs; each part
+/// lends to the other only once the budget has refused, so a read no larger than the one it replaces always fits.
 /// </summary>
 internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, DatabaseIndex? credit, long namesFloor = 0, long detailsFloor = 0)
 {
     private readonly IndexBudget budget = pool.Budget;
     private long taken, credited, nameBytes;
+    private int reading = -1;
+    /// <summary>After a read that did not fit: the entry it was reading when it ran out of room, or -1 (the dataset's own name).</summary>
+    public int FailedAt { get; private set; } = -1;
     private long nameCredit = credit?.NameBytes ?? 0, detailCredit = (credit?.Bytes ?? 0) - (credit?.NameBytes ?? 0);
     private int modules, cut, leftOut;
     private readonly ObjectTable.Builder objects = new();
@@ -233,23 +238,35 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
 
     private sealed class TooLarge : Exception;
 
-    /// <summary>Charges a detail's share (a column, a type, a description, a text's slot) to the details' part of the replaced
-    /// read's share, else to the budget above <paramref name="keepFree"/>.</summary>
+    /// <summary>Charges a detail's share (a column, a type, a description, a signature, a text's slot) to the details' part of
+    /// the replaced read's share, else to the budget above <paramref name="keepFree"/>, else to what is left of the names' part.</summary>
     private bool TryCharge(long bytes, long keepFree)
     {
-        if (detailCredit >= bytes) { detailCredit -= bytes; credited += bytes; return true; }
-        if (!budget.TryTake(bytes, keepFree)) return false;
-        taken += bytes;
+        if (detailCredit >= bytes) { detailCredit -= bytes; credited += bytes; }
+        else if (budget.TryTake(bytes, keepFree)) taken += bytes;
+        else if (!Lend(bytes, ref detailCredit, ref nameCredit)) return false;
+        return true;
+    }
+
+    /// <summary>Pays from what is left of both parts together, <paramref name="own"/> first: the last resort, so the share is
+    /// never refused a charge it covers because it is split.</summary>
+    private bool Lend(long bytes, ref long own, ref long other)
+    {
+        if (own + other < bytes) return false;
+        var mine = Math.Min(own, bytes);
+        own -= mine;
+        other -= bytes - mine;
+        credited += bytes;
         return true;
     }
 
     /// <summary>Charges a name's share (a record, its facts, a text's slot) to the names' part of the replaced read's share, else
-    /// to the budget above the names floor.</summary>
+    /// to the budget above the names floor, else to what is left of the details' part.</summary>
     private bool TryChargeName(long bytes)
     {
         if (nameCredit >= bytes) { nameCredit -= bytes; credited += bytes; }
         else if (budget.TryTake(bytes, namesFloor)) taken += bytes;
-        else return false;
+        else if (!Lend(bytes, ref nameCredit, ref detailCredit)) return false;
         nameBytes += bytes;
         return true;
     }
@@ -306,16 +323,19 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
             var detailed = false;
             foreach (var entry in entries)
             {
+                reading++;
                 var detail = entry.Detail;
                 detailed |= detail is not null;
                 Intern(entry.Name);
-                // Carried details may be an earlier generation's (a table created again): the listing's own facts name the object.
-                var current = detail is { Carried: false } ? detail : null;
+                // Details carried from an earlier generation (a table created again) do not name this object: the listing's facts do.
+                var current = detail is { Stale: false } ? detail : null;
                 var at = Add(entry.Kind, entry.Folder, current?.Subtype ?? entry.Subtype, dataset, entry.Name, current?.Modified ?? entry.Modified ?? entry.Created);
                 var signature = detail?.Signature is { } sig ? Clip(sig) : null;
                 var partitioning = detail?.Partitioning is { } part ? Clip(part) : null;
                 var clustering = detail?.Clustering is { } cluster ? Clip(cluster) : null;
-                Charge(BigQueryFacts.ObjectBytes + Strings(signature, partitioning, clustering));
+                Charge(BigQueryFacts.ObjectBytes);
+                // What pass 2 read of it is a detail, kept above the details' floor like its columns.
+                if (signature is not null || partitioning is not null || clustering is not null) ChargeDetail(Strings(signature, partitioning, clustering));
                 facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature, ColumnsCut: detail?.ColumnsCut == true, Listed: entry.Modified);
                 if (entry.Shards is { } group)
                 {
@@ -326,7 +346,14 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                 // A bulk read lacks facts pass 2 keeps, and carried details were not whole: the next build reads the object again
                 // rather than reuse it.
                 if (detail.Bulk || detail.Carried) facts[at] = facts[at] with { Whole = false, Stale = detail.Stale };
-                if (definitions && detail.Definition is { Length: > 0 } text && !Definition(at, text, detail.DefinitionCut)) facts[at] = facts[at] with { Whole = false };
+                if (definitions && detail.Definition is { Length: > 0 } text && !Definition(at, text, detail.DefinitionCut)) facts[at] = facts[at] with { Whole = false, TextLeftOut = true };
+                // Carried from a read that left its text out for memory: still left out, and still counted.
+                else if (definitions && detail.TextLeftOut && detail.Definition is null)
+                {
+                    cut++;
+                    leftOut++;
+                    facts[at] = facts[at] with { Whole = false, TextLeftOut = true };
+                }
                 if (detail.ColumnsCut) cut++;
                 if (!children) continue;
                 short ordinal = 0;
@@ -339,7 +366,8 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                     var typeName = InternDetail(column.Type);
                     if (!types.TryGetValue(typeName, out var type))
                     {
-                        // ObjectDetails numbers types in 16 bits: a dataset with more distinct type texts keeps its names only.
+                        // ObjectDetails numbers types in 16 bits: a dataset with more distinct type texts is refused like one past
+                        // the budget (the service then leaves out the table that passed the count, or the dataset's columns).
                         if (types.Count >= MaxTypes) throw new TooLarge();
                         ChargeDetail(IndexMemory.TypeBytes);
                         type = types[typeName] = objects.Details.AddType(objects.Id(typeName), -1, types.Count, 0, userDefined: true, tableType: false);
@@ -366,6 +394,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         }
         catch (TooLarge)
         {
+            FailedAt = reading;
             Abandon();
             return null;
         }
@@ -396,6 +425,28 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     }
 
     private static string Clip(string text) => text.Length <= BigQueryIndexLimits.FactChars ? text : text[..(BigQueryIndexLimits.FactChars - 1)] + "…";
+
+    /// <summary>What a detail's own records cost a read (its columns with their descriptions, its signature and layout): not its
+    /// texts, which the pool holds, nor the type and text slots a dataset's objects share. What tells a detail that grew from
+    /// one that did not.</summary>
+    internal static long Weight(BigQueryDetail detail)
+    {
+        static long Text(string? value) => value is null ? 0 : IndexMemory.StringBytes(Math.Min(value.Length, BigQueryIndexLimits.FactChars));
+        var bytes = Text(detail.Signature) + Text(detail.Partitioning) + Text(detail.Clustering);
+        foreach (var column in detail.Columns)
+            bytes += IndexMemory.RecordBytes + IndexMemory.TypedBytes + (column.Description is { Length: > 0 } text ? BigQueryFacts.DescriptionBytes + Text(text) : 0);
+        return bytes;
+    }
+
+    /// <summary>Whether <paramref name="fresh"/> has the columns <paramref name="held"/> has (paths, types, order) and weighs no
+    /// more: holding it in place of the other takes no new text and no more room.</summary>
+    internal static bool SameShape(BigQueryDetail fresh, BigQueryDetail held)
+    {
+        if (fresh.Columns.Count != held.Columns.Count || Weight(fresh) > Weight(held)) return false;
+        for (var at = 0; at < fresh.Columns.Count; at++)
+            if (fresh.Columns[at].Path != held.Columns[at].Path || fresh.Columns[at].Type != held.Columns[at].Type || fresh.Columns[at].Record != held.Columns[at].Record) return false;
+        return true;
+    }
     private static long Strings(params string?[] values) => values.Sum(value => value is null ? 0 : IndexMemory.StringBytes(value.Length));
 }
 
@@ -496,13 +547,21 @@ internal static partial class BigQueryEntries
             if (!columns.TryGetValue(parent, out var list)) columns[parent] = list = [];
             list.Add(new(table.Name(at), table.Subtype(at) == "struct", table.Typed(at)?.TypeName ?? "?", table.Typed(at) is { } typed && (typed.Flags & TypedFlags.Nullable) != 0, facts.Description(at)));
         }
+        // One string for each long definition, however many objects share it (each unpacking is a copy of the whole text).
+        var unpacked = new Dictionary<object, string>(ReferenceEqualityComparer.Instance);
+        string? Definition(int at)
+        {
+            if (table.StoredDefinition(at) is not { } stored) return null;
+            if (stored is string text) return text;
+            return unpacked.TryGetValue(stored, out var held) ? held : unpacked[stored] = DefinitionText.ToText(stored);
+        }
         for (var at = 0; at < table.Count; at++)
         {
             if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true } fact || !fact.Whole && !carry) continue;
             var modified = table.Modified(at) is { } date ? (long)(date - DateTime.UnixEpoch).TotalMilliseconds : (long?)null;
             var subtype = table.Subtype(at) == "clone" ? "clone" : null;
-            known[Key(table.Kind(at), table.Name(at), facts.Shards(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, table.Definition(at), columns.GetValueOrDefault(at) ?? [],
-                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole, Stale: fact.Stale));
+            known[Key(table.Kind(at), table.Name(at), facts.Shards(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, Definition(at), columns.GetValueOrDefault(at) ?? [],
+                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole, Stale: fact.Stale, TextLeftOut: fact.TextLeftOut));
         }
         return known;
     }
@@ -511,19 +570,6 @@ internal static partial class BigQueryEntries
     /// (whose entry is its newest shard, so its name changes with every new shard) its prefix, which no table name can end in.</summary>
     public static (string Kind, string Name) Key(string kind, string name, Varia.Backend.BigQueryShardsDto? shards) => (kind, shards is null ? name : shards.Prefix + "*");
     public static (string Kind, string Name) Key(BigQueryEntry entry) => Key(entry.Kind, entry.Name, entry.Shards);
-
-    /// <summary>The objects an earlier read holds details of, by <see cref="Key(BigQueryEntry)"/>: what a read that replaces it
-    /// may keep when the details of anything new do not fit. With <paramref name="current"/>, only those whose details are the
-    /// object's own generation's, not carried from one created or changed since.</summary>
-    public static HashSet<(string Kind, string Name)> Detailed(DatabaseIndex? read, bool current = false)
-    {
-        var detailed = new HashSet<(string, string)>();
-        if (read?.Facts is not { } facts || read.ChildrenLeftOut) return detailed;
-        var table = read.Table;
-        for (var at = 0; at < table.Count; at++)
-            if (table.Parent(at) < 0 && facts.Of(at) is { Detailed: true } fact && !(current && fact.Stale)) detailed.Add(Key(table.Kind(at), table.Name(at), facts.Shards(at)));
-        return detailed;
-    }
 
     /// <summary>pass 2's tables.get as a detail: columns flattened depth first (STRUCT fields below their column), layout and size.</summary>
     public static BigQueryDetail FromTable(Table table)

@@ -279,8 +279,9 @@ internal static partial class IndexFileChecks
             };
             // One table pass 2 never reached: listed, without details.
             if (detail is not null && !skipped && entry.Kind == "bqTable" && entry.Name.StartsWith("audit_", StringComparison.Ordinal)) (detail, skipped) = (null, true);
-            // One whose details are carried from an earlier generation of it, until pass 2 reads it again.
-            if (entry.Name == "orders_copy") detail = detail! with { Carried = true, Stale = true };
+            // One whose details are carried from an earlier generation of it, until pass 2 reads it again, from a read that left
+            // its text out for memory.
+            if (entry.Name == "orders_copy") detail = detail! with { Carried = true, Stale = true, TextLeftOut = true };
             entries.Add(entry with { Detail = detail });
         }
         return entries;
@@ -347,12 +348,16 @@ internal static partial class IndexFileChecks
                     .Append('|').Append(facts.Shards(at) is { } shards ? JsonSerializer.Serialize(shards, Json) : "-");
             text.Append('\n');
         }
-        // The texts held, in order: a text the table gave back (a definition left out for memory) is no reader's.
+        // The texts held, whatever their ids (which no reader sees: a file numbers them its own way, and a text the table gave
+        // back, a definition left out for memory, is no reader's).
         var (names, definitions) = (table.NameTexts(), table.DefinitionTexts());
-        for (int id = 0, held = 0; texts && id < table.Texts.Count; id++)
+        var lines = new List<string>();
+        for (var id = 0; texts && id < table.Texts.Count; id++)
             if (table.Texts[id] is { } stored)
-                text.Append('t').Append(held++).Append('|').Append(stored is string value ? "S" + value.Length + ":" + Hash(value) : "P" + DefinitionText.Length(stored) + ":" + Hash(DefinitionText.ToText(stored)))
-                    .Append(names[id] ? "|name" : "").Append(definitions[id] ? "|definition" : "").Append('\n');
+                lines.Add("t|" + (stored is string value ? "S" + value.Length + ":" + Hash(value) : "P" + DefinitionText.Length(stored) + ":" + Hash(DefinitionText.ToText(stored)))
+                    + (names[id] ? "|name" : "") + (definitions[id] ? "|definition" : ""));
+        lines.Sort(StringComparer.Ordinal);
+        foreach (var line in lines) text.Append(line).Append('\n');
         if (table.Details is { } details)
             text.Append("details|").Append(details.Types).Append('|').Append(details.TypedCount).Append('|').Append(details.KeyCount).Append('|').Append(details.KeyColumns).Append('|').Append(details.Bytes)
                 .Append('|').Append(string.Join(",", details.ForeignKeys().Select(key => key.At + ">" + key.Referenced))).Append('\n');
@@ -439,7 +444,6 @@ internal static partial class IndexFileChecks
                 foreach (var (definitions, carry) in new[] { (true, false), (false, false), (true, true) })
                     text.Append("known ").Append(definitions).Append(carry).Append(' ').AppendJoin(';', BigQueryEntries.Known(read, definitions, carry).OrderBy(pair => pair.Key.Kind + "/" + pair.Key.Name, StringComparer.Ordinal)
                         .Select(pair => pair.Key + "=" + pair.Value.Created + "," + pair.Value.Modified + "," + JsonSerializer.Serialize(pair.Value.Detail, Json))).Append('\n');
-                text.Append("detailed ").AppendJoin(',', BigQueryEntries.Detailed(read).Order()).Append('\n');
             }
         return text.ToString();
     }
@@ -635,7 +639,7 @@ internal static partial class IndexFileChecks
             var second = new ConnectionIndex(world.Budget, world.Catalog, world.Pool);
             var loaded = Load(world, file, kind, Sealed).Value!;
             check(world.Budget.Used == used + loaded.Bytes && loaded.Bytes == unit.Bytes && world.Pool.Stats == (stats.Texts, 2 * stats.References, stats.Bytes)
-                && loaded.Pooled.Zip(unit.Pooled).All(pair => ReferenceEquals(pair.First, pair.Second)),
+                && loaded.Pooled.ToHashSet(ReferenceEqualityComparer.Instance).SetEquals(unit.Pooled),
                 $"{name} loaded beside its read holds the pool's own texts: no text twice, one more reference each, and only its records charged again");
             if (kind == IndexUnitKind.Server) second.PutServer(loaded);
             else if (kind == IndexUnitKind.Agent) second.PutAgent(loaded);
@@ -661,7 +665,7 @@ internal static partial class IndexFileChecks
             later.Budget.Limit = later.Budget.Used;
             var replacement = Load(later, file, kind, Sealed, credit: first);
             check(replacement is { Problem: IndexFileProblem.None, Value: { } swap } && swap.Credited > 0 && ReferenceEquals(swap.CreditFrom, first) && later.Budget.Used == later.Budget.Limit + swap.Bytes - swap.Credited
-                && (kind == IndexUnitKind.Dataset || swap.Credited == swap.Bytes),
+                && swap.Credited == swap.Bytes && swap.NameBytes == first.NameBytes,
                 $"{name} loads as a rebuild's replacement into the share of the read it replaces: {replacement.Problem}, {replacement.Value?.Credited} of {replacement.Value?.Bytes} credited");
             if (replacement.Value is not null)
             {
@@ -669,6 +673,66 @@ internal static partial class IndexFileChecks
                 check(later.Budget.Used == used && later.Pool.Stats == stats && replacement.Value.CreditFrom is null, $"swapping the loaded {name} in moves the share over: nothing is charged twice");
             }
             check(Load(later, file, kind, Sealed).Problem == IndexFileProblem.Budget && later.Budget.Used == used && later.Pool.Stats == stats, $"without that share the full budget refuses {name}, and nothing is taken");
+            if (name == "a BigQuery dataset" && replacement.Value is { } swapped)
+            {
+                // Against a read's own replacement under the same full budget: the same parts of the share pay for the same things.
+                var liveWorld = new World();
+                var liveFirst = await read(liveWorld);
+                liveWorld.Hold(liveFirst, kind);
+                liveWorld.Budget.Limit = liveWorld.Budget.Used;
+                var liveSwap = Dataset(liveWorld, DatasetEntries(), credit: liveFirst);
+                check((swapped.Bytes, swapped.Credited, swapped.NameBytes) == (liveSwap.Bytes, liveSwap.Credited, liveSwap.NameBytes),
+                    $"{name} loaded as a replacement takes from the replaced read's share what a read replacing it takes: {swapped.Bytes}/{swapped.Credited}/{swapped.NameBytes} against {liveSwap.Bytes}/{liveSwap.Credited}/{liveSwap.NameBytes}");
+                liveWorld.Connection.Abandon(liveSwap);
+                // More objects and no columns: more than the names' part of the share, far less than all of it. The read lends
+                // the details' part to its names once the budget refuses, and so does the load.
+                var more = DatasetEntries().Concat(Enumerable.Range(0, 8).Select(extra => DatasetEntries()[1] with { Name = "lent_" + extra, Detail = null, Shards = null })).ToList();
+                var namesOnly = new World();
+                var lentFile = Save(Dataset(namesOnly, more, children: false), IndexUnitKind.Dataset, Sealed);
+                // The new names are held in the pool already, so only their records and slots are the share's to pay.
+                object[] Pin(World into)
+                {
+                    var limit = into.Budget.Limit;
+                    into.Budget.Limit = long.MaxValue / 4;
+                    var pinned = more.Skip(DatasetEntries().Count).Select(entry => (object)into.Pool.TryAcquire(entry.Name, 0)!).ToArray();
+                    into.Budget.Limit = into.Budget.Used;
+                    return pinned;
+                }
+                var (laterLimit, livePinned, laterPinned) = (later.Budget.Limit, Pin(liveWorld), Pin(later));
+                var lent = Load(later, lentFile, kind, Sealed, credit: swapped);
+                var liveLent = Dataset(liveWorld, more, children: false, credit: liveFirst);
+                check(lent.Value is { } lentBack && liveLent is not null && lentBack.NameBytes > swapped.NameBytes && lentBack.Credited == lentBack.Bytes
+                    && (lentBack.Bytes, lentBack.Credited, lentBack.NameBytes) == (liveLent.Bytes, liveLent.Credited, liveLent.NameBytes),
+                    $"{name} with more names than the share's names' part loads into the share, the details' part lending, as the read does: {lent.Problem}, {lent.Value?.Bytes}/{lent.Value?.Credited}/{lent.Value?.NameBytes} against {liveLent?.Bytes}/{liveLent?.Credited}/{liveLent?.NameBytes}");
+                if (lent.Value is not null) later.Connection.Abandon(lent.Value);
+                if (liveLent is not null) liveWorld.Connection.Abandon(liveLent);
+                later.Pool.Release(laterPinned);
+                liveWorld.Pool.Release(livePinned);
+                later.Budget.Limit = laterLimit;
+                check(later.Budget.Used == used && later.Pool.Stats == stats, $"and a load that borrowed from the share gives it back: {later.Budget.Used} of {used}, {later.Pool.Stats} of {stats}, lent {lent.Value?.Bytes}/{lent.Value?.Credited}");
+                liveWorld.Connection.Dispose();
+            }
+            if (kind == IndexUnitKind.Database && replacement.Value is { } holding)
+            {
+                // A larger unit refused part way through a load that had the share: the read it would have replaced keeps it all.
+                var larger = new World();
+                var grown = Save(await Database(larger, extraTables: 60), IndexUnitKind.Database, Sealed);
+                var dump = Dump(holding);
+                var refusedLarger = Load(later, grown, kind, Sealed, credit: holding);
+                var untouched = later.Budget.Used == used && later.Pool.Stats == stats && Dump(holding) == dump;
+                var fits = Load(later, file, kind, Sealed, credit: holding);
+                check(refusedLarger.Problem == IndexFileProblem.Budget && untouched && fits.Value is { } again && again.Credited == again.Bytes && later.Budget.Used == used,
+                    $"a load refused part way with the replaced read's share leaves that read and its share as they were: {refusedLarger.Problem}, then {fits.Problem}");
+                if (fits.Value is not null) later.Hold(fits.Value, kind);
+            }
+            // A stream that cannot seek loads the same unit: only the early refusal by the file's length is not there.
+            {
+                var streamed = new World();
+                using var forward = new Failing(file, int.MaxValue);
+                var read1 = IndexFile.Load(forward, new IndexLoadOptions(Sealed, kind, Identity, Discovered: false), streamed.Limits, streamed.Pool);
+                check(read1.Value is not null && Dump(read1.Value) == Dump(unit), $"{name} loads from a stream that cannot seek: {read1.Problem}");
+                if (read1.Value is not null) streamed.Connection.Abandon(read1.Value);
+            }
             later.Connection.Dispose();
             check(later.Empty, $"dropping the replacement of {name} leaves nothing");
 
@@ -717,7 +781,22 @@ internal static partial class IndexFileChecks
                 && Enumerable.Range(0, loaded.Table.Count).All(at => !loaded.Table.HasDefinition(at) && !loaded.Table.DefinitionCut(at))
                 && loaded.Table.Rows().Select(row => row.Label).SequenceEqual(unit.Table.Rows().Select(row => row.Label)),
                 $"a database loaded with no room above the names' reserve keeps every name and counts each definition as left out for memory, as its read would: {loaded.Modules} modules, {loaded.Cut} cut, {loaded.LeftOut} left out against {live.Cut} and {live.LeftOut}");
-            check(world.Budget.Used == loaded.Bytes + loaded.Pooled.Sum(StringPool.Cost) && loaded.Bytes < unit.Bytes, "a definition left out on load is not charged: not its text, nor its slot");
+            check(world.Budget.Used == loaded.Bytes + loaded.Pooled.Sum(StringPool.Cost) && loaded.Bytes == unit.Bytes && loaded.Pooled.Length < unit.Pooled.Length
+                && loaded.Table.Texts.Count == unit.Table.Texts.Count, "a definition left out on load costs its place in the table, which stays, and not its text");
+
+            // Without its children as well: the two together are the read without children under the same reserve.
+            var both = new World();
+            both.Limits.NamesReserveBytes = long.MaxValue / 4;
+            var bare = Load(both, file, IndexUnitKind.Database, Clear, children: false).Value!;
+            var bareWorld = new World();
+            bareWorld.Limits.NamesReserveBytes = long.MaxValue / 4;
+            var bareLive = await Database(bareWorld, children: false);
+            check(bare.Table.Rows().SequenceEqual(bareLive.Table.Rows()) && (bare.Modules, bare.Cut, bare.LeftOut) == (bareLive.Modules, bareLive.Cut, bareLive.LeftOut) && bare is { Modules: 0, ChildrenLeftOut: true }
+                && both.Budget.Used == bare.Bytes + bare.Pooled.Sum(StringPool.Cost),
+                $"a database loaded without its children and with no room for definitions is the read without children under that reserve: {bare.Modules} modules, {bare.Cut} cut, {bare.LeftOut} left out against {bareLive.Cut} and {bareLive.LeftOut}");
+            both.Connection.Abandon(bare);
+            bareWorld.Connection.Abandon(bareLive);
+            check(both.Empty && bareWorld.Empty, "and they give everything back");
             world.Connection.Abandon(loaded);
             starved.Connection.Abandon(live);
             source.Connection.Abandon(unit);
@@ -854,6 +933,114 @@ internal static partial class IndexFileChecks
             source.Connection.Abandon(unit);
         }
 
+        // BigQuery: a dataset with its columns replacing its read without them (a share that is almost all names), with room
+        // above the names' floor and none above the details'. A read charges entry by entry, so its first columns borrow the
+        // names' part and its later names go to the budget; a load charges section by section and holds the share whole, so
+        // wherever the read fits the load fits, taking no more of the budget.
+        {
+            var source = new World();
+            var unit = Dataset(source, DatasetEntries());
+            var cost = source.Budget.Used;
+            var (fitted, refused, failures) = (0, 0, new List<string>());
+            List<BigQueryEntry> With(int extra) => DatasetEntries().Concat(Enumerable.Range(0, extra).Select(at => DatasetEntries()[1] with { Name = "share_" + at, Detail = null, Shards = null })).ToList();
+            // The dataset with 200 more objects, whose records a load charges before any column.
+            var many = With(200);
+            var file = Save(Dataset(new World(), many), IndexUnitKind.Dataset, Sealed);
+            // None above the details' floor, and a little.
+            foreach (var aboveDetails in new long[] { 0, 4096 })
+            for (var extra = 60; extra <= 260; extra += 2)
+            {
+                // The share: the dataset read without its columns, with as many more names as make up most of what the columns cost.
+                var more = With(extra);
+                (World World, DatabaseIndex Pin, DatabaseIndex Credit) Set()
+                {
+                    var world = new World(new ObjectIndexLimits { DefinitionChars = 2000, MemoryBytes = cost * 64, NamesReserveBytes = cost * 16 });
+                    // Every text the dataset names is pooled already, so only records, slots and facts are the share's or the budget's.
+                    var (pin, credit) = (Dataset(world, DatasetEntries()), Dataset(world, more, children: false));
+                    var free = aboveDetails == 0 ? (world.Limits.BigQueryNamesFloorBytes + world.Limits.BigQueryDetailsFloor(true, false)) / 2 : world.Limits.BigQueryDetailsFloor(true, false) + aboveDetails;
+                    world.Budget.Force(world.Budget.Free - free);
+                    return (world, pin, credit);
+                }
+                var (loadWorld, loadPin, loadCredit) = Set();
+                var (liveWorld, livePin, liveCredit) = Set();
+                var (held, liveHeld) = (loadWorld.Budget.Used, liveWorld.Budget.Used);
+                var liveReader = new BigQueryReader(liveWorld.Limits, liveWorld.Pool, liveCredit, liveWorld.Limits.BigQueryNamesFloorBytes, liveWorld.Limits.BigQueryDetailsFloor(true, false));
+                var live = liveReader.Read("varia-alpha", "sales", many, true, true);
+                var loaded = Load(loadWorld, file, IndexUnitKind.Dataset, Sealed, credit: loadCredit, discovered: true);
+                if (live is not null)
+                {
+                    fitted++;
+                    if (loaded.Value is not { } back || back.Bytes != live.Bytes || back.NameBytes != live.NameBytes || loadWorld.Budget.Used - held > liveWorld.Budget.Used - liveHeld)
+                        failures.Add($"{extra} ({aboveDetails} above the details' floor): {loaded.Problem}, {loaded.Value?.Bytes}/{loaded.Value?.NameBytes} against {live.Bytes}/{live.NameBytes}, {loadWorld.Budget.Used - held} taken against {liveWorld.Budget.Used - liveHeld}");
+                    liveWorld.Connection.Abandon(live);
+                }
+                else refused++;
+                if (loaded.Value is not null) loadWorld.Connection.Abandon(loaded.Value);
+                if (loadWorld.Budget.Used != held) failures.Add($"{extra}: {loadWorld.Budget.Used - held} bytes left");
+                foreach (var (world, pin, credit) in new[] { (loadWorld, loadPin, loadCredit), (liveWorld, livePin, liveCredit) })
+                {
+                    world.Connection.Abandon(credit);
+                    world.Connection.Abandon(pin);
+                }
+            }
+            check(fitted > 0 && refused > 0 && failures.Count == 0, $"a replacement whose share is mostly names loads wherever its read fits, with no room or a little above the details' floor ({fitted} of 202 shares fit, {refused} do not): {string.Join("; ", failures.Take(4))}");
+            source.Connection.Abandon(unit);
+        }
+
+        // BigQuery: below the details' floor, where a discovered project's dataset has no room for columns or text, the load
+        // without columns still holds the names, every view and routine text left out, as the read without columns does (of a
+        // dataset with no signatures or layout, which are details too: one with them is refused, as its read is).
+        foreach (var layout in new[] { false, true })
+        {
+            var entries = layout ? DatasetEntries() : DatasetEntries().Select(entry => entry.Detail is null ? entry : entry with { Detail = entry.Detail with { Signature = null, Partitioning = null, Clustering = null } }).ToList();
+            var source = new World();
+            var unit = Dataset(source, entries);
+            var file = Save(unit, IndexUnitKind.Dataset, Sealed);
+            World Between()
+            {
+                // Free: 13/32 of the limit, between the names' floor (12/32) and the details' floors (14/32 and 16/32).
+                var world = new World(new ObjectIndexLimits { DefinitionChars = 2000, MemoryBytes = source.Budget.Used * 64, NamesReserveBytes = source.Budget.Used * 16 });
+                world.Budget.Force(world.Budget.Limit / 32 * 19);
+                return world;
+            }
+            var (world, liveWorld) = (Between(), Between());
+            var held = world.Budget.Used;
+            var whole = Load(world, file, IndexUnitKind.Dataset, Sealed, discovered: true);
+            var bare = Load(world, file, IndexUnitKind.Dataset, Sealed, children: false, discovered: true);
+            var live = new BigQueryReader(liveWorld.Limits, liveWorld.Pool, null, liveWorld.Limits.BigQueryNamesFloorBytes, liveWorld.Limits.BigQueryDetailsFloor(true, false))
+                .Read("varia-alpha", "sales", entries, false, true);
+            if (layout)
+            {
+                check(whole.Problem == IndexFileProblem.Budget && bare.Problem == IndexFileProblem.Budget && live is null && world.Budget.Used == held,
+                    $"a dataset with signatures or layout has no room below the details' floor, with or without its columns, as its read without columns has none: {whole.Problem}, {bare.Problem}");
+                source.Connection.Abandon(unit);
+                continue;
+            }
+            check(live is not null && whole.Problem == IndexFileProblem.Budget && bare.Value is { ChildrenLeftOut: true, Modules: 0 } kept && kept.LeftOut == unit.Modules + unit.LeftOut && live.LeftOut == unit.Modules + unit.LeftOut
+                && (kept.Modules, kept.Cut, kept.LeftOut) == (live.Modules, live.Cut, live.LeftOut) && kept.Table.Rows().SequenceEqual(live.Table.Rows())
+                && world.Budget.Free >= world.Limits.BigQueryNamesFloorBytes && world.Budget.Used - held == kept.Bytes + kept.Pooled.Sum(StringPool.Cost),
+                $"a dataset loaded without its columns below the details' floor keeps its names and leaves its definitions out, as the read without columns does: {whole.Problem}, {bare.Problem}, "
+                + $"{bare.Value?.Modules}/{bare.Value?.Cut}/{bare.Value?.LeftOut} against {live?.Modules}/{live?.Cut}/{live?.LeftOut} (of {unit.Modules}), rows {(bare.Value is { } shown && live is not null ? shown.Table.Rows().SequenceEqual(live.Table.Rows()) : false)}, {world.Budget.Free} free, {world.Budget.Used - held} held of {(bare.Value is { } charged ? charged.Bytes + charged.Pooled.Sum(StringPool.Cost) : 0)}");
+            if (bare.Value is not null) world.Connection.Abandon(bare.Value);
+            if (live is not null) liveWorld.Connection.Abandon(live);
+            source.Connection.Abandon(unit);
+            check(world.Budget.Used == held && liveWorld.Budget.Used == held && source.Empty, "and gives everything back");
+        }
+
+        // BigQuery: what a later build reuses of a read unpacks each long definition once, however many objects share it.
+        {
+            var shared = "SELECT 1 AS n -- " + Module("shared");
+            List<BigQueryEntry> entries = [.. Enumerable.Range(0, 3).Select(at => new BigQueryEntry("bqView", "bqViews", null, "v" + at, 1700000000000, null,
+                Detail: new BigQueryDetail(null, 1700000000000, shared, [new BigQueryColumn("n", false, "INT64", true, null)])))];
+            var world = new World();
+            var unit = Dataset(world, entries);
+            var known = BigQueryEntries.Known(unit, true);
+            check(unit.Table.StoredDefinition(1) is PackedText && known.Count == 3 && known.Values.Select(value => value.Detail.Definition).Distinct(ReferenceEqualityComparer.Instance).Count() == 1
+                && known[("bqView", "v2")].Detail.Definition == shared,
+                "what a later build reuses of a dataset holds one string for a long definition its objects share");
+            world.Connection.Abandon(unit);
+        }
+
         // BigQuery: a view's text gives way before its columns do, and the object is then not whole, so the next build reads it again.
         {
             var entries = DatasetEntries();
@@ -918,6 +1105,14 @@ internal static partial class IndexFileChecks
         var later = new World();
         var after = Load(later, files[0], IndexUnitKind.Database, Sealed).Value;
         check(world.Empty && after is not null && Dump(after) == dump, "a file outlives the unit it was saved from");
+        // Loads of one file at once, into one pool and budget: each is the unit, every text is held once, and dropping them
+        // all leaves nothing.
+        var loads = await Task.WhenAll(Enumerable.Range(0, 8).Select(at => Task.Run(() => Load(later, files[at % 2], IndexUnitKind.Database, at % 2 == 0 ? Sealed : Clear).Value)));
+        check(loads.All(loaded => loaded is not null && Dump(loaded) == dump) && later.Pool.Count == (after?.Pooled.Length ?? -1)
+            && later.Budget.Used == loads.Sum(loaded => loaded!.Bytes) + (after?.Bytes ?? 0) + (after?.Pooled.Sum(StringPool.Cost) ?? 0),
+            "eight loads of one unit at once into one pool hold each text once");
+        foreach (var loaded in loads)
+            if (loaded is not null) later.Connection.Abandon(loaded);
         if (after is not null) later.Connection.Abandon(after);
     }
 }

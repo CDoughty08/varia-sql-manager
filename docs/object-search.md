@@ -182,28 +182,36 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   always has at least an eighth of the limit (64 MiB) for names and definitions before a definition is left out, in
   practice more, since details stop well before names do. A floor only refuses BigQuery: SQL Server's reads take
   whatever is free, which also means SQL Server's use counts against BigQuery's room: with SQL Server holding 5/8 of
-  the limit or more, a BigQuery index reads nothing new, and says why.
+  the limit or more (or the two engines together), a BigQuery index reads nothing new, and says why.
 - **What a BigQuery dataset holds, it keeps.** A rebuild or refresh charges the share of the read it replaces, names
-  to the part its names held and details to the rest, so a new object's name never pushes a held column out of that
-  share. Pass 1 goes on holding, by name (a date-sharded group by its prefix, since a new shard renames its entry), the
-  details of the objects pass 2 is about to read again (a forced read's, a table created again, one not read whole),
-  marked so that a build stopped or a read that fails in between leaves nothing a later build reuses. A
+  to the part its names held and details (columns, signatures, layout, text slots) to the rest, so a new object's name
+  does not push a held column out of that share; each part lends to the other only once the budget has refused, so a
+  read no larger than the one it replaces always fits. Pass 1 goes on holding, by name (a date-sharded group by its
+  prefix, since a new shard renames its entry; not across a table becoming a group or the reverse), the details of the
+  objects pass 2 is about to read again (a forced read's, a table created again, one not read whole), marked so that a
+  build stopped or a read that fails in between leaves nothing a later build reuses. A
   dataset that already holds details keeps one floor less free than its project's (7/16 for a discovered project, 3/8
-  for the billing and starred projects), so a column added or a table recreated a little wider still fits, and
+  for the billing and starred projects) for whatever details it reads, so what it holds can grow, and
   discovered datasets that hold details are read before the half-free line is checked, whatever the names pass found.
   An object whose pass 2 read fails keeps the details it had, to be read again by the next build, unless it was
-  created or changed since, whose carried details were another generation's and are dropped. When the details of new
-  objects do not fit even there, the dataset keeps what it held and the new objects are listed by name, reported as
-  details missing (then, if that is still too much, the objects created or changed since as well); when not even that
-  fits beside what it holds, or in pass 1 the names of what is new do not, the dataset is left as it was read before
-  (skipped as `TOO_LARGE`, its earlier read kept, without stopping the build's names pass) until there is room. A
+  created or changed since, whose carried details were another generation's and are dropped (a date-sharded group is
+  the same table whatever its newest shard). When pass 2's read of the dataset does not fit even there, objects go back
+  to what the dataset held of them (nothing, for a new one), in this order until the read fits: the new objects; those
+  whose details grew; the one the read ran out of room at (a column renamed in place), up to 16 times; then every
+  object. An object no larger than before keeps what pass 2 read (one created again keeps it only when its columns are
+  the same). Either way the dataset keeps what it held, lists what is new by
+  name, and reports details missing. In pass 1, when the names of what is new do not fit beside what it holds (a new
+  name's text is always new memory), the dataset is left as it was read before (skipped as `TOO_LARGE`, its earlier
+  read kept) until there is room. A new dataset of a discovered project that does not fit stops the names pass for new
+  datasets only: datasets the index already holds are still listed and read; details carried from a build stopped
+  between its passes stay until a build's pass 2 reads them again. A
   read never swaps a dataset that holds details for one without them: only a dataset that holds none is kept without
   its columns (`CHILDREN_LEFT_OUT`). A read of one project or dataset (Refresh, or a project a search hit reveals)
   uses the billing and starred floors, whatever the project.
 - **When memory runs out, the index says so.** The status counts the definitions left out for memory (`leftOut`) and
   the databases or datasets they belong to (`leftOutIn`; the server's own and the system objects are in none), apart
   from definitions only cut at their length and from turning `objectExplorer.search.definitions` off. The index line
-  adds "N definitions left out of M databases (not enough index memory)", which keeps the line in view in Object
+  adds "N definitions left out (not enough index memory)", which keeps the line in view in Object
   Explorer's band; below it in the tab, and in the band's Search and index details, a note says a search inside
   definitions misses them and names the option to raise. The same note shows when children were left out, a database or
   dataset did not fit, or BigQuery projects were read by name only. The system objects are shared between servers: a
@@ -509,7 +517,8 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
      projects first, then discovered projects, swapping each dataset as it finishes. Once less than half the memory
      limit is free (discovered projects' floor, [Memory](#memory)), pass 2 stops early for the remaining discovered
      projects (recording them as names only) while keeping Wave 1 and Wave 2 intact; the billing and starred projects'
-     details go on until 7/16 is free, after which a dataset keeps its names without its columns.
+     details go on until 7/16 is free (3/8 for a dataset that already holds details), after which a dataset that holds
+     no details keeps its names without its columns and one that does keeps what it held.
   The status says "Discovering accessible BigQuery projects…", then "Indexing N of M datasets", then "Reading details of
   N of M objects"; the finished index line reports the project count when more than one project is indexed. The status
   bar names the pass the same way ("Listing BigQuery datasets N / M", "Reading BigQuery object details N / M"). While wave

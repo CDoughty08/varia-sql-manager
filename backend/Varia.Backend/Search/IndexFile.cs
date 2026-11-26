@@ -49,11 +49,13 @@ internal sealed record SavedResourceSet(ResourceKey Key, SavedResource Read);
 /// <para>A save reads a unit that is never changed once built (a table's arrays, the pool's texts, a read's facts), so it takes
 /// no lock and a search of the unit runs beside it; the flags a read may still set are read once, first. It answers a problem
 /// as a value. Saving to a path writes a temporary file beside the target (<see cref="TemporaryExtension"/>), flushes it and
-/// renames it over the target, so a crash or a stop leaves the earlier file or none.</para>
-/// <para>A load trusts nothing in the file. Every length is checked against <see cref="IndexFileLimits"/> before anything is
-/// allocated by it, every text is taken from the <see cref="StringPool"/> and every byte charged to the budget as the read that
-/// made the unit charged it, and every reference the table's readers follow is checked before a table exists. Whatever goes
-/// wrong is answered as a value, with everything the load took given back.</para>
+/// renames it over the target, so the target is never part of a file: a crash or a stop leaves the earlier file or, at worst
+/// (Windows, replacing a file a load has open), none for a moment.</para>
+/// <para>A load trusts nothing in the file. Every length is checked against <see cref="IndexFileLimits"/>, what a load keeps
+/// is charged to the budget before there is anywhere to keep it, every text is taken from the <see cref="StringPool"/> and
+/// charged as the read that made the unit charged it, and every reference the table's readers follow is checked before a
+/// table exists. Whatever goes wrong is answered as a value, with everything the load took given back. Loads are given files:
+/// a stream that cannot seek loads too, without the early refusal of counts its length could not back.</para>
 /// Names, definitions and paths are never logged: this code logs nothing.
 /// </summary>
 internal static class IndexFile
@@ -83,7 +85,8 @@ internal static class IndexFile
         try
         {
             token.ThrowIfCancellationRequested();
-            // Everything that could refuse the unit is checked before a byte is written.
+            // Everything that could refuse the unit is checked before a byte is written, but the file's size, which only the
+            // writing finds (a caller's stream is then left part-written; a path's target is untouched).
             var plan = IndexFileUnit.Prepare(unit, options.Extra.Length);
             var header = new IndexFileHeader(IndexFileContainer.Version, options.Protection.IsEncrypted, unit.Kind, unit.Provider, unit.ReadAt, !unit.DefinitionsLeftOut,
                 !unit.ChildrenLeftOut, unit.Table.Count, plan.Charge, options.Identity.ToArray(), options.Sync.ToArray());
@@ -181,7 +184,7 @@ internal static class IndexFile
     {
         if (options.Kind == IndexUnitKind.Resource) return new(null, IndexFileProblem.Kind);
         IndexFileHeader? header = null;
-        var held = new List<object?>();
+        var held = new IndexFileUnit.Segments<object?>();
         IndexFileUnit.PooledAccount? account = null;
         try
         {
@@ -224,7 +227,7 @@ internal static class IndexFile
             header = read;
             Expect(header, IndexUnitKind.Resource, identity.Span);
             var reader = new IndexFileContainer.PayloadReader(new IndexFileContainer.ChunkReader(stream, seal, headerBytes, token));
-            var unit = IndexFileUnit.Load(reader, header, new IndexFileUnit.PlainAccount(mostBytes), true, [], token);
+            var unit = IndexFileUnit.Load(reader, header, new IndexFileUnit.PlainAccount(mostBytes), true, new IndexFileUnit.Segments<object?>(), token);
             if (unit.LeftOut > unit.Table.Count) return new(null, IndexFileProblem.Corrupt, header);
             return new(new(unit.Resource!, new SavedResource(unit.Table, unit.LeftOut)), IndexFileProblem.None, header, unit.Extra);
         }

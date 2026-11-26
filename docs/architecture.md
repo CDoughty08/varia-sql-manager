@@ -642,8 +642,8 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   which each `explorer.index` carries and applies from that build on, dropping nothing held), with names and definitions
   held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). Definitions leave a quarter of the
   limit to names, and every BigQuery charge must leave a floor above that reserve free (`ObjectIndexLimits.BigQuery*FloorBytes`:
-  discovered details, then billing and starred details, then names), so BigQuery never crowds out SQL Server's definitions in
-  either build order (a new BigQuery charge path must take a floor). A BigQuery dataset that holds details is never swapped for a read without them: pass 1 carries its earlier details by name (a date-sharded group by its prefix) until pass 2 has read them again, the replaced read's share pays names and details apart, and `Hold` leaves out what is new, or leaves the dataset as it was, rather than drop what it held. Definitions left out for memory are counted apart (`LeftOut`) and reported in the status. It reads on its own pool (" - Object Search", the explorer's prologue)
+  discovered details, then billing and starred details, then names), so BigQuery always leaves SQL Server's definitions room (at least an eighth of the limit) in
+  either build order (a new BigQuery charge path must take a floor). A BigQuery dataset that holds details is never swapped for a read without them: pass 1 carries its earlier details by name (a date-sharded group by its prefix) until pass 2 has read them again, the replaced read's share pays names and details apart, and `Hold` sends objects back to what was held of them (new ones, then those that grew, then the rest), or leaves the dataset as it was, rather than drop what it held. Definitions left out for memory are counted apart (`LeftOut`) and reported in the status. It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
   `CatalogSql.Lint`), and server objects from `ObjectSearchSql.Server`. It indexes every kind Object Explorer lists but
   the SSIS Catalog's, Microsoft-shipped objects included; the resource database's are read once per build and shared by
@@ -659,11 +659,13 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `IndexFile` (`IndexFileContainer` for the header, encryption and chunks, `IndexFileUnit` for the content; their doc
   comments are the layout) saves one unit of the index (a `DatabaseIndex`, or the shared resource set) to a versioned file
   and loads it back; only the `IndexStore` calls it. Its rules: a file is untrusted, so every length is
-  checked against `IndexFileLimits` and charged to the budget before anything is allocated by it, and every reference a
-  search or a lookup follows is checked before a table exists (in clear text nothing else vouches for the content); a load
-  takes texts from the `StringPool` and charges as the reader that made the unit charges (a new field must be charged the
-  same way, BigQuery's under its floors); every failure is an `IndexFileProblem` value with everything taken given back;
-  a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
+  checked against `IndexFileLimits`, whatever a load keeps is charged to the budget before there is anywhere to keep it
+  (what it does not charge is bounded by those limits alone), and every reference a search or a lookup follows is checked
+  before a table exists (in clear text nothing else vouches for the content); a load takes texts from the `StringPool` and
+  charges as the reader that made the unit charges (a new field must be charged the same way, BigQuery's under its
+  floors; a BigQuery replacement holds the replaced share whole rather than in the read's two parts, since it charges by
+  section rather than by entry, so it fits wherever the read fits); the writer refuses whatever the loader would; every
+  failure is an `IndexFileProblem` value with everything taken given back; a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
   change bumps `IndexFileContainer.Version` and commits that version's files (`Fixtures/IndexFile`, written by the test
   program's `--write-index-goldens`), which `IndexFileChecks` loads on every run.
   The `IndexStore` (`IndexStore.cs`, `IndexStoreNames.cs`; the security boundary's bullet has the key, the folder and what

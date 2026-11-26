@@ -90,8 +90,9 @@ internal sealed class IndexFileRefused(IndexFileProblem problem) : Exception
 /// checks must stand alone. Inside the chunks the body is a run of blocks, each u8 codec (0 stored, 1 zstd) | u32 raw bytes |
 /// (zstd: u32 stored bytes) | bytes, so what is already compressed (a <see cref="PackedText"/> frame) is stored as it is.
 /// A zstd block that packs better than <see cref="MaxRatio"/> to one is followed by padding up to that ratio, so a file never
-/// unpacks to more than that many times its size: the bound on what a small file can make a load read, hold or allocate
-/// (<see cref="PayloadReader.Backed"/>).
+/// unpacks to more than that many times its size, and a packed definition's frame is padded by the same rule
+/// (<see cref="IndexFileUnit"/>), which bounds the work a file can make a load do by the file's own size
+/// (<see cref="PayloadReader.Backed"/>). What a load keeps or allocates is bounded by the budget, not by this.
 /// </summary>
 internal static class IndexFileContainer
 {
@@ -116,8 +117,9 @@ internal static class IndexFileContainer
 
     public static IndexFileRefused Refused(IndexFileProblem problem) => new(problem);
 
-    /// <summary>The padding after a zstd block of <paramref name="raw"/> bytes stored in <paramref name="stored"/>.</summary>
-    private static int Padding(uint raw, uint stored) => (int)Math.Max(0, (raw + MaxRatio - 1) / MaxRatio - (long)stored);
+    /// <summary>The padding after a zstd block, or a packed definition's frame, of <paramref name="raw"/> bytes stored in
+    /// <paramref name="stored"/>.</summary>
+    public static int Padding(uint raw, uint stored) => (int)Math.Max(0, (raw + MaxRatio - 1) / MaxRatio - (long)stored);
 
     /// <summary>Room for <paramref name="bytes"/> in <paramref name="buffer"/>, keeping what it holds: buffers start small and
     /// grow to their fixed size only for a file that needs it, since most units are a few KiB.</summary>
@@ -320,6 +322,8 @@ internal static class IndexFileContainer
             if (stream.ReadAtLeast(sealedHeader, sealedHeader.Length, throwOnEndOfStream: false) < sealedHeader.Length) throw Refused(IndexFileProblem.Truncated);
             var plain = new byte[(int)length];
             if (!seal.OpenHeader(prefix, sealedHeader, plain)) throw Refused(seal.Encrypted ? IndexFileProblem.Key : IndexFileProblem.Corrupt);
+            // A file past the format's size is refused here, not after the limit's worth of chunks is read.
+            if (stream.CanSeek && stream.Length > IndexFileLimits.FileBytes) throw Refused(IndexFileProblem.Limits);
             return (ParseHeader(plain, seal.Encrypted), seal, PrefixBytes + sealedHeader.Length);
         }
         catch
@@ -445,7 +449,7 @@ internal static class IndexFileContainer
     }
 
     /// <summary>The body's content as the unit writes it: values into blocks, each compressed when that makes it smaller, and
-    /// bytes that are compressed already (<see cref="Frame"/>) as they are.</summary>
+    /// bytes that are compressed already (<see cref="AsIs"/>) as they are.</summary>
     internal sealed class PayloadWriter(ChunkWriter chunks)
     {
         private static readonly int MostPacked = (int)ZstandardEncoder.GetMaxCompressedLength(BlockBytes);
@@ -453,6 +457,7 @@ internal static class IndexFileContainer
         private byte[] block = [];
         private byte[] packed = [];
         private int used;
+        private bool asIs;
 
         public void Bytes(ReadOnlySpan<byte> data)
         {
@@ -467,20 +472,13 @@ internal static class IndexFileContainer
             }
         }
 
-        /// <summary>Bytes no compressor would shrink: written in blocks of their own, not through zstd again.</summary>
-        public void Frame(ReadOnlySpan<byte> data)
+        /// <summary>Whether what follows is written as it is, in stored blocks: bytes no compressor would shrink (packed
+        /// definitions' frames), not put through zstd again.</summary>
+        public void AsIs(bool on)
         {
+            if (on == asIs) return;
             Flush();
-            Span<byte> head = stackalloc byte[5];
-            while (!data.IsEmpty)
-            {
-                var take = Math.Min(data.Length, BlockBytes);
-                head[0] = 0;
-                BinaryPrimitives.WriteUInt32LittleEndian(head[1..], (uint)take);
-                chunks.Write(head);
-                chunks.Write(data[..take]);
-                data = data[take..];
-            }
+            asIs = on;
         }
 
         private void Flush()
@@ -488,8 +486,13 @@ internal static class IndexFileContainer
             if (used == 0) return;
             Span<byte> head = stackalloc byte[9];
             BinaryPrimitives.WriteUInt32LittleEndian(head[1..], (uint)used);
-            Grow(ref packed, (int)ZstandardEncoder.GetMaxCompressedLength(used), MostPacked);
-            if (ZstandardEncoder.TryCompress(block.AsSpan(0, used), packed, out var size, Level, 0) && size < used)
+            var size = 0;
+            if (!asIs)
+            {
+                Grow(ref packed, (int)ZstandardEncoder.GetMaxCompressedLength(used), MostPacked);
+                if (!ZstandardEncoder.TryCompress(block.AsSpan(0, used), packed, out size, Level, 0) || size >= used) size = 0;
+            }
+            if (size > 0)
             {
                 head[0] = 1;
                 BinaryPrimitives.WriteUInt32LittleEndian(head[5..], (uint)size);
@@ -561,10 +564,21 @@ internal static class IndexFileContainer
         private byte[] block = [];
         private byte[] packed = [];
         private int at, length;
+        private bool compressed, plain;
+
+        /// <summary>Whether what follows must come from stored blocks: the bytes the unit puts in as they are (packed
+        /// definitions' frames), which are unpacked again. A frame inside a compressed block would let a file's padding pack
+        /// too, and so its frames cost far more than the ratio's share of the file to unpack.</summary>
+        public void Plain(bool on)
+        {
+            if (on && compressed && at < length) throw Refused(IndexFileProblem.Corrupt);
+            plain = on;
+        }
 
         /// <summary>Refuses a size the file cannot hold: the content still to come is at most what this block has left and
-        /// <see cref="MaxRatio"/> times the file's unread bytes. Called before anything is allocated by a count the content
-        /// states, with the fewest bytes that many items take, so an allocation is never more than the file's size justifies.</summary>
+        /// <see cref="MaxRatio"/> times the file's unread bytes. An early refusal of a count no file of this size could back,
+        /// with the fewest bytes that many items take; it is not what bounds a load's memory (a file may be large), the budget
+        /// is. A stream that cannot seek is taken to be as long as the largest file.</summary>
         public void Backed(long bytes)
         {
             if (bytes > length - at + MaxRatio * chunks.Unread) throw Refused(IndexFileProblem.Corrupt);
@@ -611,7 +625,8 @@ internal static class IndexFileContainer
             Span<byte> head = stackalloc byte[5];
             Fill(head);
             var raw = BinaryPrimitives.ReadUInt32LittleEndian(head[1..]);
-            if (head[0] > 1 || raw == 0 || raw > BlockBytes) throw Refused(IndexFileProblem.Corrupt);
+            if (head[0] > 1 || raw == 0 || raw > BlockBytes || plain && head[0] == 1) throw Refused(IndexFileProblem.Corrupt);
+            compressed = head[0] == 1;
             Grow(ref block, (int)raw, BlockBytes);
             if (head[0] == 0) Fill(block.AsSpan(0, (int)raw));
             else
