@@ -126,6 +126,8 @@ internal sealed partial class ObjectSearchService : IDisposable
     }
 
     public ObjectIndexLimits Limits { get; }
+    /// <summary>A check's hook: called when a BigQuery build's names pass has held a dataset's read (or left it as it was).</summary>
+    internal Action<string, string>? NamesHeld { get; set; }
 
     /// <summary>explorer.index's memoryLimitMiB, checked: the limit every connection's index shares from this build on, with the
     /// names' reserve (and so BigQuery's floors) in proportion. Nothing held is dropped: a rebuild charges its predecessor's
@@ -139,7 +141,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         {
             if (Limits.MemoryBytes == bytes && budget.Limit == bytes) return;
             // Reads running on other connections take no lock: the reserve (and the floors that follow from it) is never larger
-            // than the limit in force allows, so a read between the two writes is refused nothing it would have been given.
+            // than the limit in force allows, so a read between the two writes is refused nothing it would have been given
+            // (it may for that instant be given what the smaller reserve allows under the larger limit).
             if (bytes < budget.Limit) Limits.NamesReserveBytes = reserve;
             budget.Limit = bytes;
             Limits.MemoryBytes = bytes;
@@ -726,9 +729,10 @@ internal sealed partial class ObjectSearchService : IDisposable
             if (state.Index.Resource is { } held && held.Key == key)
             {
                 // The set this connection holds is current. One whose definitions were left out for memory is read again once
-                // there is room above the names' reserve, so raising the limit and rebuilding brings them back; one another
+                // there is room above the names' reserve (as much again as the set's records take, so a build at the reserve's
+                // edge does not read it again for nothing), so raising the limit and rebuilding brings them back; one another
                 // connection has already retired is exchanged for the newer set whatever the room, since that costs nothing.
-                if (held.LeftOut == 0 || resources.Current(held) && budget.Free < Limits.NamesReserveBytes) return null;
+                if (held.LeftOut == 0 || resources.Current(held) && budget.Free < Limits.NamesReserveBytes + held.Bytes) return null;
                 resources.Retire(held);
             }
             // The shared read has its own connection and lifetime: other connections may wait for it, so stopping this build (or

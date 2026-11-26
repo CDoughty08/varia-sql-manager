@@ -273,7 +273,7 @@ internal static partial class IndexFileChecks
                     writer.Write(fact.Created);
                     writer.Write((ushort)((fact.Detailed ? 1 : 0) | (fact.Whole ? 2 : 0) | (fact.ColumnsCut ? 4 : 0) | (fact.Rows is not null ? 8 : 0) | (fact.Bytes is not null ? 16 : 0)
                         | (fact.Listed is not null ? 32 : 0) | (fact.Partitioning is not null ? 64 : 0) | (fact.Clustering is not null ? 128 : 0) | (fact.Signature is not null ? 256 : 0)
-                        | (fact.Stale ? 512 : 0) | FactFlags));
+                        | (fact.Stale ? 512 : 0) | (fact.TextLeftOut ? 1024 : 0) | FactFlags));
                     if (fact.Rows is { } rows) writer.Write(rows);
                     if (fact.Bytes is { } bytes) writer.Write(bytes);
                     if (fact.Listed is { } listed) writer.Write(listed);

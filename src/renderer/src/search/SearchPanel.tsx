@@ -121,11 +121,9 @@ export function moreMatches(definition: DefinitionMatch): string | undefined {
 const memorySkip = (skip: ObjectIndexSkip): boolean => skip.code === childrenLeftOut || (skip.code === 'TOO_LARGE' && /memory/i.test(skip.message))
 
 /** The definitions an index left out because its memory ran out, for its line: a search inside definitions cannot find them.
- *  The databases (datasets) are named when some are theirs; the server's own and the system objects' are in none. */
+ *  The count is the whole index's (its databases', the server's own and the system objects'), so the line names no database. */
 function leftOutText(status: ObjectIndexStatus): string {
-  if (!status.leftOut) return ''
-  const where = status.leftOutIn ? ` of ${count(status.leftOutIn, status.provider === 'bigquery' ? 'dataset' : 'database')}` : ''
-  return ` · ${count(status.leftOut, 'definition')} left out${where} (not enough index memory)`
+  return status.leftOut ? ` · ${count(status.leftOut, 'definition')} left out (not enough index memory)` : ''
 }
 
 /** Whether an index left anything out because the memory every index shares ran out: definitions, children, a whole database

@@ -1319,7 +1319,7 @@ try {
     await expect(indexLines).not.toContainText('left out')
     await setStub({ indexLeftOut: { leftOut: 1204, leftOutIn: 2 } })
     await rebuildIndex()
-    await expect(indexLines).toHaveText([/ · 1,204 definitions left out of 2 databases \(not enough index memory\)$/,
+    await expect(indexLines).toHaveText([/ · 1,204 definitions left out \(not enough index memory\)$/,
       'The index does not have enough memory, so a search inside definitions misses the ones left out. Raise Index memory limit in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.'])
     await expect(tabHits).toHaveCount(2)
     for (const mode of ['light', 'dark']) {
@@ -1330,10 +1330,10 @@ try {
     const bandText = await searchBox().inputValue()
     await searchBox().fill('ORD')
     await expect(explorerSearchHits(page)).toHaveCount(3)
-    await expect(explorerSearchIndexLine(page)).toHaveText(/ · 1,204 definitions left out of 2 databases \(not enough index memory\)$/)
+    await expect(explorerSearchIndexLine(page)).toHaveText(/ · 1,204 definitions left out \(not enough index memory\)$/)
     await page.locator(part.explorerSearch).getByRole('button', { name: 'Search and index details', exact: true }).click()
     const memoryDetails = explorerSearchPopover(page, 'Search details')
-    await expect(memoryDetails).toContainText('1,204 definitions left out of 2 databases (not enough index memory)')
+    await expect(memoryDetails).toContainText('1,204 definitions left out (not enough index memory)')
     await expect(memoryDetails).toContainText('Raise Index memory limit in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.')
     for (const mode of ['light', 'dark']) {
       await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)

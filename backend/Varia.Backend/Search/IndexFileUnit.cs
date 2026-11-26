@@ -87,7 +87,7 @@ internal static class IndexFileUnit
     private const ushort ChildrenLeftOutFlag = 1, DefinitionsLeftOutFlag = 2, DetailedFlag = 4, FailedPartFlag = 8, CaseKnownFlag = 16, CaseSensitiveFlag = 32, DottedIFlag = 64,
         FactsFlag = 128, DatasetFlag = 256, UnitFlags = 511;
     private const ushort FactDetailed = 1, FactWhole = 2, FactColumnsCut = 4, FactRows = 8, FactBytes = 16, FactListed = 32, FactPartitioning = 64, FactClustering = 128,
-        FactSignature = 256, FactStale = 512, FactFlags = 1023;
+        FactSignature = 256, FactStale = 512, FactTextLeftOut = 1024, FactFlags = 2047;
     private const byte EntryFlags = ObjectTable.SystemFlag | ObjectTable.CutFlag | ObjectTable.ChildFlag;
     private const byte OwnUses = (byte)(TextUse.Name | TextUse.Definition), Uses5 = 31;
     /// <summary>What a read's charge may exceed its content's by: rows it charged and then left out (a child whose parent the
@@ -497,7 +497,7 @@ internal static class IndexFileUnit
                 writer.Int64(fact.Created);
                 writer.UInt16((ushort)((fact.Detailed ? FactDetailed : 0) | (fact.Whole ? FactWhole : 0) | (fact.ColumnsCut ? FactColumnsCut : 0) | (fact.Rows is not null ? FactRows : 0)
                     | (fact.Bytes is not null ? FactBytes : 0) | (fact.Listed is not null ? FactListed : 0) | (fact.Partitioning is not null ? FactPartitioning : 0)
-                    | (fact.Clustering is not null ? FactClustering : 0) | (fact.Signature is not null ? FactSignature : 0) | (fact.Stale ? FactStale : 0)));
+                    | (fact.Clustering is not null ? FactClustering : 0) | (fact.Signature is not null ? FactSignature : 0) | (fact.Stale ? FactStale : 0) | (fact.TextLeftOut ? FactTextLeftOut : 0)));
                 if (fact.Rows is { } rows) writer.Int64(rows);
                 if (fact.Bytes is { } bytes) writer.Int64(bytes);
                 if (fact.Listed is { } listed) writer.Int64(listed);
@@ -599,23 +599,34 @@ internal static class IndexFileUnit
         public DatabaseIndex? Credit => credit;
 
         /// <summary>Charges to <paramref name="share"/> (a part of the replaced read's share) first, the rest to the budget when
-        /// that leaves <paramref name="keepFree"/> free.</summary>
-        private bool TryCharge(long bytes, long keepFree, ref long share)
+        /// that leaves <paramref name="keepFree"/> free, else to what is left of both parts together (<paramref name="other"/>):
+        /// as a read lends between them once the budget has refused, so a load no larger than what it replaces always fits.</summary>
+        private bool TryCharge(long bytes, long keepFree, ref long share, ref long other)
         {
             if (bytes <= 0) return true;
             var fromShare = Math.Min(share, bytes);
-            if (bytes > fromShare && !budget.TryTake(bytes - fromShare, keepFree)) return false;
+            if (bytes > fromShare && !budget.TryTake(bytes - fromShare, keepFree))
+            {
+                if (share + other < bytes) return false;
+                other -= bytes - fromShare;
+                share -= fromShare;
+                Credited += bytes;
+                return true;
+            }
             share -= fromShare;
             Credited += fromShare;
             Taken += bytes - fromShare;
             return true;
         }
 
+        private long noShare;
+        private bool TryCharge(long bytes, long keepFree, ref long share) => bigQuery ? TryCharge(bytes, keepFree, ref share, ref nameCredit) : TryCharge(bytes, keepFree, ref share, ref noShare);
+
         /// <summary>A BigQuery name's share (a record, its facts, a text's slot): the names' part of the replaced read's share,
         /// else the budget above the names floor (<see cref="BigQueryReader"/>).</summary>
         private bool TryChargeName(long bytes)
         {
-            if (!TryCharge(bytes, namesFloor, ref nameCredit)) return false;
+            if (!TryCharge(bytes, namesFloor, ref nameCredit, ref creditLeft)) return false;
             NameBytes += Math.Max(0, bytes);
             return true;
         }
@@ -983,12 +994,14 @@ internal static class IndexFileUnit
                 var partitioning = Stated(FactPartitioning) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var clustering = Stated(FactClustering) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var signature = Stated(FactSignature) ? reader.Text(IndexFileLimits.FactChars) : null;
-                var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed, Stated(FactStale));
+                var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed, Stated(FactStale), Stated(FactTextLeftOut));
                 // Facts are an object's, never a column's, so a load without children keeps them all.
                 if (Moved(at) < 0 || (entries[Moved(at)].Flags & ObjectTable.ChildFlag) != 0) throw Corrupt();
                 var cost = FactBytesOf(fact);
                 whole += cost;
-                account.Fact(cost);
+                // The object's facts are its name's; what pass 2 read of it (signature, layout) is a detail, as the read charges.
+                account.Fact(BigQueryFacts.ObjectBytes);
+                account.Details(cost - BigQueryFacts.ObjectBytes);
                 objects[Moved(at)] = fact;
             }
             var descriptionCount = reader.Count(count, IndexFileProblem.Corrupt);
@@ -1093,7 +1106,7 @@ internal static class IndexFileUnit
             modules--;
             leftOut++;
             // An object whose text the load left out is not whole: the next build reads it again (BigQueryReader).
-            if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false };
+            if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false, TextLeftOut = true };
         }
         (modules, cut) = (Math.Max(0, modules), Math.Max(0, cut));
         // Without children the counts were checked against the entries the file has, not the ones the load keeps: hold them
