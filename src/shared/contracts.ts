@@ -19,7 +19,7 @@ import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
 import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
-import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
+import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectIndexStatusParams, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
 import type { LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
@@ -727,6 +727,7 @@ export interface RpcMethods {
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   /** (Re)builds the connection's object index in backend memory; progress EVENTs, and Stop is varia:explorer-cancel. */
   'explorer.index': { params: ObjectIndexParams; result: ObjectIndexResult }
+  'explorer.indexStatus': { params: ObjectIndexStatusParams; result: ObjectIndexResult }
   /** Searches the connection's object index (names and module definitions), in backend memory. */
   'explorer.search': { params: ObjectSearchParams; result: ObjectSearchResult }
   /** Peek: a table's, view's or module's properties (and a module's text), on the Object Explorer pool; Stop is varia:explorer-cancel. */
@@ -1015,6 +1016,7 @@ export interface VariaApi {
   explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Builds a connection's object index; it answers once every database was read or skipped. Stop it with explorerCancel. */
   explorerIndex(params: ObjectIndexParams): Promise<ApiResult<ObjectIndexResult>>
+  explorerIndexStatus(params: ObjectIndexStatusParams): Promise<ApiResult<ObjectIndexResult>>
   /** Searches a connection's object index; a search replaced by a newer one is cancelled with explorerCancel. */
   explorerSearch(params: ObjectSearchParams): Promise<ApiResult<ObjectSearchResult>>
   /** Peek's read of one object; a card closed before it answers cancels it with explorerCancel. */

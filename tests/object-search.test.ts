@@ -8,7 +8,7 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes, unindexedKinds, agentSearchKinds,
+  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes, unindexedKinds, agentSearchKinds,
   bigQuerySearchKinds, bigQuerySearchVariants, providerSearchKinds, searchHitNames, searchKindFilters,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
@@ -146,6 +146,10 @@ describe('object search contracts', () => {
     ])
       expect(index(bad), JSON.stringify(bad)).toBe(false)
     expect(requestSchemas['explorer.index']).toBe(objectIndexParamsSchema)
+    expect(requestSchemas['explorer.indexStatus']).toBe(objectIndexStatusParamsSchema)
+    expect(objectIndexStatusParamsSchema.safeParse({ connectionId: '00000000-0000-4000-8000-000000000001' }).success).toBe(true)
+    for (const bad of [{}, { connectionId: 'x' }, { connectionId: '00000000-0000-4000-8000-000000000001', requestId: '00000000-0000-4000-8000-000000000002' }])
+      expect(objectIndexStatusParamsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
     expect(requestSchemas['explorer.search']).toBe(objectSearchParamsSchema)
   })
 
@@ -153,6 +157,7 @@ describe('object search contracts', () => {
     // Both engines: BigQuery's connections are indexed and searched through the same methods.
     expect(methodPolicies['explorer.index']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 0, providers: ['sqlserver', 'bigquery'] })
     expect(methodPolicies['explorer.search']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 15_000, providers: ['sqlserver', 'bigquery'] })
+    expect(methodPolicies['explorer.indexStatus']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 5_000, providers: ['sqlserver', 'bigquery'] })
     const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' }
     expect(cancellableRequests('explorer.index', channels)).toBe('explorer')
     expect(cancellableRequests('explorer.search', channels)).toBe('explorer')
@@ -669,6 +674,48 @@ describe('ObjectSearchService', () => {
     pendingIndex[2]({ ok: false, error: 'stopped', code: 'CANCELLED' })
     await settle()
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 0, total: 0, objects: 40, status: status() })
+  })
+
+  it('reads the index status after a stopped first build, so what it read shows as a stopped index with Build index', async () => {
+    const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
+    const { service, api, pendingIndex, connections } = harness()
+    const partial = bq({ indexed: 3, databases: 3, objects: 120, stopped: true })
+    api.explorerIndexStatus = vi.fn(async () => ({ ok: true as const, value: { status: partial, elapsedMs: 0 } }))
+    connections.set([bigQueryConnection('bq')])
+    expect(service.getSnapshot().indexes.bq?.status).toBeUndefined()
+    service.stopBuild('bq')
+    pendingIndex[0]({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    expect(api.explorerIndexStatus).toHaveBeenCalledWith({ connectionId: 'bq' })
+    const entry = service.getSnapshot().indexes.bq!
+    expect(entry).toEqual({ connectionId: 'bq', done: 3, total: 3, objects: 120, status: partial })
+    expect(indexSummary(entry, entry.status)).toBe('Index: 120 objects, 5 definitions in 3 datasets · build stopped')
+    expect(indexIncomplete(entry, entry.status)).toBe(true)
+    expect(unindexedServers(['bq'], service.getSnapshot().indexes)).toEqual(['bq'])
+    expect(indexGap(entry)).toBe('build stopped')
+    // A newer build that started before the status came back keeps its own entry, while it runs and after it finishes.
+    let answer: (value: ApiResult<ObjectIndexResult>) => void = () => {}
+    api.explorerIndexStatus = vi.fn(() => new Promise<ApiResult<ObjectIndexResult>>(resolve => { answer = resolve }))
+    service.build('bq')
+    service.stopBuild('bq')
+    pendingIndex[1]({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    service.build('bq')
+    const late = answer
+    late({ ok: true, value: { status: bq({ state: 'none' }), elapsedMs: 0 } })
+    await settle()
+    expect(service.getSnapshot().indexes.bq).toMatchObject({ requestId: 'req3', status: partial })
+    service.stopBuild('bq')
+    pendingIndex[2]({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    const stale = answer
+    service.build('bq')
+    const complete = bq({ indexed: 9, databases: 9, objects: 900 })
+    pendingIndex[3]({ ok: true, value: { status: complete, elapsedMs: 1 } })
+    await settle()
+    stale({ ok: true, value: { status: partial, elapsedMs: 0 } })
+    await settle()
+    expect(service.getSnapshot().indexes.bq?.status).toEqual(complete)
   })
 
   it('cancels a disconnected single-target search and typing task, retaining filters and completed hits while rejecting late replies', async () => {
@@ -1411,6 +1458,7 @@ describe('ObjectSearchService', () => {
     expect(indexSummary(undefined, bq({ projects: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets')
     expect(indexSummary(undefined, bq({ objects: 4210, modules: 180, indexed: 62, projects: 14 }))).toBe('Index: 4,210 objects, 180 definitions in 62 datasets across 14 projects')
     expect(indexSummary(undefined, bq({ state: 'none' }))).toBe('This connection has no index yet.')
+    expect(indexSummary(undefined, status({ indexed: 2, stopped: true }))).toMatch(/ in 2 databases · build stopped$/)
     expect(indexSummary(undefined, bq({ namesOnly: ['varia-beta'], skipped: [
       { database: 'census', project: 'varia-beta', code: 'PERMISSION_DENIED', message: 'm' }, { database: '', project: 'varia-gamma', code: 'API_DISABLED', message: 'm' },
       { database: 'sales', project: 'varia-alpha', code: 'CATALOG_ERROR', message: 'm', details: true }, { database: 'big', project: 'varia-alpha', code: childrenLeftOut, message: 'm' }

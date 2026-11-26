@@ -72,6 +72,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         public CancellationTokenSource? Build;
         public bool Building;
         public bool Built;
+        /// <summary>The last full build was stopped (Stop or a disconnect, not a newer build) before it finished.</summary>
+        public bool Stopped;
         public bool Definitions = true;
         public int Databases;
         public int Indexed;
@@ -262,7 +264,7 @@ internal sealed partial class ObjectSearchService : IDisposable
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
             {
-                if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
+                if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.Stopped = false; state.BuiltAt = DateTime.UtcNow; }
             }
             Finish(build: true, watch.ElapsedMilliseconds);
             finishedBuild = true;
@@ -270,6 +272,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
         {
+            // Stopped, not superseded: what it read stays, and the status says the index is partial until a build finishes.
+            lock (state.Gate) if (ReferenceEquals(state.Build, source)) state.Stopped = true;
             throw new RequestException("CANCELLED", "The object index build was stopped.");
         }
         catch (SqlException error)
@@ -289,6 +293,16 @@ internal sealed partial class ObjectSearchService : IDisposable
             if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
+    }
+
+    /// <summary>explorer.indexStatus: the index as it stands, so a window learns what a stopped build kept (its CANCELLED answer
+    /// carries no status). <paramref name="bigQuery"/> for a BigQuery handle, whose connection SqlService has already checked.</summary>
+    public ObjectIndexResult IndexStatus(ObjectIndexStatusArgs args, bool bigQuery = false)
+    {
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
+        if (!bigQuery) host.Profile(args.ConnectionId);
+        return new(states.TryGetValue(args.ConnectionId, out var state) ? Status(state)
+            : new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null, Projects: bigQuery ? 0 : null), 0);
     }
 
     /// <summary>explorer.search; <paramref name="bigQuery"/> for a BigQuery handle, whose search narrows by Project and Dataset (never
@@ -378,6 +392,7 @@ internal sealed partial class ObjectSearchService : IDisposable
         var databases = state.Index.Databases;
         lock (state.Gate)
         {
+            bool? stopped = !state.Building && state.Stopped ? true : null;
             if (state.BigQuery)
             {
                 // Datasets: those this build lists while it runs, else those the index holds and those it skipped.
@@ -387,12 +402,13 @@ internal sealed partial class ObjectSearchService : IDisposable
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
-                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark);
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped);
             }
-            return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
+            // A stopped first build that read only the server's own objects still holds an index.
+            return new(state.Building ? "building" : state.Built || databases.Count > 0 || state.Index.Objects > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
                 databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
-                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped);
         }
     }
 

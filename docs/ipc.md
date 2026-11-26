@@ -281,6 +281,7 @@ noted where it matters.
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; `explorerCancel` | unary | explorer | 45 s, budget 40 s |
 | `explorer.index` | invoke; `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, ≤ 4/s) | explorer | none; 120 s budget per database, 30 s per BigQuery metadata call ([Search Objects](object-search.md)) |
+| `explorer.indexStatus` | invoke | unary | explorer | 5 s; reads the index's counters only (what a stopped build kept) |
 | `explorer.search` | invoke; `explorerCancel` | unary | explorer | 15 s; stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; `explorerCancel` | unary | explorer (Peek's slot per connection) | 30 s, budget 15 s from when it has the slot |
 | `explorer.peekDependencies` | as `explorer.peek` | unary | as `explorer.peek` | as `explorer.peek` |

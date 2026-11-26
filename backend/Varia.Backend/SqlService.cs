@@ -33,7 +33,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.cancel", "query.session.close", "query.session.state",
-        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.dependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.dependencies", "explorer.index", "explorer.indexStatus", "explorer.search", "results.copy", "results.export",
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
@@ -456,7 +456,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         "query.execute" or "plans.estimate" or "results.remoteQuery" or "query.attach" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.distinct" or "results.distinctRead" or "results.distinctTick" or "results.diffSeek" => RequestLane.Results,
-        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
+        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.indexStatus" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" or "ssis.execution" or "ssis.packageRuns" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
@@ -600,6 +600,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "explorer.index" => Read<ObjectIndexArgs>(parameters, json) is var indexArgs && bigQuery.Owns(indexArgs.ConnectionId)
             ? await search.IndexBigQueryAsync(indexArgs, bigQuery, Token(context), context is null ? null : value => context.SendEvent(value, droppable: true))
             : await search.IndexAsync(SqlServerIndexArgs(indexArgs), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
+        "explorer.indexStatus" => Read<ObjectIndexStatusArgs>(parameters, json) is var statusArgs && bigQuery.Owns(statusArgs.ConnectionId)
+            ? search.IndexStatus(statusArgs, bigQuery: true) : search.IndexStatus(statusArgs),
         "explorer.search" => Read<ObjectSearchArgs>(parameters, json) is var searchArgs && bigQuery.Owns(searchArgs.ConnectionId)
             ? search.Search(searchArgs, Token(context), bigQuery: true) : search.Search(searchArgs, Token(context)),
         "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)

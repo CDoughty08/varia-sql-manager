@@ -126,7 +126,7 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   const databases = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.agent).length
   const server = status.skipped.some(skip => !skip.database)
   const agent = status.skipped.some(skip => skip.agent)
-  const skipped = (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '') + (agent ? ' · SQL Server Agent objects skipped' : '')
+  const skipped = (status.stopped ? ' · build stopped' : '') + (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '') + (agent ? ' · SQL Server Agent objects skipped' : '')
     + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '')
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
@@ -155,7 +155,7 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const listTruncated = globalSkips.some(skip => skip.code === 'TOO_LARGE' && !isMemorySkip(skip))
   const discoveryFailed = globalSkips.some(skip => skip.code !== 'TOO_LARGE')
   const globalNote = (listTruncated ? ' · project list truncated' : '') + (memoryStopped ? ' · index memory limit reached' : '') + (discoveryFailed ? ' · project discovery skipped' : '')
-  const skipped = globalNote + (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
+  const skipped = (status.stopped ? ' · build stopped' : '') + globalNote + (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
     + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '')
   // The billed bulk path: where it read, and a location whose queries failed (its datasets were read with the free calls instead).
@@ -168,21 +168,22 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
 }
 
 /**
- * The servers of a search (`servers`: the live ones it asks) that have no index and none building, which Build index builds:
+ * The servers of a search (`servers`: the live ones it asks) that have no index, or only what a stopped build read, and none
+ * building, which Build index builds (a new build reuses the details it already holds of unchanged BigQuery objects):
  * while indexing on connect is off, only the user starts a build. `answered` is a one-server search's index as its last
  * answer reported it, which knows of an index this window did not build.
  */
 export function unindexedServers(servers: readonly string[], indexes: Readonly<Record<string, IndexEntry>>, answered?: ObjectIndexStatus): string[] {
   return servers.filter(id => {
     const entry = indexes[id], status = entry?.status ?? answered
-    return !entry?.requestId && (!status || status.state === 'none')
+    return !entry?.requestId && (!status || status.state === 'none' || !!status.stopped)
   })
 }
 
 /** Whether the index line should stay in view: a build running or failed, or an index that leaves objects out (not ready, with
  *  databases skipped, or names only). A healthy index's detail is a click away. */
 export function indexIncomplete(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): boolean {
-  return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions || !!status.namesOnly?.length
+  return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions || !!status.namesOnly?.length || !!status.stopped
 }
 
 /** What a finished server index leaves out, in a few words, or undefined when it holds everything (a build still running is
@@ -203,6 +204,7 @@ export function indexGap(entry: IndexEntry): string | undefined {
   const projectSkips = bigQuery ? status.skipped.some(skip => !skip.database && !!skip.project) : status.skipped.some(skip => !skip.database)
   const namesOnly = status.namesOnly?.length ?? 0
   const gaps = [
+    status.stopped ? 'build stopped' : '',
     databases ? `${count(databases, bigQuery ? 'dataset' : 'database')} skipped` : '',
     listTruncated ? 'project list truncated' : '',
     memoryStopped ? 'index memory limit reached' : '',

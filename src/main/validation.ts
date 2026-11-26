@@ -13,7 +13,7 @@ import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
-import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
+import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
 import { languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
@@ -83,6 +83,7 @@ export const requestSchemas = {
   'results.visibility': z.object({ source: z.uuid(), seq: z.number().int().min(1).max(2 ** 31 - 1), visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),
   'explorer.children': explorerChildrenParamsSchema,
   'explorer.index': objectIndexParamsSchema,
+  'explorer.indexStatus': objectIndexStatusParamsSchema,
   'explorer.search': objectSearchParamsSchema,
   'explorer.peek': peekParamsSchema,
   'explorer.peekDependencies': peekDependenciesParamsSchema,
