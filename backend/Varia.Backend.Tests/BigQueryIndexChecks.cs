@@ -257,7 +257,17 @@ internal static partial class BigQueryIndexChecks
     /// <summary>Pass 2 admits datasets by the objects they read: together within the permits, a larger one alone, first come first.</summary>
     static async Task AdmissionAsync(Action<bool, string> check)
     {
+        check(!ObjectSearchService.ProgressReplaces(false, "names", "names", 40, 41) && ObjectSearchService.ProgressReplaces(false, "names", "names", 41, 41)
+            && ObjectSearchService.ProgressReplaces(true, "names", "names", 40, 41) && ObjectSearchService.ProgressReplaces(false, "details", "names", 5, 41),
+            "a progress count (done or total) read out of order never goes back within a phase; a new phase or the phase's last report replaces it");
         var admission = new BigQueryDetailAdmission(10);
+        using (var ended = new CancellationTokenSource())
+        {
+            ended.Cancel();
+            var refusedAtOnce = false;
+            try { (await admission.EnterAsync(1, ended.Token)).Dispose(); } catch (OperationCanceledException) { refusedAtOnce = true; }
+            check(refusedAtOnce && admission.Admitted == (0, 0), "a dataset already stopped is not admitted, even with room");
+        }
         var six = await admission.EnterAsync(6, CancellationToken.None);
         var second = admission.EnterAsync(6, CancellationToken.None);
         var small = admission.EnterAsync(3, CancellationToken.None);

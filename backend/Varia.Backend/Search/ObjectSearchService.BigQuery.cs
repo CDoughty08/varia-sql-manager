@@ -307,8 +307,8 @@ internal sealed partial class ObjectSearchService
             if (progress is null) return;
             lock (progressGate)
             {
-                if (last || phase != lastPhase || done >= lastDone) lastDone = done;
-                lastTotal = total;
+                if (ProgressReplaces(last, phase, lastPhase, done, lastDone)) lastDone = done;
+                if (ProgressReplaces(last, phase, lastPhase, total, lastTotal)) lastTotal = total;
                 lastPhase = phase;
                 if (!last && progressed.Elapsed - reported < ProgressEvery) return;
                 SendLocked();

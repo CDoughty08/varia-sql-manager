@@ -495,18 +495,39 @@ internal static class BigQueryExplorerChecks
         long still = 9_000 * Stopwatch.Frequency;
         var queue = new BigQueryRateLimiter(clock: () => still);
         var reserved = Enumerable.Range(0, 5).Select(_ => queue.ReserveRefundable("ada", BqMethod.TablesGet, still)).ToList();
-        reserved[2].Refund();
+        reserved[2].Refund(still);
         var afterMiddle = queue.Reserve("ada", BqMethod.TablesGet, still);
-        reserved[3].Refund();
-        reserved[1].Refund();
+        reserved[3].Refund(still);
+        reserved[1].Refund(still);
         var afterOutOfOrder = queue.Reserve("ada", BqMethod.TablesGet, still);
         check(Math.Abs(afterMiddle.TotalMilliseconds - 50) < 0.01 && Math.Abs(afterOutOfOrder.TotalMilliseconds - 60) < 0.01,
             $"a turn given back mid-queue is not reused alongside scheduled ones ({afterMiddle.TotalMilliseconds} ms, then {afterOutOfOrder.TotalMilliseconds} ms)");
         var tail = Enumerable.Range(0, 3).Select(_ => queue.ReserveRefundable("ada", BqMethod.RoutinesGet, still)).ToList();
-        tail[0].Refund();
-        tail[1].Refund();
-        tail[2].Refund();
+        tail[0].Refund(still);
+        tail[1].Refund(still);
+        tail[2].Refund(still);
         check(queue.Reserve("ada", BqMethod.RoutinesGet, still) == TimeSpan.Zero, "turns given back from the end, gaps included, are all reused");
+
+        // A method that never goes idle drops a gap once its turn has passed, and a turn already past when given back (its caller
+        // waited for a slot) is not kept: gaps stay bounded however long a build keeps the method busy.
+        var busy = Enumerable.Range(0, 5).Select(_ => queue.ReserveRefundable("ada", BqMethod.ModelsList, still)).ToList();
+        busy[1].Refund(still);
+        var kept = queue.Gaps("ada", BqMethod.ModelsList);
+        var later = still + Stopwatch.Frequency * 3 / 100;
+        busy[0].Refund(later);
+        queue.Reserve("ada", BqMethod.ModelsList, later);
+        check(kept == 1 && queue.Gaps("ada", BqMethod.ModelsList) == 0 && queue.Reserve("ada", BqMethod.ModelsList, later) > TimeSpan.Zero,
+            $"a busy method drops gaps whose turns have passed and keeps no past turn ({kept}, then {queue.Gaps("ada", BqMethod.ModelsList)})");
+
+        // A call whose deadline has already ended takes no turn and no slot.
+        using (var ended = new CancellationTokenSource())
+        {
+            ended.Cancel();
+            var refusedAtOnce = false;
+            try { await queue.EnterAsync("ada", BqMethod.JobsGet, ended.Token); } catch (OperationCanceledException) { refusedAtOnce = true; }
+            check(refusedAtOnce && queue.Reserve("ada", BqMethod.JobsGet, still) == TimeSpan.Zero && queue.InUse("ada") == 0,
+                "a call already stopped takes no turn and no slot");
+        }
 
         // A refusal of a call paced before the method last slowed down (queued or in flight at the old rate) does not slow it again.
         long clock = 20_000 * Stopwatch.Frequency;

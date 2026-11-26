@@ -15,8 +15,10 @@ export function indexStatusText(running: readonly IndexEntry[]): string {
   const done = running.reduce((sum, entry) => sum + entry.done, 0), total = running.reduce((sum, entry) => sum + entry.total, 0)
   const servers = running.length > 1 ? ` on ${running.length} servers` : ''
   const limited = running.some(entry => entry.throttled) ? ' (rate limited)' : ''
-  const labels = new Set(running.map(counted))
-  if (total && labels.size === 1) {
+  // Summed only when every build counts the same thing: SQL Server's databases, or one BigQuery phase (so a BigQuery build
+  // still finding projects is not added to a SQL Server build's databases).
+  const kinds = new Set(running.map(entry => entry.phase ?? ''))
+  if (total && kinds.size === 1) {
     const approx = running.some(entry => entry.growing) ? '~' : ''
     return `${counted(running[0]!)} ${numbers.format(done)} / ${approx}${numbers.format(total)}${servers}${limited}`
   }

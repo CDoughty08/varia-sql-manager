@@ -60,17 +60,18 @@ internal sealed class BigQueryRateLimiter(int inFlight = BigQueryRateLimiter.InF
     /// whose deadline ends while it waits gives its turn back and takes no slot.</summary>
     public async Task<Lease> EnterAsync(string principal, string method, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         var pace = paces.GetOrAdd((principal, method), key => new Pace(RateOf(key.Method)));
         var reserved = Seconds(now());
         var (wait, start, turn) = pace.Reserve(reserved);
         if (wait > TimeSpan.Zero)
         {
             try { await Task.Delay(wait, token); }
-            catch (OperationCanceledException) { pace.Refund(start, turn); throw; }
+            catch (OperationCanceledException) { pace.Refund(start, turn, Seconds(now())); throw; }
         }
         var gate = slots.GetOrAdd(principal, _ => new SemaphoreSlim(inFlight, inFlight));
         try { await gate.WaitAsync(token); }
-        catch (OperationCanceledException) { pace.Refund(start, turn); throw; }
+        catch (OperationCanceledException) { pace.Refund(start, turn, Seconds(now())); throw; }
         return new Lease(gate, reserved);
     }
 
@@ -100,12 +101,15 @@ internal sealed class BigQueryRateLimiter(int inFlight = BigQueryRateLimiter.InF
 
     /// <summary>Reserves a turn at <paramref name="timestamp"/>, with the action that gives it back as a stopped call does (the checks
     /// give turns back out of order through it).</summary>
-    internal (TimeSpan Wait, Action Refund) ReserveRefundable(string principal, string method, long timestamp)
+    internal (TimeSpan Wait, Action<long> Refund) ReserveRefundable(string principal, string method, long timestamp)
     {
         var pace = paces.GetOrAdd((principal, method), key => new Pace(RateOf(key.Method)));
         var (wait, start, turn) = pace.Reserve(Seconds(timestamp));
-        return (wait, () => pace.Refund(start, turn));
+        return (wait, at => pace.Refund(start, turn, Seconds(at)));
     }
+
+    /// <summary>Turns given back mid-queue still kept for a method (the checks read it).</summary>
+    internal int Gaps(string principal, string method) => paces.TryGetValue((principal, method), out var pace) ? pace.Gaps : 0;
 
     static double Seconds(long timestamp) => (double)timestamp / Stopwatch.Frequency;
 
@@ -123,9 +127,11 @@ internal sealed class BigQueryRateLimiter(int inFlight = BigQueryRateLimiter.InF
         private double reduced = rate;
         private double throttledAt = double.NegativeInfinity;
         // Turns given back with scheduled turns after them, by start: one for each call stopped while it waited for its turn or a
-        // slot, so as many as the callers that wait at once; all are dropped once the method is idle.
+        // slot, so as many as the callers that wait at once; each is dropped once its turn has passed, and all once the method is idle.
         private readonly SortedList<double, double> gaps = [];
         const double Epsilon = 1e-9;
+
+        public int Gaps { get { lock (gate) return gaps.Count; } }
 
         public double Rate(double at)
         {
@@ -145,6 +151,9 @@ internal sealed class BigQueryRateLimiter(int inFlight = BigQueryRateLimiter.InF
                     next = at;
                     gaps.Clear();
                 }
+                // A gap whose turn has passed can never be handed out again: a busy method drops it here rather than keeping
+                // every turn ever given back mid-queue until it next goes idle.
+                while (gaps.Count > 0 && gaps.Keys[0] + gaps.Values[0] <= at) gaps.RemoveAt(0);
                 var start = next;
                 next += turn;
                 return (TimeSpan.FromSeconds(start - at), start, turn);
@@ -152,12 +161,14 @@ internal sealed class BigQueryRateLimiter(int inFlight = BigQueryRateLimiter.InF
         }
 
         /// <summary>A turn its caller gave up unsent (its deadline ended while it waited for the turn or a slot): later callers may
-        /// use it once no scheduled turn follows it.</summary>
-        public void Refund(double start, double turn)
+        /// use it once no scheduled turn follows it. A turn already past at <paramref name="at"/> (its caller waited on for a slot)
+        /// is worth nothing to them, so it is not kept.</summary>
+        public void Refund(double start, double turn, double at)
         {
             lock (gate)
             {
                 var end = start + turn;
+                if (end <= at) return;
                 if (end < next - Epsilon)
                 {
                     gaps[start] = turn;

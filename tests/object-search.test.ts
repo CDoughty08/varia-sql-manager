@@ -1402,6 +1402,8 @@ describe('ObjectSearchService', () => {
     expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }])).toBe('Indexing objects 3 / 12')
     expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'c', requestId: 'r2', done: 1, total: 4, objects: 3 }])).toBe('Indexing objects 4 / 16 on 2 servers')
     expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'b', requestId: 'r2', done: 7, total: 30, objects: 3, phase: 'details', throttled: true }])).toBe('Indexing objects on 2 servers… (rate limited)')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'b', requestId: 'r2', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Indexing objects on 2 servers…')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }, { connectionId: 'c', requestId: 'r2', done: 1, total: 4, objects: 3, phase: 'names' }])).toBe('Listing BigQuery datasets 3 / 9 on 2 servers')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 40, objects: 120, phase: 'names', growing: true, throttled: true }, undefined)).toBe('Indexing 1 of about 40 datasets (120 objects so far)… BigQuery is rate limiting the calls, which retry.')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 120, phase: 'names' }, undefined)).toBe('Indexing 1 of 4 datasets (120 objects so far)…')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 7, total: 30, objects: 120, phase: 'details' }, undefined)).toBe('Reading details of 7 of 30 objects…')

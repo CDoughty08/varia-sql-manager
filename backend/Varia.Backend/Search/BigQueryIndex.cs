@@ -81,6 +81,7 @@ internal sealed class BigQueryDetailAdmission(int permits)
     /// <summary>Waits until the dataset's <paramref name="count"/> objects may be read; disposing the result lets others in.</summary>
     public async Task<IDisposable> EnterAsync(int count, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         LinkedListNode<(int Count, TaskCompletionSource Ready)> node;
         lock (gate)
         {
