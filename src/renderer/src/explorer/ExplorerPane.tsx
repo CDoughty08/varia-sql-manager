@@ -145,12 +145,13 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId,
   readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string; readonly onNewMultiServerQuery?: () => void
 }) {
   const { explorer, connections, commands } = useWorkbench()
-  const { selected, multiSelected } = useServiceSnapshot(explorer)
+  const { selected, multiSelected, multiSelectProvider: multiProvider } = useServiceSnapshot(explorer)
   const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections).filter(connection => connection.inExplorer !== false)
   const connect = useCommandEnabled('connection.connect')
+  const canNewMultiQuery = useCommandEnabled('explorer.newMultiServerQuery')
   const selectedServer = explorer.menuNode(selected)?.connectionId
-  const multiProvider = explorer.multiSelectProvider
+  const inMultiBar = multiSelected.length >= 2
   const multiSelectionLabel = multiProvider === 'bigquery'
     ? `${multiSelected.length} BigQuery Projects selected`
     : `${multiSelected.length} SQL Servers selected`
@@ -185,21 +186,29 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId,
   useLayoutEffect(() => {
     if (!searchable && !empty && focusLost(paneDocument())) focusTree(header.current)
   }, [searchable, empty])
+  const wasMultiBar = useRef(inMultiBar)
+  useLayoutEffect(() => {
+    if (wasMultiBar.current && !inMultiBar && !empty && focusLost(paneDocument())) focusTree(header.current)
+    wasMultiBar.current = inMultiBar
+  }, [inMultiBar, empty])
   return <>
     <div className="explorer-header pane-header" ref={header}><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={headerTools} /><ExplorerMenuButton /></div>
     {searchable ? <ExplorerSearch connectionId={selectedServer} inlineTools={inlineToolbar} /> : <div className="explorer-tools-bar">{inlineToolbar}</div>}
-    {multiSelected.length >= 2 && <div className="oe-multi-bar" role="region" aria-label="Multi-server selection"
-      style={{ height: 26, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 'var(--varia-space-1)', padding: '0 var(--varia-space-2)' }}>
-      <span className="oe-multi-bar-label" style={{ flex: '1 1 0', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 'var(--varia-size-xs)', fontWeight: 600 }}>
-        {multiSelectionLabel}
-      </span>
+    {inMultiBar && <div className="oe-multi-bar" role="region" aria-label="Multi-server selection"
+      onKeyDown={event => {
+        if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+          event.preventDefault()
+          explorer.clearMultiSelect()
+          focusTree(header.current)
+        }
+      }}>
+      <span className="oe-multi-bar-label" title={multiSelectionLabel}>{multiSelectionLabel}</span>
       <button type="button" className="primary oe-multi-bar-action"
-        style={{ height: 20, padding: '0 var(--varia-space-2)', fontSize: 'var(--varia-size-xs)', lineHeight: 1 }}
+        disabled={!onNewMultiServerQuery && !canNewMultiQuery}
         onClick={() => { if (onNewMultiServerQuery) onNewMultiServerQuery(); else void commands.execute('explorer.newMultiServerQuery', undefined, 'toolbar') }}>
         New Query
       </button>
       <button type="button" className="icon-button oe-multi-bar-clear" aria-label="Clear selection" title="Clear selection (Escape)"
-        style={{ width: 20, height: 20, padding: 2 }}
         onClick={() => { explorer.clearMultiSelect(); focusTree(header.current) }}>
         <Icon name="close" />
       </button>

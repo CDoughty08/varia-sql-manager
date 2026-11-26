@@ -17,10 +17,11 @@ namespace Varia.Backend.MultiQuery;
 /// <see cref="BigQueryTransaction.Open"/> over <c>ChildrenAsync(full: true)</c> after Phase 1, and delegates all row
 /// ingestion through <see cref="SqlService"/>'s single-call BigQuery helpers so the working-memory lint invariants hold.
 /// </summary>
-internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunner
+internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner? crossEngine = null) : IMultiTargetRunner
 {
     private const string BeginTransactionSql = "BEGIN TRANSACTION;";
     private readonly BigQueryService bigQuery = service.BigQuery;
+    private readonly CrossEngineRunner crossEngine = crossEngine ?? new CrossEngineRunner(service, new ReadOnlySqlValidator());
     private readonly ConditionalWeakTable<QueryBudget, RunState> runs = new();
 
     public string Provider => Providers.BigQuery;
@@ -53,7 +54,7 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
             var sample = targets[0];
             if (BigQueryErrors.IsLegacySql(sample.Sql))
             {
-                var err = new MultiTargetError("LEGACY_SQL", BigQueryErrors.LegacySql);
+                var err = new MultiTargetError("LEGACY_SQL", BigQueryErrors.LegacySql, Line: Math.Max(1, sample.StartLine));
                 return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, false, err))];
             }
             var blockers = GoogleSqlScanner.FindTransactionBlockers(sample.Sql);
@@ -68,22 +69,12 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
         else if (mode == "crossEngineReadOnly")
         {
             var sample = targets[0];
-            if (BigQueryErrors.IsLegacySql(sample.Sql))
-            {
-                var err = new MultiTargetError("LEGACY_SQL", BigQueryErrors.LegacySql);
+            if (CrossEngineRunner.ValidateBigQueryStatic(sample.Sql, sample.StartLine) is { } err)
                 return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, false, err))];
-            }
-            var check = GoogleSqlScanner.InspectReadOnlySelect(sample.Sql);
-            if (!check.Allowed)
-            {
-                var line = OffsetLine(sample.StartLine, check.Line);
-                var err = new MultiTargetError("READ_ONLY_VIOLATION", check.Message, Line: line);
-                return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, false, err))];
-            }
         }
         else if (BigQueryErrors.IsLegacySql(targets[0].Sql))
         {
-            var err = new MultiTargetError("LEGACY_SQL", BigQueryErrors.LegacySql);
+            var err = new MultiTargetError("LEGACY_SQL", BigQueryErrors.LegacySql, Line: Math.Max(1, targets[0].StartLine));
             return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, false, err))];
         }
 
@@ -118,6 +109,13 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
         if (connection is null || lease is null)
             return new(ctx.Target.TargetKey, false, new MultiTargetError("NOT_CONNECTED", "The BigQuery connection is no longer open."));
 
+        if (ctx.Mode == "crossEngineReadOnly")
+        {
+            var (outcome, resolvedLocation) = await crossEngine.DryRunBigQueryTargetWithLocationAsync(ctx, ctx.Sql, ctx.StartLine, token);
+            if (outcome.Passed) state.ResolvedLocations[ctx.Target.TargetKey] = resolvedLocation;
+            return outcome;
+        }
+
         var dataset = ctx.Target.Dataset ?? connection.Options.Dataset;
         var location = await service.ResolveBigQueryLocationAsync(connection, dataset, token);
         long? estimatedBytes = null;
@@ -130,14 +128,18 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 if (GoogleSqlScanner.IsMultiStatementScript(ctx.Sql))
                 {
                     return new(ctx.Target.TargetKey, false, new MultiTargetError("INVALID_PARAMS",
-                        "BigQuery Transaction mode cannot resolve the location for a multi-statement script when the connection location is Automatic and no default dataset is set. Select a default dataset or configure an explicit connection location."));
+                        dataset is null
+                            ? "BigQuery Transaction mode cannot resolve the location for a multi-statement script when the connection location is Automatic and no default dataset is set. Select a default dataset or configure an explicit connection location."
+                            : $"BigQuery Transaction mode could not read the location of default dataset '{dataset}' while connection location is Automatic. Configure an explicit connection location."));
                 }
-                var (ok, estimate, error) = await TryDryRunAsync(ctx, connection, null, null, token);
+                var (ok, estimate, error) = await TryDryRunAsync(ctx, connection, dataset, null, token);
                 if (!ok) return new(ctx.Target.TargetKey, false, error);
                 if (estimate!.StatementType == "SCRIPT" || estimate.Location is null)
                 {
                     return new(ctx.Target.TargetKey, false, new MultiTargetError("INVALID_PARAMS",
-                        "BigQuery Transaction mode could not determine a location for this query with location set to Automatic and no default dataset. Select a default dataset or configure an explicit connection location."));
+                        dataset is null
+                            ? "BigQuery Transaction mode could not determine a location for this query with location set to Automatic and no default dataset. Select a default dataset or configure an explicit connection location."
+                            : $"BigQuery Transaction mode could not determine a location for this query using default dataset '{dataset}'. Configure an explicit connection location."));
                 }
                 location = estimate.Location;
                 estimatedBytes = estimate.BytesProcessed;
@@ -154,20 +156,6 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
             return new(ctx.Target.TargetKey, true, EstimatedBytes: estimatedBytes);
         }
 
-        if (ctx.Mode == "crossEngineReadOnly")
-        {
-            var (ok, estimate, error) = await TryDryRunAsync(ctx, connection, dataset, location, token);
-            if (!ok) return new(ctx.Target.TargetKey, false, error);
-            if (!estimate!.Faked && !string.Equals(estimate.StatementType, "SELECT", StringComparison.Ordinal))
-            {
-                return new(ctx.Target.TargetKey, false, new MultiTargetError("READ_ONLY_VIOLATION",
-                    $"Cross-Engine BigQuery requires a single SELECT statement (BigQuery reported {estimate.StatementType ?? "unknown"}).",
-                    Line: ctx.StartLine));
-            }
-            state.ResolvedLocations[ctx.Target.TargetKey] = location ?? estimate.Location;
-            return new(ctx.Target.TargetKey, true, EstimatedBytes: estimate.BytesProcessed);
-        }
-
         // Fire-and-Forget mode.
         state.ResolvedLocations[ctx.Target.TargetKey] = location;
         if (ctx.PreflightDryRun)
@@ -175,7 +163,7 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
             var (ok, estimate, error) = await TryDryRunAsync(ctx, connection, dataset, location, token);
             if (!ok) return new(ctx.Target.TargetKey, false, error);
             estimatedBytes = estimate!.BytesProcessed;
-            if (location is null && estimate.Location is not null)
+            if (location is null && estimate.Location is not null && estimate.StatementType != "SCRIPT")
                 state.ResolvedLocations[ctx.Target.TargetKey] = estimate.Location;
             NoteIncompleteDryRun(ctx, estimate);
         }
@@ -247,11 +235,20 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
         ResultSetBuffer? currentSet = null;
         BigQueryTabSession? session = null;
         BigQueryJobSummary? summary = null;
+        BigQueryJobException? jobFailed = null;
         var jobId = BigQueryService.NewJobId();
+        string? beginJobId = null;
         string? location = null;
+        var beginSent = false;
+        var beginCreated = false;
+        var beginDone = false;
+        var beginInsertSettled = false;
+        var beginStopAsked = 0;
         var sent = false;
         var created = false;
         var complete = false;
+        var insertSettled = false;
+        var verified = false;
         var indexMarked = false;
         long recordsAffected = -1;
         long childRowsAffected = -1;
@@ -264,8 +261,17 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
         void StopJob()
         {
             if (target.IsAbandoned()) return;
-            if (Interlocked.Exchange(ref stopAsked, 1) != 0) return;
-            if (sent && !complete) bigQuery.CancelJob(connection, project, jobId, location);
+            var loc = Volatile.Read(ref location);
+            if (Volatile.Read(ref beginSent) && !Volatile.Read(ref beginDone) && Volatile.Read(ref beginInsertSettled)
+                && Volatile.Read(ref beginJobId) is { } bid && Interlocked.Exchange(ref beginStopAsked, 1) == 0)
+            {
+                bigQuery.CancelJob(connection, project, bid, loc, maybeUnborn: !Volatile.Read(ref beginCreated));
+            }
+            if (Volatile.Read(ref sent) && !Volatile.Read(ref complete) && Volatile.Read(ref insertSettled)
+                && Interlocked.Exchange(ref stopAsked, 1) == 0)
+            {
+                bigQuery.CancelJob(connection, project, jobId, loc, maybeUnborn: !Volatile.Read(ref created));
+            }
         }
 
         async Task ChildAsync(BigQueryChild child)
@@ -275,6 +281,7 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
             var statement = child.StatementType;
             if (statement == "SELECT")
             {
+                var slot = statementSlot++;
                 if (target.DiscardResults)
                 {
                     discarded++;
@@ -302,7 +309,7 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 }
                 var set = service.Results.Open(target.Budget, index, 1, 1, "rows", childPlan.Columns, childPlan.Wires,
                     lengths: childPlan.Lengths, targetKey: target.Target.TargetKey, targetLabel: target.Target.Label,
-                    targetEnvironment: target.Target.Environment, targetProvider: Providers.BigQuery, statementSlot: statementSlot++);
+                    targetEnvironment: target.Target.Environment, targetProvider: Providers.BigQuery, statementSlot: slot < 1000 ? slot : null);
                 if (set is null)
                 {
                     target.Quota.Release(index, descriptorBytes);
@@ -338,11 +345,17 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
             }
         }
 
-        async Task<(List<BigQueryChild> Children, bool Complete)> ChildrenAsync(bool full)
+        async Task<(List<BigQueryChild> Children, bool Complete)> ChildrenAsync(bool full, bool readRows = true)
         {
             var listed = await bigQuery.ChildrenAsync(connection, project, jobId, full ? null : readChildren, token);
-            if (!full && !listed.Complete) return listed;
-            foreach (var child in listed.Children)
+            if (!readRows || (!full && !listed.Complete)) return listed;
+            await ReadChildrenAsync(listed.Children);
+            return listed;
+        }
+
+        async Task ReadChildrenAsync(List<BigQueryChild> listedChildren)
+        {
+            foreach (var child in listedChildren)
             {
                 if (readChildren.Contains(child.Id)) continue;
                 if (!child.Done) break;
@@ -350,24 +363,34 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 try { await ChildAsync(child); }
                 catch (Exception error) when (!token.IsCancellationRequested) { throw new ChildReadFailure(error); }
             }
-            return listed;
         }
 
+        var emittedDone = false;
         using var stopRegistration = token.Register(StopJob);
         EmitTargetState(target, "running", 0, 1, -1, 0, watch.ElapsedMilliseconds, null, null);
 
         try
         {
             // Defense-in-depth checks when ExecutePhase1Async is invoked without PreflightAsync.
+            MultiTargetPhase1Outcome FailEarly(MultiTargetError err)
+            {
+                target.Messages.Add(err.Message, MessageKind.Error, err.Line, target.Target.TargetKey, Providers.BigQuery);
+                EmitTargetState(target, "failed", 0, 1, -1, 0, watch.ElapsedMilliseconds, null, err);
+                var outcome = new MultiTargetOutcome(target.Target.TargetKey, Providers.BigQuery, target.Target.Label, "failed",
+                    0, 1, -1, watch.ElapsedMilliseconds, [], target.Target.Environment, Error: err);
+                return new(new MultiTargetPhase1Result(outcome, sets, NeedsCommit: false, discarded));
+            }
             if (isTransaction && bigQuery.Environment.Emulator)
-                throw new RequestException("UNSUPPORTED_PROVIDER", "BigQuery Transaction mode is not supported in emulator mode because the emulator does not support sessions or multi-statement transactions.");
+                return FailEarly(new("UNSUPPORTED_PROVIDER", "BigQuery Transaction mode is not supported in emulator mode because the emulator does not support sessions or multi-statement transactions."));
+            if (target.Mode == "crossEngineReadOnly" && CrossEngineRunner.ValidateBigQueryStatic(target.Sql, target.StartLine) is { } staticErr)
+                return FailEarly(staticErr);
             if (BigQueryErrors.IsLegacySql(target.Sql))
-                throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
+                return FailEarly(new("LEGACY_SQL", BigQueryErrors.LegacySql, Line: target.StartLine));
             if (isTransaction)
             {
                 var blockers = GoogleSqlScanner.FindTransactionBlockers(target.Sql);
                 if (blockers.Count > 0)
-                    throw new RequestException("INVALID_SCRIPT", blockers[0].Message);
+                    return FailEarly(new("INVALID_SCRIPT", blockers[0].Message, Line: OffsetLine(target.StartLine, blockers[0].Line)));
             }
 
             if (!state.ResolvedLocations.TryGetValue(target.Target.TargetKey, out location))
@@ -377,24 +400,30 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 {
                     if (GoogleSqlScanner.IsMultiStatementScript(target.Sql))
                         throw new RequestException("INVALID_PARAMS",
-                            "BigQuery Transaction mode cannot resolve the location for a multi-statement script when the connection location is Automatic and no default dataset is set. Select a default dataset or configure an explicit connection location.");
-                    var est = await bigQuery.EstimateAsync(connection, target.Sql, token, dataset: null);
+                            dataset is null
+                                ? "BigQuery Transaction mode cannot resolve the location for a multi-statement script when the connection location is Automatic and no default dataset is set. Select a default dataset or configure an explicit connection location."
+                                : $"BigQuery Transaction mode could not read the location of default dataset '{dataset}' while connection location is Automatic. Configure an explicit connection location.");
+                    var est = await bigQuery.EstimateAsync(connection, target.Sql, token, dataset: dataset);
                     if (est.StatementType == "SCRIPT" || est.Location is null)
                         throw new RequestException("INVALID_PARAMS",
-                            "BigQuery Transaction mode could not determine a location for this query with location set to Automatic and no default dataset. Select a default dataset or configure an explicit connection location.");
+                            dataset is null
+                                ? "BigQuery Transaction mode could not determine a location for this query with location set to Automatic and no default dataset. Select a default dataset or configure an explicit connection location."
+                                : $"BigQuery Transaction mode could not determine a location for this query using default dataset '{dataset}'. Configure an explicit connection location.");
                     location = est.Location;
                 }
                 state.ResolvedLocations[target.Target.TargetKey] = location;
             }
+            Volatile.Write(ref location, location);
 
             // Transaction mode: open a fresh ephemeral session (createSession: true) and BEGIN TRANSACTION.
             if (isTransaction)
             {
                 session = new BigQueryTabSession("multi:" + target.QueryId + ":" + target.Target.TargetKey, connection) { Location = location };
-                var beginJobId = BigQueryService.NewJobId();
+                var nextBeginJobId = BigQueryService.NewJobId();
+                Volatile.Write(ref beginJobId, nextBeginJobId);
                 var beginJob = new Job
                 {
-                    JobReference = new JobReference { ProjectId = project, JobId = beginJobId, Location = location },
+                    JobReference = new JobReference { ProjectId = project, JobId = nextBeginJobId, Location = location },
                     Configuration = new JobConfiguration
                     {
                         Labels = new Dictionary<string, string>(BigQueryService.Labels),
@@ -409,15 +438,34 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                         }
                     }
                 };
-                var beginInserted = await bigQuery.InsertJobAsync(connection, beginJob, dataset, token);
-                location = SqlService.KnownLocation(beginInserted.JobReference?.Location) ?? location;
+                token.ThrowIfCancellationRequested();
+                Volatile.Write(ref beginSent, true);
+                Job beginInserted;
+                try
+                {
+                    beginInserted = await bigQuery.InsertJobAsync(connection, beginJob, dataset, token);
+                    Volatile.Write(ref location, SqlService.KnownLocation(beginInserted.JobReference?.Location) ?? location);
+                    Volatile.Write(ref beginCreated, true);
+                }
+                catch (Exception error) when (BigQueryService.NeverCreated(error))
+                {
+                    Volatile.Write(ref beginSent, false);
+                    throw;
+                }
+                finally
+                {
+                    Volatile.Write(ref location, Volatile.Read(ref location) ?? SqlService.KnownLocation(beginJob.JobReference?.Location));
+                    Volatile.Write(ref beginInsertSettled, true);
+                    if (token.IsCancellationRequested) StopJob();
+                }
                 BigQueryService.CaptureSession(session, beginInserted, location);
-                var beginDone = beginInserted.Status?.State == "DONE"
+                var beginFinished = beginInserted.Status?.State == "DONE"
                     ? beginInserted
-                    : await bigQuery.WaitDoneAsync(connection, project, beginJobId, location, token);
-                location = SqlService.KnownLocation(beginDone.JobReference?.Location) ?? location;
-                BigQueryService.CaptureSession(session, beginDone, location);
-                if (BigQueryJobException.Of(beginDone) is { } beginFailed) throw beginFailed;
+                    : await bigQuery.WaitDoneAsync(connection, project, nextBeginJobId, location, token);
+                Volatile.Write(ref beginDone, true);
+                Volatile.Write(ref location, SqlService.KnownLocation(beginFinished.JobReference?.Location) ?? location);
+                BigQueryService.CaptureSession(session, beginFinished, location);
+                if (BigQueryJobException.Of(beginFinished) is { } beginFailed) throw beginFailed;
                 if (session.Id is null)
                     throw new RequestException("BACKEND_ERROR", "BigQuery did not return a session ID for the transaction.");
                 session.Location = location;
@@ -443,26 +491,49 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                     }
                 }
             };
-            sent = true;
-            var inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
-            created = true;
+            token.ThrowIfCancellationRequested();
+            Volatile.Write(ref sent, true);
+            Job inserted;
+            try
+            {
+                inserted = await bigQuery.InsertJobAsync(connection, job, dataset, token);
+                Volatile.Write(ref location, SqlService.KnownLocation(inserted.JobReference?.Location) ?? location);
+                Volatile.Write(ref created, true);
+            }
+            catch (Exception error) when (BigQueryService.NeverCreated(error))
+            {
+                Volatile.Write(ref sent, false);
+                throw;
+            }
+            finally
+            {
+                Volatile.Write(ref location, Volatile.Read(ref location) ?? SqlService.KnownLocation(job.JobReference?.Location));
+                Volatile.Write(ref insertSettled, true);
+                if (token.IsCancellationRequested) StopJob();
+            }
             bigQuery.Reached();
-            location = SqlService.KnownLocation(inserted.JobReference?.Location) ?? location;
             target.Messages.Add("BigQuery job " + SqlService.JobName(project, location, jobId) + ".",
                 MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
             var refused = BigQueryJobException.Of(inserted);
-            target.Events.Job(SqlService.JobEvent(project, jobId, location, refused is null ? "running" : "done",
+            var refusedNeedsScriptVerify = refused is not null && isTransaction
+                && (BigQueryService.StatementOf(inserted.Statistics) == "SCRIPT" || inserted.Statistics?.NumChildJobs > 0);
+            target.Events.Job(SqlService.JobEvent(project, jobId, location, refused is null || refusedNeedsScriptVerify ? "running" : "done",
                 session?.Transaction ?? BigQueryTransaction.None, target.Target.TargetKey));
             if (refused is not null)
             {
-                complete = true;
+                Volatile.Write(ref complete, true);
+                if (!refusedNeedsScriptVerify)
+                {
+                    emittedDone = true;
+                    Volatile.Write(ref verified, true);
+                }
                 throw refused;
             }
 
-            // Poll the job and read completed script children incrementally.
+            // Poll the job and read completed script children incrementally (deferring child row reads in Transaction mode
+            // until post-Phase-1 COMMIT_TRANSACTION verification finishes so a ChildReadFailure cannot bypass sawCommit).
             BigQueryPage? page = null;
-            BigQueryJobException? jobFailed = null;
-            var listing = true;
+            var listing = !isTransaction;
             try
             {
                 try
@@ -481,7 +552,7 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 }
                 catch (BigQueryJobException error) { jobFailed = error; }
 
-                complete = true;
+                Volatile.Write(ref complete, true);
                 var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
                 summary = SqlService.JobSummary(project, location, jobId, finished);
                 var statement = summary.StatementType;
@@ -490,13 +561,22 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 var listedAll = false;
                 if (script)
                 {
-                    try { (children, listedAll) = await ChildrenAsync(full: true); }
-                    catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure)) { children = null; }
+                    try
+                    {
+                        (children, listedAll) = await ChildrenAsync(full: true, readRows: !isTransaction);
+                        if (children is not null && ((finished.Statistics?.NumChildJobs is { } expectedChildren && children.Count < expectedChildren) || children.Any(c => !c.Done)))
+                            listedAll = false;
+                    }
+                    catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure))
+                    {
+                        children = null;
+                        listedAll = false;
+                    }
                 }
                 service.MarkBigQueryIndex(target.Target.ConnectionId, connection, finished, statement, children, listedAll, project, dataset, target.Sql);
                 indexMarked = true;
 
-                // Post-Phase-1 transaction verification over ChildrenAsync(full: true).
+                // Post-Phase-1 transaction verification over ChildrenAsync(full: true) BEFORE reading child/top-level rows.
                 var sawCommit = false;
                 if (isTransaction && session is not null)
                 {
@@ -506,13 +586,18 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                         if (statement == "COMMIT_TRANSACTION" && jobFailed is null) sawCommit = true;
                         txState = BigQueryService.Apply(txState, statement, jobFailed is not null);
                     }
-                    else if (children is not null && listedAll)
+                    else if (children is not null)
                     {
                         foreach (var child in children)
                         {
-                            if (child.StatementType == "COMMIT_TRANSACTION" && child.Done && child.Error is null) sawCommit = true;
-                            txState = BigQueryService.Apply(txState, child.StatementType, child.Error is not null || !child.Done);
+                            if (child.StatementType == "COMMIT_TRANSACTION" && (!child.Done || child.Error is null)) sawCommit = true;
+                            if (listedAll)
+                                txState = BigQueryService.Apply(txState, child.StatementType, child.Error is not null || !child.Done);
                         }
+                        if (!listedAll)
+                            txState = sawCommit ? BigQueryTransaction.None : BigQueryTransaction.Unknown;
+                        else if (jobFailed is not null && !children.Any(c => c.Error is not null || !c.Done))
+                            txState = BigQueryService.Apply(txState, statement, failed: true);
                     }
                     else
                     {
@@ -520,7 +605,9 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                     }
                     session.Transaction = txState;
                 }
+                Volatile.Write(ref verified, true);
 
+                emittedDone = true;
                 target.Events.Job(SqlService.JobEvent(project, jobId, location, "done",
                     session?.Transaction ?? BigQueryTransaction.None, target.Target.TargetKey));
 
@@ -537,6 +624,37 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                         1, 1, recordsAffected, watch.ElapsedMilliseconds, [.. sets.Select(s => s.ResultId)], target.Target.Environment,
                         BytesProcessed: summary.BytesProcessed, Job: summary, Error: inDoubtError);
                     return new(new MultiTargetPhase1Result(inDoubtOutcome, sets, NeedsCommit: false, discarded));
+                }
+
+                if (isTransaction && session is not null && jobFailed is null && session.Transaction != BigQueryTransaction.Open)
+                {
+                    if (session.Id is { } sid && !target.IsAbandoned())
+                        await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location);
+                    if (BigQueryCost.Summary(summary, target.Prices != false) is { } failCost)
+                        target.Messages.Add(failCost, MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
+                    var reason = session.Transaction == BigQueryTransaction.Unknown
+                        ? "Varia could not verify that the BigQuery transaction remained open (script child listing was incomplete or unavailable), so the coordinated transaction was aborted."
+                        : "The BigQuery transaction is no longer open after Phase 1, so the coordinated transaction was aborted.";
+                    var txErr = new MultiTargetError("SQL_ERROR", reason);
+                    target.Messages.Add(reason, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
+                    EmitTargetState(target, "failed", 1, 1, recordsAffected, sets.Count, watch.ElapsedMilliseconds, summary.BytesProcessed, txErr);
+                    var abortedOutcome = new MultiTargetOutcome(target.Target.TargetKey, Providers.BigQuery, target.Target.Label, "failed",
+                        1, 1, recordsAffected, watch.ElapsedMilliseconds, [.. sets.Select(s => s.ResultId)], target.Target.Environment,
+                        BytesProcessed: summary.BytesProcessed, Job: summary, Error: txErr);
+                    return new(new MultiTargetPhase1Result(abortedOutcome, sets, NeedsCommit: false, discarded));
+                }
+
+                if (isTransaction && script && children is not null)
+                {
+                    if (jobFailed is not null)
+                    {
+                        try { await ReadChildrenAsync(children); }
+                        catch (Exception ex) when (ex is not OutOfMemoryException) { }
+                    }
+                    else
+                    {
+                        await ReadChildrenAsync(children);
+                    }
                 }
 
                 if (jobFailed is not null)
@@ -585,9 +703,10 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                         }
                         else
                         {
+                            var slot = statementSlot++;
                             currentSet = service.Results.Open(target.Budget, index, 1, 1, "rows", plan.Columns, plan.Wires,
                                 lengths: plan.Lengths, targetKey: target.Target.TargetKey, targetLabel: target.Target.Label,
-                                targetEnvironment: target.Target.Environment, targetProvider: Providers.BigQuery, statementSlot: statementSlot++);
+                                targetEnvironment: target.Target.Environment, targetProvider: Providers.BigQuery, statementSlot: slot < 1000 ? slot : null);
                             if (currentSet is null)
                             {
                                 target.Quota.Release(index, descriptorBytes);
@@ -624,26 +743,9 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 if (BigQueryCost.Summary(summary, target.Prices != false) is { } cost)
                     target.Messages.Add(cost, MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
 
-                // In Transaction mode, verify the session's transaction is definitely Open before entering the barrier.
+                // In Transaction mode, session.Transaction was already verified Open above; enter the coordinated barrier.
                 if (isTransaction && session is not null)
                 {
-                    if (session.Transaction != BigQueryTransaction.Open)
-                    {
-                        if (session.Id is { } sid && !target.IsAbandoned())
-                            await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location);
-                        MarkRolledBackPreview(sets, target.Events);
-                        var reason = session.Transaction == BigQueryTransaction.Unknown
-                            ? "Varia could not verify that the BigQuery transaction remained open (script child listing was incomplete or unavailable), so the coordinated transaction was aborted."
-                            : "The BigQuery transaction is no longer open after Phase 1, so the coordinated transaction was aborted.";
-                        var txErr = new MultiTargetError("SQL_ERROR", reason);
-                        target.Messages.Add(reason, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
-                        EmitTargetState(target, "failed", 1, 1, recordsAffected, sets.Count, watch.ElapsedMilliseconds, summary.BytesProcessed, txErr);
-                        var abortedOutcome = new MultiTargetOutcome(target.Target.TargetKey, Providers.BigQuery, target.Target.Label, "failed",
-                            1, 1, recordsAffected, watch.ElapsedMilliseconds, [.. sets.Select(s => s.ResultId)], target.Target.Environment,
-                            BytesProcessed: summary.BytesProcessed, Job: summary, Error: txErr);
-                        return new(new MultiTargetPhase1Result(abortedOutcome, sets, NeedsCommit: false, discarded));
-                    }
-
                     EmitTargetState(target, "atBarrier", 1, 1, recordsAffected, sets.Count, watch.ElapsedMilliseconds, summary.BytesProcessed, null);
                     var phase2 = new BigQueryPhase2Handle(bigQuery, connection, lease, session, sets, target.Events, target.IsAbandoned);
                     leaseTransferred = true;
@@ -666,11 +768,20 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
         }
         catch (Exception error)
         {
+            var cancelledAtCatch = token.IsCancellationRequested;
+            var timedOutAtCatch = target.IsTimedOut?.Invoke() == true;
+            var userCancelledAtCatch = target.IsUserCancelled?.Invoke() == true;
             var childFailed = error is ChildReadFailure;
             if (error is ChildReadFailure read) error = read.InnerException!;
 
-            if (childFailed && sent && !complete && !target.IsAbandoned())
-                bigQuery.CancelJob(connection, project, jobId, location);
+            var curLocation = Volatile.Read(ref location);
+            var wasSent = Volatile.Read(ref sent);
+            var wasCreated = Volatile.Read(ref created);
+            var wasComplete = Volatile.Read(ref complete);
+            var wasVerified = Volatile.Read(ref verified);
+
+            if (childFailed && wasSent && !wasComplete && !target.IsAbandoned())
+                bigQuery.CancelJob(connection, project, jobId, curLocation, maybeUnborn: !wasCreated);
 
             if (currentSet is not null)
             {
@@ -683,53 +794,129 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 currentSet = null;
             }
 
-            if (sent && !indexMarked && (created || error is BigQueryJobMayExist { Exists: true }))
-                service.MarkBigQueryIndexWhenDone(target.Target.ConnectionId, connection, project, jobId, location, dataset, target.Sql);
+            if (wasSent && !indexMarked && (wasCreated || error is BigQueryJobMayExist { Exists: true }))
+                service.MarkBigQueryIndexWhenDone(target.Target.ConnectionId, connection, project, jobId, curLocation, dataset, target.Sql);
 
-            var committedBeforeCancel = false;
+            var committedOrUnverified = false;
+            var jobSettledDone = wasComplete;
+            var unverifiedReason = false;
             if (isTransaction && session is not null && !target.IsAbandoned())
             {
-                if (sent && !complete && (created || !BigQueryService.NeverCreated(error)))
+                // If BEGIN TRANSACTION setup was interrupted before completion, cancel it and capture any created session ID before aborting.
+                if (Volatile.Read(ref beginSent) && !Volatile.Read(ref beginDone) && Volatile.Read(ref beginJobId) is { } bid)
                 {
-                    bigQuery.CancelJob(connection, project, jobId, location);
-                    session.Tail = new BigQueryTail(jobId, location, cancelled: true, created: created || error is BigQueryJobMayExist { Exists: true });
+                    var beginWasCreated = Volatile.Read(ref beginCreated);
+                    if (Interlocked.Exchange(ref beginStopAsked, 1) == 0)
+                        bigQuery.CancelJob(connection, project, bid, curLocation, maybeUnborn: !beginWasCreated);
+                    if (session.Id is null && (beginWasCreated || cancelledAtCatch || !BigQueryService.NeverCreated(error)))
+                    {
+                        try
+                        {
+                            using var beginSettleCts = CancellationTokenSource.CreateLinkedTokenSource(bigQuery.Stopping);
+                            beginSettleCts.CancelAfter(beginWasCreated ? bigQuery.CloseWaitLimit : bigQuery.UnbornCancelLimit + bigQuery.CloseWaitLimit);
+                            var beginUnbornWatch = System.Diagnostics.Stopwatch.StartNew();
+                            while (true)
+                            {
+                                try
+                                {
+                                    var foundBegin = await bigQuery.GetJobAsync(connection, project, bid, curLocation, beginSettleCts.Token);
+                                    BigQueryService.CaptureSession(session, foundBegin, SqlService.KnownLocation(foundBegin.JobReference?.Location) ?? curLocation);
+                                    if (session.Id is not null || foundBegin.Status?.State == "DONE") break;
+                                    await Task.Delay(bigQuery.DonePoll, beginSettleCts.Token);
+                                }
+                                catch (Google.GoogleApiException nf) when (!beginWasCreated && nf.HttpStatusCode == System.Net.HttpStatusCode.NotFound && !beginSettleCts.IsCancellationRequested)
+                                {
+                                    var rem = bigQuery.UnbornCancelLimit - beginUnbornWatch.Elapsed;
+                                    if (rem <= TimeSpan.Zero) break;
+                                    await Task.Delay(TimeSpan.FromTicks(Math.Min(bigQuery.UnbornCancelPoll.Ticks, rem.Ticks)), beginSettleCts.Token);
+                                }
+                            }
+                        }
+                        catch (Exception) { }
+                    }
+                }
+                else if (wasSent && !wasVerified && (wasCreated || cancelledAtCatch || !BigQueryService.NeverCreated(error)))
+                {
+                    if (!wasComplete && Interlocked.Exchange(ref stopAsked, 1) == 0)
+                        bigQuery.CancelJob(connection, project, jobId, curLocation, maybeUnborn: !wasCreated);
+                    session.Tail = new BigQueryTail(jobId, curLocation, cancelled: !wasComplete, created: wasCreated || error is BigQueryJobMayExist { Exists: true });
                     try
                     {
                         using var settleCts = CancellationTokenSource.CreateLinkedTokenSource(bigQuery.Stopping);
-                        settleCts.CancelAfter(bigQuery.CloseWaitLimit);
-                        var settled = await bigQuery.SettleAsync(session, settleCts.Token);
-                        committedBeforeCancel = settled.Committed;
+                        settleCts.CancelAfter(wasCreated ? bigQuery.CloseWaitLimit : bigQuery.UnbornCancelLimit + bigQuery.CloseWaitLimit);
+                        var settled = await bigQuery.SettleAsync(session, settleCts.Token, waitUnborn: !wasCreated);
+                        if (settled.Done) jobSettledDone = true;
+                        if (settled.SawCommit)
+                        {
+                            committedOrUnverified = true;
+                        }
+                        else if (!settled.ListingComplete)
+                        {
+                            committedOrUnverified = true;
+                            unverifiedReason = true;
+                        }
                     }
-                    catch (Exception) { }
+                    catch (Exception)
+                    {
+                        committedOrUnverified = true;
+                        unverifiedReason = true;
+                    }
                 }
                 if (session.Id is { } sid)
                     await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location);
             }
 
+            if (wasSent && wasCreated && jobSettledDone && !emittedDone)
+            {
+                emittedDone = true;
+                target.Events.Job(SqlService.JobEvent(project, jobId, curLocation, "done",
+                    session?.Transaction ?? BigQueryTransaction.None, target.Target.TargetKey));
+            }
+
+            if (!committedOrUnverified && jobFailed is not null)
+                error = jobFailed;
+
             string status;
-            MultiTargetError targetError;
-            if (committedBeforeCancel)
+            MultiTargetError? targetError;
+            var isCancellationError = IsCancellationError(error, timedOutAtCatch);
+            if (committedOrUnverified)
             {
                 status = "commitInDoubt";
-                targetError = new("SQL_ERROR", "The stopped BigQuery job committed a transaction before it stopped; changes may already be committed.");
+                targetError = new("SQL_ERROR", unverifiedReason
+                    ? "BigQuery did not confirm whether the stopped transaction job committed before interruption; outcome is unknown."
+                    : "The stopped BigQuery job committed a transaction before it stopped; changes may already be committed.");
                 target.Messages.Add(targetError.Message, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
             }
-            else if (token.IsCancellationRequested)
+            else if (cancelledAtCatch && isCancellationError)
             {
                 StopJob();
-                status = "cancelled";
-                targetError = new("CANCELLED", "Query execution was cancelled.");
-                target.Messages.Add(targetError.Message, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
+                if (timedOutAtCatch)
+                {
+                    status = "timedOut";
+                    targetError = new("TIMEOUT", "The query exceeded its execution timeout.");
+                    target.Messages.Add(targetError.Message, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
+                }
+                else if (isTransaction && !userCancelledAtCatch)
+                {
+                    status = "rolledBack";
+                    targetError = null;
+                }
+                else
+                {
+                    status = "cancelled";
+                    targetError = new("CANCELLED", "Query execution was cancelled.");
+                    target.Messages.Add(targetError.Message, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
+                }
             }
             else
             {
-                var mapped = await service.BigQueryFailureAsync(error, connection, created, cap, target.Prices != false, CancellationToken.None);
+                var mapped = await service.BigQueryFailureAsync(error, connection, wasCreated, cap, target.Prices != false, CancellationToken.None);
                 status = error is BigQueryJobException && mapped.Code is "TIMEOUT" or "CANCELLED"
                     ? (mapped.Code == "TIMEOUT" ? "timedOut" : "cancelled")
                     : "failed";
                 var text = SqlService.EditorPositions(mapped.Message, target.StartLine, target.StartColumn, out var line);
                 target.Messages.Add(text, MessageKind.Error, line, target.Target.TargetKey, Providers.BigQuery);
-                targetError = new(mapped.Code, text.Length > 16384 ? text[..16384] + "…" : text, Line: line);
+                targetError = new(mapped.Code, MultiQueryCoordinator.ClampText(text, 16385), Line: line);
             }
 
             if (isTransaction && status != "commitInDoubt" && sets.Count > 0)
@@ -738,7 +925,7 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
             EmitTargetState(target, status, 0, 1, recordsAffected, sets.Count, watch.ElapsedMilliseconds, summary?.BytesProcessed, targetError);
             var outcome = new MultiTargetOutcome(target.Target.TargetKey, Providers.BigQuery, target.Target.Label, status,
                 0, 1, recordsAffected, watch.ElapsedMilliseconds, [.. sets.Select(s => s.ResultId)], target.Target.Environment,
-                BytesProcessed: summary?.BytesProcessed, Job: summary ?? (created ? new BigQueryJobSummary(project, jobId, location) : null), Error: targetError);
+                BytesProcessed: summary?.BytesProcessed, Job: summary ?? (wasCreated ? new BigQueryJobSummary(project, jobId, curLocation) : null), Error: targetError);
             return new(new MultiTargetPhase1Result(outcome, sets, NeedsCommit: false, discarded));
         }
         finally
@@ -764,12 +951,32 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
     }
 
     private static long EstimateDescriptorBytes(IReadOnlyList<ResultColumn> columns) =>
-        512 + columns.Sum(c => 2L * c.Name.Length + 2L * c.DataType.Length + 128);
+        ColumnPlan.DescriptorBytesOf(columns);
+
+    internal static bool IsCancellationError(Exception error, bool timedOut)
+    {
+        for (Exception? cur = error; cur is not null; cur = cur.InnerException)
+        {
+            if (cur is BigQueryJobMayExist or TimeoutException) return false;
+            if (cur is OperationCanceledException oce) return oce.InnerException is not TimeoutException;
+            if (cur is Grpc.Core.RpcException { StatusCode: Grpc.Core.StatusCode.Cancelled }) return true;
+            if (cur is BigQueryJobException bqErr)
+            {
+                var serverTimedOut = bqErr.Result.Message?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true;
+                if (bqErr.Errors.Append(bqErr.Result).Any(e =>
+                    (e.Reason == "stopped" && (!serverTimedOut || timedOut))
+                    || (e.Reason == "timeout" && timedOut)))
+                    return true;
+            }
+        }
+        return false;
+    }
 
     private static void MarkRolledBackPreview(IReadOnlyList<ResultSetBuffer> sets, QueryEventSink events)
     {
         foreach (var set in sets)
         {
+            if (set.RolledBackPreview) continue;
             set.RolledBackPreview = true;
             events.ResultSetMeta(set.ResultId, rolledBackPreview: true);
         }
@@ -778,9 +985,10 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
     private static void EmitTargetState(MultiTargetContext target, string phase, int batchesCompleted, int batchesTotal,
         long rowsAffected, int resultSetCount, long elapsedMs, long? bytesProcessed, MultiTargetError? error)
     {
+        var clamped = error is null ? null : MultiQueryCoordinator.ClampError(error);
         target.Events.TargetState(new MultiQueryTargetStateEvent(
             target.Target.TargetKey, phase, batchesCompleted, batchesTotal, rowsAffected,
-            resultSetCount, elapsedMs, bytesProcessed, error?.Code, error?.Message));
+            resultSetCount, elapsedMs, bytesProcessed, clamped?.Code, clamped is null ? null : MultiQueryCoordinator.ClampText(clamped.Message, 2000)));
     }
 
     private static QueryArgs TargetQueryArgs(MultiTargetContext ctx, string? dataset, long? cap) => new(
@@ -823,6 +1031,11 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
         {
             if (Interlocked.Exchange(ref settled, 1) != 0)
                 return new(MultiCommitOutcome.Refused, new MultiTargetError("INVALID_REQUEST", "The BigQuery target transaction was already settled."));
+            if (isAbandoned())
+            {
+                MarkRolledBackPreview(resultSets, events);
+                return new(MultiCommitOutcome.CancelledBeforeSend, new MultiTargetError("CANCELLED", "The query was abandoned during shutdown before commit was sent."));
+            }
             if (session.Id is null) return new(MultiCommitOutcome.Committed);
             var result = await bigQuery.CommitEphemeralSessionAsync(session, token);
             if (result.Outcome is MultiCommitOutcome.Refused or MultiCommitOutcome.CancelledBeforeSend)
@@ -838,17 +1051,19 @@ internal sealed class BigQueryMultiRunner(SqlService service) : IMultiTargetRunn
                 if (session.Tail is { } tail)
                 {
                     tail.Cancelled = true;
-                    bigQuery.CancelJob(connection, connection.Options.Project, tail.JobId, tail.Location);
+                    bigQuery.CancelJob(connection, connection.Options.Project, tail.JobId, tail.Location, maybeUnborn: !tail.Created);
                     try
                     {
-                        using var settleCts = CancellationTokenSource.CreateLinkedTokenSource(bigQuery.Stopping);
+                        using var settleCts = token.CanBeCanceled
+                            ? CancellationTokenSource.CreateLinkedTokenSource(bigQuery.Stopping, token)
+                            : CancellationTokenSource.CreateLinkedTokenSource(bigQuery.Stopping);
                         settleCts.CancelAfter(bigQuery.CloseWaitLimit);
                         await bigQuery.SettleAsync(session, settleCts.Token);
                     }
                     catch (Exception) { }
                 }
                 if (session.Id is { } sid)
-                    await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location);
+                    await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location, token);
             }
             MarkRolledBackPreview(resultSets, events);
         }

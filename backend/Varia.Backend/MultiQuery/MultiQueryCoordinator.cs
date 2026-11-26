@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
 
@@ -19,9 +20,11 @@ internal sealed class MultiQueryCoordinator(
     internal const int MaxConcurrentRuns = 8;
     internal const int MaxTargetParallelism = 8;
     internal const int DefaultTransactionTimeoutSeconds = 300;
+    internal const int CommitTimeoutSeconds = 30;
     internal const int RollbackTimeoutSeconds = 10;
 
-    private readonly Func<string, string?> resolveProvider = providerOf ?? (id => service.ConnectionProvider(id));
+    private readonly IReadOnlySqlValidator readOnlyValidator = sqlValidator ?? new ReadOnlySqlValidator();
+    private readonly Func<string, string?> resolveProvider = providerOf ?? service.LiveProvider;
     private int activeRuns;
 
     internal int ActiveRuns => Volatile.Read(ref activeRuns);
@@ -40,6 +43,8 @@ internal sealed class MultiQueryCoordinator(
         var queryRegistered = false;
         SqlService.RunningQuery? running = null;
         QueryBudget? budget = null;
+        CancellationTokenSource? userCancelCts = null;
+        CancellationTokenSource? timeoutCts = null;
         CancellationTokenSource? cancellation = null;
         CancellationTokenRegistration contextReg = default;
         var watch = Stopwatch.StartNew();
@@ -53,7 +58,9 @@ internal sealed class MultiQueryCoordinator(
             for (var i = 0; i < args.Targets.Length; i++)
             {
                 var target = args.Targets[i];
-                var provider = resolveProvider(target.ConnectionId) ?? Providers.SqlServer;
+                var provider = resolveProvider(target.ConnectionId);
+                if (provider is null)
+                    throw new RequestException("NOT_CONNECTED", "Connect to each target server first.");
                 if (!runners.ContainsKey(provider))
                     throw new RequestException("UNSUPPORTED_PROVIDER", $"No multi-server runner is registered for provider '{provider}'.");
                 providers[i] = provider;
@@ -70,11 +77,13 @@ internal sealed class MultiQueryCoordinator(
                 ? requestedTimeout
                 : args.Mode == "transaction" ? DefaultTransactionTimeoutSeconds : 0;
 
-            cancellation = effectiveTimeoutSeconds > 0
+            userCancelCts = new CancellationTokenSource();
+            timeoutCts = effectiveTimeoutSeconds > 0
                 ? new CancellationTokenSource(TimeSpan.FromSeconds(effectiveTimeoutSeconds))
                 : new CancellationTokenSource();
+            cancellation = CancellationTokenSource.CreateLinkedTokenSource(userCancelCts.Token, timeoutCts.Token);
 
-            running = new SqlService.RunningQuery(connectionIds, args.SessionId, cancellation)
+            running = new SqlService.RunningQuery(connectionIds, args.SessionId, userCancelCts)
             {
                 Detachable = false,
                 AbandonBigQueryOnShutdown = hasBigQuery
@@ -84,13 +93,21 @@ internal sealed class MultiQueryCoordinator(
                 throw new RequestException("DUPLICATE_QUERY", "This query is already running.");
             queryRegistered = true;
 
+            // Re-verify every target connection is still live AFTER Register() to close the disconnect TOCTOU window.
+            for (var i = 0; i < args.Targets.Length; i++)
+            {
+                var currentProvider = resolveProvider(args.Targets[i].ConnectionId);
+                if (currentProvider is null || currentProvider != providers[i])
+                    throw new RequestException("NOT_CONNECTED", "Connect to each target server first.");
+            }
+
             if (context is not null)
             {
                 var localRunning = running;
-                var localCts = cancellation;
+                var localTimeoutCts = timeoutCts;
                 contextReg = context.Token.Register(() =>
                 {
-                    if (context.Reason == CancelReason.Deadline) TryCancel(localCts);
+                    if (context.Reason == CancelReason.Deadline) TryCancel(localTimeoutCts);
                     else localRunning.Cancel();
                 });
             }
@@ -104,7 +121,7 @@ internal sealed class MultiQueryCoordinator(
             var messages = new QueryMessages(events.Message);
             var token = cancellation.Token;
 
-            var contexts = BuildTargetContexts(args, providers, effectiveTimeoutSeconds, quota, running, budget, messages, events);
+            var contexts = BuildTargetContexts(args, providers, effectiveTimeoutSeconds, quota, running, cancellation, budget, messages, events);
 
             // Handle early cancellation (e.g., query.cancel arrived before registration).
             if (token.IsCancellationRequested)
@@ -127,7 +144,7 @@ internal sealed class MultiQueryCoordinator(
             foreach (var ctx in contexts)
                 events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, "preflight", 0, 0, 0, 0, watch.ElapsedMilliseconds));
 
-            var preflightFailure = await RunPreflightAsync(args, contexts, messages, events, watch, token).ConfigureAwait(false);
+            var preflightFailure = await RunPreflightAsync(args, contexts, running, messages, events, watch, token).ConfigureAwait(false);
             if (preflightFailure is not null)
             {
                 return FinalizeResult(args.Mode, preflightFailure.Status, preflightFailure.Outcomes, [], quota, budget, messages, watch, combineWarnings: null);
@@ -137,7 +154,6 @@ internal sealed class MultiQueryCoordinator(
             var isTransaction = args.Mode == "transaction";
             var isSequential = args.Mode == "fireAndForget" && args.Sequential == true;
             var phase1Outcomes = new MultiTargetPhase1Outcome?[contexts.Length];
-            var peerFailed = 0;
 
             using var phase1Cts = CancellationTokenSource.CreateLinkedTokenSource(token);
 
@@ -149,11 +165,15 @@ internal sealed class MultiQueryCoordinator(
                     var ctx = contexts[i];
                     if (stopped || phase1Cts.IsCancellationRequested)
                     {
-                        var skipStatus = stopped ? "skipped" : running.UserCancelled ? "cancelled" : "timedOut";
+                        var skipStatus = phase1Cts.IsCancellationRequested
+                            ? (running.UserCancelled ? "cancelled" : "timedOut")
+                            : "skipped";
                         MultiTargetError? skipErr = skipStatus == "skipped"
                             ? null
                             : new MultiTargetError(skipStatus == "cancelled" ? "CANCELLED" : "TIMEOUT",
                                 skipStatus == "cancelled" ? "The query was cancelled." : "The query exceeded its execution timeout.");
+                        if (skipErr is not null)
+                            messages.Add(skipErr.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
                         events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, skipStatus, 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: skipErr?.Code, ErrorMessage: skipErr?.Message));
                         phase1Outcomes[i] = new MultiTargetPhase1Outcome(
                             new MultiTargetPhase1Result(EmptyOutcome(ctx, skipStatus, 0, skipErr), [], NeedsCommit: false));
@@ -202,6 +222,8 @@ internal sealed class MultiQueryCoordinator(
                                 "timedOut" => new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout."),
                                 _ => null
                             };
+                            if (unstartedError is not null)
+                                messages.Add(unstartedError.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
                             events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, unstartedStatus, 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: unstartedError?.Code, ErrorMessage: unstartedError?.Message));
                             phase1Outcomes[index] = new MultiTargetPhase1Outcome(
                                 new MultiTargetPhase1Result(EmptyOutcome(ctx, unstartedStatus, 0, unstartedError), [], NeedsCommit: false));
@@ -218,7 +240,6 @@ internal sealed class MultiQueryCoordinator(
                                 var passed = outcome.Result.NeedsCommit && outcome.Phase2 is not null && outcome.Result.Outcome.Status == "succeeded";
                                 if (!passed)
                                 {
-                                    Interlocked.Exchange(ref peerFailed, 1);
                                     TryCancel(phase1Cts);
                                 }
                             }
@@ -244,6 +265,7 @@ internal sealed class MultiQueryCoordinator(
                 targetResultSets[i] = entry.Result.ResultSets;
             }
 
+            var enteredPhase2Commit = false;
             if (isTransaction)
             {
                 var allPassed = !token.IsCancellationRequested && !running.UserCancelled && !running.Abandoned;
@@ -262,6 +284,12 @@ internal sealed class MultiQueryCoordinator(
 
                 if (allPassed)
                 {
+                    enteredPhase2Commit = true;
+                    // Phase 2 Commit uses userCancelCts + a fresh bounded CommitTimeoutSeconds so an expiring Phase 1 timer
+                    // cannot mid-flight abort COMMIT after every target already cleared the barrier.
+                    using var commitCts = CancellationTokenSource.CreateLinkedTokenSource(userCancelCts.Token);
+                    commitCts.CancelAfter(TimeSpan.FromSeconds(CommitTimeoutSeconds));
+                    var commitToken = commitCts.Token;
                     var commitTasks = new Task[contexts.Length];
                     for (var i = 0; i < contexts.Length; i++)
                     {
@@ -271,13 +299,13 @@ internal sealed class MultiQueryCoordinator(
                         var current = finalOutcomes[i];
                         commitTasks[i] = Task.Run(async () =>
                         {
-                            events.TargetState(new MultiQueryTargetStateEvent(
-                                ctx.Target.TargetKey, "committing", current.BatchesCompleted, current.BatchesTotal,
-                                current.RowsAffected, current.ResultSetIds.Count, watch.ElapsedMilliseconds, current.BytesProcessed));
                             MultiCommitResult commitResult;
                             try
                             {
-                                commitResult = await handle.CommitAsync(token).ConfigureAwait(false);
+                                events.TargetState(new MultiQueryTargetStateEvent(
+                                    ctx.Target.TargetKey, "committing", current.BatchesCompleted, current.BatchesTotal,
+                                    current.RowsAffected, current.ResultSetIds.Count, watch.ElapsedMilliseconds, current.BytesProcessed));
+                                commitResult = await handle.CommitAsync(commitToken).ConfigureAwait(false);
                             }
                             catch (Exception error)
                             {
@@ -290,14 +318,25 @@ internal sealed class MultiQueryCoordinator(
                                 await DisposeQuietlyAsync(handle).ConfigureAwait(false);
                             }
 
+                            if (commitResult.Outcome is MultiCommitOutcome.Refused or MultiCommitOutcome.CancelledBeforeSend)
+                                SqlServerMultiRunner.MarkRolledBackPreview(targetResultSets[index], events);
+
+                            var timedOutBeforeSend = commitResult.Outcome == MultiCommitOutcome.CancelledBeforeSend
+                                && (string.Equals(commitResult.Error?.Code, "TIMEOUT", StringComparison.Ordinal) || !running.UserCancelled);
                             var committedStatus = commitResult.Outcome switch
                             {
                                 MultiCommitOutcome.Committed => "committed",
                                 MultiCommitOutcome.Refused => "failed",
-                                MultiCommitOutcome.CancelledBeforeSend => "cancelled",
+                                MultiCommitOutcome.CancelledBeforeSend => timedOutBeforeSend ? "timedOut" : "cancelled",
                                 _ => "commitInDoubt"
                             };
-                            var committedError = commitResult.Outcome == MultiCommitOutcome.Committed ? null : commitResult.Error;
+                            MultiTargetError? committedError = commitResult.Outcome switch
+                            {
+                                MultiCommitOutcome.Committed => null,
+                                MultiCommitOutcome.CancelledBeforeSend when timedOutBeforeSend => new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout before commit was sent."),
+                                MultiCommitOutcome.CancelledBeforeSend => new MultiTargetError("CANCELLED", commitResult.Error?.Message ?? "The transaction commit was cancelled before it was sent."),
+                                _ => commitResult.Error is { } err ? ClampError(err) : null
+                            };
                             if (committedError is not null)
                                 messages.Add(committedError.Message, MessageKind.Error, committedError.Line, ctx.Target.TargetKey, ctx.Provider);
 
@@ -306,7 +345,7 @@ internal sealed class MultiQueryCoordinator(
                             events.TargetState(new MultiQueryTargetStateEvent(
                                 ctx.Target.TargetKey, committedStatus, updated.BatchesCompleted, updated.BatchesTotal,
                                 updated.RowsAffected, updated.ResultSetIds.Count, watch.ElapsedMilliseconds,
-                                updated.BytesProcessed, committedError?.Code, committedError?.Message));
+                                updated.BytesProcessed, committedError?.Code, ClampEventMessage(committedError?.Message)));
                         });
                     }
 
@@ -329,11 +368,11 @@ internal sealed class MultiQueryCoordinator(
                         {
                             rollbackTasks.Add(Task.Run(async () =>
                             {
-                                events.TargetState(new MultiQueryTargetStateEvent(
-                                    ctx.Target.TargetKey, "rollingBack", current.BatchesCompleted, current.BatchesTotal,
-                                    current.RowsAffected, current.ResultSetIds.Count, watch.ElapsedMilliseconds, current.BytesProcessed));
                                 try
                                 {
+                                    events.TargetState(new MultiQueryTargetStateEvent(
+                                        ctx.Target.TargetKey, "rollingBack", current.BatchesCompleted, current.BatchesTotal,
+                                        current.RowsAffected, current.ResultSetIds.Count, watch.ElapsedMilliseconds, current.BytesProcessed));
                                     await handle.RollbackAsync(rollbackToken).ConfigureAwait(false);
                                 }
                                 catch (Exception)
@@ -355,17 +394,8 @@ internal sealed class MultiQueryCoordinator(
                         }
                         else
                         {
-                            var normalized = NormalizeAbortedTransactionOutcome(current, running, cancellation, Volatile.Read(ref peerFailed) != 0);
-                            if (normalized.Status != "commitInDoubt")
+                            if (current.Status != "commitInDoubt")
                                 SqlServerMultiRunner.MarkRolledBackPreview(targetResultSets[index], events);
-                            if (normalized != current)
-                            {
-                                finalOutcomes[index] = normalized;
-                                events.TargetState(new MultiQueryTargetStateEvent(
-                                    ctx.Target.TargetKey, normalized.Status, normalized.BatchesCompleted, normalized.BatchesTotal,
-                                    normalized.RowsAffected, normalized.ResultSetIds.Count, watch.ElapsedMilliseconds,
-                                    normalized.BytesProcessed, normalized.Error?.Code, normalized.Error?.Message));
-                            }
                         }
                     }
 
@@ -374,23 +404,13 @@ internal sealed class MultiQueryCoordinator(
             }
             else
             {
-                // Non-transaction modes: dispose any unexpected Phase 2 handle and reclassify timeout cancellations.
+                // Non-transaction modes: dispose any unexpected Phase 2 handle.
+                // Runners (and ExecuteTargetSafelyAsync) already classify timeout/user-cancel via ctx.IsTimedOut / ctx.IsUserCancelled
+                // before emitting their single terminal event, so Stage 3 never rewrites external cancellations or double-emits.
                 for (var i = 0; i < contexts.Length; i++)
                 {
                     if (phase1Outcomes[i]?.Phase2 is { } stray)
                         await DisposeQuietlyAsync(stray).ConfigureAwait(false);
-
-                    var current = finalOutcomes[i];
-                    if (current.Status == "cancelled" && !running.UserCancelled && cancellation.IsCancellationRequested)
-                    {
-                        var timedOutError = new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout.", current.Error?.BatchNumber, current.Error?.Iteration, current.Error?.Line);
-                        var updated = current with { Status = "timedOut", Error = timedOutError };
-                        finalOutcomes[i] = updated;
-                        events.TargetState(new MultiQueryTargetStateEvent(
-                            contexts[i].Target.TargetKey, "timedOut", updated.BatchesCompleted, updated.BatchesTotal,
-                            updated.RowsAffected, updated.ResultSetIds.Count, watch.ElapsedMilliseconds,
-                            updated.BytesProcessed, timedOutError.Code, timedOutError.Message));
-                    }
                 }
             }
 
@@ -410,10 +430,23 @@ internal sealed class MultiQueryCoordinator(
             }
 
             // Stage 4: Optional post-Phase-2 autoCombine (only after Phase 2 has settled).
+            // Once Phase 2 Commit was entered, decouple autoCombine from the Phase 1 timeout timer so an expiring
+            // Phase 1 timer during commit cannot silently suppress autoCombine on a completed run.
             List<string>? combineWarnings = null;
-            if (args.AutoCombine != false && combiner is not null && !token.IsCancellationRequested && !running.UserCancelled)
+            var combineToken = enteredPhase2Commit ? userCancelCts.Token : token;
+            if (args.AutoCombine != false && combiner is not null && !combineToken.IsCancellationRequested && !running.UserCancelled)
             {
-                combineWarnings = await RunAutoCombineAsync(allSets, budget, quota, events, token).ConfigureAwait(false);
+                var commitInDoubtKeys = new HashSet<string>(
+                    finalOutcomes.Where(o => o.Status == "commitInDoubt").Select(o => o.TargetKey),
+                    StringComparer.Ordinal);
+                combineWarnings = await RunAutoCombineAsync(allSets, commitInDoubtKeys, budget, quota, events, combineToken).ConfigureAwait(false);
+            }
+
+            // Main owns the stored result sets only once the response frame is sent; release all of them if framing fails.
+            if (context is not null && allSets.Count > 0)
+            {
+                var idsToRelease = allSets.Select(s => s.ResultId).ToArray();
+                context.Unsent = () => service.Results.Release(idsToRelease);
             }
 
             var overallStatus = ComputeOverallStatus(args.Mode, finalOutcomes, running);
@@ -425,13 +458,14 @@ internal sealed class MultiQueryCoordinator(
             if (budget is not null) budget.Executing = false;
             contextReg.Dispose();
             if (queryRegistered && running is not null)
-            {
                 service.UnregisterQuery(args.QueryId, running);
-                running.Ended.TrySetResult();
-            }
             cancellation?.Dispose();
+            timeoutCts?.Dispose();
+            userCancelCts?.Dispose();
             if (sessionEntered) service.EndSessionRun(args.SessionId, args.QueryId);
             Interlocked.Decrement(ref activeRuns);
+            if (queryRegistered && running is not null)
+                running.Ended.TrySetResult();
         }
     }
 
@@ -441,6 +475,7 @@ internal sealed class MultiQueryCoordinator(
         int effectiveTimeoutSeconds,
         IMultiQueryQuota quota,
         SqlService.RunningQuery running,
+        CancellationTokenSource outerCancellation,
         QueryBudget budget,
         QueryMessages messages,
         QueryEventSink events)
@@ -452,6 +487,8 @@ internal sealed class MultiQueryCoordinator(
         var discardResults = args.DiscardResults ?? false;
         var preflightDryRun = args.PreflightDryRun ?? false;
         Func<bool> isAbandoned = () => running.Abandoned;
+        Func<bool> isUserCancelled = () => running.UserCancelled;
+        Func<bool> isTimedOut = () => !running.UserCancelled && outerCancellation.IsCancellationRequested;
 
         for (var i = 0; i < args.Targets.Length; i++)
         {
@@ -504,7 +541,9 @@ internal sealed class MultiQueryCoordinator(
                 isAbandoned,
                 budget,
                 messages,
-                events);
+                events,
+                isUserCancelled,
+                isTimedOut);
         }
 
         return contexts;
@@ -515,6 +554,7 @@ internal sealed class MultiQueryCoordinator(
     private async Task<PreflightFailure?> RunPreflightAsync(
         QueryMultiArgs args,
         MultiTargetContext[] contexts,
+        SqlService.RunningQuery running,
         QueryMessages messages,
         QueryEventSink events,
         Stopwatch watch,
@@ -522,34 +562,40 @@ internal sealed class MultiQueryCoordinator(
     {
         var failures = new Dictionary<string, MultiTargetError>(StringComparer.Ordinal);
 
-        if (args.Mode == "crossEngineReadOnly" && sqlValidator is not null)
+        if (args.Mode == "crossEngineReadOnly")
         {
             var sqlStartLine = args.StartLines?.Sqlserver ?? 1;
             IReadOnlyList<ReadOnlySqlViolation> violations;
             try
             {
-                violations = await sqlValidator.ValidateTSqlAsync(args.Scripts!.Sqlserver, sqlStartLine, token).ConfigureAwait(false);
+                violations = await readOnlyValidator.ValidateTSqlAsync(args.Scripts!.Sqlserver, sqlStartLine, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                return BuildCancelledPreflight(contexts, events, watch);
+                return BuildCancelledPreflight(contexts, running, messages, events, watch);
             }
 
             if (violations.Count > 0)
             {
-                var firstSqlTarget = contexts.FirstOrDefault(c => c.Provider == Providers.SqlServer);
-                foreach (var violation in violations)
-                {
-                    messages.Add(violation.Message, MessageKind.Error, violation.Line, firstSqlTarget?.Target.TargetKey, Providers.SqlServer);
-                }
                 var first = violations[0];
-                var readOnlyErr = new MultiTargetError("READ_ONLY_VIOLATION", first.Message, Line: first.Line);
+                var readOnlyErr = ClampError(new MultiTargetError("READ_ONLY_VIOLATION", first.Message, Line: first.Line));
                 foreach (var ctx in contexts)
                 {
                     if (ctx.Provider == Providers.SqlServer)
+                    {
+                        foreach (var violation in violations)
+                            messages.Add(violation.Message, MessageKind.Error, violation.Line, ctx.Target.TargetKey, Providers.SqlServer);
                         failures[ctx.Target.TargetKey] = readOnlyErr;
+                    }
                 }
                 return BuildFailedPreflight(contexts, failures, messages, events, watch, messagesAlreadyLogged: true);
+            }
+
+            // Mark SQL Server targets as validated so SqlServerMultiRunner does not spawn additional 256 MiB ScriptDom parse threads.
+            for (var i = 0; i < contexts.Length; i++)
+            {
+                if (contexts[i].Provider == Providers.SqlServer)
+                    contexts[i] = contexts[i] with { ReadOnlyValidated = true };
             }
         }
 
@@ -562,13 +608,13 @@ internal sealed class MultiQueryCoordinator(
             }
             catch (OperationCanceledException)
             {
-                return BuildCancelledPreflight(contexts, events, watch);
+                return BuildCancelledPreflight(contexts, running, messages, events, watch);
             }
 
             foreach (var item in crossOutcomes)
             {
                 if (!item.Passed)
-                    failures[item.TargetKey] = item.Error ?? new MultiTargetError("READ_ONLY_VIOLATION", "Cross-engine pre-flight check failed.");
+                    failures[item.TargetKey] = ClampError(item.Error ?? new MultiTargetError("READ_ONLY_VIOLATION", "Cross-engine pre-flight check failed."));
             }
             if (failures.Count > 0)
                 return BuildFailedPreflight(contexts, failures, messages, events, watch, messagesAlreadyLogged: false);
@@ -586,11 +632,11 @@ internal sealed class MultiQueryCoordinator(
             }
             catch (OperationCanceledException)
             {
-                return BuildCancelledPreflight(contexts, events, watch);
+                return BuildCancelledPreflight(contexts, running, messages, events, watch);
             }
             catch (RequestException error)
             {
-                var err = new MultiTargetError(error.Code, error.Message);
+                var err = ClampError(new MultiTargetError(error.Code, error.Message));
                 foreach (var ctx in providerContexts) failures[ctx.Target.TargetKey] = err;
                 continue;
             }
@@ -598,7 +644,7 @@ internal sealed class MultiQueryCoordinator(
             foreach (var outcome in preflightResults)
             {
                 if (!outcome.Passed)
-                    failures[outcome.TargetKey] = outcome.Error ?? new MultiTargetError("INVALID_SCRIPT", "Pre-flight validation failed.");
+                    failures[outcome.TargetKey] = ClampError(outcome.Error ?? new MultiTargetError("INVALID_SCRIPT", "Pre-flight validation failed."));
             }
         }
 
@@ -621,11 +667,12 @@ internal sealed class MultiQueryCoordinator(
         {
             if (failures.TryGetValue(ctx.Target.TargetKey, out var err))
             {
+                var clamped = ClampError(err);
                 if (!messagesAlreadyLogged)
-                    messages.Add(err.Message, MessageKind.Error, err.Line, ctx.Target.TargetKey, ctx.Provider);
+                    messages.Add(clamped.Message, MessageKind.Error, clamped.Line, ctx.Target.TargetKey, ctx.Provider);
                 events.TargetState(new MultiQueryTargetStateEvent(
-                    ctx.Target.TargetKey, "failed", 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: err.Code, ErrorMessage: err.Message));
-                outcomes.Add(EmptyOutcome(ctx, "failed", watch.ElapsedMilliseconds, err));
+                    ctx.Target.TargetKey, "failed", 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: clamped.Code, ErrorMessage: ClampEventMessage(clamped.Message)));
+                outcomes.Add(EmptyOutcome(ctx, "failed", watch.ElapsedMilliseconds, clamped));
             }
             else
             {
@@ -637,73 +684,81 @@ internal sealed class MultiQueryCoordinator(
         return new PreflightFailure("failed", outcomes);
     }
 
-    private static PreflightFailure BuildCancelledPreflight(MultiTargetContext[] contexts, QueryEventSink events, Stopwatch watch)
+    private static PreflightFailure BuildCancelledPreflight(
+        MultiTargetContext[] contexts,
+        SqlService.RunningQuery running,
+        QueryMessages messages,
+        QueryEventSink events,
+        Stopwatch watch)
     {
-        var err = new MultiTargetError("CANCELLED", "The query was cancelled during pre-flight.");
+        var status = running.UserCancelled ? "cancelled" : "timedOut";
+        var err = running.UserCancelled
+            ? new MultiTargetError("CANCELLED", "The query was cancelled during pre-flight.")
+            : new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout during pre-flight.");
+        messages.Add(err.Message, MessageKind.Error);
         var outcomes = new List<MultiTargetOutcome>(contexts.Length);
         foreach (var ctx in contexts)
         {
             events.TargetState(new MultiQueryTargetStateEvent(
-                ctx.Target.TargetKey, "cancelled", 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: err.Code, ErrorMessage: err.Message));
-            outcomes.Add(EmptyOutcome(ctx, "cancelled", watch.ElapsedMilliseconds, err));
+                ctx.Target.TargetKey, status, 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: err.Code, ErrorMessage: ClampEventMessage(err.Message)));
+            outcomes.Add(EmptyOutcome(ctx, status, watch.ElapsedMilliseconds, err));
         }
-        return new PreflightFailure("cancelled", outcomes);
+        return new PreflightFailure(status, outcomes);
     }
 
     private static async Task<MultiTargetPhase1Outcome> ExecuteTargetSafelyAsync(IMultiTargetRunner runner, MultiTargetContext ctx, CancellationToken token)
     {
+        var watch = Stopwatch.StartNew();
         try
         {
             return await runner.ExecutePhase1Async(ctx, token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            var err = new MultiTargetError("CANCELLED", "The query was cancelled.");
-            ctx.Events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, "cancelled", 0, 0, 0, 0, 0, ErrorCode: err.Code, ErrorMessage: err.Message));
-            return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(EmptyOutcome(ctx, "cancelled", 0, err), [], NeedsCommit: false));
+            watch.Stop();
+            string status;
+            MultiTargetError? err;
+            if (ctx.IsTimedOut?.Invoke() == true)
+            {
+                status = "timedOut";
+                err = new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout.");
+                ctx.Messages.Add(err.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
+            }
+            else if (ctx.Mode == "transaction" && ctx.IsUserCancelled?.Invoke() == false)
+            {
+                status = "rolledBack";
+                err = null;
+            }
+            else
+            {
+                status = "cancelled";
+                err = new MultiTargetError("CANCELLED", "The query was cancelled.");
+                ctx.Messages.Add(err.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
+            }
+            ctx.Events.TargetState(new MultiQueryTargetStateEvent(
+                ctx.Target.TargetKey, status, 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: err?.Code, ErrorMessage: ClampEventMessage(err?.Message)));
+            return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(EmptyOutcome(ctx, status, watch.ElapsedMilliseconds, err), [], NeedsCommit: false));
         }
         catch (RequestException error)
         {
-            var err = new MultiTargetError(error.Code, error.Message);
-            ctx.Messages.Add(error.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
-            ctx.Events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, "failed", 0, 0, 0, 0, 0, ErrorCode: err.Code, ErrorMessage: err.Message));
+            var err = ClampError(new MultiTargetError(error.Code, error.Message));
+            ctx.Messages.Add(err.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
+            ctx.Events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, "failed", 0, 0, 0, 0, 0, ErrorCode: err.Code, ErrorMessage: ClampEventMessage(err.Message)));
             return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(EmptyOutcome(ctx, "failed", 0, err), [], NeedsCommit: false));
         }
         catch (Exception error)
         {
             var msg = "Execution stopped unexpectedly: " + error.Message;
-            var err = new MultiTargetError("BACKEND_ERROR", msg);
-            ctx.Messages.Add(msg, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
-            ctx.Events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, "failed", 0, 0, 0, 0, 0, ErrorCode: err.Code, ErrorMessage: err.Message));
+            var err = ClampError(new MultiTargetError("BACKEND_ERROR", msg));
+            ctx.Messages.Add(err.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
+            ctx.Events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, "failed", 0, 0, 0, 0, 0, ErrorCode: err.Code, ErrorMessage: ClampEventMessage(err.Message)));
             return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(EmptyOutcome(ctx, "failed", 0, err), [], NeedsCommit: false));
         }
     }
 
-    private static MultiTargetOutcome NormalizeAbortedTransactionOutcome(
-        MultiTargetOutcome current,
-        SqlService.RunningQuery running,
-        CancellationTokenSource outerCancellation,
-        bool peerFailed)
-    {
-        if (current.Status != "cancelled") return current;
-        if (running.UserCancelled) return current;
-        if (outerCancellation.IsCancellationRequested)
-        {
-            return current with
-            {
-                Status = "timedOut",
-                Error = new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout.", current.Error?.BatchNumber, current.Error?.Iteration, current.Error?.Line)
-            };
-        }
-        if (peerFailed)
-        {
-            return current with { Status = "rolledBack", Error = null };
-        }
-        return current;
-    }
-
     private async Task<List<string>?> RunAutoCombineAsync(
         List<ResultSetBuffer> allSets,
+        HashSet<string> commitInDoubtKeys,
         QueryBudget budget,
         IMultiQueryQuota quota,
         QueryEventSink events,
@@ -714,7 +769,7 @@ internal sealed class MultiQueryCoordinator(
         var bySlot = new SortedDictionary<int, List<ResultSetBuffer>>();
         foreach (var set in allSets)
         {
-            if (set.Kind != "rows" || set.IsRemote || !set.IsComplete || set.IsReleased || set.StatementSlot is not { } slot)
+            if (set.Kind != "rows" || !set.IsComplete || set.IsReleased || set.StatementSlot is not { } slot)
                 continue;
             if (!bySlot.TryGetValue(slot, out var group))
             {
@@ -730,14 +785,23 @@ internal sealed class MultiQueryCoordinator(
             if (sources.Count < 2) continue;
             if (token.IsCancellationRequested) break;
 
-            var estimatedBytes = EstimateCombinedDescriptorBytes(sources);
+            var hasCommitInDoubt = sources.Any(s => !s.IsRemote && s.TargetKey is { } key && commitInDoubtKeys.Contains(key));
+            var hasRolledBack = sources.Any(s => !s.IsRemote && s.RolledBackPreview);
+            var hasCommittedOrLive = sources.Any(s => !s.IsRemote && !s.RolledBackPreview);
+            if (hasCommitInDoubt || (hasRolledBack && hasCommittedOrLive))
+            {
+                (warnings ??= []).Add($"Combined view for statement {slot + 1} was skipped because targets had mixed transaction outcomes (committed or commit-in-doubt alongside rolled-back results).");
+                continue;
+            }
+
+            var statementName = sources.Select(s => s.ResultName).FirstOrDefault(n => n is not null);
+            var estimatedBytes = EstimateCombinedDescriptorBytes(sources, statementName);
             if (!quota.TryAllocate(estimatedBytes, out var combinedIndex, out _))
             {
                 (warnings ??= []).Add($"Combined view for statement {slot + 1} was skipped because the result set or descriptor limit was reached.");
                 continue;
             }
 
-            var statementName = sources.Select(s => s.ResultName).FirstOrDefault(n => n is not null);
             CombineOutput output;
             try
             {
@@ -772,7 +836,8 @@ internal sealed class MultiQueryCoordinator(
 
             if (output.Buffer is { } combined)
             {
-                if (sources.Any(s => s.RolledBackPreview)) combined.RolledBackPreview = true;
+                if (sources.Any(s => !s.IsRemote && s.RolledBackPreview)) combined.RolledBackPreview = true;
+                if (sources.Any(s => !s.IsRemote && s.Incomplete)) combined.Incomplete = true;
                 if (combined.IsOpen) combined.Complete();
                 events.Opened(combined);
                 events.Closed(combined);
@@ -787,10 +852,38 @@ internal sealed class MultiQueryCoordinator(
         return warnings;
     }
 
-    private static long EstimateCombinedDescriptorBytes(IReadOnlyList<ResultSetBuffer> sources)
+    internal static long EstimateCombinedDescriptorBytes(IReadOnlyList<ResultSetBuffer> sources, string? statementName = null)
     {
-        var cols = Math.Min(PageBuilder.MaxColumns, sources.Sum(s => s.Columns.Count) + 2);
-        return 256L + cols * 96L;
+        // Sum the max per-column descriptor cost for each distinct aligned column slot (capped at PageBuilder.MaxColumns),
+        // matching ColumnPlan.DescriptorBytesOf (names + widened dataType + collation + 120/184 overhead + 512 base).
+        var slotCost = new Dictionary<(string Key, int Occurrence), long>();
+        foreach (var set in sources)
+        {
+            if (set.IsRemote) continue;
+            var occurrences = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var col in set.Columns)
+            {
+                if (ResultTextWriter.Hidden(col)) continue;
+                var key = OrdinalNames.KeyOf(col.Name);
+                occurrences.TryGetValue(key, out var occ);
+                occurrences[key] = occ + 1;
+                var alignKey = (key, occ);
+                var dataTypeBytes = Math.Max(Encoding.UTF8.GetByteCount(col.DataType), 16);
+                var cost = Encoding.UTF8.GetByteCount(col.Name) + dataTypeBytes + (col.Collation is null ? 120L : 184L);
+                if (slotCost.TryGetValue(alignKey, out var existing))
+                {
+                    if (cost > existing) slotCost[alignKey] = cost;
+                }
+                else if (slotCost.Count + 1 < PageBuilder.MaxColumns)
+                {
+                    slotCost[alignKey] = cost;
+                }
+            }
+        }
+        // Include base 512 + synthetic _server column + statementName bytes.
+        var total = 512L + 160L + (statementName is null ? 0L : Encoding.UTF8.GetByteCount(statementName) + 8L);
+        foreach (var cost in slotCost.Values) total += cost;
+        return total;
     }
 
     internal static string ComputeOverallStatus(string mode, IReadOnlyList<MultiTargetOutcome> outcomes, SqlService.RunningQuery running)
@@ -799,21 +892,21 @@ internal sealed class MultiQueryCoordinator(
 
         if (mode == "transaction")
         {
-            if (outcomes.All(o => o.Status == "committed")) return "completed";
+            if (outcomes.Count > 0 && outcomes.All(o => o.Status == "committed")) return "completed";
             if (outcomes.Any(o => o.Status == "committed")) return "partialFailure";
             if (outcomes.Any(o => o.Status == "rolledBack")) return "rolledBack";
-            if (running.UserCancelled || outcomes.Any(o => o.Status == "cancelled")) return "cancelled";
+            if (outcomes.Any(o => o.Status == "cancelled") || (outcomes.Count == 0 && running.UserCancelled)) return "cancelled";
             if (outcomes.Any(o => o.Status == "timedOut")) return "timedOut";
             return "failed";
         }
 
         var succeededCount = outcomes.Count(o => o.Status == "succeeded");
-        if (succeededCount == outcomes.Count)
+        if (outcomes.Count > 0 && succeededCount == outcomes.Count)
         {
             return outcomes.Any(o => o.Error is not null) ? "completedWithErrors" : "completed";
         }
         if (succeededCount > 0) return "partialFailure";
-        if (running.UserCancelled || outcomes.Any(o => o.Status == "cancelled")) return "cancelled";
+        if (outcomes.Any(o => o.Status == "cancelled") || (outcomes.Count == 0 && running.UserCancelled)) return "cancelled";
         if (outcomes.Any(o => o.Status == "timedOut")) return "timedOut";
         return "failed";
     }
@@ -845,10 +938,24 @@ internal sealed class MultiQueryCoordinator(
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         var summaryBudget = service.SummaryBudget(budget.StoppedBytes);
 
+        var clampedOutcomes = targetOutcomes.Select(o => o.Error is null ? o : o with { Error = ClampError(o.Error) }).ToList();
+        List<string>? clampedWarnings = null;
+        if (combineWarnings is { Count: > 0 })
+        {
+            clampedWarnings = new List<string>(Math.Min(combineWarnings.Count, 64));
+            foreach (var warning in combineWarnings)
+            {
+                if (clampedWarnings.Count >= 64) break;
+                if (string.IsNullOrWhiteSpace(warning)) continue;
+                clampedWarnings.Add(ClampText(warning, 512));
+            }
+            if (clampedWarnings.Count == 0) clampedWarnings = null;
+        }
+
         return new QueryMultiResult(
             status,
             mode,
-            targetOutcomes,
+            clampedOutcomes,
             descriptors,
             quota.DiscardedResultSets,
             output,
@@ -856,8 +963,28 @@ internal sealed class MultiQueryCoordinator(
             watch.ElapsedMilliseconds,
             summaryBudget,
             completedAt,
-            combineWarnings is { Count: > 0 } ? combineWarnings : null);
+            clampedWarnings);
     }
+
+    internal static string ClampText(string text, int maxChars)
+    {
+        if (text.Length <= maxChars) return text;
+        if (maxChars <= 0) return "";
+        if (maxChars == 1) return char.IsHighSurrogate(text[0]) ? "" : text[..1];
+        var take = maxChars - 1;
+        if (take > 0 && char.IsHighSurrogate(text[take - 1])) take--;
+        return text[..take] + "…";
+    }
+
+    internal static MultiTargetError ClampError(MultiTargetError error) =>
+        error with
+        {
+            Code = ClampText(string.IsNullOrEmpty(error.Code) ? "BACKEND_ERROR" : error.Code, 64),
+            Message = ClampText(error.Message ?? "", 16385)
+        };
+
+    private static string? ClampEventMessage(string? message) =>
+        message is null ? null : ClampText(message, 2000);
 
     private static MultiTargetOutcome EmptyOutcome(MultiTargetContext ctx, string status, long elapsedMs, MultiTargetError? error) =>
         new(

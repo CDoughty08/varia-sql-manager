@@ -633,6 +633,595 @@ internal static class MultiQuerySqlChecks
                 && result.CombineWarnings is ["Combined view skipped: result memory full."],
                 "autoCombine budget refusal preserves individual server results and reports CombineWarnings");
         }
+
+        // 10. Clamping of combineWarnings (<= 64, <= 512 chars) and MultiTargetError (<= 64 code, <= 16385 msg), plus surrogate safety.
+        {
+            var longMsg = new string('x', 20_000);
+            var clampedErr = MultiQueryCoordinator.ClampError(new MultiTargetError(new string('E', 100), longMsg));
+            check(clampedErr.Code.Length == 64 && clampedErr.Message.Length == 16385 && clampedErr.Message.EndsWith("…", StringComparison.Ordinal),
+                "MultiQueryCoordinator.ClampError caps Code to 64 and Message to 16385");
+
+            var surrogateText = new string('a', 510) + "😀tail";
+            var clampedText = MultiQueryCoordinator.ClampText(surrogateText, 512);
+            check(clampedText.Length <= 512 && !char.IsHighSurrogate(clampedText[^2]),
+                "MultiQueryCoordinator.ClampText never splits a UTF-16 surrogate pair");
+
+            var fakeRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var set = OpenFakeSet(service.Results, ctx, slot: 0);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 1, 2, [set.ResultId]), [set], NeedsCommit: false)));
+            });
+            var noisyCombiner = new FakeCombiner((_, _, _, _, _, _, _) =>
+                new CombineOutput(null, [.. Enumerable.Range(0, 80).Select(i => $"Warning {i}: " + new string('w', 600))]));
+            var coordinator = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = fakeRunner }, noisyCombiner);
+            var args = new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget", [T("a", c1, "S1"), T("b", c2, "S2")], 1000, 30, Sql: "SELECT 1;");
+            var res = await coordinator.ExecuteAsync(args, context: null);
+            check(res.CombineWarnings is { Count: 64 } && res.CombineWarnings.All(w => w.Length is > 0 and <= 512),
+                "FinalizeResult clamps combineWarnings to at most 64 entries of <= 512 chars");
+        }
+
+        // 11. Disconnect TOCTOU: disconnected provider returns NOT_CONNECTED instead of silently routing to SqlServer.
+        {
+            var calls = 0;
+            var fakeRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+                Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false))));
+            var coordinator = new MultiQueryCoordinator(
+                service,
+                new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = fakeRunner },
+                providerOf: id => ++calls <= 2 ? Providers.SqlServer : null);
+            var args = new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget", [T("a", c1, "S1"), T("b", c2, "S2")], 1000, 30, Sql: "SELECT 1;");
+            string? toctouCode = null;
+            try { await coordinator.ExecuteAsync(args, context: null); }
+            catch (RequestException error) { toctouCode = error.Code; }
+            check(toctouCode == "NOT_CONNECTED",
+                $"MultiQueryCoordinator re-verifies target connectivity after Register() to close disconnect TOCTOU ({toctouCode})");
+        }
+
+        // 12. Pre-flight timeout is classified as timedOut (TIMEOUT) and logs an error message.
+        {
+            var slowPreflightRunner = new FakeRunner(
+                Providers.SqlServer,
+                (_, _) => Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome("a", Providers.SqlServer, "S1", "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false))),
+                preflight: async (_, token) => { await Task.Delay(TimeSpan.FromSeconds(5), token); return []; });
+            var coordinator = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = slowPreflightRunner });
+            var args = new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget", [T("a", c1, "S1")], 1000, TimeoutSeconds: 1, Sql: "SELECT 1;");
+            var res = await coordinator.ExecuteAsync(args, context: null);
+            check(res.Status == "timedOut" && res.Targets[0].Status == "timedOut" && res.Targets[0].Error?.Code == "TIMEOUT"
+                && res.Messages.Any(m => m.Kind == QueryMessages.Error),
+                $"Pre-flight timeout classifies as timedOut/TIMEOUT and logs a Messages error ({res.Status}/{res.Targets[0].Error?.Code})");
+        }
+
+        // 13. Additional ReadOnlySqlValidator checks: CTE + DELETE and compound assignment SELECT @v += 1.
+        {
+            var validator = new ReadOnlySqlValidator();
+            var cteDelete = await validator.ValidateTSqlAsync("WITH c AS (SELECT 1 AS x) DELETE FROM dbo.T WHERE x IN (SELECT x FROM c);", 1, CancellationToken.None);
+            var assignVar = await validator.ValidateTSqlAsync("SELECT @v += 1;", 1, CancellationToken.None);
+            check(cteDelete.Count > 0 && assignVar.Count > 0,
+                "ReadOnlySqlValidator rejects CTE + DELETE and SELECT @v += 1");
+        }
+
+        // 14. EstimateCombinedDescriptorBytes accounts for real column name/type/collation sizes.
+        {
+            var wideStore = new ResultStore(1L << 28, 1L << 27);
+            var wideBudget = wideStore.BeginQuery("wide-est");
+            var wideCols = Enumerable.Range(0, 200).Select(i =>
+                new ResultColumn("col_" + i + "_" + new string('n', 80), "nvarchar(4000)", "text", Collation: new ResultCollation(1033, 0, 0, false, 0))).ToList();
+            var s1 = wideStore.Open(wideBudget, 0, 1, 1, "rows", wideCols, [.. Enumerable.Repeat(WireKind.Text, 200)], targetKey: "a", targetLabel: "S1", statementSlot: 0)!;
+            s1.Complete();
+            var s2 = wideStore.Open(wideBudget, 1, 1, 1, "rows", wideCols, [.. Enumerable.Repeat(WireKind.Text, 200)], targetKey: "b", targetLabel: "S2", statementSlot: 0)!;
+            s2.Complete();
+            var est = MultiQueryCoordinator.EstimateCombinedDescriptorBytes([s1, s2], "MyResult");
+            var actual = ColumnPlan.DescriptorBytesOf(wideCols);
+            check(est >= actual, $"EstimateCombinedDescriptorBytes ({est}) covers actual ColumnPlan.DescriptorBytesOf ({actual})");
+        }
+
+        // 15. INVOKE_EXTERNAL_API blocked by ReadOnlySqlValidator, null sqlValidator fails closed, context.Unsent releases sets,
+        // and MultiCommitOutcome.Refused marks RolledBackPreview.
+        {
+            var validator = new ReadOnlySqlValidator();
+            var extApi = await validator.ValidateTSqlAsync("SELECT INVOKE_EXTERNAL_API('MySet', 'MyFn', 1);", 1, CancellationToken.None);
+            check(extApi.Count > 0 && extApi.Any(v => v.Keyword == "INVOKE_EXTERNAL_API"),
+                "ReadOnlySqlValidator rejects INVOKE_EXTERNAL_API");
+
+            var fakeSqlRunner = new FakeRunner(Providers.SqlServer, (_, _) =>
+                Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome("a", Providers.SqlServer, "S1", "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false))));
+            var fakeBqRunner = new FakeRunner(Providers.BigQuery, (_, _) =>
+                Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome("b", Providers.BigQuery, "BQ1", "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false))));
+            // Omitting sqlValidator still defaults to ReadOnlySqlValidator (never fails open).
+            var failClosed = new MultiQueryCoordinator(
+                service,
+                new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = fakeSqlRunner, [Providers.BigQuery] = fakeBqRunner },
+                providerOf: id => id == c1 ? Providers.SqlServer : Providers.BigQuery);
+            var ceArgs = new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "crossEngineReadOnly",
+                [T("a", c1, "S1"), T("b", c2, "BQ1")], 1000, 30,
+                Scripts: new MultiQueryScripts("DELETE FROM dbo.T;", "SELECT 1"));
+            var ceRes = await failClosed.ExecuteAsync(ceArgs, context: null);
+            check(ceRes.Status == "failed" && ceRes.Targets[0].Error?.Code == "READ_ONLY_VIOLATION",
+                $"MultiQueryCoordinator fails closed on crossEngineReadOnly even when sqlValidator parameter is omitted ({ceRes.Status}/{ceRes.Targets[0].Error?.Code})");
+
+            // context.Unsent releases all stored ResultSetBuffers if response framing fails, and Refused commit marks RolledBackPreview.
+            ResultSetBuffer? refSet = null;
+            var refusedCommitRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var set = OpenFakeSet(service.Results, ctx, slot: 0);
+                refSet = set;
+                var handle = new FakePhase2Handle(
+                    onCommit: _ => Task.FromResult(new MultiCommitResult(MultiCommitOutcome.Refused, new MultiTargetError("SQL_ERROR", "refused"))),
+                    onRollback: _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 1, 1, [set.ResultId]), [set], NeedsCommit: true), handle));
+            });
+            using var reqCtx = new RequestContext(2, "query.executeMulti", RequestLane.Query, 0);
+            var refCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = refusedCommitRunner });
+            var refRes = await refCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction", [T("a", c1, "S1")], 1000, 30, Sql: "SELECT 1;"), reqCtx);
+            check(refRes.Status == "failed" && refSet is { RolledBackPreview: true } && reqCtx.Unsent is not null,
+                "MultiCommitOutcome.Refused marks RolledBackPreview and registers context.Unsent");
+            reqCtx.Unsent!.Invoke();
+            check(refSet!.IsReleased, "Invoking context.Unsent releases all stored ResultSetBuffers");
+        }
+
+        // 16. Round 3 hardening & coverage checks: external AI rejection, MultiQueryQuota, single-parse crossEngineReadOnly,
+        // single terminal event on OCE, sequential cancel (not skipped), partialFailure, completedWithErrors, DispatchAsync, SessionLimit.
+        {
+            // (a) ReadOnlySqlValidator rejects all 8 external AI model calls (specialized & FunctionCall forms) and sys.INVOKE_EXTERNAL_API
+            var aiValidator = new ReadOnlySqlValidator();
+            var aiViolations = await aiValidator.ValidateTSqlAsync("SELECT AI_GENERATE_EMBEDDINGS(N'hello' USE MODEL MyModel);", 1, CancellationToken.None);
+            check(aiViolations.Count > 0 && aiViolations.Any(v => v.Keyword == "EXTERNAL_AI_CALL"),
+                "ReadOnlySqlValidator rejects AI_GENERATE_EMBEDDINGS external model call");
+            foreach (var aiSql in new[]
+            {
+                "SELECT AI_GENERATE_RESPONSE(N'hi');",
+                "SELECT AI_ANALYZE_SENTIMENT(N'hi');",
+                "SELECT AI_CLASSIFY(N'hi', N'a,b');",
+                "SELECT AI_EXTRACT(N'hi', N'name');",
+                "SELECT AI_FIX_GRAMMAR(N'hi');",
+                "SELECT AI_SUMMARIZE(N'hi');",
+                "SELECT AI_TRANSLATE(N'hi', N'es');"
+            })
+            {
+                var vs = await aiValidator.ValidateTSqlAsync(aiSql, 1, CancellationToken.None);
+                check(vs.Any(v => v.Keyword == "EXTERNAL_AI_CALL"), $"ReadOnlySqlValidator rejects plain FunctionCall {aiSql}");
+            }
+            var sysExt = await aiValidator.ValidateTSqlAsync("SELECT sys.INVOKE_EXTERNAL_API('a', 'b', 1);", 1, CancellationToken.None);
+            check(sysExt.Any(v => v.Keyword == "INVOKE_EXTERNAL_API"), "ReadOnlySqlValidator rejects sys.INVOKE_EXTERNAL_API");
+
+            // (a2) BatchHasExecuteStatementAsync catches EXEC, implicit proc calls, and INSERT ... EXEC while allowing THROW and (SELECT 1/0)
+            check(!await SqlServerMultiRunner.BatchHasExecuteStatementAsync(SqlScript.Parse("THROW 50001, 'err', 1;", 1)[0], CancellationToken.None)
+                && !await SqlServerMultiRunner.BatchHasExecuteStatementAsync(SqlScript.Parse("(SELECT 1/0);", 1)[0], CancellationToken.None)
+                && await SqlServerMultiRunner.BatchHasExecuteStatementAsync(SqlScript.Parse("dbo.MyProc;", 1)[0], CancellationToken.None)
+                && await SqlServerMultiRunner.BatchHasExecuteStatementAsync(SqlScript.Parse("INSERT INTO dbo.T EXEC dbo.MyProc;", 1)[0], CancellationToken.None),
+                "BatchHasExecuteStatementAsync distinguishes safe THROW/(SELECT 1/0) from dbo.MyProc and INSERT ... EXEC");
+
+            // (a3) Transaction pre-flight rejects variable-named ROLLBACK TRANSACTION @sp (while allowing literal savepoints)
+            var txRunner = new SqlServerMultiRunner(service);
+            var txBudget = service.Results.BeginQuery("tx-rb-var");
+            using var txEvents = new QueryEventSink(null);
+            var txMsgs = new QueryMessages(txEvents.Message);
+            var rbVarCtx = new MultiTargetContext(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction", false,
+                T("t1", c1, "S1"), Providers.SqlServer, "DECLARE @sp sysname = NULL; ROLLBACK TRANSACTION @sp;",
+                1, 1, 1000, 10, 30, false, false, null, null, null, null, new MultiQueryQuota(10, 1 << 20), () => false, txBudget, txMsgs, txEvents);
+            var rbVarPre = await txRunner.PreflightAsync([rbVarCtx], CancellationToken.None);
+            check(!rbVarPre[0].Passed && rbVarPre[0].Error?.Code == "INVALID_SCRIPT",
+                "Transaction pre-flight rejects variable-named ROLLBACK TRANSACTION @sp");
+            check(MultiQueryCoordinator.ClampText("😀abc", 1) == "",
+                "ClampText(maxChars: 1) never splits leading UTF-16 surrogate pair");
+
+            // (b) MultiQueryQuota count cap, descriptor byte cap, Release recycling & idempotency
+            var quota = new MultiQueryQuota(maxResultSets: 2, maxSummaryDescriptorBytes: 100);
+            check(quota.TryAllocate(60, out var qi0, out var ov0) && qi0 == 0 && !ov0, "MultiQueryQuota allocates slot 0");
+            check(!quota.TryAllocate(50, out _, out var ov1) && ov1, "MultiQueryQuota enforces descriptor byte cap");
+            check(quota.TryAllocate(40, out var qi1, out var ov2) && qi1 == 1 && !ov2, "MultiQueryQuota allocates slot 1 up to exact cap");
+            check(!quota.TryAllocate(0, out _, out var ov3) && !ov3, "MultiQueryQuota enforces count cap");
+            quota.Release(0, 60);
+            quota.Release(0, 60); // idempotent duplicate release
+            check(quota.KeptResultSets == 1 && quota.TryAllocate(60, out var qiReused, out _) && qiReused == 0,
+                "MultiQueryQuota.Release recycles index idempotently");
+
+            // (c) crossEngineReadOnly invokes ValidateTSqlAsync exactly once (not 2 + N) via ReadOnlyValidated
+            var parseCalls = 0;
+            var countingValidator = new CountingSqlValidator(() => Interlocked.Increment(ref parseCalls));
+            var sqlRunCount = 0;
+            var realSqlRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                if (!ctx.ReadOnlyValidated) Interlocked.Increment(ref parseCalls);
+                Interlocked.Increment(ref sqlRunCount);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false)));
+            }, preflight: (ts, _) =>
+            {
+                if (ts.Any(t => !t.ReadOnlyValidated)) Interlocked.Increment(ref parseCalls);
+                return Task.FromResult<IReadOnlyList<MultiTargetPreflightOutcome>>([.. ts.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, true))]);
+            });
+            var okBqRunner = new FakeRunner(Providers.BigQuery, (ctx, _) =>
+                Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false))));
+            var onceCoord = new MultiQueryCoordinator(service,
+                new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = realSqlRunner, [Providers.BigQuery] = okBqRunner },
+                sqlValidator: countingValidator,
+                providerOf: id => id == c2 ? Providers.BigQuery : Providers.SqlServer);
+            var onceRes = await onceCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "crossEngineReadOnly",
+                [T("s1", c1, "S1"), T("s2", c1, "S2"), T("b1", c2, "BQ1")], 1000, 30,
+                Scripts: new MultiQueryScripts("SELECT 1;", "SELECT 1;")), context: null);
+            check(onceRes.Status == "completed" && parseCalls == 1 && sqlRunCount == 2,
+                $"crossEngineReadOnly validates T-SQL once across 2 SQL targets (calls={parseCalls}, runs={sqlRunCount})");
+
+            // (d) Runner throwing OperationCanceledException on timeout emits exactly ONE terminal event (timedOut)
+            var termEvents = new List<MultiQueryTargetStateEvent>();
+            var oceRunner = new FakeRunner(Providers.SqlServer, async (_, tok) =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), tok);
+                throw new InvalidOperationException("unreachable");
+            });
+            var oceCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = oceRunner });
+            using var oceCtx = new RequestContext(3, "query.executeMulti", RequestLane.Query, 0, sendEvent: (_, e, _) =>
+            {
+                if (e is MultiQueryTargetStateEvent ts && ts.Phase is not ("queued" or "preflight" or "running" or "committing"))
+                    termEvents.Add(ts);
+            });
+            var oceRes = await oceCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget",
+                [T("t1", c1, "S1")], 1000, TimeoutSeconds: 1, Sql: "SELECT 1;"), oceCtx);
+            check(oceRes.Status == "timedOut" && termEvents.Count == 1 && termEvents[0].Phase == "timedOut",
+                $"Runner OCE on timeout emits single timedOut terminal event (status={oceRes.Status}, events={termEvents.Count}/{termEvents.FirstOrDefault()?.Phase})");
+
+            // (e) Sequential Fire-and-Forget cancellation marks remaining target cancelled (NOT skipped)
+            var seqQueryId = Guid.NewGuid().ToString();
+            using var seqCtx = new RequestContext(4, "query.executeMulti", RequestLane.Query, 0);
+            var seqRunner = new FakeRunner(Providers.SqlServer, (ctx, tok) =>
+            {
+                if (ctx.Target.TargetKey == "seq1")
+                {
+                    seqCtx.Cancel(CancelReason.User);
+                    tok.ThrowIfCancellationRequested();
+                }
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false)));
+            });
+            var seqCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = seqRunner });
+            var seqRes = await seqCoord.ExecuteAsync(new QueryMultiArgs(seqQueryId, Guid.NewGuid().ToString(), "fireAndForget",
+                [T("seq1", c1, "S1"), T("seq2", c2, "S2")], 1000, 30, Sequential: true, Sql: "SELECT 1;"), seqCtx);
+            check(seqRes.Status == "cancelled" && seqRes.Targets[1].Status == "cancelled",
+                $"Sequential Fire-and-Forget cancel marks remaining targets cancelled, not skipped ({seqRes.Status}/{seqRes.Targets[1].Status})");
+
+            // (f) partialFailure (1 committed + 1 refused) and completedWithErrors (Fire-and-Forget 1 succeeded + 1 failed)
+            var pfRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var outcome = ctx.Target.TargetKey == "p1"
+                    ? new MultiCommitResult(MultiCommitOutcome.Committed)
+                    : new MultiCommitResult(MultiCommitOutcome.Refused, new MultiTargetError("SQL_ERROR", "refused"));
+                var handle = new FakePhase2Handle(_ => Task.FromResult(outcome), _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 1, 1, []), [], NeedsCommit: true), handle));
+            });
+            var pfCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = pfRunner });
+            var pfRes = await pfCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
+                [T("p1", c1, "S1"), T("p2", c2, "S2")], 1000, 30, Sql: "UPDATE dbo.T SET x = 1;"), context: null);
+            check(pfRes.Status == "partialFailure" && pfRes.Targets[0].Status == "committed" && pfRes.Targets[1].Status == "failed",
+                $"Transaction 1 committed + 1 refused produces partialFailure ({pfRes.Status})");
+
+            var ffPartialRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var failed = ctx.Target.TargetKey == "e2";
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, failed ? "failed" : "succeeded",
+                        1, 1, 0, 1, [], Error: failed ? new MultiTargetError("SQL_ERROR", "boom") : null), [], NeedsCommit: false)));
+            });
+            var ffPartialCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = ffPartialRunner });
+            var ffPartialRes = await ffPartialCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget",
+                [T("e1", c1, "S1"), T("e2", c2, "S2")], 1000, 30, Sql: "SELECT 1;"), context: null);
+            check(ffPartialRes.Status == "partialFailure", $"Fire-and-Forget 1 succeeded + 1 failed produces partialFailure ({ffPartialRes.Status})");
+
+            var cweRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var nonFatalErr = ctx.Target.TargetKey == "e2" ? new MultiTargetError("SQL_ERROR", "non-fatal batch error") : null;
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded",
+                        2, 2, 0, 1, [], Error: nonFatalErr), [], NeedsCommit: false)));
+            });
+            var cweCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = cweRunner });
+            var cweRes = await cweCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget",
+                [T("e1", c1, "S1"), T("e2", c2, "S2")], 1000, 30, Sql: "SELECT 1;\nGO\nSELECT 2;"), context: null);
+            check(cweRes.Status == "completedWithErrors", $"Fire-and-Forget all succeeded with non-fatal batch error produces completedWithErrors ({cweRes.Status})");
+
+            // (g) SqlService.DispatchAsync("query.executeMulti", ...) validates parameters & AcquireEphemeralSqlSlot honors SessionLimit
+            var wire = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+            using var badDoc = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                queryId = Guid.NewGuid().ToString(), sessionId = Guid.NewGuid().ToString(),
+                mode = "bogusMode", targets = new[] { new { targetKey = "k1", connectionId = c1, label = "S1" } }, sql = "SELECT 1;"
+            }, wire));
+            var badDispatchCode = "";
+            try { await service.DispatchAsync("query.executeMulti", badDoc.RootElement.Clone(), wire, null); }
+            catch (RequestException ex) { badDispatchCode = ex.Code; }
+            check(badDispatchCode == "INVALID_PARAMS", $"SqlService query.executeMulti rejects invalid mode ({badDispatchCode})");
+
+            using var slotSvc = new SqlService(new ResultStore(1L << 22, 1L << 21));
+            var limit = slotSvc.SessionLimit;
+            for (var i = 0; i < limit; i++) slotSvc.AcquireEphemeralSqlSlot(limit);
+            var slotErr = "";
+            try { slotSvc.AcquireEphemeralSqlSlot(limit); }
+            catch (RequestException ex) { slotErr = ex.Code; }
+            for (var i = 0; i < limit; i++) slotSvc.ReleaseEphemeralSqlSlot();
+            check(slotErr == "SESSION_LIMIT", $"AcquireEphemeralSqlSlot enforces SessionLimit ({slotErr})");
+
+            // (h) Round 6 hardening checks:
+            // - ReadOnlySqlValidator rejects 3-part db.sys.* external API / AI calls
+            var roVal = new ReadOnlySqlValidator();
+            var threePartExt = await roVal.ValidateTSqlAsync("SELECT master.sys.INVOKE_EXTERNAL_API('a', 'b', 1);", 1, CancellationToken.None);
+            var threePartAi = await roVal.ValidateTSqlAsync("SELECT master.sys.AI_GENERATE_EMBEDDINGS(N'x');", 1, CancellationToken.None);
+            check(threePartExt.Count > 0 && threePartAi.Count > 0,
+                $"ReadOnlySqlValidator rejects 3-part db.sys.INVOKE_EXTERNAL_API and AI_* calls ({threePartExt.Count}/{threePartAi.Count})");
+
+            // - SqlServerMultiRunner pre-flight rejects ALTER DATABASE SCOPED CONFIGURATION in transaction mode
+            var sqlRunner = new SqlServerMultiRunner(service);
+            var scopedBudget = service.Results.BeginQuery(Guid.NewGuid().ToString());
+            using var scopedEvents = new QueryEventSink(null);
+            var scopedMessages = new QueryMessages(scopedEvents.Message);
+            var scopedCtx = new MultiTargetContext(
+                Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction", false,
+                T("sc1", c1, "S1"), Providers.SqlServer, "ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 2;",
+                1, 1, 1000, 100, 30, true, false, null, null, null, Guid.NewGuid().ToString(),
+                new MultiQueryQuota(100, 8L << 20), () => false, scopedBudget, scopedMessages, scopedEvents);
+            var scopedPre = await sqlRunner.PreflightAsync([scopedCtx], CancellationToken.None);
+            check(!scopedPre[0].Passed && (scopedPre[0].Error?.Message.Contains("ALTER DATABASE", StringComparison.OrdinalIgnoreCase) ?? false),
+                "SqlServerMultiRunner rejects ALTER DATABASE SCOPED CONFIGURATION in transaction mode");
+
+            // - SqlServerMultiRunner defense-in-depth validates crossEngineReadOnly when ReadOnlyValidated == false and handles bad SqlScript.Parse cleanly
+            var unvalCtx = scopedCtx with { Mode = "crossEngineReadOnly", Sql = "DELETE FROM dbo.T;", ReadOnlyValidated = false };
+            var unvalRes = await sqlRunner.ExecutePhase1Async(unvalCtx, CancellationToken.None);
+            check(unvalRes.Result.Outcome.Status == "failed" && unvalRes.Result.Outcome.Error?.Code == "READ_ONLY_VIOLATION",
+                $"SqlServerMultiRunner refuses unvalidated crossEngineReadOnly DML ({unvalRes.Result.Outcome.Status}/{unvalRes.Result.Outcome.Error?.Code})");
+
+            var badBatchCtx = scopedCtx with { Mode = "fireAndForget", Sql = "SELECT 1;\nGO 999999999999999999999" };
+            var badBatchRes = await sqlRunner.ExecutePhase1Async(badBatchCtx, CancellationToken.None);
+            check(badBatchRes.Result.Outcome.Status == "failed" && badBatchRes.Result.Outcome.Error?.Code == "INVALID_SCRIPT",
+                $"SqlServerMultiRunner handles SqlScript.Parse failure cleanly ({badBatchRes.Result.Outcome.Status}/{badBatchRes.Result.Outcome.Error?.Code})");
+
+            // - ComputeOverallStatus does not override all-failed or all-timedOut to cancelled on late UserCancelled
+            using var lateCts = new CancellationTokenSource();
+            var lateRun = new SqlService.RunningQuery(new HashSet<string> { c1 }, "s1", lateCts);
+            lateRun.Cancel();
+            var allFailed = new[] { new MultiTargetOutcome("f1", Providers.SqlServer, "S1", "failed", 0, 1, 0, 1, [], Error: new("SQL_ERROR", "err")) };
+            var allTimedOut = new[] { new MultiTargetOutcome("t1", Providers.SqlServer, "S1", "timedOut", 0, 1, 0, 1, [], Error: new("TIMEOUT", "to")) };
+            check(MultiQueryCoordinator.ComputeOverallStatus("fireAndForget", allFailed, lateRun) == "failed"
+                && MultiQueryCoordinator.ComputeOverallStatus("transaction", allFailed, lateRun) == "failed"
+                && MultiQueryCoordinator.ComputeOverallStatus("fireAndForget", allTimedOut, lateRun) == "timedOut"
+                && MultiQueryCoordinator.ComputeOverallStatus("transaction", allTimedOut, lateRun) == "timedOut",
+                "ComputeOverallStatus preserves failed/timedOut even when late UserCancelled arrives");
+
+            // - Stage 3 does not rewrite externally-cancelled target or emit duplicate terminal events when a peer times out
+            var extRunner = new FakeRunner(Providers.SqlServer, async (ctx, ct) =>
+            {
+                if (ctx.Target.TargetKey == "ext1")
+                {
+                    var err = new MultiTargetError("CANCELLED", "Externally cancelled job");
+                    ctx.Events.TargetState(new MultiQueryTargetStateEvent("ext1", "cancelled", 0, 1, 0, 0, 1, ErrorCode: err.Code, ErrorMessage: err.Message));
+                    return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                        new MultiTargetOutcome("ext1", ctx.Provider, ctx.Target.Label, "cancelled", 0, 1, 0, 1, [], Error: err), [], NeedsCommit: false));
+                }
+                await Task.Delay(Timeout.Infinite, ct);
+                throw new InvalidOperationException("unreachable");
+            });
+            var extCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = extRunner });
+            var extRes = await extCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "fireAndForget",
+                [T("ext1", c1, "S1"), T("ext2", c2, "S2")], 1000, TimeoutSeconds: 1, Sql: "SELECT 1;"), context: null);
+            check(extRes.Targets[0].Status == "cancelled" && extRes.Targets[0].Error?.Message == "Externally cancelled job"
+                && extRes.Targets[1].Status == "timedOut",
+                $"Stage 3 preserves externally-cancelled target when peer times out ({extRes.Targets[0].Status}/{extRes.Targets[1].Status})");
+
+            // - RunAutoCombineAsync skips mixed committed + rolledBack (partialFailure) and commitInDoubt + rolledBack slots
+            var mixCombinedCalled = 0;
+            var mixCombiner = new FakeCombiner((_, _, _, _, _, _, _) => { mixCombinedCalled++; return new CombineOutput(null, []); });
+            var mixRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var set = OpenFakeSet(service.Results, ctx, slot: 0);
+                var phase2 = new FakePhase2Handle(
+                    onCommit: _ => Task.FromResult(ctx.Target.TargetKey == "m1"
+                        ? new MultiCommitResult(MultiCommitOutcome.Committed)
+                        : new MultiCommitResult(MultiCommitOutcome.Refused, new MultiTargetError("SQL_ERROR", "commit failed"))),
+                    onRollback: _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 1, 1, [set.ResultId]),
+                    [set], NeedsCommit: true), phase2));
+            });
+            var mixCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = mixRunner }, combiner: mixCombiner);
+            var mixRes = await mixCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
+                [T("m1", c1, "S1"), T("m2", c2, "S2")], 1000, 30, Sql: "SELECT 1;", AutoCombine: true), context: null);
+            check(mixRes.Status == "partialFailure" && mixCombinedCalled == 0 && (mixRes.CombineWarnings?.Any(w => w.Contains("mixed transaction outcomes", StringComparison.OrdinalIgnoreCase)) ?? false),
+                $"RunAutoCombineAsync skips mixed committed+rolledBack slot (called={mixCombinedCalled}, warnings={mixRes.CombineWarnings?.Count ?? 0})");
+
+            // - Phase 2 CommitAsync CancelledBeforeSend with !UserCancelled maps to timedOut/TIMEOUT
+            var p2TimeoutRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var phase2 = new FakePhase2Handle(
+                    onCommit: _ => Task.FromResult(new MultiCommitResult(MultiCommitOutcome.CancelledBeforeSend, new MultiTargetError("TIMEOUT", "timed out"))),
+                    onRollback: _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []),
+                    [], NeedsCommit: true), phase2));
+            });
+            var p2TimeoutCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = p2TimeoutRunner });
+            var p2TimeoutRes = await p2TimeoutCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
+                [T("pt1", c1, "S1")], 1000, 30, Sql: "SELECT 1;"), context: null);
+            check(p2TimeoutRes.Targets[0].Status == "timedOut" && p2TimeoutRes.Targets[0].Error?.Code == "TIMEOUT",
+                $"Phase 2 CommitAsync CancelledBeforeSend without UserCancelled maps to timedOut/TIMEOUT ({p2TimeoutRes.Targets[0].Status}/{p2TimeoutRes.Targets[0].Error?.Code})");
+
+            // - > 8 target throttle waiter yields skipped on peer failure in transaction mode
+            var tenTargets = Enumerable.Range(1, 10).Select(idx => T($"th{idx}", idx % 2 == 0 ? c2 : c1, $"S{idx}")).ToArray();
+            var thStarted = 0;
+            var thGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var thRunner = new FakeRunner(Providers.SqlServer, async (ctx, ct) =>
+            {
+                if (Interlocked.Increment(ref thStarted) == 8) thGate.TrySetResult();
+                await thGate.Task.WaitAsync(ct);
+                if (ctx.Target.TargetKey == "th1")
+                    return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                        new MultiTargetOutcome("th1", ctx.Provider, ctx.Target.Label, "failed", 0, 1, 0, 1, [], Error: new("SQL_ERROR", "boom")), [], NeedsCommit: false));
+                await Task.Delay(Timeout.Infinite, ct);
+                throw new InvalidOperationException("unreachable");
+            });
+            var thCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = thRunner });
+            var thRes = await thCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
+                tenTargets, 1000, 30, Sql: "SELECT 1;"), context: null);
+            check(thRes.Targets.Any(t => t.Status == "skipped"),
+                $"Transaction throttle waiter (>8 targets) transitions to skipped on peer failure (skipped={thRes.Targets.Count(t => t.Status == "skipped")})");
+
+            // (i) Round 7 hardening checks:
+            // - ActiveEphemeralConnections returns to 0 after pre-cancelled and NOT_CONNECTED ExecutePhase1Async calls
+            using var preCancel = new CancellationTokenSource();
+            preCancel.Cancel();
+            var preRes = await sqlRunner.ExecutePhase1Async(scopedCtx with { Mode = "fireAndForget", Sql = "SELECT 1;" }, preCancel.Token);
+            var notConnRes = await sqlRunner.ExecutePhase1Async(scopedCtx with { Mode = "fireAndForget", Sql = "SELECT 1;", Target = T("nc1", "missing-conn", "Missing") }, CancellationToken.None);
+            check(preRes.Result.Outcome.Status == "cancelled" && notConnRes.Result.Outcome.Status == "failed" && sqlRunner.ActiveEphemeralConnections == 0,
+                $"SqlServerMultiRunner ActiveEphemeralConnections returns to 0 on cancel/NOT_CONNECTED (active={sqlRunner.ActiveEphemeralConnections})");
+
+            // - EvaluateTransactionProbeUncertainty decision matrix
+            var txValidSame = new TransactionProbeResult(true, 1, 1, 42);
+            var txReplaced = new TransactionProbeResult(true, 1, 1, 99);
+            var txZero = new TransactionProbeResult(true, 0, 0, null);
+            check(!SqlServerMultiRunner.EvaluateTransactionProbeUncertainty(true, 42, txValidSame, xactAbortOn: true, sawTriggerTranEnd: false, isCancellation: false)
+                && SqlServerMultiRunner.EvaluateTransactionProbeUncertainty(true, 42, txReplaced, xactAbortOn: true, sawTriggerTranEnd: false, isCancellation: false)
+                && !SqlServerMultiRunner.EvaluateTransactionProbeUncertainty(true, 42, txZero, xactAbortOn: true, sawTriggerTranEnd: false, isCancellation: false)
+                && SqlServerMultiRunner.EvaluateTransactionProbeUncertainty(true, 42, txZero, xactAbortOn: false, sawTriggerTranEnd: false, isCancellation: false)
+                && SqlServerMultiRunner.EvaluateTransactionProbeUncertainty(true, 42, txZero, xactAbortOn: true, sawTriggerTranEnd: true, isCancellation: false)
+                && SqlServerMultiRunner.EvaluateTransactionProbeUncertainty(true, 42, txZero, xactAbortOn: true, sawTriggerTranEnd: false, isCancellation: true),
+                "EvaluateTransactionProbeUncertainty classifies same/replaced/XACT_ABORT/trigger/cancel accurately");
+
+            // - Pre-flight rejects ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE, COMMIT WORK, ROLLBACK WORK, and OPENROWSET(PROVIDER=...)
+            var clearPre = await sqlRunner.PreflightAsync([scopedCtx with { Sql = "ALTER DATABASE SCOPED CONFIGURATION CLEAR PROCEDURE_CACHE;" }], CancellationToken.None);
+            var commitWorkPre = await sqlRunner.PreflightAsync([scopedCtx with { Sql = "COMMIT WORK;" }], CancellationToken.None);
+            var rollbackWorkPre = await sqlRunner.PreflightAsync([scopedCtx with { Sql = "ROLLBACK WORK;" }], CancellationToken.None);
+            var orProviderViol = await roVal.ValidateTSqlAsync("SELECT * FROM OPENROWSET(PROVIDER = 'SQLNCLI', 'Server=x;', 'SELECT 1');", 1, CancellationToken.None);
+            check(!clearPre[0].Passed && !commitWorkPre[0].Passed && !rollbackWorkPre[0].Passed && orProviderViol.Count > 0,
+                "Pre-flight blocks ALTER DATABASE SCOPED CONFIGURATION CLEAR, COMMIT WORK, ROLLBACK WORK, and OPENROWSET(PROVIDER=...)");
+
+            // - RunAutoCombineAsync combines uniform rolled-back previews (propagating RolledBackPreview) and skips commitInDoubt
+            var uniformCombined = (ResultSetBuffer?)null;
+            var uniformCombiner = new FakeCombiner((st, bud, srcs, idx, bn, it, name) =>
+            {
+                var c = st.Open(bud, idx, bn, it, "combined", [new("_server", "nvarchar(256)", "text"), new("v", "int", "text")], [WireKind.Text, WireKind.Text], statementSlot: 0)!;
+                c.Complete();
+                uniformCombined = c;
+                return new CombineOutput(c, []);
+            });
+            var uniformRbRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var set = OpenFakeSet(service.Results, ctx, slot: 0);
+                var phase2 = new FakePhase2Handle(_ => Task.FromResult(new MultiCommitResult(MultiCommitOutcome.Committed)), _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, ctx.Target.TargetKey == "u1" ? "succeeded" : "failed", 1, 1, 1, 1, [set.ResultId],
+                        Error: ctx.Target.TargetKey == "u2" ? new("SQL_ERROR", "fail") : null),
+                    [set], NeedsCommit: ctx.Target.TargetKey == "u1"), ctx.Target.TargetKey == "u1" ? phase2 : null));
+            });
+            var uniformCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = uniformRbRunner }, combiner: uniformCombiner);
+            var uniformRes = await uniformCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
+                [T("u1", c1, "S1"), T("u2", c2, "S2")], 1000, 30, Sql: "SELECT 1;", AutoCombine: true), context: null);
+            check(uniformRes.Status == "rolledBack" && uniformCombined is { RolledBackPreview: true },
+                $"RunAutoCombineAsync combines uniform rolled-back previews and marks RolledBackPreview=true ({uniformRes.Status}, rb={uniformCombined?.RolledBackPreview})");
+
+            // (j) Round 8 hardening checks:
+            // - AssessTransactionUncertaintyAsync with sessionLost=true returns false for plain DML and true for EXEC or trigger Msg 3609
+            using var dummyConn = new Microsoft.Data.SqlClient.SqlConnection();
+            Microsoft.Data.SqlClient.SqlInfoMessageEventHandler noopInfo = (_, _) => { };
+            var safeDmlBatch = SqlScript.Parse("UPDATE dbo.Orders SET Status = 'Shipped';", 1, [])[0];
+            var execBatch = SqlScript.Parse("EXEC dbo.CommitThenDie;", 1, [])[0];
+            var lostSafe = await SqlServerMultiRunner.AssessTransactionUncertaintyAsync(dummyConn, noopInfo, true, 1, safeDmlBatch, false, false, sessionLost: true);
+            var lostExec = await SqlServerMultiRunner.AssessTransactionUncertaintyAsync(dummyConn, noopInfo, true, 1, execBatch, false, false, sessionLost: true);
+            var lostTrig = await SqlServerMultiRunner.AssessTransactionUncertaintyAsync(dummyConn, noopInfo, true, 1, safeDmlBatch, sawTriggerTranEnd: true, false, sessionLost: true);
+            check(!lostSafe && lostExec && lostTrig
+                && SqlServerMultiRunner.IsSessionLostError(new IOException("drop"), dummyConn)
+                && SqlServerMultiRunner.IsSessionLostError(new ObjectDisposedException("sni"), dummyConn),
+                $"AssessTransactionUncertaintyAsync sessionLost distinguishes plain DML from EXEC/trigger ({lostSafe}/{lostExec}/{lostTrig})");
+
+            // - Phase 2 CancelledBeforeSend keeps status and error.Code aligned even if late UserCancelled flips before return
+            var lateCancelQid = Guid.NewGuid().ToString();
+            var lateCancelRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var phase2 = new FakePhase2Handle(
+                    onCommit: async _ =>
+                    {
+                        await service.DispatchAsync("query.cancel", JsonSerializer.SerializeToElement(new CancelArgs(lateCancelQid), wire), wire);
+                        return new MultiCommitResult(MultiCommitOutcome.CancelledBeforeSend, new MultiTargetError("TIMEOUT", "timed out"));
+                    },
+                    onRollback: _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []),
+                    [], NeedsCommit: true), phase2));
+            });
+            var lateCancelCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = lateCancelRunner });
+            var lateCancelRes = await lateCancelCoord.ExecuteAsync(new QueryMultiArgs(lateCancelQid, Guid.NewGuid().ToString(), "transaction",
+                [T("lc1", c1, "S1")], 1000, 30, Sql: "SELECT 1;"), context: null);
+            check(lateCancelRes.Targets[0].Status == "timedOut" && lateCancelRes.Targets[0].Error?.Code == "TIMEOUT",
+                $"Phase 2 CancelledBeforeSend preserves consistent timedOut/TIMEOUT even on late UserCancelled ({lateCancelRes.Targets[0].Status}/{lateCancelRes.Targets[0].Error?.Code})");
+
+            // (k) Round 9 hardening checks:
+            // - Phase 1 timeout expiring while Phase 2 Commit is in flight does NOT suppress Stage 4 autoCombine on a completed run
+            var postCommitCombined = 0;
+            var postCommitCombiner = new FakeCombiner((st, bud, srcs, idx, bn, it, name) =>
+            {
+                postCommitCombined++;
+                var c = st.Open(bud, idx, bn, it, "combined", [new("_server", "nvarchar(256)", "text"), new("v", "int", "text")], [WireKind.Text, WireKind.Text], statementSlot: 0)!;
+                c.Complete();
+                return new CombineOutput(c, []);
+            });
+            var postCommitRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            {
+                var set = OpenFakeSet(service.Results, ctx, slot: 0);
+                var phase2 = new FakePhase2Handle(
+                    onCommit: async _ =>
+                    {
+                        await Task.Delay(1200);
+                        return new MultiCommitResult(MultiCommitOutcome.Committed);
+                    },
+                    onRollback: _ => Task.CompletedTask);
+                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 1, 1, [set.ResultId]),
+                    [set], NeedsCommit: true), phase2));
+            });
+            var postCommitCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = postCommitRunner }, combiner: postCommitCombiner);
+            var postCommitRes = await postCommitCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
+                [T("pc1", c1, "S1"), T("pc2", c2, "S2")], 1000, TimeoutSeconds: 1, Sql: "SELECT 1;", AutoCombine: true), context: null);
+            check(postCommitRes.Status == "completed" && postCommitCombined == 1,
+                $"Expiring Phase 1 timer during Phase 2 Commit does not suppress Stage 4 autoCombine ({postCommitRes.Status}, combined={postCommitCombined})");
+
+            // - ComputeOverallStatus with empty outcomes returns cancelled when UserCancelled and failed otherwise (never vacuously completed)
+            using var emptyNotCancelCts = new CancellationTokenSource();
+            var emptyNotCancelRun = new SqlService.RunningQuery(new HashSet<string> { c1 }, "s-empty", emptyNotCancelCts);
+            check(MultiQueryCoordinator.ComputeOverallStatus("transaction", [], lateRun) == "cancelled"
+                && MultiQueryCoordinator.ComputeOverallStatus("fireAndForget", [], lateRun) == "cancelled"
+                && MultiQueryCoordinator.ComputeOverallStatus("transaction", [], emptyNotCancelRun) == "failed"
+                && MultiQueryCoordinator.ComputeOverallStatus("fireAndForget", [], emptyNotCancelRun) == "failed",
+                "ComputeOverallStatus handles empty outcomes without vacuous completed");
+
+            // - Post-preflight / pre-start cancellation in sequential mode logs error to Messages
+            var postPreQid = Guid.NewGuid().ToString();
+            var postPreRunner = new FakeRunner(Providers.SqlServer,
+                execute: (ctx, _) => Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "succeeded", 1, 1, 0, 1, []), [], NeedsCommit: false))),
+                preflight: async (targets, _) =>
+                {
+                    await service.DispatchAsync("query.cancel", JsonSerializer.SerializeToElement(new CancelArgs(postPreQid), wire), wire);
+                    return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, Passed: true))];
+                });
+            var postPreCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = postPreRunner });
+            var postPreRes = await postPreCoord.ExecuteAsync(new QueryMultiArgs(postPreQid, Guid.NewGuid().ToString(), "fireAndForget",
+                [T("pp1", c1, "S1")], 1000, 30, Sql: "SELECT 1;", Sequential: true), context: null);
+            check(postPreRes.Status == "cancelled" && postPreRes.Messages.Any(m => m.Kind == "error" && m.Text.Contains("cancelled", StringComparison.OrdinalIgnoreCase)),
+                $"Post-preflight sequential cancel logs error to Messages (status={postPreRes.Status}, msgs={postPreRes.Messages.Count})");
+        }
+    }
+
+    private sealed class CountingSqlValidator(Action onCall) : IReadOnlySqlValidator
+    {
+        public Task<IReadOnlyList<ReadOnlySqlViolation>> ValidateTSqlAsync(string sql, int startLine, CancellationToken token)
+        {
+            onCall();
+            return Task.FromResult<IReadOnlyList<ReadOnlySqlViolation>>([]);
+        }
     }
 
     private static ResultSetBuffer OpenFakeSet(ResultStore store, MultiTargetContext ctx, int slot)

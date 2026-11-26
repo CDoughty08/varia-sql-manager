@@ -10,7 +10,7 @@ import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import Icon from '../Icon'
 import StatusPill from '../kit/StatusPill'
-import { useConnectionAccent, useWorkbench } from '../core/WorkbenchContext'
+import { useConnectionAccent, useOptionalWorkbench, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import type { GestureEvent } from '../core/gestures'
@@ -34,12 +34,14 @@ export function recoveryLabel(action: TreeAction): string | undefined {
 }
 
 /** Pointer mousedown fields forwarded to GestureService and secondary-click checks (never raw modifier reads). */
-export type RowMouseEvent = GestureEvent & { readonly button: number; readonly preventDefault?: () => void }
+export type RowMouseEvent = GestureEvent & { readonly button: number; readonly target?: EventTarget | null; readonly preventDefault?: () => void }
 
 export interface RowActions {
   select(rowId: number): void
-  /** Top-level server row press: handles `explorer.addToSelection`, `grid.secondaryClick`, and plain selection. */
+  /** Top-level server row press: handles checkbox toggle, `grid.secondaryClick`, and plain selection; defers draggable `mod+click` to `serverClick`. */
   serverMouseDown?(rowId: number, event: RowMouseEvent): void
+  /** Top-level server row click: completes a non-drag `explorer.addToSelection` toggle without disrupting `Ctrl+Drag`; returns true if a toggle ran. */
+  serverClick?(rowId: number, event: RowMouseEvent): boolean
   toggle(rowId: number): void
   /** A double-click on a node that does not expand: its kind's default action, if it has one. */
   activate(rowId: number): void
@@ -101,7 +103,7 @@ export interface RowProps {
   readonly focused?: boolean
   /** Top-level server row is a member of `multiSelected`. */
   readonly multiSelected?: boolean
-  /** Multi-server selection mode (`multiSelected.length >= 2`) is active. */
+  /** Multi-server selection mode (`multiSelected.length > 0`) is active. */
   readonly inMultiSelect?: boolean
   /** Connected top-level server whose engine does not match the active multi-select engine lock. */
   readonly incompatible?: boolean
@@ -210,8 +212,8 @@ function LostActions({ rowId, label, actions }: { rowId: number; label: string; 
   const status = explorer.node(rowId), action = status ? serverConnectionStatus(status)?.action ?? 'Reconnect' : 'Reconnect'
   const stop = (event: MouseEvent) => event.stopPropagation()
   return <span className="oe-actions">
-    <button tabIndex={-1} disabled={!canReconnect} aria-label={action === 'Reconnect' ? 'Reconnect ' + label : `${action} for ${label}`} title={action + '…'} onMouseDown={stop} onClick={() => actions.reconnect(rowId)}><Icon name="plug" /></button>
-    <button tabIndex={-1} disabled={!canRemove} aria-label={'Remove ' + label + ' from Explorer'} title="Remove from Explorer" onMouseDown={stop} onClick={() => actions.remove(rowId)}><Icon name="close" /></button>
+    <button tabIndex={-1} disabled={!canReconnect} aria-label={action === 'Reconnect' ? 'Reconnect ' + label : `${action} for ${label}`} title={action + '…'} onMouseDown={stop} onClick={event => { event.stopPropagation(); actions.reconnect(rowId) }}><Icon name="plug" /></button>
+    <button tabIndex={-1} disabled={!canRemove} aria-label={'Remove ' + label + ' from Explorer'} title="Remove from Explorer" onMouseDown={stop} onClick={event => { event.stopPropagation(); actions.remove(rowId) }}><Icon name="close" /></button>
   </span>
 }
 const systemFolders: ReadonlySet<FolderId> = new Set<FolderId>(systemFolderIds)
@@ -297,14 +299,14 @@ function ServerBandContent({ node, twistie, sublabel, active, environment, tag, 
   const lockTitle = lockedProvider === 'bigquery'
     ? 'Multi-server selection is locked to BigQuery connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.'
     : 'Multi-server selection is locked to SQL Server connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.'
+  const showCheck = !!inMultiSelect && !node.lost && !incompatible
   return <>
     <span className="oe-server-top">
       {twistie}
-      {inMultiSelect && !node.lost && <span className={`oe-server-check${multiSelected ? ' checked' : ''}`} data-checked={multiSelected ? '' : undefined} aria-hidden="true"
-        style={{ width: 14, height: 14, flex: 'none', display: 'inline-grid', placeItems: 'center', borderRadius: 'var(--varia-radius-sm)' }}>
+      {showCheck && <span className={`oe-server-check${multiSelected ? ' checked' : ''}`} data-checked={multiSelected ? '' : undefined} aria-hidden="true">
         {multiSelected && <Icon name="check" />}
       </span>}
-      {incompatible ? <span className="oe-icon-muted" style={{ opacity: 0.55, display: 'inline-flex', flex: 'none' }}>{icon}</span> : icon}
+      {incompatible ? <span className="oe-icon-muted">{icon}</span> : icon}
       <Label text={node.label} />
       <RowEnd connection={connectionState(node)}>
         {tag && <EnvironmentTag environment={environment} place="explorer" />}
@@ -341,37 +343,91 @@ export function PinnedServerRow({ node, edge, current, active, color, environmen
     const popup = button.closest<HTMLElement>('[popover]')
     return popup ? button.ownerDocument.querySelector<HTMLButtonElement>(`[popovertarget="${CSS.escape(popup.id)}"]`) ?? undefined : button
   })
+  const suppressNextClick = useRef(false)
+  const suppressCleanup = useRef<(() => void) | undefined>(undefined)
+  const clearSuppress = () => {
+    suppressCleanup.current?.()
+    suppressCleanup.current = undefined
+    suppressNextClick.current = false
+  }
+  useEffect(() => clearSuppress, [])
   const handleMouseDown = (event: MouseEvent<HTMLButtonElement>) => {
+    clearSuppress()
+    const isSecondary = event.button === 2 || (event.button === 0 && !!gestures?.matches('grid.secondaryClick', event))
+    const onCheck = (event.target as Element | null)?.closest?.('.oe-server-check') != null
+    const isMultiToggle = event.button === 0 && (onCheck || !!gestures?.matches('explorer.addToSelection', event))
+    const suppress = event.button === 0 && (isSecondary || isMultiToggle)
+    suppressNextClick.current = suppress
+    if (suppress) {
+      const win = event.currentTarget.ownerDocument.defaultView
+      if (win) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const onMouseUp = () => {
+          // Macrotask runs after the browser's synchronous mouseup -> click sequence, clearing stale flags and removing the blur listener when the user drags off.
+          timer = setTimeout(() => {
+            timer = undefined
+            clearSuppress()
+          }, 0)
+        }
+        win.addEventListener('mouseup', onMouseUp, { once: true })
+        win.addEventListener('blur', clearSuppress, { once: true })
+        suppressCleanup.current = () => {
+          win.removeEventListener('mouseup', onMouseUp)
+          win.removeEventListener('blur', clearSuppress)
+          if (timer !== undefined) { clearTimeout(timer); timer = undefined }
+        }
+      }
+    }
     if (onServerMouseDown) { onServerMouseDown(event); return }
-    if (event.button === 2 || gestures?.matches('grid.secondaryClick', event)) {
-      const currentSelected = explorer.getSnapshot().multiSelected
+    if (isSecondary) {
+      const currentSelected = explorer.settle().multiSelected
       if (currentSelected.length >= 2 && currentSelected.includes(node.id)) return
+      explorer.endOpen()
       explorer.select(node.id)
       return
     }
-    if (event.button === 0 && gestures?.matches('explorer.addToSelection', event)) {
+    if (isMultiToggle) {
       event.preventDefault()
-      const result = explorer.toggleMultiSelect(node.id)
+      explorer.endOpen()
+      const result = explorer.toggleMultiSelect(node.id, { silentNotice: !!notifications })
       if (result.notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: result.notice })
     }
   }
   const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (suppressNextClick.current) { clearSuppress(); return }
+    if ((event.target as Element | null)?.closest?.('.oe-server-check')) return
     if (gestures?.matches('explorer.addToSelection', event) || gestures?.matches('grid.secondaryClick', event)) return
     jump()
   }
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') clearSuppress()
+  }
   const sublabel = shownSublabel(node), tag = environmentTag(environment)
-  const facts = [status?.words && displayText(status.words), tag?.description]
-  const name = [`Jump to ${rowName(node)}`, ...facts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
+  const lockWords = incompatible && lockedProvider
+    ? (lockedProvider === 'bigquery' ? 'locked to BigQuery selection' : 'locked to SQL Server selection')
+    : undefined
+  const lockDescription = lockDescriptionOf(incompatible, lockedProvider)
+  const tooltipFacts = [status?.words && displayText(status.words), tag?.description, lockDescription]
+  const nameFacts = [status?.words && displayText(status.words), tag?.description, multiSelected && 'selected', lockWords]
+  const name = [`Jump to ${rowName(node)}`, ...nameFacts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
+  const hasCheck = !!inMultiSelect && !node.lost && !incompatible
   return <button ref={menuTarget} type="button"
     className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}${multiSelected ? ' multi-selected' : ''}${incompatible ? ' dimmed engine-incompatible' : ''}`}
     style={accentStyle(accent, top === undefined ? undefined : { top })} data-accent={accent ? '' : undefined} data-current-section={current || undefined}
-    data-multi-selected={multiSelected ? '' : undefined} data-engine-incompatible={incompatible ? '' : undefined}
+    data-multi-selected={multiSelected ? '' : undefined} data-engine-incompatible={incompatible ? '' : undefined} data-has-check={hasCheck ? '' : undefined}
     role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
-    aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onMouseDown={handleMouseDown} onClick={handleClick}>
+    aria-label={name} title={clip([rowTooltip(node), ...tooltipFacts].filter(Boolean).join('\n'))} onMouseDown={handleMouseDown} onClick={handleClick} onKeyDown={handleKeyDown}>
     <ServerBandContent node={node} twistie={<span className="oe-twistie"><Icon name={edge === 'top' ? 'chevron-up' : 'chevron-down'} /></span>}
       sublabel={sublabel} active={active} environment={environment} tag={tag} chips={status?.chips}
       multiSelected={multiSelected} inMultiSelect={inMultiSelect} incompatible={incompatible} lockedProvider={lockedProvider} />
   </button>
+}
+
+function lockDescriptionOf(incompatible: boolean | undefined, lockedProvider: ProviderId | undefined): string | undefined {
+  if (!incompatible || !lockedProvider) return undefined
+  return lockedProvider === 'bigquery'
+    ? 'Multi-server selection is locked to BigQuery connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.'
+    : 'Multi-server selection is locked to SQL Server connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.'
 }
 
 /** Root server treeitem: subscribes to the theme accent only on server rows so non-server rows avoid extra subscriptions. */
@@ -382,17 +438,42 @@ function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, f
   tag: ReturnType<typeof environmentTag>; chips?: readonly StatusChip[]; name: string; tooltip: string; note?: string; peekable: boolean
   select: (event: MouseEvent) => void; toggle: (event: MouseEvent) => void; edgeOf: (event: DragEvent) => 'before' | 'after'
 }) {
+  const gestures = useOptionalWorkbench()?.gestures
   const accent = useConnectionAccent(color)
   const style = accentStyle(accent, { transform: `translateY(${top}px)` })
+  const hasCheck = !!inMultiSelect && !node.lost && !incompatible
+  const lastToggleAt = useRef(-Infinity)
+  const lockDescription = lockDescriptionOf(incompatible, lockedProvider)
+  const description = [rowDescription(node, note), lockDescription].filter(Boolean).join(' ') || undefined
+  const fullTooltip = [tooltip, lockDescription].filter(Boolean).join('\n')
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row server${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed || incompatible ? ' dimmed' : ''}${multiSelected ? ' multi-selected' : ''}${incompatible ? ' engine-incompatible' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={draggable || undefined}
+    aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={description} title={clip(fullTooltip)} style={style} draggable={draggable || undefined}
     data-accent={accent ? '' : undefined} data-peekable={peekable || undefined} data-drop={drop}
-    data-focused={focused ? '' : undefined} data-multi-selected={multiSelected ? '' : undefined} data-engine-incompatible={incompatible ? '' : undefined}
-    onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
+    data-focused={focused ? '' : undefined} data-multi-selected={multiSelected ? '' : undefined} data-engine-incompatible={incompatible ? '' : undefined} data-has-check={hasCheck ? '' : undefined}
+    onMouseDown={event => {
+      const target = event.target as Element | null
+      if (event.button === 0 && !target?.closest?.('.oe-twistie') && !target?.closest?.('.oe-star-button') && !target?.closest?.('.oe-actions')
+        && !gestures?.matches('grid.secondaryClick', event)
+        && target?.closest?.('.oe-server-check')) {
+        lastToggleAt.current = performance.now()
+      }
+      select(event)
+    }}
+    onClick={event => {
+      const target = event.target as Element | null
+      if (target?.closest?.('.oe-twistie') || target?.closest?.('.oe-star-button') || target?.closest?.('.oe-server-check') || target?.closest?.('.oe-actions')) return
+      if (actions.serverClick?.(rowId, event)) {
+        lastToggleAt.current = performance.now()
+      }
+    }}
+    onDoubleClick={event => {
+      if (gestures?.matches('explorer.addToSelection', event) || (event.target as Element | null)?.closest?.('.oe-server-check') || performance.now() - lastToggleAt.current < 600) return
+      if (expandable) actions.toggle(rowId); else actions.activate(rowId)
+    }}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
-    onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
+    onDragStart={draggable ? (event: DragEvent) => { lastToggleAt.current = -Infinity; if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
     onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDragEnd={() => actions.dragEnd()}>
     <ServerBandContent node={node}
       twistie={<span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />}
@@ -406,10 +487,15 @@ function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, f
 function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, focused, multiSelected, inMultiSelect, incompatible, lockedProvider, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery, drop }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = level > 1 ? <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} aria-hidden="true" /> : null
-  const select = (event: MouseEvent) => { const target = event.target as Element; if (!target.closest('.oe-twistie') && !target.closest('.oe-star-button')) actions.select(rowId) }
-  const serverMouseDown = (event: MouseEvent) => {
+  const select = (event: MouseEvent) => {
+    if (event.button !== 0 && event.button !== 2) return
     const target = event.target as Element
-    if (target.closest('.oe-twistie') || target.closest('.oe-star-button')) return
+    if (!target.closest('.oe-twistie') && !target.closest('.oe-star-button')) actions.select(rowId)
+  }
+  const serverMouseDown = (event: MouseEvent) => {
+    if (event.button !== 0 && event.button !== 2) return
+    const target = event.target as Element
+    if (target.closest('.oe-twistie') || target.closest('.oe-star-button') || target.closest('.oe-actions')) return
     if (actions.serverMouseDown) actions.serverMouseDown(rowId, event)
     else actions.select(rowId)
   }
@@ -421,7 +507,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     const icon = kind === RowKind.Error || kind === RowKind.MoreError ? 'error' : kind === RowKind.Loading || kind === RowKind.More ? 'loading' : 'info'
     // As the tree's last row it carries the line a server dragged below everything draws (drop).
     return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId} className={'explorer-row synthetic' + tone} aria-level={level} aria-selected={selected}
-      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} data-drop={drop} onMouseDown={select}
+      aria-disabled={inert || undefined} aria-label={text} title={text} style={style} data-drop={drop} data-focused={focused ? '' : undefined} onMouseDown={select}
       // Not a place a server drops, except below everything when it is the tree's last row: passing over it clears the line
       // the row above left, so releasing here moves nothing.
       onDragOver={(event: DragEvent) => actions.dragOver(rowId, half(event), event)}>
@@ -480,7 +566,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     className={`explorer-row${folder ? ' folder' : ''}${systemFolder ? ' system-folder' : ''}${column ? ' column' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
-    data-peekable={peekable || undefined} data-drop={drop}
+    data-peekable={peekable || undefined} data-drop={drop} data-focused={focused ? '' : undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
     onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}

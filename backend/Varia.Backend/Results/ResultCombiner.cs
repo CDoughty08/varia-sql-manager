@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Varia.Backend.MultiQuery;
 
 namespace Varia.Backend.Results;
@@ -60,6 +61,7 @@ internal sealed class ResultCombiner : IResultCombiner
                 }
                 if (src.IsRemote)
                 {
+                    if (throwOnBudgetRefusal) throw SqlService.RemoteRefused();
                     skippedRemote++;
                     warnings.Add($"Skipped {label}: result is windowed in BigQuery. Load it into memory to include it in Combined.");
                     continue;
@@ -71,6 +73,7 @@ internal sealed class ResultCombiner : IResultCombiner
                 }
                 catch (RequestException error) when (error.Code == "REMOTE_RESULT")
                 {
+                    if (throwOnBudgetRefusal) throw SqlService.RemoteRefused();
                     skippedRemote++;
                     warnings.Add($"Skipped {label}: result is windowed in BigQuery. Load it into memory to include it in Combined.");
                     continue;
@@ -116,11 +119,20 @@ internal sealed class ResultCombiner : IResultCombiner
             }
 
             var anyRolledBack = false;
+            var anyIncomplete = false;
+            long expectedRows = 0;
             foreach (var item in inMemory)
             {
-                if (item.Set.RolledBackPreview) { anyRolledBack = true; break; }
+                if (item.Set.RolledBackPreview) anyRolledBack = true;
+                if (item.Set.Incomplete) anyIncomplete = true;
+                foreach (var page in item.Pages) expectedRows += page.Rows;
             }
             if (anyRolledBack) combined.RolledBackPreview = true;
+            if (anyIncomplete)
+            {
+                combined.Incomplete = true;
+                warnings.Add("One or more source results ended with an error and contributed partial rows.");
+            }
 
             var refused = false;
             try
@@ -131,6 +143,7 @@ internal sealed class ResultCombiner : IResultCombiner
                 for (var s = 0; s < inMemory.Count && !refused; s++)
                 {
                     var (src, pages, label) = inMemory[s];
+                    var labelUtf8 = Encoding.UTF8.GetBytes(label);
                     using var rooms = PageRooms.Over(pages, src.Wires.Count, () => new RequestException("TOO_LARGE", TooLarge));
                     using var reader = new RoomReader(rooms, src.Wires.Count);
 
@@ -147,7 +160,7 @@ internal sealed class ResultCombiner : IResultCombiner
                             if (builder is null) { refused = true; break; }
 
                             var truncated = 0;
-                            builder.AppendText(label);
+                            builder.AppendUtf8(labelUtf8);
                             builder.Measure(label.Length, 2L * label.Length);
                             if (builder.LastTruncated) truncated++;
 
@@ -161,7 +174,9 @@ internal sealed class ResultCombiner : IResultCombiner
                                 }
                                 if (view.IsNull(srcCol, r))
                                 {
-                                    builder.AppendNull(view.IsError(srcCol, r));
+                                    var isErr = view.IsError(srcCol, r);
+                                    builder.AppendNull(isErr);
+                                    if (isErr) builder.Measure(0, 0, exact: false);
                                     continue;
                                 }
 
@@ -185,16 +200,17 @@ internal sealed class ResultCombiner : IResultCombiner
                                     var take = Math.Min(span.Length, MaxBinaryHexBytes);
                                     var written = FormatHex(span[..take], hexBuffer!);
                                     builder.AppendUtf8(hexBuffer.AsSpan(0, written), hexCut);
-                                    var fullBytes = lengths.TryCell(r, srcCol, out var kept) ? kept.Bytes : span.Length;
+                                    var hasKept = lengths.TryCell(r, srcCol, out var kept);
+                                    var fullBytes = hasKept ? kept.Bytes : span.Length;
                                     var hexChars = 2L + 2L * fullBytes;
-                                    builder.Measure(hexChars, 2L * hexChars, keep: hexCut || outLength.Rule != LengthRule.Utf16, exact: !cut);
+                                    var hexExact = hasKept ? kept.Exact && !src.Lengths[srcCol].Estimated : !cut;
+                                    builder.Measure(hexChars, 2L * hexChars, keep: hexCut || outLength.Rule != LengthRule.Utf16, exact: hexExact);
                                 }
                                 else if (srcMeta.SortKind == ColumnTypes.Boolean && ColumnTypes.IsNumeric(outMeta.SortKind))
                                 {
                                     var normalized = ColumnTypes.BooleanNumber(span);
                                     builder.AppendUtf8(normalized, cut);
-                                    var derivedSize = outLength.Derive(normalized, WireKind.Text);
-                                    builder.Measure(derivedSize.Chars, derivedSize.Bytes, keep: cut, exact: !cut && derivedSize.Exact);
+                                    MeasureCopied(builder, src.Lengths[srcCol], outLength, lengths, r, srcCol, normalized, srcWire, cut);
                                 }
                                 else
                                 {
@@ -216,6 +232,7 @@ internal sealed class ResultCombiner : IResultCombiner
                         if (refused) break;
                     }
                 }
+                if (!refused) combined.Complete();
             }
             catch (RequestException error) when (error.Code == "TOO_LARGE")
             {
@@ -230,7 +247,7 @@ internal sealed class ResultCombiner : IResultCombiner
                 throw;
             }
 
-            if (refused || combined.Refusal != TruncationReason.None || combined.Truncated != TruncationReason.None)
+            if (refused || combined.IsReleased || combined.Progress().RowsStored < expectedRows || combined.Truncated != TruncationReason.None)
             {
                 store.Release([combined.ResultId]);
                 if (throwOnBudgetRefusal) throw new RequestException("TOO_LARGE", TooLarge);
@@ -238,7 +255,6 @@ internal sealed class ResultCombiner : IResultCombiner
                 return new CombineOutput(null, warnings);
             }
 
-            combined.Complete();
             return new CombineOutput(combined, warnings);
         }
         finally
@@ -314,7 +330,7 @@ internal sealed class ResultCombiner : IResultCombiner
     {
         var slots = new List<AlignedSlot>();
         var slotByKey = new Dictionary<(string Key, int Occurrence), int>();
-        var droppedColumns = 0;
+        var droppedKeys = new HashSet<(string Key, int Occurrence)>();
 
         for (var s = 0; s < sources.Count; s++)
         {
@@ -332,7 +348,7 @@ internal sealed class ResultCombiner : IResultCombiner
                 {
                     if (slots.Count + 1 >= PageBuilder.MaxColumns)
                     {
-                        droppedColumns++;
+                        droppedKeys.Add(alignKey);
                         continue;
                     }
                     slotIndex = slots.Count;
@@ -362,8 +378,8 @@ internal sealed class ResultCombiner : IResultCombiner
             if (missingInSome) missingColumns++;
 
             var (column, wire, length, widened, zonedToText, binaryToText) = WidenSlot(slot, missingInSome);
-            if (widened) widenedColumns++;
             if (zonedToText) zonedToTextColumns++;
+            else if (widened) widenedColumns++;
             if (binaryToText) hasBinaryToText = true;
 
             columns.Add(column);
@@ -377,8 +393,8 @@ internal sealed class ResultCombiner : IResultCombiner
             warnings.Add($"Schema drift: {zonedToTextColumns} temporal column(s) mixed zoned and unzoned values and were widened to text.");
         if (widenedColumns > 0)
             warnings.Add($"Schema drift: {widenedColumns} column(s) had differing types across servers and were widened.");
-        if (droppedColumns > 0)
-            warnings.Add($"Combined result reached the {PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture)}-column limit; {droppedColumns} extra column(s) were omitted.");
+        if (droppedKeys.Count > 0)
+            warnings.Add($"Combined result reached the {PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture)}-column limit; {droppedKeys.Count} extra column(s) were omitted.");
 
         return new CombinePlan(slots, columns, wires, lengths, hasBinaryToText);
     }
@@ -411,11 +427,17 @@ internal sealed class ResultCombiner : IResultCombiner
         }
 
         var binaryToText = anyBinary && anyTextWire;
-        if (binaryToText) kind = ColumnTypes.Text;
-        else if (kind == ColumnTypes.Other && anyGuid && anyNonGuidOther) kind = ColumnTypes.Text;
-
         var outWire = anyBinary && !anyTextWire ? WireKind.Binary : WireKind.Text;
-        var widened = distinctKinds.Count > 1 || binaryToText || (kind == ColumnTypes.Text && anyGuid && anyNonGuidOther);
+        var sameBaseType = members.All(m => string.Equals(ColumnTypes.BaseName(m.Column.DataType), ColumnTypes.BaseName(first.Column.DataType), StringComparison.OrdinalIgnoreCase));
+        var mixedXmlJson = kind == ColumnTypes.Json && members.Any(m => m.Column.Role == "xml") && members.Any(m => m.Column.Role != "xml");
+        var heterogeneousOther = kind == ColumnTypes.Other && (!sameBaseType || (anyGuid && anyNonGuidOther));
+
+        if (binaryToText) kind = ColumnTypes.Text;
+        else if (mixedXmlJson) kind = ColumnTypes.Text;
+        else if (heterogeneousOther) kind = outWire == WireKind.Binary ? ColumnTypes.Binary : ColumnTypes.Text;
+
+        var widened = distinctKinds.Count > 1 || binaryToText || mixedXmlJson || heterogeneousOther;
+        if (outWire == WireKind.Binary && widened) kind = ColumnTypes.Binary;
         var zonedToText = kind == ColumnTypes.Text && anyTimestamp && anyUnzonedTemporal;
 
         var nullable = missingInSome || members.Any(m => m.Column.Nullable);
@@ -431,7 +453,7 @@ internal sealed class ResultCombiner : IResultCombiner
         }
 
         int? maxLength = null;
-        if (!widened && members.All(m => m.Column.MaxLength is > 0))
+        if (sameDataType && members.All(m => m.Column.MaxLength is > 0))
             maxLength = members.Max(m => m.Column.MaxLength!.Value);
 
         int? precision = null;
@@ -446,6 +468,7 @@ internal sealed class ResultCombiner : IResultCombiner
             var maxPrecision = 0;
             var anyBigNumeric = false;
             var anyNumeric = false;
+            var anyWideDecimal = false;
             foreach (var (col, _, _) in members)
             {
                 var srcScale = ResultPivoter.Scale(col);
@@ -454,36 +477,71 @@ internal sealed class ResultCombiner : IResultCombiner
                 maxIntPrecision = Math.Max(maxIntPrecision, srcIntPrecision);
                 if (col.Precision is { } p) maxPrecision = Math.Max(maxPrecision, p);
                 if (col.BigQueryDecimal == BigQueryDecimalKind.BigNumeric) anyBigNumeric = true;
+                else if (col.BigQueryDecimal == BigQueryDecimalKind.WideDecimal) anyWideDecimal = true;
                 else if (col.BigQueryDecimal == BigQueryDecimalKind.Numeric) anyNumeric = true;
             }
 
-            if (anyBigNumeric || (anyNumeric && (maxScale > 9 || maxIntPrecision > 29)))
+            if (anyBigNumeric)
                 bigQueryDecimal = BigQueryDecimalKind.BigNumeric;
+            else if (anyWideDecimal || (anyNumeric && (maxScale > 9 || maxIntPrecision > 29)) || maxIntPrecision + maxScale > 38)
+                bigQueryDecimal = BigQueryDecimalKind.WideDecimal;
             else if (anyNumeric)
                 bigQueryDecimal = BigQueryDecimalKind.Numeric;
 
-            scale = maxScale;
+            var identicalDecimal = sameDataType && members.All(m => m.Column.Precision == first.Column.Precision && m.Column.Scale == first.Column.Scale);
             if (bigQueryDecimal == BigQueryDecimalKind.BigNumeric)
             {
-                precision = Math.Clamp(Math.Max(maxIntPrecision + maxScale, Math.Max(maxPrecision, 77)), 1, 77);
-                dataType = "BIGNUMERIC";
+                if (identicalDecimal)
+                {
+                    precision = first.Column.Precision;
+                    scale = first.Column.Scale;
+                    dataType = first.Column.DataType;
+                }
+                else
+                {
+                    precision = Math.Clamp(Math.Max(maxIntPrecision + maxScale, Math.Max(maxPrecision, 77)), 1, 77);
+                    scale = 38;
+                    dataType = "BIGNUMERIC";
+                }
+            }
+            else if (bigQueryDecimal == BigQueryDecimalKind.WideDecimal)
+            {
+                precision = Math.Clamp(Math.Max(maxIntPrecision + maxScale, maxPrecision), 1, 77);
+                scale = maxScale;
+                dataType = identicalDecimal
+                    ? first.Column.DataType
+                    : $"decimal({precision.Value.ToString(CultureInfo.InvariantCulture)},{maxScale.ToString(CultureInfo.InvariantCulture)})";
             }
             else if (bigQueryDecimal == BigQueryDecimalKind.Numeric)
             {
-                precision = Math.Clamp(Math.Max(maxIntPrecision + maxScale, Math.Max(maxPrecision, 38)), 1, 38);
-                dataType = "NUMERIC";
+                if (identicalDecimal)
+                {
+                    precision = first.Column.Precision;
+                    scale = first.Column.Scale;
+                    dataType = first.Column.DataType;
+                }
+                else
+                {
+                    // BigQuery NUMERIC holds at most 29 integer digits regardless of declared scale (so precision is 29 + scale).
+                    precision = Math.Clamp(29 + maxScale, 1, 38);
+                    scale = maxScale;
+                    dataType = "NUMERIC";
+                }
             }
             else
             {
                 precision = Math.Clamp(Math.Max(maxIntPrecision + maxScale, maxPrecision), 1, 38);
-                dataType = sameDataType && members.All(m => ResultPivoter.Scale(m.Column) == maxScale && m.Column.Precision == first.Column.Precision)
+                scale = maxScale;
+                dataType = identicalDecimal && members.All(m => ResultPivoter.Scale(m.Column) == maxScale)
                     ? first.Column.DataType
                     : $"decimal({precision.Value.ToString(CultureInfo.InvariantCulture)},{maxScale.ToString(CultureInfo.InvariantCulture)})";
             }
         }
         else if (kind == ColumnTypes.Float)
         {
-            precision = 53;
+            precision = sameDataType
+                ? (members.All(m => m.Column.Precision == first.Column.Precision) ? first.Column.Precision : null)
+                : 53;
             dataType = sameDataType ? first.Column.DataType : "float";
         }
         else if (sameDataType)
@@ -491,6 +549,10 @@ internal sealed class ResultCombiner : IResultCombiner
             dataType = first.Column.DataType;
             precision = members.All(m => m.Column.Precision == first.Column.Precision) ? first.Column.Precision : null;
             scale = members.All(m => m.Column.Scale == first.Column.Scale) ? first.Column.Scale : null;
+        }
+        else if (outWire == WireKind.Binary)
+        {
+            dataType = "varbinary(max)";
         }
         else
         {

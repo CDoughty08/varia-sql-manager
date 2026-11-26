@@ -285,7 +285,7 @@ internal static class ColumnProfiler
             }
         }
 
-        public bool NeedsBins => basis != Basis.None && values > 0;
+        public bool NeedsBins => basis != Basis.None && values > 0 && Range() is var (from, to) && double.IsFinite(from) && double.IsFinite(to);
 
         public void Add(PageView view, PageLengths lengths, int row)
         {
@@ -307,7 +307,7 @@ internal static class ColumnProfiler
                 charStats?.Add(size.Chars, size.Exact);
                 byteStats.Add(size.Bytes, size.Exact);
             }
-            if (basis is Basis.Value or Basis.Time && (hasExact ? exact : Measure(cell)) is { } measure)
+            if (basis is Basis.Value or Basis.Time && (hasExact ? (double.IsFinite(exact) ? exact : (double?)null) : Measure(cell)) is { } measure)
             {
                 if (measure < low) low = measure;
                 if (measure > high) high = measure;
@@ -360,11 +360,17 @@ internal static class ColumnProfiler
             {
                 Basis.Chars => Size(lengths, row, cell, view.IsTruncated(column, row)).Chars,
                 Basis.Bytes => Size(lengths, row, cell, view.IsTruncated(column, row)).Bytes,
-                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? exact : Measure(cell)
+                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? (double.IsFinite(exact) ? exact : (double?)null) : Measure(cell)
             };
-            if (measure is not { } value) return -1;
+            if (measure is not { } value || !double.IsFinite(value)) return -1;
             var (from, to) = Range();
-            return to <= from ? 0 : (int)Math.Min(Bins - 1, Math.Max(0, Math.Floor((value - from) / (to - from) * Bins)));
+            if (!double.IsFinite(from) || !double.IsFinite(to)) return -1;
+            if (to <= from) return 0;
+            var span = to - from;
+            var ratio = double.IsInfinity(span)
+                ? (value * 0.5 - from * 0.5) / (to * 0.5 - from * 0.5)
+                : (value - from) / span;
+            return double.IsFinite(ratio) ? (int)Math.Clamp(Math.Floor(ratio * Bins), 0, Bins - 1) : -1;
         }
 
         private (double From, double To) Range() => basis switch
@@ -424,7 +430,9 @@ internal static class ColumnProfiler
             {
                 case ViewSorter.Kind.Exact: return Canonical(meta.SortKind == ColumnTypes.Boolean ? ColumnTypes.BooleanNumber(cell) : cell);
                 case ViewSorter.Kind.Approximate:
-                    return Ordered(double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : double.NaN);
+                    return double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                        ? Ordered(parsed)
+                        : Tagged(1, cell);
                 case ViewSorter.Kind.Ticks:
                 {
                     if (ViewSorter.UtcTicks(cell) is { } instant) return Eight((ulong)instant ^ 0x8000_0000_0000_0000UL);
@@ -471,12 +479,13 @@ internal static class ColumnProfiler
         private int Compare(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
             kind == ViewSorter.Kind.Exact ? ViewSorter.CompareNumericText(a, b) : Math.Sign(a.SequenceCompareTo(b));
 
-        /// <summary>A float's key: its bits, the two zeros as one, in an order bytes compare in.</summary>
+        /// <summary>A float's key: tag 0 + its bits, the two zeros as one and every NaN as 0, in an order bytes compare in.</summary>
         private ReadOnlySpan<byte> Ordered(double number)
         {
+            if (double.IsNaN(number)) return TaggedEight(0, 0UL);
             if (number == 0) number = 0;
             var bits = BitConverter.DoubleToInt64Bits(number);
-            return Eight(bits >= 0 ? (ulong)bits ^ 0x8000_0000_0000_0000UL : ~(ulong)bits);
+            return TaggedEight(0, bits >= 0 ? (ulong)bits ^ 0x8000_0000_0000_0000UL : ~(ulong)bits);
         }
 
         private ReadOnlySpan<byte> Eight(ulong value)

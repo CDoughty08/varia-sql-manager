@@ -19,7 +19,10 @@ internal sealed record TransactionProbeResult(bool Valid, short XactState = 0, i
 /// <summary>SQL Server multi-target runner: pre-flight validation (duplicate physical server detection, single-parse-thread
 /// ScriptDom Msg 226/574 + COMMIT/ROLLBACK checks), ephemeral unpooled Phase 1 execution with post-batch transaction probes,
 /// and Phase 2 Commit/Rollback handle.</summary>
-internal sealed class SqlServerMultiRunner(SqlService service, Func<string, string?>? serverOf = null) : IMultiTargetRunner
+internal sealed class SqlServerMultiRunner(
+    SqlService service,
+    Func<string, string?>? serverOf = null,
+    IReadOnlySqlValidator? sqlValidator = null) : IMultiTargetRunner
 {
     /// <summary>Maximum active ephemeral SQL Server connections across all concurrent multi-server runs.</summary>
     internal const int MaxEphemeralConnections = 64;
@@ -29,20 +32,19 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
     internal const string BeginTransactionLegacySql = "SET XACT_ABORT ON; BEGIN TRANSACTION; SELECT @@TRANCOUNT;";
     internal const string ProbeTransactionWithIdSql = "SELECT XACT_STATE(), @@TRANCOUNT, CURRENT_TRANSACTION_ID();";
     internal const string ProbeTransactionLegacySql = "SELECT XACT_STATE(), @@TRANCOUNT;";
+    internal const string ProbeFailedBatchWithIdSql = "SELECT XACT_STATE(), @@TRANCOUNT, CURRENT_TRANSACTION_ID(), CASE WHEN (@@OPTIONS & 16384) <> 0 THEN 1 ELSE 0 END;";
+    internal const string ProbeFailedBatchLegacySql = "SELECT XACT_STATE(), @@TRANCOUNT, CASE WHEN (@@OPTIONS & 16384) <> 0 THEN 1 ELSE 0 END;";
+    internal const string StatisticsOffSql = "SET STATISTICS XML OFF; SET STATISTICS PROFILE OFF;";
     internal const string RollbackTransactionSql = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;";
 
     private static readonly Regex InvalidScriptLine = new(@"^Line (\d+):", RegexOptions.CultureInvariant);
 
     private readonly Func<string, string?> resolveServer = serverOf ?? service.ServerOf;
-    private readonly object ephemeralGate = new();
-    private int activeEphemeralConnections;
+    private readonly IReadOnlySqlValidator readOnlyValidator = sqlValidator ?? new ReadOnlySqlValidator();
 
     public string Provider => Providers.SqlServer;
 
-    internal int ActiveEphemeralConnections
-    {
-        get { lock (ephemeralGate) return activeEphemeralConnections; }
-    }
+    internal int ActiveEphemeralConnections => service.ActiveEphemeralSqlConnections;
 
     /// <summary>CURRENT_TRANSACTION_ID() exists on SQL Server 2016+ (Major >= 13) and Azure SQL Database / Managed Instance
     /// (EngineEdition 5 or 8, which report ProductMajorVersion == 12).</summary>
@@ -99,6 +101,19 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
 
         if (first.Mode != "transaction")
         {
+            if (first.Mode == "crossEngineReadOnly")
+            {
+                if (first.ReadOnlyValidated)
+                    return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, Passed: true))];
+                var roViolations = await readOnlyValidator.ValidateTSqlAsync(first.Sql, baseLine, token).ConfigureAwait(false);
+                if (roViolations.Count > 0)
+                {
+                    var v = roViolations[0];
+                    var roErr = MultiQueryCoordinator.ClampError(new MultiTargetError("READ_ONLY_VIOLATION", v.Message, Line: v.Line));
+                    return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, Passed: false, Error: roErr))];
+                }
+                return [.. targets.Select(t => new MultiTargetPreflightOutcome(t.Target.TargetKey, Passed: true))];
+            }
             try
             {
                 _ = SqlScript.Parse(first.Sql, baseLine);
@@ -259,28 +274,9 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             : fallback;
     }
 
-    private void AcquireEphemeralConnectionSlot()
-    {
-        lock (ephemeralGate)
-        {
-            if (activeEphemeralConnections >= MaxEphemeralConnections)
-                throw new RequestException("SESSION_LIMIT",
-                    $"This multi-server query was not executed: {MaxEphemeralConnections.ToString("N0", CultureInfo.InvariantCulture)} ephemeral SQL Server connections are already active.");
-            if (service.OpenSessionCount + activeEphemeralConnections >= service.SessionLimit)
-                throw new RequestException("SESSION_LIMIT",
-                    "This query was not executed: " + service.SessionLimit.ToString("N0", CultureInfo.InvariantCulture)
-                    + " SQL sessions are already open, the most Varia SQL Manager keeps open.");
-            activeEphemeralConnections++;
-        }
-    }
+    private void AcquireEphemeralConnectionSlot() => service.AcquireEphemeralSqlSlot(MaxEphemeralConnections);
 
-    private void ReleaseEphemeralConnectionSlot()
-    {
-        lock (ephemeralGate)
-        {
-            if (activeEphemeralConnections > 0) activeEphemeralConnections--;
-        }
-    }
+    private void ReleaseEphemeralConnectionSlot() => service.ReleaseEphemeralSqlSlot();
 
     public async Task<MultiTargetPhase1Outcome> ExecutePhase1Async(MultiTargetContext target, CancellationToken token)
     {
@@ -290,6 +286,37 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         var targetKey = target.Target.TargetKey;
         var dialect = target.Provider;
 
+        // Defense-in-depth read-only enforcement when ExecutePhase1Async is invoked directly without coordinator pre-flight.
+        if (target.Mode == "crossEngineReadOnly" && !target.ReadOnlyValidated)
+        {
+            IReadOnlyList<ReadOnlySqlViolation> violations;
+            try
+            {
+                violations = await readOnlyValidator.ValidateTSqlAsync(target.Sql, startLine, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                watch.Stop();
+                var (cancelStatus, cancelErr) = ClassifyCancellation(target, isTransaction, 0, 0);
+                if (cancelErr is not null)
+                    target.Messages.Add(cancelErr.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                EmitTerminalState(target, cancelStatus, 0, 0, -1, 0, watch.ElapsedMilliseconds, cancelErr);
+                return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                    BuildOutcome(target, cancelStatus, 0, 0, -1, watch.ElapsedMilliseconds, [], null, null, cancelErr),
+                    [], NeedsCommit: false, 0), Phase2: null);
+            }
+            if (violations.Count > 0)
+            {
+                var firstViolation = violations[0];
+                var roErr = MultiQueryCoordinator.ClampError(new MultiTargetError("READ_ONLY_VIOLATION", firstViolation.Message, Line: firstViolation.Line));
+                target.Messages.Add(roErr.Message, MessageKind.Error, roErr.Line, targetKey, dialect);
+                watch.Stop();
+                EmitTerminalState(target, "failed", 0, 0, -1, 0, watch.ElapsedMilliseconds, roErr);
+                var roOutcome = BuildOutcome(target, "failed", 0, 0, -1, watch.ElapsedMilliseconds, [], null, null, roErr);
+                return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(roOutcome, [], NeedsCommit: false, 0), Phase2: null);
+            }
+        }
+
         var unbatched = new List<ResultMarker>();
         List<SqlBatch> batches;
         try
@@ -298,6 +325,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         }
         catch (RequestException error)
         {
+            watch.Stop();
             var errLine = ExtractLine(error.Message, startLine);
             target.Messages.Add(error.Message, MessageKind.Error, errLine, targetKey, dialect);
             var err = new MultiTargetError(error.Code, error.Message, Line: errLine);
@@ -323,7 +351,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         var statementSlot = 0;
         var discardedLocal = 0;
         long storedRows = 0;
-        long rowsAffected = 0;
+        long rowsAffected = -1;
         var completed = 0;
         var batchNumber = 0;
         var iteration = 0;
@@ -385,8 +413,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             }
             var lines = terminating.Take(20).Concat(snapshot);
             if (suppressed > 0) lines = lines.Append("… and " + suppressed + " more errors.");
-            var text = string.Join(Environment.NewLine, lines);
-            return text.Length > 16384 ? text[..16384] + "…" : text;
+            return MultiQueryCoordinator.ClampText(string.Join(Environment.NewLine, lines), 16385);
         }
 
         void Report(SqlException error)
@@ -411,6 +438,10 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             && conn.State == ConnectionState.Open
             && error.Errors.Cast<SqlError>().All(item => item.Class < 20);
 
+        var sawTriggerTranEnd = 0;
+        var descriptorCapNoted = false;
+        var raisedBefore = 0;
+
         SqlInfoMessageEventHandler onInfo = (_, e) =>
         {
             foreach (SqlError error in e.Errors)
@@ -421,6 +452,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                         target.Messages.Add(error.Message, SqlService.InformationalKind(error.Number), targetKey: targetKey, dialect: dialect);
                     continue;
                 }
+                if (error.Number == 3609) Volatile.Write(ref sawTriggerTranEnd, 1);
                 if (currentSet is not null) currentSet.Incomplete = true;
                 lock (errors)
                 {
@@ -432,7 +464,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         };
 
         target.Events.TargetState(new MultiQueryTargetStateEvent(
-            targetKey, "running", 0, totalBatches, 0, 0, 0));
+            targetKey, "running", 0, totalBatches, -1, 0, 0));
 
         SqlConnection? connection = null;
         var slotAcquired = false;
@@ -440,6 +472,8 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         var supportsTxId = false;
         long? startTxId = null;
 
+        try
+        {
         try
         {
             token.ThrowIfCancellationRequested();
@@ -508,6 +542,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                 for (var b = 0; b < batches.Count && failure is null; b++)
                 {
                     batchNumber = b + 1;
+                    iteration = 0;
                     var batch = batches[b];
                     if (batch.Markers is { Count: > 0 } && await ResultNamePlan.BuildAsync(batch, startLine, token).ConfigureAwait(false) is { } namePlan)
                     {
@@ -520,7 +555,8 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                     for (iteration = 1; iteration <= batch.RepeatCount && failure is null; iteration++)
                     {
                         token.ThrowIfCancellationRequested();
-                        var raisedBefore = Raised();
+                        Volatile.Write(ref sawTriggerTranEnd, 0);
+                        raisedBefore = Raised();
                         var names = namePlans[b] is { Slots.Count: > 0 } placed ? new ResultNameBinder(placed) : null;
                         pendingNames = names;
                         pendingRepetition = batch.RepeatCount > 1 ? iteration : 0;
@@ -536,7 +572,6 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                         {
                             if (e.RecordCount >= 0)
                             {
-                                rowsAffected += e.RecordCount;
                                 target.Messages.Add(
                                     e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)",
                                     MessageKind.Info, targetKey: targetKey, dialect: dialect);
@@ -568,6 +603,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                                             var mayBePlan = ColumnPlan.MayBeExecutionPlan(reader);
                                             if (target.DiscardResults && !mayBePlan)
                                             {
+                                                names?.Take(reader, isPlan: false, Raised() != raisedBefore);
                                                 target.Quota.RecordDiscarded(1);
                                                 discardedLocal++;
                                                 statementSlot++;
@@ -581,6 +617,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                                                 var built = ColumnPlan.From(reader, prefix);
                                                 if (target.DiscardResults && !built.IsPlan)
                                                 {
+                                                    names?.Take(reader, isPlan: false, Raised() != raisedBefore);
                                                     target.Quota.RecordDiscarded(1);
                                                     discardedLocal++;
                                                     statementSlot++;
@@ -592,13 +629,20 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                                                 {
                                                     var name = names?.Take(reader, built.IsPlan, Raised() != raisedBefore);
                                                     var descriptorCharge = built.DescriptorBytes + (name is null ? 0 : Encoding.UTF8.GetByteCount(name) + 8);
-                                                    int? slot = built.IsPlan ? null : statementSlot++;
+                                                    int? slot = built.IsPlan ? null : (statementSlot++ is var s && s is >= 0 and < 1000 ? s : null);
 
-                                                    if (!target.Quota.TryAllocate(descriptorCharge, out var globalIndex, out _))
+                                                    if (!target.Quota.TryAllocate(descriptorCharge, out var globalIndex, out var oversize))
                                                     {
                                                         target.Quota.RecordDiscarded(1);
                                                         discardedLocal++;
                                                         names?.Stop("the run kept no more result sets");
+                                                        names?.Refused();
+                                                        if (oversize && !descriptorCapNoted)
+                                                        {
+                                                            descriptorCapNoted = true;
+                                                            target.Messages.Add("Additional result sets were discarded because the response descriptor size cap was reached.",
+                                                                MessageKind.Info, targetKey: targetKey, dialect: dialect);
+                                                        }
                                                     }
                                                     else
                                                     {
@@ -731,6 +775,8 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                                     }
                                 }
                             }
+                            if (reader.RecordsAffected >= 0)
+                                rowsAffected = Math.Max(0, rowsAffected) + reader.RecordsAffected;
                             cutShort = token.IsCancellationRequested;
                         }
                         catch (Exception error)
@@ -752,9 +798,10 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                             connection.InfoMessage -= statementStop.OnMessage;
                         }
 
-                        if (cutShort) throw new OperationCanceledException(token);
-
                         var batchFailed = Raised() != raisedBefore;
+                        var peerAbortOnly = isTransaction && target.IsUserCancelled?.Invoke() == false && target.IsTimedOut?.Invoke() != true;
+                        if (cutShort && (!batchFailed || !peerAbortOnly)) throw new OperationCanceledException(token);
+
                         if (names is not null)
                         {
                             foreach (var note in names.Unapplied(batchFailed, null, batch.RepeatCount > 1 ? iteration : 0))
@@ -766,6 +813,22 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                         {
                             if (batchFailed)
                             {
+                                // Even when a batch raised an error (e.g. EXEC('COMMIT TRAN'); SELECT 1/0;, SET XACT_ABORT OFF,
+                                // SET NOEXEC ON, or trigger Msg 3609), fail-closed probe the open connection (or check EXEC/trigger
+                                // risk if disconnected) before assuming rollback. Pass isCancellation: false because this batch
+                                // already raised its own SQL error (which rolls back under XACT_ABORT ON even if a peer concurrently cancelled phase1Cts).
+                                if (await AssessTransactionUncertaintyAsync(
+                                    connection, onInfo, supportsTxId, startTxId, batch,
+                                    Volatile.Read(ref sawTriggerTranEnd) != 0,
+                                    isCancellation: false).ConfigureAwait(false))
+                                {
+                                    commitInDoubt = true;
+                                    status = "commitInDoubt";
+                                    const string doubtMsg = "The script closed or replaced the coordinated transaction before raising an error; commit outcome is in doubt. Check the data before retrying.";
+                                    target.Messages.Add(doubtMsg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                                    failure = new MultiTargetError("SQL_ERROR", doubtMsg, batchNumber, iteration);
+                                    break;
+                                }
                                 status = "failed";
                                 failure = new MultiTargetError("SQL_ERROR", ErrorText([]), batchNumber, iteration);
                                 break;
@@ -791,15 +854,23 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                                 connection.FireInfoMessageEventOnUserErrors = true;
                             }
 
-                            if (Raised() != raisedBefore)
-                            {
-                                status = "failed";
-                                failure = new MultiTargetError("SQL_ERROR", ErrorText([]), batchNumber, iteration);
-                                break;
-                            }
-
                             if (!probe.Valid)
                             {
+                                // We are aborting Phase 1 anyway; reset SET NOEXEC/PARSEONLY/FMTONLY/SHOWPLAN/STATISTICS and re-probe
+                                // BEFORE rolling back so `EXEC('COMMIT TRAN'); SET NOEXEC ON;` cannot hide a commit behind a rolled-back status.
+                                var (reprobe, reprobeLost) = await ResetAndReprobeAsync(connection, onInfo, supportsTxId).ConfigureAwait(false);
+                                var lostAndSafe = !reprobe.Valid && reprobeLost
+                                    && Volatile.Read(ref sawTriggerTranEnd) == 0
+                                    && !await BatchHasExecuteStatementAsync(batch, CancellationToken.None).ConfigureAwait(false);
+                                if (!lostAndSafe && (!reprobe.Valid || reprobe.TranCount == 0 || (supportsTxId && reprobe.TransactionId != startTxId)))
+                                {
+                                    commitInDoubt = true;
+                                    status = "commitInDoubt";
+                                    const string doubtMsg = "The script enabled a non-executing SET option and the coordinated transaction could not be confirmed intact; commit outcome is in doubt. Check the data before retrying.";
+                                    target.Messages.Add(doubtMsg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                                    failure = new MultiTargetError("SQL_ERROR", doubtMsg, batchNumber, iteration);
+                                    break;
+                                }
                                 status = "failed";
                                 target.Messages.Add(probe.FailureReason!, MessageKind.Error, targetKey: targetKey, dialect: dialect);
                                 failure = new MultiTargetError("SQL_ERROR", probe.FailureReason!, batchNumber, iteration);
@@ -840,6 +911,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                         target.Events.TargetState(new MultiQueryTargetStateEvent(
                             targetKey, "running", completed, totalBatches, rowsAffected, sets.Count, watch.ElapsedMilliseconds));
                     }
+                    iteration = 0;
                 }
 
                 if (!isTransaction && failure is null && firstError is { } firstErr)
@@ -855,12 +927,30 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                     try
                     {
                         using var checkCts = new CancellationTokenSource(TimeSpan.FromSeconds(RollbackTimeoutSeconds));
-                        await using var checkCmd = connection.CreateCommand();
-                        checkCmd.CommandText = SqlService.TransactionCountSql;
-                        checkCmd.CommandTimeout = 0;
-                        using var checkStop = checkCts.Token.Register(SqlService.Attention, checkCmd);
-                        await using var checkReader = await checkCmd.ExecuteReaderAsync(checkCts.Token).ConfigureAwait(false);
-                        var openTranCount = await ReadScalarInt32Async(checkReader, checkCts.Token).ConfigureAwait(false);
+                        foreach (var resetSql in SqlService.ExecuteAgainSql)
+                        {
+                            await using var resetCmd = connection.CreateCommand();
+                            resetCmd.CommandText = resetSql;
+                            resetCmd.CommandTimeout = 0;
+                            using var resetStop = checkCts.Token.Register(SqlService.Attention, resetCmd);
+                            await resetCmd.ExecuteNonQueryAsync(checkCts.Token).ConfigureAwait(false);
+                        }
+                        await using (var statsCmd = connection.CreateCommand())
+                        {
+                            statsCmd.CommandText = StatisticsOffSql;
+                            statsCmd.CommandTimeout = 0;
+                            using var statsStop = checkCts.Token.Register(SqlService.Attention, statsCmd);
+                            await statsCmd.ExecuteNonQueryAsync(checkCts.Token).ConfigureAwait(false);
+                        }
+                        int? openTranCount;
+                        await using (var checkCmd = connection.CreateCommand())
+                        {
+                            checkCmd.CommandText = SqlService.TransactionCountSql;
+                            checkCmd.CommandTimeout = 0;
+                            using var checkStop = checkCts.Token.Register(SqlService.Attention, checkCmd);
+                            await using var checkReader = await checkCmd.ExecuteReaderAsync(checkCts.Token).ConfigureAwait(false);
+                            openTranCount = await ReadScalarInt32Async(checkReader, checkCts.Token).ConfigureAwait(false);
+                        }
                         if (openTranCount is > 0)
                         {
                             await using var rbCmd = connection.CreateCommand();
@@ -873,7 +963,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                                 MessageKind.Info, targetKey: targetKey, dialect: dialect);
                         }
                     }
-                    catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException)
+                    catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or ObjectDisposedException or IOException)
                     {
                         // Disposing the unpooled connection below ends the server session and rolls back any open transaction.
                     }
@@ -890,42 +980,158 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         catch (SqlException error)
         {
             if (currentSet is not null) currentSet.Incomplete = true;
-            status = token.IsCancellationRequested ? "cancelled" : error.Number == -2 && batchNumber > 0 ? "timedOut" : "failed";
-            foreach (SqlError item in error.Errors)
+            if (error.Errors.Cast<SqlError>().Any(item => item.Number == 3609))
+                Volatile.Write(ref sawTriggerTranEnd, 1);
+            if (token.IsCancellationRequested)
             {
-                if (item.Class <= 10)
+                var cancelledBatch = batchNumber > 0 && batchNumber <= batches.Count ? batches[batchNumber - 1] : null;
+                var batchErrored = Raised() != raisedBefore
+                    || error.Errors.Cast<SqlError>().Any(item => item.Class > 10 && item.Number is not (0 or -2));
+                var peerAbortOnly = isTransaction && target.IsUserCancelled?.Invoke() == false && target.IsTimedOut?.Invoke() != true;
+                if (isTransaction && batchNumber > 0
+                    && await AssessTransactionUncertaintyAsync(
+                        connection, onInfo, supportsTxId, startTxId, cancelledBatch,
+                        Volatile.Read(ref sawTriggerTranEnd) != 0,
+                        isCancellation: !batchErrored,
+                        sessionLost: IsSessionLostError(error, connection)).ConfigureAwait(false))
                 {
-                    if (!SqlService.IsContextChange(item))
-                        target.Messages.Add(item.Message, SqlService.InformationalKind(item.Number), targetKey: targetKey, dialect: dialect);
+                    commitInDoubt = true;
+                    status = "commitInDoubt";
+                    const string doubtMsg = "The coordinated transaction was closed or replaced before cancellation; commit outcome is in doubt. Check the data before retrying.";
+                    target.Messages.Add(doubtMsg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                    failure = new MultiTargetError("SQL_ERROR", doubtMsg, batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
                 }
-                else if (status == "failed" && !Delivered(item))
+                else if (batchErrored && peerAbortOnly)
                 {
-                    target.Messages.Add(Describe(item), MessageKind.Error, SourceLine(item), targetKey, dialect);
+                    status = "failed";
+                    foreach (SqlError item in error.Errors)
+                    {
+                        if (item.Class <= 10)
+                        {
+                            if (!SqlService.IsContextChange(item))
+                                target.Messages.Add(item.Message, SqlService.InformationalKind(item.Number), targetKey: targetKey, dialect: dialect);
+                        }
+                        else if (item.Number is not (0 or -2) && !Delivered(item))
+                        {
+                            target.Messages.Add(Describe(item), MessageKind.Error, SourceLine(item), targetKey, dialect);
+                        }
+                    }
+                    var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10 && item.Number is not (0 or -2)).Select(Describe).ToList();
+                    if (details.Count == 0 && Raised() == raisedBefore)
+                    {
+                        details.Add(error.Message);
+                        target.Messages.Add(error.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                    }
+                    failure = new MultiTargetError("SQL_ERROR", ErrorText(details), batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+                }
+                else
+                {
+                    (status, failure) = ClassifyCancellation(target, isTransaction, batchNumber, iteration);
+                    if (failure is not null)
+                        target.Messages.Add(failure.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
                 }
             }
-            var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
-            if (details.Count == 0)
+            else
             {
-                details.Add(error.Message);
-                if (status == "failed") target.Messages.Add(error.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                status = error.Number == -2 && batchNumber > 0 ? "timedOut" : "failed";
+                foreach (SqlError item in error.Errors)
+                {
+                    if (item.Class <= 10)
+                    {
+                        if (!SqlService.IsContextChange(item))
+                            target.Messages.Add(item.Message, SqlService.InformationalKind(item.Number), targetKey: targetKey, dialect: dialect);
+                    }
+                    else if (status == "failed" && !Delivered(item))
+                    {
+                        target.Messages.Add(Describe(item), MessageKind.Error, SourceLine(item), targetKey, dialect);
+                    }
+                }
+                var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
+                if (details.Count == 0)
+                {
+                    details.Add(error.Message);
+                    if (status == "failed") target.Messages.Add(error.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                }
+                var code = status == "failed" ? "SQL_ERROR" : "TIMEOUT";
+                var text = status == "failed" ? ErrorText(details) : "The query exceeded its execution timeout.";
+                if (status == "timedOut")
+                    target.Messages.Add(text, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                failure = new MultiTargetError(code, text, batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+
+                // In Transaction mode, severity 17-25 errors and command timeouts throw straight here (bypassing post-batch probe):
+                // fail-closed probe the open connection (or check EXEC/trigger risk if disconnected) once user batches have begun.
+                if (isTransaction && batchNumber > 0)
+                {
+                    var failedBatch = batchNumber <= batches.Count ? batches[batchNumber - 1] : null;
+                    if (await AssessTransactionUncertaintyAsync(
+                        connection, onInfo, supportsTxId, startTxId, failedBatch,
+                        Volatile.Read(ref sawTriggerTranEnd) != 0,
+                        isCancellation: status == "timedOut",
+                        sessionLost: IsSessionLostError(error, connection)).ConfigureAwait(false))
+                    {
+                        commitInDoubt = true;
+                        status = "commitInDoubt";
+                        const string doubtMsg = "The script closed or replaced the coordinated transaction before raising an error; commit outcome is in doubt. Check the data before retrying.";
+                        target.Messages.Add(doubtMsg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                        failure = new MultiTargetError("SQL_ERROR", doubtMsg, batchNumber, iteration > 0 ? iteration : null);
+                    }
+                }
             }
-            var code = status == "failed" ? "SQL_ERROR" : status == "cancelled" ? "CANCELLED" : "TIMEOUT";
-            var text = status == "failed" ? ErrorText(details) : status == "cancelled" ? "The query was cancelled." : "The query exceeded its execution timeout.";
-            failure = new MultiTargetError(code, text, batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
         }
         catch (OperationCanceledException)
         {
             if (currentSet is not null) currentSet.Incomplete = true;
-            status = "cancelled";
-            failure = new MultiTargetError("CANCELLED", "The query was cancelled.", batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+            var cancelledBatch = batchNumber > 0 && batchNumber <= batches.Count ? batches[batchNumber - 1] : null;
+            var batchErrored = Raised() != raisedBefore;
+            var peerAbortOnly = isTransaction && target.IsUserCancelled?.Invoke() == false && target.IsTimedOut?.Invoke() != true;
+            if (isTransaction && batchNumber > 0
+                && await AssessTransactionUncertaintyAsync(
+                    connection, onInfo, supportsTxId, startTxId, cancelledBatch,
+                    Volatile.Read(ref sawTriggerTranEnd) != 0,
+                    isCancellation: !batchErrored).ConfigureAwait(false))
+            {
+                commitInDoubt = true;
+                status = "commitInDoubt";
+                const string doubtMsg = "The coordinated transaction was closed or replaced before cancellation; commit outcome is in doubt. Check the data before retrying.";
+                target.Messages.Add(doubtMsg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                failure = new MultiTargetError("SQL_ERROR", doubtMsg, batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+            }
+            else if (batchErrored && peerAbortOnly)
+            {
+                status = "failed";
+                failure = new MultiTargetError("SQL_ERROR", ErrorText([]), batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+            }
+            else
+            {
+                (status, failure) = ClassifyCancellation(target, isTransaction, batchNumber, iteration);
+                if (failure is not null)
+                    target.Messages.Add(failure.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+            }
         }
         catch (Exception error)
         {
             if (currentSet is not null) currentSet.Incomplete = true;
-            status = "failed";
-            var msg = "Execution stopped unexpectedly: " + error.Message;
-            target.Messages.Add(msg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
-            failure = new MultiTargetError("BACKEND_ERROR", ErrorText([msg]), batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+            var failedBatch = batchNumber > 0 && batchNumber <= batches.Count ? batches[batchNumber - 1] : null;
+            if (isTransaction && batchNumber > 0
+                && await AssessTransactionUncertaintyAsync(
+                    connection, onInfo, supportsTxId, startTxId, failedBatch,
+                    Volatile.Read(ref sawTriggerTranEnd) != 0,
+                    isCancellation: false,
+                    sessionLost: IsSessionLostError(error, connection)).ConfigureAwait(false))
+            {
+                commitInDoubt = true;
+                status = "commitInDoubt";
+                const string doubtMsg = "The connection failed during a batch that may have closed the coordinated transaction; commit outcome is in doubt. Check the data before retrying.";
+                target.Messages.Add(doubtMsg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                failure = new MultiTargetError("SQL_ERROR", doubtMsg, batchNumber, iteration > 0 ? iteration : null);
+            }
+            else
+            {
+                status = "failed";
+                var msg = "Execution stopped unexpectedly: " + error.Message;
+                target.Messages.Add(msg, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+                failure = new MultiTargetError("BACKEND_ERROR", ErrorText([msg]), batchNumber > 0 ? batchNumber : null, iteration > 0 ? iteration : null);
+            }
         }
         finally
         {
@@ -971,32 +1177,256 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(outcome, sets, NeedsCommit: true, discardedLocal), handle);
         }
 
-        // Otherwise clean up connection now (including rollback of any open transaction on failed/cancelled Phase 1).
-        try
+        // If Phase 1 finished right as cancellation/peer-abort arrived before Phase 2 handoff, do NOT report "succeeded" for a rolled-back target.
+        if (isTransaction && status == "succeeded" && failure is null && !commitInDoubt && token.IsCancellationRequested)
         {
-            if (connection is not null)
-            {
-                if (isTransaction)
-                {
-                    await RollbackAndDisposeAsync(connection, onInfo, !commitInDoubt ? sets : [], target.Events).ConfigureAwait(false);
-                }
-                else
-                {
-                    connection.FireInfoMessageEventOnUserErrors = false;
-                    connection.InfoMessage -= onInfo;
-                    await connection.DisposeAsync().ConfigureAwait(false);
-                }
-            }
+            var clampedIteration = batchNumber > 0 && batchNumber <= batches.Count
+                ? Math.Min(iteration, batches[batchNumber - 1].RepeatCount)
+                : iteration;
+            (status, failure) = ClassifyCancellation(target, isTransaction: true, batchNumber, clampedIteration);
+            if (failure is not null)
+                target.Messages.Add(failure.Message, MessageKind.Error, targetKey: targetKey, dialect: dialect);
+        }
         }
         finally
         {
-            if (slotAcquired && !transferredToPhase2) ReleaseEphemeralConnectionSlot();
+            // Clean up connection and release ephemeral slot on every non-handoff exit (including unexpected exceptions).
+            if (!transferredToPhase2)
+            {
+                try
+                {
+                    if (connection is not null)
+                    {
+                        if (isTransaction)
+                        {
+                            await RollbackAndDisposeAsync(connection, onInfo, !commitInDoubt ? sets : [], target.Events).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            try
+                            {
+                                connection.FireInfoMessageEventOnUserErrors = false;
+                                connection.InfoMessage -= onInfo;
+                                await connection.DisposeAsync().ConfigureAwait(false);
+                            }
+                            catch (Exception)
+                            {
+                                // Disposal must never clobber the Phase 1 outcome or drop stored ResultSetBuffers.
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    if (slotAcquired) ReleaseEphemeralConnectionSlot();
+                }
+            }
         }
 
         watch.Stop();
         EmitTerminalState(target, status, completed, totalBatches, rowsAffected, sets.Count, watch.ElapsedMilliseconds, failure);
         var finalOutcome = BuildOutcome(target, status, completed, totalBatches, rowsAffected, watch.ElapsedMilliseconds, sets, spid, login, failure);
         return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(finalOutcome, sets, NeedsCommit: false, discardedLocal), Phase2: null);
+    }
+
+    private static (string Status, MultiTargetError? Error) ClassifyCancellation(MultiTargetContext target, bool isTransaction, int batchNumber, int iteration)
+    {
+        var b = batchNumber > 0 ? batchNumber : (int?)null;
+        var it = iteration > 0 ? iteration : (int?)null;
+        if (target.IsTimedOut?.Invoke() == true)
+            return ("timedOut", new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout.", b, it));
+        if (isTransaction && target.IsUserCancelled?.Invoke() == false)
+            return ("rolledBack", null);
+        return ("cancelled", new MultiTargetError("CANCELLED", "The query was cancelled.", b, it));
+    }
+
+    internal static bool IsSessionLostError(Exception error, SqlConnection? connection) =>
+        connection is null
+        || SqlService.IsSessionLost(error, connection.State)
+        || error is IOException or ObjectDisposedException;
+
+    private static async Task<(TransactionProbeResult Probe, bool XactAbortOn, bool SessionLost)> ProbeFailedBatchAsync(
+        SqlConnection connection,
+        SqlInfoMessageEventHandler onInfo,
+        bool supportsTxId,
+        CancellationToken token)
+    {
+        connection.FireInfoMessageEventOnUserErrors = false;
+        connection.InfoMessage -= onInfo;
+        try
+        {
+            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            probeCts.CancelAfter(TimeSpan.FromSeconds(RollbackTimeoutSeconds));
+            await using var probeCmd = connection.CreateCommand();
+            probeCmd.CommandText = supportsTxId ? ProbeFailedBatchWithIdSql : ProbeFailedBatchLegacySql;
+            probeCmd.CommandTimeout = 0;
+            using var probeStop = probeCts.Token.Register(SqlService.Attention, probeCmd);
+            await using var reader = await probeCmd.ExecuteReaderAsync(probeCts.Token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(probeCts.Token).ConfigureAwait(false))
+                return (new TransactionProbeResult(false), true, connection.State != ConnectionState.Open);
+            var expectedCols = supportsTxId ? 4 : 3;
+            if (reader.FieldCount != expectedCols || reader.GetFieldType(0) != typeof(short) || reader.GetFieldType(1) != typeof(int)
+                || (supportsTxId && reader.GetFieldType(2) != typeof(long)) || reader.GetFieldType(expectedCols - 1) != typeof(int))
+                return (new TransactionProbeResult(false), true, connection.State != ConnectionState.Open);
+            if (reader.IsDBNull(0) || reader.IsDBNull(1) || (supportsTxId && reader.IsDBNull(2)) || reader.IsDBNull(expectedCols - 1))
+                return (new TransactionProbeResult(false), true, connection.State != ConnectionState.Open);
+            var xactState = reader.GetInt16(0);
+            var tranCount = reader.GetInt32(1);
+            long? txId = supportsTxId ? reader.GetInt64(2) : null;
+            var xactAbortOn = reader.GetInt32(expectedCols - 1) != 0;
+            return (new TransactionProbeResult(true, xactState, tranCount, txId), xactAbortOn, false);
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or ObjectDisposedException or IOException)
+        {
+            return (new TransactionProbeResult(false), true, IsSessionLostError(error, connection));
+        }
+        finally
+        {
+            connection.InfoMessage += onInfo;
+            connection.FireInfoMessageEventOnUserErrors = true;
+        }
+    }
+
+    private static async Task<(TransactionProbeResult Probe, bool SessionLost)> ResetAndReprobeAsync(
+        SqlConnection connection,
+        SqlInfoMessageEventHandler onInfo,
+        bool supportsTxId)
+    {
+        if (connection.State != ConnectionState.Open) return (new TransactionProbeResult(false), true);
+        connection.FireInfoMessageEventOnUserErrors = false;
+        connection.InfoMessage -= onInfo;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(RollbackTimeoutSeconds));
+            foreach (var resetSql in SqlService.ExecuteAgainSql)
+            {
+                await using var resetCmd = connection.CreateCommand();
+                resetCmd.CommandText = resetSql;
+                resetCmd.CommandTimeout = 0;
+                using var stop = cts.Token.Register(SqlService.Attention, resetCmd);
+                await resetCmd.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
+            }
+            await using (var statsCmd = connection.CreateCommand())
+            {
+                statsCmd.CommandText = StatisticsOffSql;
+                statsCmd.CommandTimeout = 0;
+                using var statsStop = cts.Token.Register(SqlService.Attention, statsCmd);
+                await statsCmd.ExecuteNonQueryAsync(cts.Token).ConfigureAwait(false);
+            }
+            await using var probeCmd = connection.CreateCommand();
+            probeCmd.CommandText = supportsTxId ? ProbeTransactionWithIdSql : ProbeTransactionLegacySql;
+            probeCmd.CommandTimeout = 0;
+            using var probeStop = cts.Token.Register(SqlService.Attention, probeCmd);
+            await using var reader = await probeCmd.ExecuteReaderAsync(cts.Token).ConfigureAwait(false);
+            return (await ReadTransactionProbeAsync(reader, supportsTxId, cts.Token).ConfigureAwait(false), connection.State != ConnectionState.Open);
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or ObjectDisposedException or IOException)
+        {
+            return (new TransactionProbeResult(false), IsSessionLostError(error, connection));
+        }
+        finally
+        {
+            connection.InfoMessage += onInfo;
+            connection.FireInfoMessageEventOnUserErrors = true;
+        }
+    }
+
+    internal static async Task<bool> AssessTransactionUncertaintyAsync(
+        SqlConnection? connection,
+        SqlInfoMessageEventHandler onInfo,
+        bool supportsTxId,
+        long? startTxId,
+        SqlBatch? batch,
+        bool sawTriggerTranEnd,
+        bool isCancellation,
+        bool sessionLost = false)
+    {
+        if (connection is null) return false;
+        if (!sessionLost && connection.State == ConnectionState.Open)
+        {
+            return await AssessFailedOrCancelledTransactionAsync(
+                connection, onInfo, supportsTxId, startTxId, batch, sawTriggerTranEnd, isCancellation).ConfigureAwait(false);
+        }
+        return sawTriggerTranEnd
+            || (batch is not null && await BatchHasExecuteStatementAsync(batch, CancellationToken.None).ConfigureAwait(false));
+    }
+
+    private static async Task<bool> AssessFailedOrCancelledTransactionAsync(
+        SqlConnection connection,
+        SqlInfoMessageEventHandler onInfo,
+        bool supportsTxId,
+        long? startTxId,
+        SqlBatch? batch,
+        bool sawTriggerTranEnd,
+        bool isCancellation)
+    {
+        var (probe, xactAbortOn, probeLost) = await ProbeFailedBatchAsync(connection, onInfo, supportsTxId, CancellationToken.None).ConfigureAwait(false);
+        if (!probe.Valid)
+        {
+            if (probeLost || connection.State != ConnectionState.Open)
+            {
+                return sawTriggerTranEnd
+                    || (batch is not null && await BatchHasExecuteStatementAsync(batch, CancellationToken.None).ConfigureAwait(false));
+            }
+            // Non-executing SET options (NOEXEC/PARSEONLY/FMTONLY/SHOWPLAN) or probe failure: reset and re-probe before rolling back.
+            var (reprobe, reprobeLost) = await ResetAndReprobeAsync(connection, onInfo, supportsTxId).ConfigureAwait(false);
+            if (!reprobe.Valid)
+            {
+                if (reprobeLost || connection.State != ConnectionState.Open)
+                {
+                    return sawTriggerTranEnd
+                        || (batch is not null && await BatchHasExecuteStatementAsync(batch, CancellationToken.None).ConfigureAwait(false));
+                }
+                return true; // Fail closed: live session cannot prove the coordinated transaction was not committed.
+            }
+            probe = reprobe;
+            xactAbortOn = false; // Conservative because @@OPTIONS could not be read before reset.
+        }
+        return EvaluateTransactionProbeUncertainty(supportsTxId, startTxId, probe, xactAbortOn, sawTriggerTranEnd, isCancellation)
+            || (probe.TranCount == 0 && batch is not null && await BatchHasExecuteStatementAsync(batch, CancellationToken.None).ConfigureAwait(false));
+    }
+
+    internal static bool EvaluateTransactionProbeUncertainty(
+        bool supportsTxId,
+        long? startTxId,
+        TransactionProbeResult probe,
+        bool xactAbortOn,
+        bool sawTriggerTranEnd,
+        bool isCancellation)
+    {
+        if (supportsTxId && probe.TranCount > 0 && probe.TransactionId != startTxId) return true;
+        if (probe.TranCount == 0 && (isCancellation || !xactAbortOn || sawTriggerTranEnd)) return true;
+        return false;
+    }
+
+    internal static Task<bool> BatchHasExecuteStatementAsync(SqlBatch batch, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (batch.Sql.Length > ResultNames.MaxParseChars || batch.ParenDepth > ResultNames.MaxParenDepth)
+            return Task.FromResult(true);
+        return ResultNames.OnParseThreadAsync(() =>
+        {
+            try
+            {
+                var parser = new TSql180Parser(initialQuotedIdentifiers: true);
+                using var reader = new StringReader(batch.Sql);
+                var fragment = parser.Parse(reader, out var parseErrors);
+                if (parseErrors.Count > 0 || fragment is null) return true;
+                var finder = new ExecuteStatementFinder();
+                fragment.Accept(finder);
+                return finder.Found;
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                return true;
+            }
+        }).WaitAsync(token);
+    }
+
+    private sealed class ExecuteStatementFinder : TSqlFragmentVisitor
+    {
+        public bool Found { get; private set; }
+        public override void Visit(ExecuteSpecification node) => Found = true;
     }
 
     private static async Task DrainReaderAsync(DbDataReader reader, bool hasLong, CancellationToken token)
@@ -1011,7 +1441,8 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         SqlConnection connection,
         SqlInfoMessageEventHandler? onInfo,
         IReadOnlyList<ResultSetBuffer> setsToMarkPreview,
-        QueryEventSink events)
+        QueryEventSink events,
+        CancellationToken token = default)
     {
         try
         {
@@ -1019,8 +1450,11 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             if (onInfo is not null) connection.InfoMessage -= onInfo;
             if (connection.State == ConnectionState.Open)
             {
-                // Always use a fresh bounded 10 s CancellationToken (never the cancelled Phase 1 token).
-                using var rollbackCts = new CancellationTokenSource(TimeSpan.FromSeconds(RollbackTimeoutSeconds));
+                // Always bound rollback to at most 10 s (and honor any earlier caller cancellation).
+                using var rollbackCts = token.CanBeCanceled
+                    ? CancellationTokenSource.CreateLinkedTokenSource(token)
+                    : new CancellationTokenSource();
+                rollbackCts.CancelAfter(TimeSpan.FromSeconds(RollbackTimeoutSeconds));
                 var rbToken = rollbackCts.Token;
                 foreach (var sql in SqlService.ExecuteAgainSql)
                 {
@@ -1037,13 +1471,20 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                 await rollbackCmd.ExecuteNonQueryAsync(rbToken).ConfigureAwait(false);
             }
         }
-        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException or ObjectDisposedException or IOException)
         {
             // Disposing the unpooled SqlConnection in finally ends the session so SQL Server rolls back any open transaction.
         }
         finally
         {
-            await connection.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await connection.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Disposal must never suppress MarkRolledBackPreview or escape outer cleanup.
+            }
             MarkRolledBackPreview(setsToMarkPreview, events);
         }
     }
@@ -1096,6 +1537,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
         long elapsedMs,
         MultiTargetError? error)
     {
+        var clamped = error is null ? null : MultiQueryCoordinator.ClampError(error);
         target.Events.TargetState(new MultiQueryTargetStateEvent(
             target.Target.TargetKey,
             phase,
@@ -1105,8 +1547,8 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             resultSetCount,
             elapsedMs,
             BytesProcessed: null,
-            ErrorCode: error?.Code,
-            ErrorMessage: error?.Message));
+            ErrorCode: clamped?.Code,
+            ErrorMessage: clamped is null ? null : MultiQueryCoordinator.ClampText(clamped.Message, 2000)));
     }
 
     private sealed class SqlServerPhase2Handle(
@@ -1124,12 +1566,47 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             if (Volatile.Read(ref disposed) != 0)
                 return new MultiCommitResult(MultiCommitOutcome.InDoubt, new MultiTargetError("SESSION_LOST", "The SQL session was already closed before commit completed."));
 
+            if (token.IsCancellationRequested)
+            {
+                MarkRolledBackPreview(sets, target.Events);
+                await DisposeAsync().ConfigureAwait(false);
+                var timedOut = target.IsUserCancelled?.Invoke() == false;
+                return new MultiCommitResult(
+                    MultiCommitOutcome.CancelledBeforeSend,
+                    new MultiTargetError(timedOut ? "TIMEOUT" : "CANCELLED",
+                        timedOut ? "The query exceeded its execution timeout before commit was sent to SQL Server."
+                            : "The transaction commit was cancelled before it was sent to SQL Server."));
+            }
+
+            var commitSent = false;
             try
             {
                 connection.FireInfoMessageEventOnUserErrors = false;
                 connection.InfoMessage -= onInfo;
 
+                // Disable SET STATISTICS XML/PROFILE before COMMIT so SQL Server does not emit a Showplan/Profile result set
+                // ahead of SELECT @@TRANCOUNT and trigger a false commitInDoubt.
+                await using (var statsCmd = connection.CreateCommand())
+                {
+                    statsCmd.CommandText = StatisticsOffSql;
+                    statsCmd.CommandTimeout = 0;
+                    using var statsStop = token.Register(SqlService.Attention, statsCmd);
+                    await statsCmd.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+                }
+
+                if (token.IsCancellationRequested)
+                {
+                    MarkRolledBackPreview(sets, target.Events);
+                    var timedOut = target.IsUserCancelled?.Invoke() == false;
+                    return new MultiCommitResult(
+                        MultiCommitOutcome.CancelledBeforeSend,
+                        new MultiTargetError(timedOut ? "TIMEOUT" : "CANCELLED",
+                            timedOut ? "The query exceeded its execution timeout before commit was sent to SQL Server."
+                                : "The transaction commit was cancelled before it was sent to SQL Server."));
+                }
+
                 var commitSql = service.CommitSql;
+                commitSent = true;
                 if (service.SessionFault?.Invoke(commitSql) is { } fault) throw fault;
 
                 await using var command = connection.CreateCommand();
@@ -1147,12 +1624,52 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             }
             catch (OperationCanceledException)
             {
+                if (!commitSent)
+                {
+                    MarkRolledBackPreview(sets, target.Events);
+                    var timedOutPre = target.IsUserCancelled?.Invoke() == false;
+                    return new MultiCommitResult(
+                        MultiCommitOutcome.CancelledBeforeSend,
+                        new MultiTargetError(timedOutPre ? "TIMEOUT" : "CANCELLED",
+                            timedOutPre ? "The query exceeded its execution timeout before commit was sent to SQL Server."
+                                : "The transaction commit was cancelled before it was sent to SQL Server."));
+                }
+                var timedOut = target.IsUserCancelled?.Invoke() == false;
                 return new MultiCommitResult(
                     MultiCommitOutcome.InDoubt,
-                    new MultiTargetError("CANCELLED", "Commit was interrupted before SQL Server confirmed completion; outcome is in doubt. Check the data before retrying."));
+                    new MultiTargetError(timedOut ? "TIMEOUT" : "CANCELLED",
+                        timedOut
+                            ? "Commit timed out before SQL Server confirmed completion; outcome is in doubt. Check the data before retrying."
+                            : "Commit was interrupted before SQL Server confirmed completion; outcome is in doubt. Check the data before retrying."));
             }
             catch (SqlException error)
             {
+                if (!commitSent)
+                {
+                    MarkRolledBackPreview(sets, target.Events);
+                    if (token.IsCancellationRequested)
+                    {
+                        var timedOutPre = target.IsUserCancelled?.Invoke() == false;
+                        return new MultiCommitResult(
+                            MultiCommitOutcome.CancelledBeforeSend,
+                            new MultiTargetError(timedOutPre ? "TIMEOUT" : "CANCELLED",
+                                timedOutPre ? "The query exceeded its execution timeout before commit was sent to SQL Server."
+                                    : "The transaction commit was cancelled before it was sent to SQL Server."));
+                    }
+                    return new MultiCommitResult(
+                        MultiCommitOutcome.Refused,
+                        new MultiTargetError("SQL_ERROR", "Commit could not be started on SQL Server: " + error.Message));
+                }
+                if (token.IsCancellationRequested)
+                {
+                    var timedOut = target.IsUserCancelled?.Invoke() == false;
+                    return new MultiCommitResult(
+                        MultiCommitOutcome.InDoubt,
+                        new MultiTargetError(timedOut ? "TIMEOUT" : "CANCELLED",
+                            timedOut
+                                ? "Commit timed out before SQL Server confirmed completion; outcome is in doubt. Check the data before retrying."
+                                : "Commit was interrupted before SQL Server confirmed completion; outcome is in doubt. Check the data before retrying."));
+                }
                 var details = string.Join(Environment.NewLine, error.Errors.Cast<SqlError>()
                     .Where(item => item.Class > 10)
                     .Select(item => "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + "\n" + item.Message));
@@ -1161,6 +1678,13 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             }
             catch (Exception error)
             {
+                if (!commitSent)
+                {
+                    MarkRolledBackPreview(sets, target.Events);
+                    return new MultiCommitResult(
+                        MultiCommitOutcome.Refused,
+                        new MultiTargetError("BACKEND_ERROR", "Commit could not be started: " + error.Message));
+                }
                 return new MultiCommitResult(
                     MultiCommitOutcome.InDoubt,
                     new MultiTargetError("BACKEND_ERROR", "Commit failed unexpectedly; outcome is in doubt. Check the data before retrying. " + error.Message));
@@ -1180,7 +1704,7 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             }
             try
             {
-                await RollbackAndDisposeAsync(connection, onInfo, sets, target.Events).ConfigureAwait(false);
+                await RollbackAndDisposeAsync(connection, onInfo, sets, target.Events, token).ConfigureAwait(false);
             }
             finally
             {
@@ -1193,9 +1717,16 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
             if (Interlocked.Exchange(ref disposed, 1) != 0) return;
             try
             {
-                connection.FireInfoMessageEventOnUserErrors = false;
-                connection.InfoMessage -= onInfo;
-                await connection.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    connection.FireInfoMessageEventOnUserErrors = false;
+                    connection.InfoMessage -= onInfo;
+                    await connection.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // Disposal must never clobber a settled CommitAsync result or releaseEphemeralSlot.
+                }
             }
             finally
             {
@@ -1215,14 +1746,14 @@ internal sealed class SqlServerMultiRunner(SqlService service, Func<string, stri
                 case CommitTransactionStatement:
                     Add(node, "COMMIT TRANSACTION", "Explicit COMMIT TRANSACTION is not allowed in Coordinated Transaction mode; Varia coordinates commit across all targets.");
                     break;
-                case RollbackTransactionStatement rollback when rollback.Name is null:
-                    Add(node, "ROLLBACK TRANSACTION", "Explicit ROLLBACK TRANSACTION without a savepoint name is not allowed in Coordinated Transaction mode.");
+                case RollbackTransactionStatement rollback when rollback.Name is null || rollback.Name.ValueExpression is not null:
+                    Add(node, "ROLLBACK TRANSACTION", "Explicit ROLLBACK TRANSACTION without a literal savepoint name is not allowed in Coordinated Transaction mode.");
                     break;
                 case CreateDatabaseStatement:
                     Add(node, "CREATE DATABASE", "CREATE DATABASE cannot run inside a coordinated transaction (SQL Server Msg 226).");
                     break;
-                case AlterDatabaseStatement:
-                    Add(node, "ALTER DATABASE", "ALTER DATABASE cannot run inside a coordinated transaction (SQL Server Msg 226).");
+                case AlterDatabaseStatement or AlterDatabaseScopedConfigurationStatement:
+                    Add(node, "ALTER DATABASE", "ALTER DATABASE cannot run inside a coordinated transaction (SQL Server Msg 226/574).");
                     break;
                 case DropDatabaseStatement:
                     Add(node, "DROP DATABASE", "DROP DATABASE cannot run inside a coordinated transaction (SQL Server Msg 226).");

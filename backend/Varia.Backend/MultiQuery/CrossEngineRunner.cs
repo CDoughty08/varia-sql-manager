@@ -63,26 +63,15 @@ internal sealed class CrossEngineRunner(SqlService service, IReadOnlySqlValidato
                 SqlServerViolations: sqlViolations);
         }
 
-        // 2. Validate GoogleSQL single-statement SELECT/WITH allowlist before any dry-run.
-        var bqStatic = GoogleSqlScanner.InspectReadOnlySelect(bigQuerySql);
-        if (!bqStatic.Allowed)
+        // 2. Validate GoogleSQL single-statement SELECT/WITH allowlist and reject legacy SQL before any dry-run.
+        if (ValidateBigQueryStatic(bigQuerySql, normalizedBqStart) is { } staticErr)
         {
             return new(
                 Passed: false,
-                ErrorCode: "READ_ONLY_VIOLATION",
-                Message: bqStatic.Message,
+                ErrorCode: staticErr.Code,
+                Message: staticErr.Message,
                 Dialect: Providers.BigQuery,
-                Line: OffsetLine(normalizedBqStart, bqStatic.Line));
-        }
-
-        if (BigQueryErrors.IsLegacySql(bigQuerySql))
-        {
-            return new(
-                Passed: false,
-                ErrorCode: "LEGACY_SQL",
-                Message: BigQueryErrors.LegacySql,
-                Dialect: Providers.BigQuery,
-                Line: normalizedBqStart);
+                Line: staticErr.Line);
         }
 
         if (bigQueryTargets.Count == 0)
@@ -101,7 +90,7 @@ internal sealed class CrossEngineRunner(SqlService service, IReadOnlySqlValidato
                 await gate.WaitAsync(token);
                 try
                 {
-                    outcomes[idx] = await DryRunBigQueryTargetAsync(target, bigQuerySql, normalizedBqStart, token);
+                    outcomes[idx] = (await DryRunBigQueryTargetWithLocationAsync(target, bigQuerySql, normalizedBqStart, token)).Outcome;
                 }
                 finally
                 {
@@ -129,16 +118,30 @@ internal sealed class CrossEngineRunner(SqlService service, IReadOnlySqlValidato
         return new(Passed: true, BigQueryOutcomes: outcomes);
     }
 
-    private async Task<MultiTargetPreflightOutcome> DryRunBigQueryTargetAsync(
+    internal static MultiTargetError? ValidateBigQueryStatic(string bigQuerySql, int bigQueryStartLine)
+    {
+        var normalizedBqStart = Math.Max(1, bigQueryStartLine);
+        if (BigQueryErrors.IsLegacySql(bigQuerySql))
+            return new MultiTargetError("LEGACY_SQL", BigQueryErrors.LegacySql, Line: normalizedBqStart);
+
+        var bqStatic = GoogleSqlScanner.InspectReadOnlySelect(bigQuerySql);
+        if (!bqStatic.Allowed)
+            return new MultiTargetError("READ_ONLY_VIOLATION", bqStatic.Message, Line: OffsetLine(normalizedBqStart, bqStatic.Line));
+
+        return null;
+    }
+
+    internal async Task<(MultiTargetPreflightOutcome Outcome, string? ResolvedLocation)> DryRunBigQueryTargetWithLocationAsync(
         MultiTargetContext target,
         string bigQuerySql,
         int bigQueryStartLine,
         CancellationToken token)
     {
+        var normalizedStart = Math.Max(1, bigQueryStartLine);
         var connection = bigQuery.Find(target.Target.ConnectionId);
         using var lease = connection?.Lease();
         if (connection is null || lease is null)
-            return new(target.Target.TargetKey, false, new MultiTargetError("NOT_CONNECTED", "The BigQuery connection is no longer open."));
+            return (new(target.Target.TargetKey, false, new MultiTargetError("NOT_CONNECTED", "The BigQuery connection is no longer open.")), null);
 
         var dataset = target.Target.Dataset ?? connection.Options.Dataset;
         var location = await service.ResolveBigQueryLocationAsync(connection, dataset, token);
@@ -154,26 +157,26 @@ internal sealed class CrossEngineRunner(SqlService service, IReadOnlySqlValidato
         }
         catch (RequestException error)
         {
-            var rewritten = SqlService.EditorPositions(error.Message, bigQueryStartLine, 1, out var line);
-            return new(target.Target.TargetKey, false, new MultiTargetError(error.Code, rewritten, Line: line));
+            var rewritten = SqlService.EditorPositions(error.Message, normalizedStart, 1, out var line);
+            return (new(target.Target.TargetKey, false, new MultiTargetError(error.Code, rewritten, Line: line)), null);
         }
         catch (Exception error)
         {
             var mapped = BigQueryErrors.Map(error, connection.Options.Project, token: token) as RequestException
                 ?? new RequestException("BACKEND_ERROR", "Dry run failed: " + BigQueryErrors.Sanitize(error.Message));
-            var rewritten = SqlService.EditorPositions(mapped.Message, bigQueryStartLine, 1, out var line);
-            return new(target.Target.TargetKey, false, new MultiTargetError(mapped.Code, rewritten, Line: line));
+            var rewritten = SqlService.EditorPositions(mapped.Message, normalizedStart, 1, out var line);
+            return (new(target.Target.TargetKey, false, new MultiTargetError(mapped.Code, rewritten, Line: line)), null);
         }
 
         if (!estimate.Faked && !string.Equals(estimate.StatementType, "SELECT", StringComparison.Ordinal))
         {
-            return new(target.Target.TargetKey, false, new MultiTargetError(
+            return (new(target.Target.TargetKey, false, new MultiTargetError(
                 "READ_ONLY_VIOLATION",
                 $"Cross-Engine BigQuery requires a single SELECT statement (BigQuery reported {estimate.StatementType ?? "unknown"}).",
-                Line: bigQueryStartLine));
+                Line: normalizedStart)), null);
         }
 
-        return new(target.Target.TargetKey, true, EstimatedBytes: estimate.BytesProcessed);
+        return (new(target.Target.TargetKey, true, EstimatedBytes: estimate.BytesProcessed), location ?? estimate.Location);
     }
 
     private static int OffsetLine(int startLine, int relativeLine)

@@ -48,6 +48,10 @@ export interface ExplorerSnapshot {
   readonly selected?: number
   /** Connected top-level server row ids in multi-selection order; index 0 defines the locked engine. */
   readonly multiSelected: readonly number[]
+  /** Locked engine of `multiSelected` (captured atomically with the snapshot to avoid tearing with deferred flushes). */
+  readonly multiSelectProvider?: ProviderId
+  /** True when at least two connected top-level servers share an engine and can be multi-selected. */
+  readonly canMultiSelect: boolean
   /** Calm status notice when multi-select rejects an incompatible-engine server. */
   readonly multiSelectNotice?: string
   readonly announcement?: Announcement
@@ -384,7 +388,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
 
   constructor(options: ExplorerServiceOptions) {
-    super({ version: 0, rows: emptyRows, multiSelected: [] })
+    super({ version: 0, rows: emptyRows, multiSelected: [], canMultiSelect: false })
     this.connections = options.connections
     this.events = options.events
     this.timers = options.timers ?? browserTimers
@@ -641,25 +645,44 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   get multiSelectProvider(): ProviderId | undefined {
     return this.multiSelected.length ? this.serverProvider(this.multiSelected[0]) : undefined
   }
+  /** True when at least two connected top-level servers share an engine and can be multi-selected. */
+  get canMultiSelect(): boolean {
+    let sql = 0, bq = 0
+    for (const rootId of this.roots) {
+      if (!this.isEligibleMultiSelectServer(rootId)) continue
+      const provider = this.serverProvider(rootId)
+      if (provider === 'sqlserver' && ++sql >= 2) return true
+      if (provider === 'bigquery' && ++bq >= 2) return true
+    }
+    return false
+  }
+  private static readonly maxMultiSelectTargets = 32
   /**
    * Toggles a connected top-level server row in `multiSelected` (defaults to the focused row). Index 0 defines the
    * engine-homogeneity lock; attempting to add an incompatible-engine server keeps the selection unchanged and raises a
    * calm status notice pointing to New Cross-Engine SELECT….
    */
-  toggleMultiSelect(id?: number): ToggleMultiSelectResult {
+  toggleMultiSelect(id?: number, options?: { readonly silentNotice?: boolean }): ToggleMultiSelectResult {
     const targetId = id ?? this.selected
     if (!this.isEligibleMultiSelectServer(targetId)) return { changed: false, multiSelected: this.multiSelected }
     const node = this.nodes.get(targetId!)!
     const targetProvider = this.serverProvider(node.id)
     if (!targetProvider) return { changed: false, multiSelected: this.multiSelected }
-    node.lastUsed = ++this.clock
-    this.pendingSelect = undefined
-    this.opened = undefined
     const existingIndex = this.multiSelected.indexOf(node.id)
     if (existingIndex >= 0) {
-      this.multiSelected = this.multiSelected.filter(member => member !== node.id)
+      node.lastUsed = ++this.clock
+      this.pendingSelect = undefined
+      this.opened = undefined
+      const remaining = this.multiSelected.filter(member => member !== node.id)
+      // Exiting below 2 clears multi-select cleanly (matching pruneMultiSelected and plan §2.1) and keeps the remaining server selected.
+      this.multiSelected = remaining.length < 2 ? [] : remaining
       this.multiSelectNotice = undefined
-      this.selected = node.id
+      if (remaining.length === 1 && remaining[0] !== node.id) {
+        this.selected = remaining[0]
+        this.reveals++
+      } else {
+        this.selected = node.id
+      }
       this.evictable = true
       this.announce(this.multiSelected.length
         ? `${node.label} removed from selection, ${this.multiSelectSummary(this.multiSelectProvider, this.multiSelected.length)}`
@@ -667,6 +690,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.publishNow()
       return { changed: true, multiSelected: this.multiSelected }
     }
+    let nextSelected: readonly number[]
     if (this.multiSelected.length === 0) {
       if (this.selected !== undefined && this.selected !== node.id && this.isEligibleMultiSelectServer(this.selected)) {
         const anchor = this.nodes.get(this.selected)!
@@ -674,27 +698,42 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
         if (anchorProvider && anchorProvider !== targetProvider) {
           const notice = this.engineLockNotice(anchorProvider)
           this.multiSelectNotice = notice
-          this.announce(notice, true)
+          if (!options?.silentNotice) this.announce(notice, true)
           this.publishNow()
-          this.onMultiSelectNotice?.(notice)
+          if (!options?.silentNotice) this.onMultiSelectNotice?.(notice)
           return { changed: false, multiSelected: this.multiSelected, notice }
         }
-        this.multiSelected = [anchor.id, node.id]
+        nextSelected = [anchor.id, node.id]
       } else {
-        this.multiSelected = [node.id]
+        if (this.connectedServerCountByProvider(targetProvider) < 2) {
+          return { changed: false, multiSelected: this.multiSelected }
+        }
+        nextSelected = [node.id]
       }
     } else {
       const lockedProvider = this.multiSelectProvider
       if (lockedProvider && lockedProvider !== targetProvider) {
         const notice = this.engineLockNotice(lockedProvider)
         this.multiSelectNotice = notice
-        this.announce(notice, true)
+        if (!options?.silentNotice) this.announce(notice, true)
         this.publishNow()
-        this.onMultiSelectNotice?.(notice)
+        if (!options?.silentNotice) this.onMultiSelectNotice?.(notice)
         return { changed: false, multiSelected: this.multiSelected, notice }
       }
-      this.multiSelected = [...this.multiSelected, node.id]
+      if (this.multiSelected.length >= ExplorerService.maxMultiSelectTargets) {
+        const notice = `At most ${ExplorerService.maxMultiSelectTargets} servers can be selected for a multi-server query.`
+        this.multiSelectNotice = notice
+        if (!options?.silentNotice) this.announce(notice, true)
+        this.publishNow()
+        if (!options?.silentNotice) this.onMultiSelectNotice?.(notice)
+        return { changed: false, multiSelected: this.multiSelected, notice }
+      }
+      nextSelected = [...this.multiSelected, node.id]
     }
+    node.lastUsed = ++this.clock
+    this.pendingSelect = undefined
+    this.opened = undefined
+    this.multiSelected = nextSelected
     this.multiSelectNotice = undefined
     this.selected = node.id
     this.evictable = true
@@ -717,18 +756,33 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.multiSelectNotice = undefined
     this.publishNow()
   }
-  /** Multi-selects every connected top-level server of `provider` in Explorer order when at least two exist. */
-  selectAllServersByProvider(provider: ProviderId): readonly number[] {
+  /** Multi-selects every connected top-level server of `provider` in Explorer order (up to 32) when at least two exist. */
+  selectAllServersByProvider(provider: ProviderId, options?: { readonly silentNotice?: boolean }): readonly number[] {
     const matching = this.roots.filter(rootId => this.isEligibleMultiSelectServer(rootId) && this.serverProvider(rootId) === provider)
     if (matching.length < 2) return []
+    const capped = matching.length > ExplorerService.maxMultiSelectTargets
+      ? matching.slice(0, ExplorerService.maxMultiSelectTargets)
+      : matching
     this.pendingSelect = undefined
     this.opened = undefined
-    this.multiSelected = matching
-    this.multiSelectNotice = undefined
-    if (this.selected === undefined || !matching.includes(this.selected)) this.selected = matching[0]
+    this.multiSelected = capped
+    const unit = provider === 'bigquery' ? 'BigQuery projects' : 'SQL Servers'
+    const notice = matching.length > capped.length
+      ? `Selected the first ${capped.length} of ${matching.length} ${unit} (maximum ${ExplorerService.maxMultiSelectTargets}).`
+      : undefined
+    this.multiSelectNotice = notice
+    if (this.selected === undefined || !capped.includes(this.selected)) {
+      this.selected = capped[0]
+      this.reveals++
+    }
     this.evictable = true
-    this.announce(`Selected all ${this.multiSelectSummary(provider, matching.length)}`, true)
+    if (notice) {
+      if (!options?.silentNotice) this.announce(notice, true)
+    } else {
+      this.announce(`Selected all ${capped.length} ${unit}`, true)
+    }
     this.publishNow()
+    if (notice && !options?.silentNotice) this.onMultiSelectNotice?.(notice)
     return this.multiSelected
   }
   /** Ordered target descriptors for the active multi-server selection (for New Multi-Server Query, Refresh Selected, Disconnect Selected). */
@@ -1189,11 +1243,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const retained = new Map(this.roots.flatMap(id => { const root = this.nodes.get(id); return root?.targetId ? [[root.targetId, id] as const] : [] }))
     const selectedRoot = this.selected === undefined ? undefined : this.rootOf(this.nodes.get(rowOwner(this.selected)))
     let removedAt = -1
+    let topologyChanged = false
     for (const [connectionId, rootId] of [...this.rootByConnection]) {
       const root = this.nodes.get(rootId)
       if (ids.has(connectionId) || (root?.targetId && targets.has(root.targetId))) continue
       if (selectedRoot?.id === rootId) removedAt = this.roots.indexOf(rootId)
       this.removeRoot(connectionId, rootId)
+      topologyChanged = true
     }
     const roots: number[] = [], added: number[] = []
     for (const connection of list) {
@@ -1203,12 +1259,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
         const id = this.addRoot(connection)
         roots.push(id)
         if (available) added.push(id)
+        topologyChanged = true
         continue
       }
       const root = this.nodes.get(existing)!
       const changedHandle = root.connectionId !== connection.id
       if (changedHandle) {
         this.markLost(root)
+        topologyChanged = true
         const previousId = root.connectionId, filters = this.filters.get(previousId)
         if (filters) { this.filterCount -= filters.size; this.filters.delete(previousId) }
         const session = this.sessionProjects.get(previousId)
@@ -1217,12 +1275,13 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
         root.connectionId = connection.id
         this.rootByConnection.set(connection.id, root.id)
       }
-      if (!available && !root.lost) this.markLost(root)
+      if (!available && !root.lost) { this.markLost(root); topologyChanged = true }
       else if (available && root.lost) {
         root.lost = false
         root.hasChildren = true
         root.generation++
         added.push(root.id)
+        topologyChanged = true
       }
       this.updateRoot(root, connection)
       roots.push(existing)
@@ -1230,6 +1289,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = roots
     if (removedAt >= 0) this.selected = roots[Math.min(removedAt, roots.length - 1)]
     if (this.selected === undefined && roots.length) this.selected = added[0] ?? roots[0]
+    if (topologyChanged && !this.multiSelected.length) this.multiSelectNotice = undefined
     this.pruneMultiSelected()
     for (const id of added) if (this.nodes.get(id)?.hasChildren) this.openRoot(id)
     this.invalidate()
@@ -1522,7 +1582,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (end !== opened.start) {
       // The walk's own selection, recorded first: any other one ends the walk (select).
       this.opened.selected = end
-      this.select(end, { reveal: !opened.held })
+      this.select(end, { reveal: !opened.held, preserveMultiSelect: true })
     }
     // Nothing is left to follow below a level that came back empty, or once the user scrolled away.
     if (opened.held || !this.nodes.get(end)?.expanded) this.opened = undefined
@@ -2299,7 +2359,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private pruneMultiSelected(): void {
     if (!this.multiSelected.length) return
     const remaining = this.multiSelected.filter(id => this.isEligibleMultiSelectServer(id))
-    if (remaining.length === this.multiSelected.length) return
+    const seedUnusable = remaining.length === 1 && this.connectedServerCountByProvider(this.serverProvider(remaining[0]) ?? '') < 2
+    if (remaining.length === this.multiSelected.length && !seedUnusable) return
     if (remaining.length < 2) {
       this.multiSelected = []
       this.multiSelectNotice = undefined
@@ -2313,11 +2374,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.announcement = { text: displayText(text), id: ++this.announcements, ...(immediate ? { immediate: true } : {}) }
   }
   private buildSnapshot(rows: VisibleRows): ExplorerSnapshot {
+    const multiSelectProvider = this.multiSelectProvider
     return {
       version: ++this.version,
       rows,
       ...(this.selected !== undefined ? { selected: this.selected } : {}),
       multiSelected: this.multiSelected,
+      ...(multiSelectProvider !== undefined ? { multiSelectProvider } : {}),
+      canMultiSelect: this.canMultiSelect,
       ...(this.multiSelectNotice !== undefined ? { multiSelectNotice: this.multiSelectNotice } : {}),
       ...(this.announcement ? { announcement: this.announcement } : {}),
       ...(this.reveals ? { reveal: this.reveals } : {})

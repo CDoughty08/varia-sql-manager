@@ -122,6 +122,7 @@ if (args is ["--bigquery-checks"])
     await BigQueryExplorerChecks.RunAsync(Collect);
     await BigQueryIndexChecks.RunAsync(Collect);
     await BigQueryJobHistoryChecks.RunAsync(Collect);
+    await MultiQueryBigQueryChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -573,7 +574,10 @@ if (liveGroup is null)
         ("AgentSchedule", () => AgentScheduleChecks.RunAsync(Check)),
         ("AgentTree", () => AgentTreeChecks.RunAsync(Check)),
         ("AgentOverview", () => AgentOverviewChecks.RunAsync(Check)),
-        ("Discard", () => DiscardChecks.RunAsync(Check))
+        ("Discard", () => DiscardChecks.RunAsync(Check)),
+        ("MultiQuerySql", () => MultiQuerySqlChecks.RunAsync(Check)),
+        ("MultiQueryBigQuery", () => MultiQueryBigQueryChecks.RunAsync(Check)),
+        ("ResultCombiner", () => ResultCombinerChecks.RunAsync(Check))
     ];
     var suiteNames = offlineSuites.Select(suite => suite.Name).ToArray();
     Check(suiteNames.Distinct().Count() == suiteNames.Length && OfflineSuites.Alone.All(suiteNames.Contains) && OfflineSuites.Weights.Keys.All(suiteNames.Contains)
@@ -595,7 +599,7 @@ if (liveGroup is null)
     }
     // The result suites again with every complete result packed (ResultStore.DefaultPacking is AsyncLocal, so packed suites
     // share the offline lane pool with the raw pass without a mid-run barrier).
-    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "FloatExact", "SearchNarrowing", "PageFilter", "ParallelResult", "CellLength", "Text", "TransposedText"];
+    string[] packedPass = ["Store", "View", "Filter", "Identity", "Diff", "ResultSearch", "Profile", "Pivot", "Distinct", "FloatExact", "SearchNarrowing", "PageFilter", "ParallelResult", "CellLength", "Text", "TransposedText", "ResultCombiner"];
     Check(packedPass.All(suiteNames.Contains), "every suite of the packed pass is an offline suite");
     Varia.Backend.Results.ResultStore.DefaultPacking = Varia.Backend.Results.PagePacking.EveryComplete;
     try { Check(new Varia.Backend.Results.ResultStore(1L << 20, 1L << 20).Packing == Varia.Backend.Results.PagePacking.EveryComplete, "the packed pass's stores pack every complete result"); }

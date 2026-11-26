@@ -152,6 +152,9 @@ internal static class GoogleSqlScanner
     /// <summary>Whether <paramref name="sql"/> is a multi-statement BigQuery script (multiple statements separated by
     /// semicolons, or a scripting control-flow/procedural statement) whose free dry-run defaults to US when no dataset or
     /// connection location is set.</summary>
+    static bool IsLabelToken(string text, Token tok) =>
+        tok.Kind == Kind.Word || (tok.Kind == Kind.Other && tok.Length > 0 && text[tok.Start] == '`');
+
     public static bool IsMultiStatementScript(string sql)
     {
         var tokens = Tokens(sql);
@@ -161,7 +164,7 @@ internal static class GoogleSqlScanner
         var stmt = statements[0];
         var i = 0;
         while (i < stmt.Count && stmt[i].Kind == Kind.Open) i++;
-        if (i + 1 < stmt.Count && stmt[i].Kind == Kind.Word && IsChar(sql, stmt[i + 1], ':')) return true;
+        if (i + 1 < stmt.Count && IsLabelToken(sql, stmt[i]) && IsChar(sql, stmt[i + 1], ':')) return true;
         if (i < stmt.Count && stmt[i].Kind == Kind.Word && ScriptStarterWords.Contains(sql.Substring(stmt[i].Start, stmt[i].Length))) return true;
         return false;
     }
@@ -177,11 +180,11 @@ internal static class GoogleSqlScanner
     };
     static readonly HashSet<string> WhilePrevContWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "AND", "OR", "NOT", "IN", "IS", "AS", "LIKE", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "SELECT", "FROM", "WHERE", "BY", "HAVING", "OVER", "CAST", "EXISTS", "MOD", "DIV", "XOR"
+        "AND", "OR", "NOT", "IN", "IS", "AS", "LIKE", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "SELECT", "FROM", "WHERE", "BY", "HAVING", "OVER", "CAST", "EXISTS"
     };
     static readonly HashSet<string> WhileNextInfixWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "AND", "OR", "IS", "IN", "LIKE", "BETWEEN", "THEN", "ELSE", "END", "AS", "FROM", "WHERE"
+        "AND", "OR", "NOT", "IS", "IN", "LIKE", "BETWEEN", "THEN", "ELSE", "END", "AS", "WHERE"
     };
     static readonly HashSet<string> IntervalDateParts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -221,7 +224,13 @@ internal static class GoogleSqlScanner
                 var t = tokens[i];
                 if (t.Kind == Kind.Open) depth++;
                 else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
-                else if (depth == 0 && t.Kind == Kind.Word && (i == 0 || !IsChar(sql, tokens[i - 1], '.')))
+                else if (depth == 0 && t.Kind == Kind.Semicolon)
+                {
+                    // Never allow a header scan (IF/ELSEIF/WHEN/EXCEPTION/CASE) to cross a statement boundary.
+                    i++;
+                    break;
+                }
+                else if (depth == 0 && t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
                 {
                     if (Is(sql, t, "CASE")) caseDepth++;
                     else if (Is(sql, t, "END") && caseDepth > 0) caseDepth--;
@@ -239,6 +248,7 @@ internal static class GoogleSqlScanner
         {
             var stack = new Stack<string>();
             var parenDepth = 0;
+            var bracketDepth = 0;
             var atBlockBoundary = true;
             string? headerKind = null;
             var inSimpleStmt = false;
@@ -263,6 +273,8 @@ internal static class GoogleSqlScanner
                     if (parenDepth == 1 && inProcHeader) seenProcParams = true;
                     if (parenDepth > 0) parenDepth--;
                 }
+                else if (IsChar(sql, t, '[')) bracketDepth++;
+                else if (IsChar(sql, t, ']')) { if (bracketDepth > 0) bracketDepth--; }
                 else if (t.Kind == Kind.Semicolon && parenDepth == 0)
                 {
                     inSimpleStmt = false;
@@ -271,7 +283,7 @@ internal static class GoogleSqlScanner
                     atBlockBoundary = true;
                     headerKind = null;
                 }
-                else if (t.Kind == Kind.Word && (i == 0 || !IsChar(sql, tokens[i - 1], '.')))
+                else if (t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
                 {
                     var atBoundary = atBlockBoundary && !inSimpleStmt && parenDepth == 0 && top != "exprCase";
                     var atNestedProcBegin = inProcHeader && seenProcParams && parenDepth == 0 && top != "exprCase";
@@ -284,7 +296,8 @@ internal static class GoogleSqlScanner
                     {
                         var hasNext = i + 1 < tokens.Count;
                         if (!hasNext || tokens[i + 1].Kind == Kind.Semicolon
-                            || (tokens[i + 1].Kind == Kind.Word && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"))))
+                            || (tokens[i + 1].Kind == Kind.Word && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"))
+                                && !(i + 2 < tokens.Count && IsChar(sql, tokens[i + 2], ':'))))
                         {
                             inSimpleStmt = true;
                             atBlockBoundary = false;
@@ -317,6 +330,8 @@ internal static class GoogleSqlScanner
                     {
                         var nextIsWord = i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word;
                         var afterNextEnds = i + 2 >= tokens.Count || tokens[i + 2].Kind == Kind.Semicolon;
+                        var afterNextHasLabel = i + 2 < tokens.Count && IsLabelToken(sql, tokens[i + 2])
+                            && (i + 3 >= tokens.Count || tokens[i + 3].Kind == Kind.Semicolon);
                         if (top == "exprCase") stack.Pop();
                         else if (top == "stmtCase" && parenDepth == 0)
                         {
@@ -327,16 +342,17 @@ internal static class GoogleSqlScanner
                         }
                         else if (parenDepth == 0)
                         {
-                            if (nextIsWord && BlockEnders.Contains(sql.Substring(tokens[i + 1].Start, tokens[i + 1].Length)) && afterNextEnds)
+                            if (nextIsWord && BlockEnders.Contains(sql.Substring(tokens[i + 1].Start, tokens[i + 1].Length)) && (afterNextEnds || afterNextHasLabel))
                             {
                                 atBlockBoundary = false;
                                 headerKind = null;
-                                i += 2;
+                                i += afterNextHasLabel ? 3 : 2;
                                 continue;
                             }
                             if (stack.Count > 0) stack.Pop();
                             atBlockBoundary = false;
                             headerKind = null;
+                            if (i + 1 < tokens.Count && IsLabelToken(sql, tokens[i + 1]) && afterNextEnds) i++;
                         }
                         if (stack.Count == 0)
                         {
@@ -379,7 +395,7 @@ internal static class GoogleSqlScanner
                             }
                         }
                     }
-                    else if (!inSimpleStmt && parenDepth == 0 && top != "exprCase")
+                    else if (!inSimpleStmt && parenDepth == 0 && bracketDepth == 0 && top != "exprCase")
                     {
                         if (headerKind == "then" && Is(sql, t, "THEN"))
                         {
@@ -440,7 +456,7 @@ internal static class GoogleSqlScanner
                     var t = tokens[i];
                     if (t.Kind == Kind.Open) depth++;
                     else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
-                    else if (depth == 0 && t.Kind == Kind.Word && (i == 0 || !IsChar(sql, tokens[i - 1], '.')) && Is(sql, t, "IN")) { i++; break; }
+                    else if (depth == 0 && t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i) && Is(sql, t, "IN")) { i++; break; }
                     i++;
                 }
                 ConsumeUntilKeyword("DO", null, consumeStop: true);
@@ -450,6 +466,7 @@ internal static class GoogleSqlScanner
             {
                 i++;
                 var depth = 0;
+                var bracketDepth = 0;
                 var caseDepth = 0;
                 var sawExpr = false;
                 while (i < tokens.Count)
@@ -457,7 +474,10 @@ internal static class GoogleSqlScanner
                     var t = tokens[i];
                     if (t.Kind == Kind.Open) depth++;
                     else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
-                    else if (depth == 0 && t.Kind == Kind.Word && (i == 0 || !IsChar(sql, tokens[i - 1], '.')))
+                    else if (IsChar(sql, t, '[')) bracketDepth++;
+                    else if (IsChar(sql, t, ']')) { if (bracketDepth > 0) bracketDepth--; }
+                    else if (depth == 0 && bracketDepth == 0 && t.Kind == Kind.Semicolon) { i++; break; }
+                    else if (depth == 0 && bracketDepth == 0 && t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
                     {
                         if (Is(sql, t, "CASE")) caseDepth++;
                         else if (Is(sql, t, "END") && caseDepth > 0) caseDepth--;
@@ -481,7 +501,7 @@ internal static class GoogleSqlScanner
                     else if (depth == 0)
                     {
                         if (t.Kind == Kind.Semicolon) { i++; break; }
-                        if (t.Kind == Kind.Word && (i == 0 || !IsChar(sql, tokens[i - 1], '.')))
+                        if (t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
                         {
                             if (Is(sql, t, "CASE")) caseDepth++;
                             else if (Is(sql, t, "END") && caseDepth > 0) caseDepth--;
@@ -489,6 +509,7 @@ internal static class GoogleSqlScanner
                             {
                                 i++;
                                 if (i < tokens.Count && tokens[i].Kind == Kind.Word && Is(sql, tokens[i], "REPEAT")) i++;
+                                if (i < tokens.Count && IsLabelToken(sql, tokens[i]) && (i + 1 >= tokens.Count || tokens[i + 1].Kind == Kind.Semicolon)) i++;
                                 if (i < tokens.Count && tokens[i].Kind == Kind.Semicolon) i++;
                                 break;
                             }
@@ -514,13 +535,16 @@ internal static class GoogleSqlScanner
             {
                 if (i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word && BlockEnders.Contains(sql.Substring(tokens[i + 1].Start, tokens[i + 1].Length))) i += 2;
                 else i++;
+                if (i < tokens.Count && IsLabelToken(sql, tokens[i]) && (i + 1 >= tokens.Count || tokens[i + 1].Kind == Kind.Semicolon)) i++;
                 if (i < tokens.Count && tokens[i].Kind == Kind.Semicolon) i++;
                 continue;
             }
             if (Is(sql, cur, "BEGIN"))
             {
                 var hasNext = i + 1 < tokens.Count;
-                var nextIsTx = hasNext && tokens[i + 1].Kind == Kind.Word && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"));
+                var nextIsTx = hasNext && tokens[i + 1].Kind == Kind.Word
+                    && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"))
+                    && !(i + 2 < tokens.Count && IsChar(sql, tokens[i + 2], ':'));
                 if (nextIsTx || !hasNext || tokens[i + 1].Kind == Kind.Semicolon)
                 {
                     var keyword = nextIsTx ? "BEGIN TRANSACTION" : "BEGIN";
@@ -648,7 +672,7 @@ internal static class GoogleSqlScanner
                         else if (depth == 0)
                         {
                             if (t.Kind == Kind.Semicolon) { i++; break; }
-                            if (t.Kind == Kind.Word && Is(sql, t, "BEGIN") && seenParams && (i == 0 || !IsChar(sql, tokens[i - 1], '.')))
+                            if (t.Kind == Kind.Word && Is(sql, t, "BEGIN") && seenParams && !IsQualifiedWord(sql, tokens, i))
                             {
                                 ConsumeProcedureBeginEnd();
                                 break;
@@ -722,20 +746,23 @@ internal static class GoogleSqlScanner
         return p < tokens.Count && tokens[p].Kind == Kind.Word && Is(sql, tokens[p], "PROCEDURE");
     }
 
+    static bool IsQualifiedWord(string sql, List<Token> tokens, int idx) =>
+        idx > 0 && (IsChar(sql, tokens[idx - 1], '.') || IsChar(sql, tokens[idx - 1], '@'));
+
     static bool IsWhileDoTerminator(string sql, List<Token> tokens, int idx, bool rejectAfterWhileOrFor)
     {
         var hasPrev = idx > 0;
         var hasNext = idx + 1 < tokens.Count;
-        var prevIsWord = hasPrev && tokens[idx - 1].Kind == Kind.Word && (idx < 2 || !IsChar(sql, tokens[idx - 2], '.'));
+        var prevIsWord = hasPrev && tokens[idx - 1].Kind == Kind.Word && !IsQualifiedWord(sql, tokens, idx - 1);
         var prevUpper = prevIsWord ? sql.Substring(tokens[idx - 1].Start, tokens[idx - 1].Length).ToUpperInvariant() : "";
         var prevCont = hasPrev && (
             (prevIsWord && ((rejectAfterWhileOrFor && prevUpper is "WHILE" or "FOR") || WhilePrevContWords.Contains(prevUpper)))
             || tokens[idx - 1].Kind == Kind.Open
-            || (tokens[idx - 1].Kind == Kind.Other && tokens[idx - 1].Length == 1 && sql[tokens[idx - 1].Start] is ',' or '=' or '<' or '>' or '!' or '+' or '-' or '*' or '/' or '%' or '|' or '&' or '^' or '~' or '.')
+            || (tokens[idx - 1].Kind == Kind.Other && tokens[idx - 1].Length == 1 && sql[tokens[idx - 1].Start] is ',' or '=' or '<' or '>' or '!' or '+' or '-' or '*' or '/' or '%' or '|' or '&' or '^' or '~' or '.' or '[' or '@')
         );
         var nextCont = hasNext && (
             (tokens[idx + 1].Kind == Kind.Word && WhileNextInfixWords.Contains(sql.Substring(tokens[idx + 1].Start, tokens[idx + 1].Length)))
-            || (tokens[idx + 1].Kind == Kind.Other && tokens[idx + 1].Length == 1 && sql[tokens[idx + 1].Start] is ',' or '=' or '<' or '>' or '!' or '+' or '-' or '*' or '/' or '%' or '|' or '&' or '^' or '.')
+            || (tokens[idx + 1].Kind == Kind.Other && tokens[idx + 1].Length == 1 && sql[tokens[idx + 1].Start] is ',' or '=' or '<' or '>' or '!' or '+' or '-' or '*' or '/' or '%' or '|' or '&' or '^' or '.' or '[' or ']')
         );
         var isIntervalExpr = prevIsWord && prevUpper == "INTERVAL" && hasNext && tokens[idx + 1].Kind == Kind.Word
             && IntervalDateParts.Contains(sql.Substring(tokens[idx + 1].Start, tokens[idx + 1].Length));
@@ -816,7 +843,7 @@ internal static class GoogleSqlScanner
                         }
                     }
                 }
-                else if (depth == 0 && (scan == 0 || !IsChar(sql, tokens[scan - 1], '.')))
+                else if (depth == 0 && !IsQualifiedWord(sql, tokens, scan))
                 {
                     if (t.Kind == Kind.Semicolon) break;
                     if (seenCteBody && prevZeroChar != ',' && !IsChar(sql, t, ','))
@@ -876,7 +903,7 @@ internal static class GoogleSqlScanner
             if (char.IsWhiteSpace(c)) { i++; continue; }
             if (c == '#' || c == '-' && i + 1 < n && sql[i + 1] == '-')
             {
-                while (i < n && sql[i] != '\n') i++;
+                while (i < n && sql[i] != '\n' && sql[i] != '\r') i++;
                 continue;
             }
             if (c == '/' && i + 1 < n && sql[i + 1] == '*')
@@ -911,6 +938,46 @@ internal static class GoogleSqlScanner
                     continue;
                 }
                 tokens.Add(new(Kind.Word, depth, start, i - start));
+                continue;
+            }
+            if (c == '0' && i + 1 < n && sql[i + 1] is 'x' or 'X' && i + 2 < n && char.IsAsciiHexDigit(sql[i + 2]))
+            {
+                var start = i;
+                i += 2;
+                while (i < n && char.IsAsciiHexDigit(sql[i])) i++;
+                tokens.Add(new(Kind.Other, depth, start, i - start));
+                continue;
+            }
+            if (char.IsAsciiDigit(c) || (c == '.' && i + 1 < n && char.IsAsciiDigit(sql[i + 1])))
+            {
+                // Tokenize GoogleSQL numeric literals (including trailing-decimal floats like `1.`) as a single Kind.Other token
+                // so trailing `.` is never mistaken for a struct-member dot before THEN / DO / WHEN / END.
+                var start = i;
+                if (c == '.')
+                {
+                    i++;
+                    while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                }
+                else
+                {
+                    while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                    if (i < n && sql[i] == '.')
+                    {
+                        i++;
+                        while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                    }
+                }
+                if (i < n && sql[i] is 'e' or 'E')
+                {
+                    var exp = i + 1;
+                    if (exp < n && sql[exp] is '+' or '-') exp++;
+                    if (exp < n && char.IsAsciiDigit(sql[exp]))
+                    {
+                        i = exp;
+                        while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                    }
+                }
+                tokens.Add(new(Kind.Other, depth, start, i - start));
                 continue;
             }
             if (c == '(') { tokens.Add(new(Kind.Open, depth, i, 1)); depth++; i++; continue; }
@@ -951,7 +1018,7 @@ internal static class GoogleSqlScanner
                 if (i + 2 < sql.Length && sql[i + 1] == quote && sql[i + 2] == quote) return i + 3;
             }
             // A single-quoted string ends at its line (GoogleSQL refuses the rest); the scan goes on from there.
-            if (!triple && quote != '`' && c == '\n') return i;
+            if (!triple && quote != '`' && c is '\n' or '\r') return i;
             i++;
         }
         return sql.Length;

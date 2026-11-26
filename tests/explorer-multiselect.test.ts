@@ -10,6 +10,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import ExplorerPane from '../src/renderer/src/explorer/ExplorerPane'
 import ExplorerTree from '../src/renderer/src/explorer/ExplorerTree'
+import { ExplorerService } from '../src/renderer/src/explorer/ExplorerService'
 import { PinnedServerRow } from '../src/renderer/src/explorer/ExplorerRow'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 
@@ -341,6 +342,7 @@ describe('ExplorerPane & ExplorerTree multi-select pointer, keyboard, ARIA, and 
     // Ctrl+Click incompatible BigQuery server does not add it and raises calm info toast.
     await act(async () => {
       rowEl(bq1).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      rowEl(bq1).dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true, detail: 1 }))
     })
     expect(workbench.explorer.getSnapshot().multiSelected).toEqual([sql1, sql2])
     expect(workbench.notifications.getSnapshot().visible.some(t => t.severity === 'info' && t.message.includes('New Cross-Engine SELECT…'))).toBe(true)
@@ -551,5 +553,594 @@ describe('ExplorerPane & ExplorerTree multi-select pointer, keyboard, ARIA, and 
     const sqlRow = host.querySelector<HTMLDivElement>(`[data-row-id="${sql1}"]`)!
     expect(sqlRow.classList.contains('dimmed')).toBe(true)
     expect(sqlRow.textContent).toContain('BQ only')
+    expect(sqlRow.querySelector('.oe-server-check')).toBeNull()
+    expect(sqlRow.getAttribute('aria-description')).toContain('BigQuery')
+  })
+
+  it('enforces the 32-target cap, exits cleanly below 2, guards double-click/middle-click/checkbox clicks, rescues focus, and sets data-focused', async () => {
+    const harness = createExplorerHarness('win32')
+    const { workbench } = harness
+    // Single-server workspace cannot get trapped in 1-item multiSelected.
+    connectSql(workbench, 'sql-01')
+    workbench.explorer.settle()
+    const firstId = serverRowId(workbench, 'sql-01')
+    workbench.explorer.select(firstId)
+    expect(workbench.explorer.toggleMultiSelect(firstId).changed).toBe(false)
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+
+    // Connect 34 SQL Servers total -> selectAllServersByProvider caps at 32 with calm notice and no duplicate "selected".
+    for (let i = 2; i <= 34; i++) connectSql(workbench, `sql-${String(i).padStart(2, '0')}`)
+    workbench.explorer.settle()
+    const all = workbench.explorer.selectAllServersByProvider('sqlserver')
+    expect(all.length).toBe(32)
+    expect(workbench.explorer.getSnapshot().multiSelectNotice).toContain('32')
+    expect(workbench.explorer.getSnapshot().announcement?.text).not.toContain('selected selected')
+
+    // Adding a 33rd server via toggleMultiSelect is refused with the 32-target cap notice.
+    const row33 = serverRowId(workbench, 'sql-33')
+    const capRes = workbench.explorer.toggleMultiSelect(row33)
+    expect(capRes.changed).toBe(false)
+    expect(capRes.notice).toContain('32')
+    expect(workbench.explorer.getSnapshot().multiSelected.length).toBe(32)
+
+    // Mount pane and verify checkbox click toggles without wiping multiSelected, middle-click preserves multiSelected,
+    // double-click with Ctrl does not expand/collapse, and removing down to 1 exits multi-select cleanly.
+    workbench.explorer.clearMultiSelect()
+    const r1 = serverRowId(workbench, 'sql-01')
+    const r2 = serverRowId(workbench, 'sql-02')
+    const r3 = serverRowId(workbench, 'sql-03')
+    workbench.explorer.select(r1)
+    workbench.explorer.toggleMultiSelect(r2)
+    workbench.explorer.toggleMultiSelect(r3)
+
+    const { host, tree } = await mountExplorerPane(harness)
+    const row2 = host.querySelector<HTMLDivElement>(`[data-row-id="${r2}"]`)!
+    const row3 = host.querySelector<HTMLDivElement>(`[data-row-id="${r3}"]`)!
+    // Focused row carries data-focused even if we arrow onto a different row.
+    expect(row3.hasAttribute('data-focused')).toBe(true)
+
+    // Middle-click on row2 does not clear multiSelected.
+    await act(async () => {
+      row2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1 }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([r1, r2, r3])
+
+    // Ctrl+double-click does not toggle expand state of row2.
+    const expandedBefore = workbench.explorer.node(r2)!.expanded
+    await act(async () => {
+      row2.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, ctrlKey: true }))
+    })
+    expect(workbench.explorer.node(r2)!.expanded).toBe(expandedBefore)
+
+    // Plain click on visible .oe-server-check toggles that server out instead of wiping multiSelected.
+    const check2 = row2.querySelector<HTMLElement>('.oe-server-check')!
+    expect(check2).toBeTruthy()
+    await act(async () => {
+      check2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([r1, r3])
+
+    // Focus a button in .oe-multi-bar, then drop selection below 2 -> multiSelected clears cleanly and focus returns to tree.
+    const clearBtn = host.querySelector<HTMLButtonElement>('.oe-multi-bar-clear')!
+    await act(async () => { clearBtn.focus() })
+    expect(document.activeElement).toBe(clearBtn)
+    await act(async () => { workbench.explorer.toggleMultiSelect(r3) })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(document.activeElement).toBe(tree())
+  })
+
+  it('suppresses PinnedServerRow jump when mod key is released between mousedown and click, and exposes multiSelected in aria-label', async () => {
+    const harness = createExplorerHarness('darwin')
+    const { workbench, renderer } = harness
+    connectSql(workbench, 'pin-1')
+    connectSql(workbench, 'pin-2')
+    workbench.explorer.settle()
+    const r1 = serverRowId(workbench, 'pin-1')
+    const r2 = serverRowId(workbench, 'pin-2')
+    const node2 = workbench.explorer.node(r2)!
+    workbench.explorer.select(r1)
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    const jump2 = vi.fn()
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: renderer,
+        children: createElement(PinnedServerRow, {
+          node: node2, edge: 'top', current: false, active: false, color: undefined, menu: false, jump: jump2,
+          multiSelected: true, inMultiSelect: true, incompatible: false
+        })
+      }))
+    })
+    cleanups.push(() => { act(() => root.unmount()); workbench.dispose() })
+    const btn2 = host.querySelector<HTMLButtonElement>('button')!
+    expect(btn2.getAttribute('aria-label')).toContain('selected')
+
+    // Hold ⌘ on mousedown, dispatch mouseup + drain microtasks, then click -> jump2 must NOT fire.
+    await act(async () => {
+      btn2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, metaKey: true }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, metaKey: false }))
+      await Promise.resolve()
+      btn2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, metaKey: false }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([r1, r2])
+    expect(jump2).not.toHaveBeenCalled()
+
+    // Plain click on .oe-server-check inside PinnedServerRow survives mouseup microtask drain without jumping.
+    const check = btn2.querySelector<HTMLElement>('.oe-server-check')!
+    await act(async () => {
+      check.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+      await Promise.resolve()
+      check.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(workbench.explorer.getSnapshot().selected).toBe(r1)
+    expect(jump2).not.toHaveBeenCalled()
+
+    // Dragging off after a suppressed mousedown clears suppressNextClick AND removes the window blur listener on the next macrotask.
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    await act(async () => {
+      btn2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, metaKey: true }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, metaKey: false }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+      btn2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, metaKey: false }))
+    })
+    expect(removeSpy).toHaveBeenCalledWith('blur', expect.any(Function))
+    removeSpy.mockRestore()
+    expect(jump2).toHaveBeenCalledTimes(1)
+
+    // Right-click on PinnedServerRow must NOT leave suppressNextClick stuck for a later keyboard Enter/Space click.
+    await act(async () => {
+      btn2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2 }))
+      btn2.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }))
+      btn2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }))
+    })
+    expect(jump2).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves 1-item keyboard seed across expanded server child rows, handles Escape in multi-bar, prunes 1-item seed on peer disconnect, and gates aria-multiselectable on same-engine pairs', async () => {
+    const harness = createExplorerHarness('win32')
+    const { workbench } = harness
+    // 1 SQL + 1 BQ -> no same-engine pair -> aria-multiselectable must be absent.
+    const sql1Conn = connectSql(workbench, 'exp-sql-1')
+    connectBq(workbench, 'exp-bq-1')
+    workbench.explorer.settle()
+    const { host, tree } = await mountExplorerPane(harness)
+    expect(tree().getAttribute('aria-multiselectable')).toBeNull()
+
+    // Add second SQL Server -> aria-multiselectable appears.
+    let sql2Conn!: ReturnType<typeof connectSql>
+    await act(async () => {
+      sql2Conn = connectSql(workbench, 'exp-sql-2')
+      workbench.explorer.settle()
+    })
+    expect(tree().getAttribute('aria-multiselectable')).toBe('true')
+
+    const s1 = serverRowId(workbench, 'exp-sql-1')
+    const s2 = serverRowId(workbench, 'exp-sql-2')
+    // Keep exp-sql-1 EXPANDED (default) and verify keyboard Space -> ArrowDown through children -> Space on s2 works!
+    await act(async () => {
+      workbench.explorer.select(s1)
+      workbench.explorer.toggleMultiSelect()
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1])
+    for (let step = 0; step < 10 && workbench.explorer.getSnapshot().selected !== s2; step++) {
+      await act(async () => {
+        tree().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      })
+    }
+    expect(workbench.explorer.getSnapshot().selected).toBe(s2)
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1])
+    await act(async () => { workbench.explorer.toggleMultiSelect() })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+
+    // Shift+Escape must NOT clear multi-select.
+    await act(async () => {
+      tree().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', shiftKey: true, bubbles: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+
+    // Escape while focused inside .oe-multi-bar clears selection and returns focus to the tree.
+    const clearBtn = host.querySelector<HTMLButtonElement>('.oe-multi-bar-clear')!
+    await act(async () => {
+      clearBtn.focus()
+      clearBtn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(document.activeElement).toBe(tree())
+
+    // Disconnecting the only same-engine peer clears a 1-item multiSelected seed and any stale multiSelectNotice.
+    const bq1 = serverRowId(workbench, 'exp-bq-1')
+    await act(async () => {
+      workbench.explorer.select(s1)
+      workbench.explorer.toggleMultiSelect(bq1, { silentNotice: true })
+    })
+    expect(workbench.explorer.getSnapshot().multiSelectNotice).toBeTruthy()
+    await act(async () => {
+      const op = workbench.connectionTargets.beginDisconnect(sql2Conn.targetId, crypto.randomUUID())!
+      workbench.connectionTargets.completeDisconnect(op)
+      workbench.explorer.settle()
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(workbench.explorer.getSnapshot().multiSelectNotice).toBeUndefined()
+    expect(sql1Conn.info.id).toBeTruthy()
+  })
+
+  it('preserves multiSelected across auto-expand single-child walks, avoids double announcements on silentNotice, and preserves multiSelected on plain PinnedServerRow mousedown', async () => {
+    const harness = createExplorerHarness('win32', params => {
+      const node = params.node as { type?: string; object?: { kind?: string } }
+      if (node.type === 'object' && node.object?.kind === 'server') {
+        return {
+          nodes: [{ ref: { type: 'folder', owner: { kind: 'server' }, folder: 'databases' }, kind: 'folder', folder: 'databases', label: 'Databases', icon: 'folder', hasChildren: true }],
+          elapsedMs: 1,
+          total: 1
+        }
+      }
+      return { nodes: [], elapsedMs: 1, total: 0 }
+    })
+    const { workbench, renderer } = harness
+    connectSql(workbench, 'auto-sql-1')
+    connectSql(workbench, 'auto-sql-2')
+    connectBq(workbench, 'auto-bq-1')
+    workbench.explorer.settle()
+    const s1 = serverRowId(workbench, 'auto-sql-1')
+    const s2 = serverRowId(workbench, 'auto-sql-2')
+    const bq1 = serverRowId(workbench, 'auto-bq-1')
+
+    workbench.explorer.close(s1)
+    workbench.explorer.close(s2)
+    workbench.explorer.select(s1)
+    workbench.explorer.toggleMultiSelect(s2)
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+
+    // Auto-expanding a single-child server advances selected into its only child while preserving multiSelected.
+    await act(async () => {
+      workbench.explorer.open(s1, true)
+      await Promise.resolve()
+      await Promise.resolve()
+      workbench.explorer.settle()
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+    expect(workbench.explorer.getSnapshot().selected).not.toBe(s1)
+
+    // silentNotice suppresses Explorer's live-region announcement so the toast announces it once.
+    const announcementBefore = workbench.explorer.getSnapshot().announcement?.id
+    const rejected = workbench.explorer.toggleMultiSelect(bq1, { silentNotice: true })
+    expect(rejected.notice).toContain('locked to SQL Server')
+    expect(workbench.explorer.getSnapshot().announcement?.id).toBe(announcementBefore)
+
+    // PinnedServerRow wired with ExplorerTree-style onServerMouseDown (selectOnPrimaryDown = false):
+    // plain mousedown + drag-off must NOT clear multiSelected; only click invokes jump.
+    // Even when the pinned button is focused and onServerMouseDown moves focus to the tree (triggering blur),
+    // clicking .oe-server-check must NOT fire jump().
+    const host = document.body.appendChild(document.createElement('div'))
+    const treeFocusTarget = host.appendChild(document.createElement('div'))
+    treeFocusTarget.tabIndex = 0
+    const pinHost = host.appendChild(document.createElement('div'))
+    const root = createRoot(pinHost)
+    const jump = vi.fn()
+    const onServerMouseDown = vi.fn((event: { target?: EventTarget | null; button: number }) => {
+      if ((event.target as Element | null)?.closest?.('.oe-server-check')) {
+        workbench.explorer.toggleMultiSelect(s2, { silentNotice: true })
+        treeFocusTarget.focus()
+      }
+    })
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: renderer,
+        children: createElement(PinnedServerRow, {
+          node: workbench.explorer.node(s2)!, edge: 'top', current: false, active: false, color: undefined, menu: false, jump,
+          multiSelected: true, inMultiSelect: true, incompatible: false, onServerMouseDown
+        })
+      }))
+    })
+    cleanups.push(() => { act(() => root.unmount()); workbench.dispose() })
+    const btn = pinHost.querySelector<HTMLButtonElement>('button')!
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    })
+    expect(onServerMouseDown).toHaveBeenCalledTimes(1)
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+    expect(jump).not.toHaveBeenCalled()
+
+    // Focus the pinned button, then click its checkbox so onServerMouseDown shifts focus (blurring btn) mid-mousedown.
+    const check = btn.querySelector<HTMLElement>('.oe-server-check')!
+    await act(async () => {
+      btn.focus()
+      check.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+      await Promise.resolve()
+      check.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }))
+    })
+    expect(jump).not.toHaveBeenCalled()
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(workbench.explorer.getSnapshot().selected).toBe(s1)
+
+    // multiSelectNotice survives an unrelated dirty flush when multiSelected is empty.
+    workbench.explorer.toggleMultiSelect(bq1, { silentNotice: true })
+    workbench.explorer.settle()
+    expect(workbench.explorer.getSnapshot().multiSelectNotice).toContain('locked to SQL Server')
+  })
+
+  it('restores exact multiSelected order, 1-item seeds, and selected row when Ctrl+Drag starts on a ServerTreeRow', async () => {
+    const harness = createExplorerHarness('win32')
+    const { workbench } = harness
+    connectSql(workbench, 'drag-sql-1')
+    connectSql(workbench, 'drag-sql-2')
+    connectSql(workbench, 'drag-sql-3')
+    workbench.explorer.settle()
+    const { host } = await mountExplorerPane(harness)
+    const s1 = serverRowId(workbench, 'drag-sql-1')
+    const s2 = serverRowId(workbench, 'drag-sql-2')
+    const s3 = serverRowId(workbench, 'drag-sql-3')
+    const rowEl = (id: number) => host.querySelector<HTMLElement>(`[data-row-id="${id}"]`)!
+    const startDrag = (el: HTMLElement) => {
+      const ev = new Event('dragstart', { bubbles: true, cancelable: true }) as DragEvent
+      Object.defineProperty(ev, 'dataTransfer', { value: { setData: vi.fn(), effectAllowed: '' } })
+      el.dispatchEvent(ev)
+    }
+
+    // 1. From empty multiSelected (s1 selected), Ctrl+Drag on s2 restores multiSelected=[] and selected=s1.
+    await act(async () => { workbench.explorer.select(s1) })
+    await act(async () => {
+      rowEl(s2).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      startDrag(rowEl(s2))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(workbench.explorer.getSnapshot().selected).toBe(s1)
+
+    // 2. From 1-item keyboard seed [s1] with focus on s2, Ctrl+Drag on s2 preserves seed [s1].
+    await act(async () => {
+      workbench.explorer.select(s1)
+      workbench.explorer.toggleMultiSelect()
+      workbench.explorer.select(s2, { preserveMultiSelect: true })
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1])
+    await act(async () => {
+      rowEl(s2).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      startDrag(rowEl(s2))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1])
+    expect(workbench.explorer.getSnapshot().selected).toBe(s2)
+
+    // 3. From 3-item selection [s1, s2, s3], Ctrl+Drag on index 0 (s1) preserves exact order [s1, s2, s3] with zero announcements or toasts.
+    await act(async () => {
+      workbench.explorer.toggleMultiSelect(s2)
+      workbench.explorer.toggleMultiSelect(s3)
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2, s3])
+    const annBefore = workbench.explorer.getSnapshot().announcement?.id
+    await act(async () => {
+      rowEl(s1).dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      startDrag(rowEl(s1))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2, s3])
+    expect(workbench.explorer.getSnapshot().announcement?.id).toBe(annBefore)
+  })
+
+  it('suppresses synthesized ServerTreeRow click after Ctrl+Click on .oe-server-check, plain mousedown + mid-click modifier, macOS Control+Cmd+Click, and LostActions click', async () => {
+    const harness = createExplorerHarness('win32')
+    const { workbench } = harness
+    connectSql(workbench, 'click-sql-1')
+    connectSql(workbench, 'click-sql-2')
+    const lostTarget = connectSql(workbench, 'click-sql-lost')
+    workbench.explorer.settle()
+    const s1 = serverRowId(workbench, 'click-sql-1')
+    const s2 = serverRowId(workbench, 'click-sql-2')
+    const sLost = serverRowId(workbench, 'click-sql-lost')
+    const lostOp = workbench.connectionTargets.beginDisconnect(lostTarget.targetId, crypto.randomUUID())!
+    workbench.connectionTargets.completeDisconnect(lostOp)
+    workbench.explorer.settle()
+    const { host, tree } = await mountExplorerPane(harness)
+
+    // 1. Ctrl+Click on .oe-server-check in a 2-server selection unmounts .oe-server-check on mousedown;
+    //    the browser's synthesized click on .oe-server-top (LCA) must NOT double-toggle s2 back on.
+    await act(async () => {
+      workbench.explorer.select(s1)
+      workbench.explorer.toggleMultiSelect(s2)
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+    const row2 = host.querySelector<HTMLElement>(`[data-row-id="${s2}"]`)!
+    const check2 = row2.querySelector<HTMLElement>('.oe-server-check')!
+    const top2 = row2.querySelector<HTMLElement>('.oe-server-top')!
+    await act(async () => {
+      check2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(row2.querySelector('.oe-server-check')).toBeNull()
+    await act(async () => {
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ctrlKey: true }))
+      top2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(workbench.explorer.getSnapshot().selected).toBe(s1)
+
+    // Wait a macrotask so mouseup cleanup finishes before the next pointer sequence.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    // 2. Plain mousedown on s2 followed by Ctrl held before click must NOT seed multi-select.
+    await act(async () => {
+      row2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ctrlKey: true }))
+      row2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([])
+    expect(workbench.explorer.getSnapshot().selected).toBe(s2)
+
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    // 3. Ctrl+Click on LostActions button does not bubble into ServerTreeRow.onClick or steal focus to tree.
+    const lostRow = host.querySelector<HTMLElement>(`[data-row-id="${sLost}"]`)!
+    const lostBtn = lostRow.querySelector<HTMLButtonElement>('.oe-actions button')!
+    const otherFocus = document.body.appendChild(document.createElement('button'))
+    cleanups.push(() => otherFocus.remove())
+    otherFocus.focus()
+    const focusSpy = vi.spyOn(tree(), 'focus')
+    await act(async () => {
+      lostBtn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      lostBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true }))
+    })
+    expect(focusSpy).not.toHaveBeenCalled()
+    focusSpy.mockRestore()
+
+    // 4. macOS Control+Cmd+Click (secondaryClick + addToSelection) preserves multiSelected on mousedown and click.
+    const macHarness = createExplorerHarness('darwin')
+    connectSql(macHarness.workbench, 'mac-sql-1')
+    connectSql(macHarness.workbench, 'mac-sql-2')
+    macHarness.workbench.explorer.settle()
+    const m1 = serverRowId(macHarness.workbench, 'mac-sql-1')
+    const m2 = serverRowId(macHarness.workbench, 'mac-sql-2')
+    macHarness.workbench.explorer.select(m1)
+    macHarness.workbench.explorer.toggleMultiSelect(m2)
+    const { host: macHost } = await mountExplorerPane(macHarness)
+    const macRow2 = macHost.querySelector<HTMLElement>(`[data-row-id="${m2}"]`)!
+    await act(async () => {
+      macRow2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true, metaKey: true }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ctrlKey: true, metaKey: true }))
+      macRow2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true, metaKey: true }))
+    })
+    expect(macHarness.workbench.explorer.getSnapshot().multiSelected).toEqual([m1, m2])
+
+    // 5. Clicking .oe-actions gap on a lost server does NOT wipe multiSelected, and Ctrl+mousedown on .oe-twistie
+    //    drifting onto .oe-server-top does NOT toggle multiSelected on click.
+    await act(async () => {
+      workbench.explorer.select(s1)
+      workbench.explorer.toggleMultiSelect(s2)
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+    const lostActions = lostRow.querySelector<HTMLElement>('.oe-actions')!
+    await act(async () => {
+      lostActions.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      lostActions.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+
+    const twistie2 = row2.querySelector<HTMLElement>('.oe-twistie')!
+    await act(async () => {
+      twistie2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ctrlKey: true }))
+      top2.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s1, s2])
+  })
+
+  it('prevents snapshot tearing between connections updates and deferred ExplorerService flushes', async () => {
+    const harness = createExplorerHarness('win32')
+    const { workbench, renderer } = harness
+    const frames: (() => void)[] = []
+    const deferredExplorer = new ExplorerService({
+      api: workbench.api,
+      connections: workbench.connections,
+      events: workbench.events,
+      schedule: cb => { frames.push(cb) }
+    })
+    cleanups.push(() => deferredExplorer.dispose())
+    const flushFrames = () => { while (frames.length) frames.shift()!() }
+
+    const bq1 = connectBq(workbench, 'tear-bq-1')
+    const bq2 = connectBq(workbench, 'tear-bq-2')
+    flushFrames()
+    const r1 = deferredExplorer.getSnapshot().rows.nodes.find(n => n?.parent === 0 && n.label === 'tear-bq-1')!.id
+    const r2 = deferredExplorer.getSnapshot().rows.nodes.find(n => n?.parent === 0 && n.label === 'tear-bq-2')!.id
+    deferredExplorer.select(r1)
+    deferredExplorer.toggleMultiSelect(r2)
+    expect(deferredExplorer.getSnapshot().multiSelected).toEqual([r1, r2])
+    expect(deferredExplorer.getSnapshot().multiSelectProvider).toBe('bigquery')
+
+    const deferredHarness = {
+      ...harness,
+      renderer: { ...renderer, explorer: deferredExplorer } as unknown as Workbench
+    }
+    const { host } = await mountExplorerPane(deferredHarness)
+
+    // Disconnect bq2 while deferred ExplorerService has NOT flushed yet (simulating production requestAnimationFrame).
+    // connections notifies ExplorerPane/ExplorerTree synchronously before nextFrame.
+    await act(async () => {
+      const op = workbench.connectionTargets.beginDisconnect(bq2.targetId, crypto.randomUUID())!
+      workbench.connectionTargets.completeDisconnect(op)
+    })
+    // Before flushFrames(): bar must NOT flash "SQL Servers selected", connected bq1 must NOT flash engine-incompatible,
+    // and disconnected bq2 must NOT carry data-multi-selected or aria-selected="true".
+    const barLabel = host.querySelector<HTMLElement>('.oe-multi-bar-label')
+    expect(barLabel?.textContent).toBe('2 BigQuery Projects selected')
+    const row1 = host.querySelector<HTMLElement>(`[data-row-id="${r1}"]`)!
+    const row2 = host.querySelector<HTMLElement>(`[data-row-id="${r2}"]`)!
+    expect(row1.hasAttribute('data-engine-incompatible')).toBe(false)
+    expect(row1.querySelector('.oe-server-check .codicon')).toBeTruthy()
+    expect(row2.hasAttribute('data-multi-selected')).toBe(false)
+    expect(row2.getAttribute('aria-selected')).toBe('false')
+    expect(host.querySelector('.oe-multi-bar-clear .codicon')).toBeTruthy()
+
+    // Right-clicking r1 pre-flush settles ExplorerService so selection and menuNode() never disagree.
+    await act(async () => {
+      row1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2 }))
+    })
+    expect(deferredExplorer.getSnapshot().selected).toBe(r1)
+    expect(deferredExplorer.getSnapshot().multiSelected).toEqual([])
+    expect(deferredExplorer.menuNode(r1)?.multiSelected).toBeUndefined()
+    expect(host.querySelector('.oe-multi-bar')).toBeNull()
+
+    // Once any remaining deferred frame flushes, state remains clean.
+    await act(async () => { flushFrames() })
+    expect(deferredExplorer.getSnapshot().multiSelected).toEqual([])
+    expect(bq1.info.id).toBeTruthy()
+
+    // selectAllServersByProvider increments reveal when changing selection and honors silentNotice.
+    const capHarness = createExplorerHarness('win32')
+    const capNotes: string[] = []
+    const capExplorer = new ExplorerService({
+      api: capHarness.workbench.api,
+      connections: capHarness.workbench.connections,
+      events: capHarness.workbench.events,
+      schedule: cb => cb(),
+      onMultiSelectNotice: msg => capNotes.push(msg)
+    })
+    cleanups.push(() => { capExplorer.dispose(); capHarness.workbench.dispose() })
+    for (let idx = 1; idx <= 33; idx++) connectSql(capHarness.workbench, `cap-sql-${idx}`)
+    const sql33 = capExplorer.settle().rows.nodes.find(n => n?.parent === 0 && n.label === 'cap-sql-33')!.id
+    capExplorer.select(sql33)
+    const revealBefore = capExplorer.getSnapshot().reveal ?? 0
+    const selectedAll = capExplorer.selectAllServersByProvider('sqlserver', { silentNotice: true })
+    expect(selectedAll).toHaveLength(32)
+    expect(capExplorer.getSnapshot().selected).toBe(selectedAll[0])
+    expect(capExplorer.getSnapshot().reveal).toBe(revealBefore + 1)
+    expect(capNotes).toEqual([])
+  })
+
+  it('handles Ctrl+Click on live ExplorerTree pinned band (ExplorerPinnedBand -> PinnedServerRow) end-to-end', async () => {
+    const harness = createExplorerHarness('win32', () => ({
+      nodes: Array.from({ length: 40 }, (_, i) => ({
+        kind: 'database' as const, label: `db_${i}`, icon: 'database' as const, hasChildren: false,
+        ref: { type: 'object' as const, object: { kind: 'database' as const, name: `db_${i}` } }
+      })),
+      elapsedMs: 1, total: 40
+    }))
+    const { workbench } = harness
+    connectSql(workbench, 'band-sql-1')
+    connectSql(workbench, 'band-sql-2')
+    workbench.explorer.settle()
+    const s1 = serverRowId(workbench, 'band-sql-1')
+    const s2 = serverRowId(workbench, 'band-sql-2')
+    await workbench.explorer.toggleOpen(s1, false)
+    workbench.explorer.settle()
+    workbench.explorer.select(s2)
+
+    const { host, tree } = await mountExplorerPane(harness)
+    // Scroll down so band-sql-1 becomes pinned in the top ExplorerPinnedBand.
+    await act(async () => {
+      const el = tree()
+      el.scrollTop = 260
+      el.dispatchEvent(new Event('scroll'))
+    })
+    const pinnedBtn = host.querySelector<HTMLButtonElement>('.explorer-pin-band .explorer-pinned-server')
+    expect(pinnedBtn).toBeTruthy()
+    await act(async () => {
+      pinnedBtn!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, ctrlKey: true }))
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ctrlKey: true }))
+      pinnedBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, ctrlKey: true }))
+    })
+    expect(workbench.explorer.getSnapshot().multiSelected).toEqual([s2, s1])
   })
 })

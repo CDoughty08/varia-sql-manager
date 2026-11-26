@@ -708,7 +708,7 @@ internal sealed partial class SqlService
             if (windowed is null)
             {
                 // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
-                var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, owned, messages, token);
+                var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, owned, messages, token, set.TargetKey, set.TargetProvider);
                 // The reader owns the page from here.
                 var reading = owned;
                 owned = null;

@@ -364,9 +364,11 @@ internal sealed class CellHasher
     /// result's columns take the first's).</summary>
     public bool ReadsExact(int column) => exacts[column];
 
+    private const NumberStyles FloatStyles = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent;
+
     /// <summary>Whether a non-NULL cell's characters count beyond its value, as <see cref="Same"/>'s <c>text</c> says: a
-    /// character column's, an exact numeric cell with trailing spaces or that is not a number, or a float cell that is not
-    /// a parseable number. Exact text compares such cells character for character.</summary>
+    /// character column's, an exact numeric cell with trailing spaces or that is not a number, or a float cell with trailing
+    /// spaces or that is not a parseable number. Exact text compares such cells character for character.</summary>
     public bool Literal(int column, ReadOnlySpan<byte> cell)
     {
         if (IsText(column)) return true;
@@ -377,7 +379,10 @@ internal sealed class CellHasher
             return trimmed.Length != cell.Length || !NumericParts(normalized, out _, out _, out _);
         }
         if (kinds[column] == Kind.Float)
-            return !double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+        {
+            var trimmed = ViewSorter.TrimEnd(cell);
+            return trimmed.Length != cell.Length || !double.TryParse(trimmed, FloatStyles, CultureInfo.InvariantCulture, out _);
+        }
         return false;
     }
 
@@ -392,31 +397,21 @@ internal sealed class CellHasher
     private ulong HashCell(PageView view, int column, int row, ulong hash) =>
         kinds[column] == Kind.Float
             ? Float(view, column, row, hash)
-            : WithExact(view, column, row, Value(view.Span(column, row), column, hash));
-
-    /// <summary>A float or real cell's exact value after its text, when the text reads back as another value: 1E0 and
-    /// 1.0000000000000002E0 both show as 1, and are different values.</summary>
-    private ulong WithExact(PageView view, int column, int row, ulong hash)
-    {
-        if (!exacts[column] || !view.TryExact(column, row, out var exact)) return hash;
-        Span<byte> bytes = stackalloc byte[8];
-        BinaryPrimitives.WriteInt64LittleEndian(bytes, CanonicalFloatBits(exact));
-        return Bytes(Step(hash, 0xfe), bytes);
-    }
+            : Value(view.Span(column, row), column, hash);
 
     /// <summary>Canonical IEEE-754 bits for float hashing and equality: -0.0 maps to +0.0 and every NaN maps to
     /// <see cref="double.NaN"/> so hash and equality stay in exact parity.</summary>
     internal static long CanonicalFloatBits(double value) =>
         BitConverter.DoubleToInt64Bits(value == 0d ? 0d : double.IsNaN(value) ? double.NaN : value);
 
-    private static bool TryFloat(PageView view, int column, int row, bool readsExact, out long bits)
+    private static bool TryFloat(PageView view, int column, int row, bool readsExact, ReadOnlySpan<byte> trimmed, out long bits)
     {
         if (readsExact && view.TryExact(column, row, out var exact))
         {
             bits = CanonicalFloatBits(exact);
             return true;
         }
-        if (double.TryParse(view.Span(column, row), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+        if (double.TryParse(trimmed, FloatStyles, CultureInfo.InvariantCulture, out var parsed))
         {
             bits = CanonicalFloatBits(parsed);
             return true;
@@ -427,8 +422,9 @@ internal sealed class CellHasher
 
     private ulong Float(PageView view, int column, int row, ulong hash)
     {
-        if (!TryFloat(view, column, row, exacts[column], out var bits))
-            return Bytes(Step(hash, (byte)'!'), view.Span(column, row));
+        var trimmed = ViewSorter.TrimEnd(view.Span(column, row));
+        if (!TryFloat(view, column, row, exacts[column], trimmed, out var bits))
+            return Bytes(Step(hash, (byte)'!'), trimmed);
         Span<byte> bytes = stackalloc byte[8];
         BinaryPrimitives.WriteInt64LittleEndian(bytes, bits);
         return Bytes(Step(hash, (byte)'#'), bytes);
@@ -448,14 +444,6 @@ internal sealed class CellHasher
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
         text = IsText(column);
-        if (kinds[column] != Kind.Float)
-        {
-            var exactX = 0d;
-            var exactY = 0d;
-            var exactA = exacts[column] && view.TryExact(column, row, out exactX);
-            var exactB = other.exacts[otherColumn] && otherView.TryExact(otherColumn, otherRow, out exactY);
-            if (exactA || exactB) return exactA && exactB && CanonicalFloatBits(exactX) == CanonicalFloatBits(exactY) && a.SequenceEqual(b);
-        }
         switch (kinds[column])
         {
             case Kind.Collated:
@@ -482,12 +470,15 @@ internal sealed class CellHasher
             }
             case Kind.Float:
             {
-                var hasA = TryFloat(view, column, row, exacts[column], out var bitsA);
-                var hasB = TryFloat(otherView, otherColumn, otherRow, other.exacts[otherColumn], out var bitsB);
+                var trimmedA = ViewSorter.TrimEnd(a);
+                var trimmedB = ViewSorter.TrimEnd(b);
+                text = trimmedA.Length != a.Length || trimmedB.Length != b.Length;
+                var hasA = TryFloat(view, column, row, exacts[column], trimmedA, out var bitsA);
+                var hasB = TryFloat(otherView, otherColumn, otherRow, other.exacts[otherColumn], trimmedB, out var bitsB);
                 if (!hasA || !hasB)
                 {
                     text = true;
-                    return !hasA && !hasB && a.SequenceEqual(b);
+                    return !hasA && !hasB && trimmedA.SequenceEqual(trimmedB);
                 }
                 return bitsA == bitsB;
             }
@@ -557,10 +548,10 @@ internal sealed class CellHasher
             }
             case Kind.Ticks:
             {
-                if (Instant(cell) is not { } ticks) return Bytes(hash, cell);
+                if (Instant(cell) is not { } ticks) return Bytes(Step(hash, (byte)'!'), cell);
                 Span<byte> bytes = stackalloc byte[8];
                 BinaryPrimitives.WriteInt64LittleEndian(bytes, ticks);
-                return Bytes(hash, bytes);
+                return Bytes(Step(hash, (byte)'#'), bytes);
             }
             case Kind.DateTime:
             case Kind.Time:
@@ -609,8 +600,14 @@ internal sealed class CellHasher
         return true;
     }
 
-    private long? Instant(ReadOnlySpan<byte> cell) => ViewSorter.UtcTicks(cell) ??
-        (DateTimeOffset.TryParse(Decode(cell[..Math.Min(cell.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : null);
+    private long? Instant(ReadOnlySpan<byte> cell)
+    {
+        if (ViewSorter.UtcTicks(cell) is { } fast) return fast;
+        var text = Decode(cell[..Math.Min(cell.Length, 64)]).Trim();
+        // Never assume TimeZoneInfo.Local for unzoned dates or datetimes (e.g. SQL Server date/datetime2 diffed against BigQuery TIMESTAMP).
+        if (!ViewSorter.HasExplicitZone(text)) return null;
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : null;
+    }
 
     private static long? UnzonedTicks(ReadOnlySpan<byte> cell, bool timeOnly) =>
         ViewSorter.TryInstant(cell, out var ticks, out _, out var dated, out var zoned) && !zoned && dated != timeOnly ? ticks : null;

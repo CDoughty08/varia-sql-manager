@@ -257,8 +257,29 @@ internal sealed class ReadOnlySqlValidator : IReadOnlySqlValidator
                 case SelectSetVariable:
                     Add(node, "SELECT_ASSIGNMENT", "Variable assignment (SELECT @var = ...) is not allowed in cross-engine read-only mode.");
                     break;
+                case InvokeExternalApiFunctionCall:
+                case FunctionCall fc when IsBuiltInOrSysCall(fc) && string.Equals(fc.FunctionName?.Value, "INVOKE_EXTERNAL_API", StringComparison.OrdinalIgnoreCase):
+                    Add(node, "INVOKE_EXTERNAL_API", "INVOKE_EXTERNAL_API is not allowed in cross-engine read-only mode.");
+                    break;
+                case AIGenerateEmbeddingsFunctionCall or AIGenerateResponseFunctionCall or AIAnalyzeSentimentFunctionCall
+                    or AIClassifyFunctionCall or AIExtractFunctionCall or AIFixGrammarFunctionCall
+                    or AISummarizeFunctionCall or AITranslateFunctionCall:
+                case FunctionCall aiFc when IsBuiltInOrSysCall(aiFc) && ExternalAiFunctionNames.Contains(aiFc.FunctionName?.Value ?? ""):
+                    Add(node, "EXTERNAL_AI_CALL", "External AI model calls are not allowed in cross-engine read-only mode.");
+                    break;
             }
         }
+
+        private static readonly HashSet<string> ExternalAiFunctionNames = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "AI_GENERATE_EMBEDDINGS", "AI_GENERATE_RESPONSE", "AI_ANALYZE_SENTIMENT",
+            "AI_CLASSIFY", "AI_EXTRACT", "AI_FIX_GRAMMAR", "AI_SUMMARIZE", "AI_TRANSLATE"
+        };
+
+        private static bool IsBuiltInOrSysCall(FunctionCall fc) =>
+            fc.CallTarget is null
+            || (fc.CallTarget is MultiPartIdentifierCallTarget mp && mp.MultiPartIdentifier.Count >= 1
+                && string.Equals(mp.MultiPartIdentifier[^1].Value, "sys", StringComparison.OrdinalIgnoreCase));
 
         private void Add(TSqlFragment fragment, string keyword, string detail)
         {
