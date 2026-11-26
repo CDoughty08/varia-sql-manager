@@ -358,7 +358,10 @@ export function explorerContribution({ commands, documents, connections, explore
     commands.register('peek.copyProperties', {
       when: args => !!peekPropertiesOf(args)?.text,
       run: async args => { const text = peekPropertiesOf(args)?.text; if (text) unwrap(await api.writeClipboardText(text)) }
-    })
+    }),
+    ...(['explorer.toggleMultiSelect', 'explorer.newMultiServerQuery', 'explorer.newCrossEngineQuery', 'explorer.refreshSelected', 'explorer.clearMultiSelect', 'explorer.disconnectSelected', 'explorer.selectAllSqlServers', 'explorer.selectAllBigQueryProjects'] as const).map(id =>
+      commands.register(id, { when: () => false, run: () => {} })
+    )
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

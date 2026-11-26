@@ -360,7 +360,7 @@ export function scriptSubmenuEntries(): { readonly [K in typeof scriptAsSubmenuI
     // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out. A
     // Search Objects hit's menu stands in its own keys for the selection's (`selectionContextOf`).
     placements: [
-      { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background'" },
+      { menu: 'explorer.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != '' && explorerNode != 'background' && !explorerMultiSelected" },
       { menu: 'search.hit.context', group: '2_script', order: 1, mnemonic: 's', when: "explorerScriptTitle != ''" }
     ]
   }

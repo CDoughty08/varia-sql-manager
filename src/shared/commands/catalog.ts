@@ -309,36 +309,36 @@ export const commandCatalog = {
   },
   'query.includeActualPlan': {
     title: 'Include Actual Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['statistics', 'xml', 'showplan', 'capture'],
-    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeActualPlan',
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer', toggled: 'includeActualPlan',
     keybindings: [{ win: 'ctrl+m', linux: 'ctrl+m', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 3, mnemonic: 'i' }]
   },
   'query.includeLivePlan': {
     title: 'Include Live Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['profiling', 'statistics', 'progress'],
-    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeLivePlan',
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer', toggled: 'includeLivePlan',
     menus: [{ menu: 'query', group: '1_execute', order: 4, mnemonic: 'l' }]
   },
   'query.estimatePlan': {
     title: 'Display Estimated Execution Plan', category: 'Query', icon: 'execution-plan', keywords: ['compile', 'xml', 'showplan'], methods: ['plans.estimate'],
-    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer',
     unavailableHint: 'Connect an idle query to a server to estimate its execution plan.',
     keybindings: [{ key: 'mod+l', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 5, mnemonic: 'e' }, { menu: 'editor.context', group: '2_execute', order: 3, mnemonic: 'd' }]
   },
   'query.estimateSessionPlan': {
     title: 'Display Estimated Plan in Query Session', category: 'Query', icon: 'execution-plan', keywords: ['compile', 'showplan', 'temporary', 'session'],
-    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy',
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer',
     unavailableHint: 'Connect an idle query to estimate using its SQL session. Capture resets @@ROWCOUNT and @@ERROR.',
     menus: [{ menu: 'query', group: '1_execute', order: 6 }, { menu: 'editor.context', group: '2_execute', order: 4 }]
   },
   'query.includeClientStatistics': {
     title: 'Include Client Statistics', category: 'Query', icon: 'graph', keywords: ['bytes', 'roundtrips', 'timing'],
-    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy', toggled: 'includeClientStatistics',
+    precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer', toggled: 'includeClientStatistics',
     keybindings: [{ win: 'alt+shift+s', linux: 'alt+shift+s', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 7, mnemonic: 's' }]
   },
   'query.resetClientStatistics': {
-    title: 'Reset Client Statistics', category: 'Query', icon: 'clear-all', precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy',
+    title: 'Reset Client Statistics', category: 'Query', icon: 'clear-all', precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer',
     menus: [{ menu: 'query', group: '1_execute', order: 8, mnemonic: 'r' }]
   },
   'workbench.showCommands': {
@@ -361,7 +361,7 @@ export const commandCatalog = {
     unavailableHint: 'The backend is still starting.',
     menus: [
       { menu: 'file', group: '0_connect', order: 1, mnemonic: 'e' }, { menu: 'query.connection', group: '1_connect', order: 1, title: 'Connect…', mnemonic: 'c' },
-      { menu: 'explorer.context', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'c', when: "explorerNode == 'server' || explorerNode == 'background'" },
+      { menu: 'explorer.context', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'c', when: "(explorerNode == 'server' && !explorerMultiSelected) || explorerNode == 'background'" },
       { menu: 'explorer.tools', group: '0_connect', order: 1, title: 'Connect…', mnemonic: 'o' }
     ]
   },
@@ -370,7 +370,7 @@ export const commandCatalog = {
     // A server node's menu (and Object Explorer's ⋯ menu, for the selected node's server) disconnects that server without asking which.
     menus: [
       { menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' },
-      { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" },
+      { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected" },
       { menu: 'explorer.tools', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: '!explorerToolsLost' }
     ]
   },
@@ -378,7 +378,7 @@ export const commandCatalog = {
     title: 'Disconnect and Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnect', 'remove', 'explorer'],
     precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
     menus: [
-      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'o', when: "explorerNode == 'server' && !explorerServerLost" },
+      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'o', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected" },
       { menu: 'explorer.tools', group: '0_connect', order: 3, mnemonic: 'v', when: '!explorerToolsLost' }
     ]
   },
@@ -389,7 +389,7 @@ export const commandCatalog = {
     precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
     menus: [
       { menu: 'query.connection', group: '2_change', order: 2, title: 'Environment…' },
-      { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost" }
+      { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected" }
     ]
   },
   // An offline server's menu reconnects that target; elsewhere, the active query's target or one the user picks.
@@ -398,7 +398,7 @@ export const commandCatalog = {
     unavailableHint: 'No server is disconnected.', providers: both,
     menus: [
       { menu: 'file', group: '0_connect', order: 3, mnemonic: 'r' }, { menu: 'query.connection', group: '1_connect', order: 4, mnemonic: 'r' },
-      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost' },
+      { menu: 'explorer.context', group: '0_connect', order: 3, mnemonic: 'r', when: 'explorerServerLost && !explorerMultiSelected' },
       { menu: 'explorer.tools', group: '0_connect', order: 2, mnemonic: 'n', when: 'explorerToolsLost' }
     ]
   },
@@ -406,7 +406,7 @@ export const commandCatalog = {
     title: 'Remove from Explorer', category: 'Connection', icon: 'close', keywords: ['disconnected', 'remove', 'explorer'], precondition: 'hasLostConnection && !documentBusy',
     unavailableHint: 'No server is disconnected.',
     menus: [
-      { menu: 'explorer.context', group: '0_connect', order: 4, mnemonic: 'o', when: 'explorerServerLost' },
+      { menu: 'explorer.context', group: '0_connect', order: 4, mnemonic: 'o', when: 'explorerServerLost && !explorerMultiSelected' },
       { menu: 'explorer.tools', group: '0_connect', order: 3, mnemonic: 'v', when: 'explorerToolsLost' }
     ]
   },
@@ -423,7 +423,7 @@ export const commandCatalog = {
     title: 'Refresh', category: 'Object Explorer', icon: 'refresh', precondition: 'hasConnection', unavailableHint: noServer, methods: ['explorer.children'], providers: both,
     keybindings: [{ key: 'f5', when: "activePanel == 'explorer' && !inputFocus" }],
     menus: [
-      { menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: '!explorerServerLost' },
+      { menu: 'explorer.context', group: '8_refresh', order: 1, mnemonic: 'f', when: '!explorerServerLost && !explorerMultiSelected' },
       { menu: 'explorer.tools', group: '1_tools', order: 3, mnemonic: 'h' }
     ]
   },
@@ -482,12 +482,12 @@ export const commandCatalog = {
   'explorer.moveServerUp': {
     title: 'Move Up', category: 'Object Explorer', icon: 'arrow-up', keywords: ['reorder', 'order', 'sort', 'server', 'move'], providers: both,
     keybindings: [{ key: 'alt+up', when: 'explorerFocus && !textInputFocus' }],
-    menus: [{ menu: 'explorer.context', group: '7_order', order: 1, mnemonic: 'u', when: "explorerNode == 'server'" }]
+    menus: [{ menu: 'explorer.context', group: '7_order', order: 1, mnemonic: 'u', when: "explorerNode == 'server' && !explorerMultiSelected" }]
   },
   'explorer.moveServerDown': {
     title: 'Move Down', category: 'Object Explorer', icon: 'arrow-down', keywords: ['reorder', 'order', 'sort', 'server', 'move'], providers: both,
     keybindings: [{ key: 'alt+down', when: 'explorerFocus && !textInputFocus' }],
-    menus: [{ menu: 'explorer.context', group: '7_order', order: 2, mnemonic: 'w', when: "explorerNode == 'server'" }]
+    menus: [{ menu: 'explorer.context', group: '7_order', order: 2, mnemonic: 'w', when: "explorerNode == 'server' && !explorerMultiSelected" }]
   },
   'explorer.collapseAll': {
     title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer, providers: both,
@@ -501,10 +501,45 @@ export const commandCatalog = {
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.', providers: both,
     menus: [
-      { menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" },
+      { menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected) || explorerNode == 'database'" },
       // A BigQuery Search Objects result: a GoogleSQL query on its connection, in its dataset when that is in the billing project.
       { menu: 'search.hit.context', group: '1_query', order: 1, mnemonic: 'q', when: 'searchHitBigQuery' }
     ]
+  },
+  'explorer.newMultiServerQuery': {
+    title: 'New Multi-Server Query', category: 'Object Explorer', icon: 'new-file', keywords: ['query', 'multi', 'server', 'servers'],
+    precondition: 'hasConnection && !documentBusy', unavailableHint: 'Connect two or more servers of the same engine first.', providers: both,
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 11, mnemonic: 'm', when: "explorerNode == 'server' && !explorerServerLost && explorerMultiSelected" }]
+  },
+  'explorer.newCrossEngineQuery': {
+    title: 'New Cross-Engine SELECT…', category: 'Object Explorer', icon: 'split-horizontal', keywords: ['cross', 'engine', 'sqlserver', 'bigquery', 'select', 'query'],
+    precondition: '!documentBusy', unavailableHint: 'Wait for the open document task to finish.', providers: both,
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 12, mnemonic: 'n', when: "explorerNode == 'server' && !explorerServerLost" }]
+  },
+  'explorer.refreshSelected': {
+    title: 'Refresh Selected', category: 'Object Explorer', icon: 'refresh', keywords: ['refresh', 'reload', 'selected', 'multi'],
+    precondition: 'hasConnection', unavailableHint: noServer, providers: both,
+    menus: [{ menu: 'explorer.context', group: '7_multi', order: 1, mnemonic: 'r', when: "explorerNode == 'server' && !explorerServerLost && explorerMultiSelected" }]
+  },
+  'explorer.clearMultiSelect': {
+    title: 'Clear Selection', category: 'Object Explorer', icon: 'clear-all', keywords: ['clear', 'deselect', 'selection', 'multi'],
+    precondition: 'hasConnection', unavailableHint: noServer, providers: both,
+    menus: [{ menu: 'explorer.context', group: '7_multi', order: 2, mnemonic: 'c', when: "explorerNode == 'server' && !explorerServerLost && explorerMultiSelected" }]
+  },
+  'explorer.disconnectSelected': {
+    title: 'Disconnect Selected', category: 'Object Explorer', icon: 'debug-disconnect', keywords: ['disconnect', 'selected', 'multi', 'server'],
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer, providers: both,
+    menus: [{ menu: 'explorer.context', group: '7_multidisconnect', order: 1, mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost && explorerMultiSelected" }]
+  },
+  'explorer.selectAllSqlServers': {
+    title: 'Select All SQL Servers', category: 'Object Explorer', keywords: ['select', 'all', 'sql', 'servers', 'multi'],
+    precondition: 'hasConnection', unavailableHint: noServer, providers: ['sqlserver'],
+    menus: [{ menu: 'explorer.context', group: '7_select', order: 1, mnemonic: 's', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected && explorerProvider == 'sqlserver' && explorerSameEngineMultiple" }]
+  },
+  'explorer.selectAllBigQueryProjects': {
+    title: 'Select All BigQuery Projects', category: 'Object Explorer', keywords: ['select', 'all', 'bigquery', 'projects', 'multi'],
+    precondition: 'hasConnection', unavailableHint: noServer, providers: ['bigquery'],
+    menus: [{ menu: 'explorer.context', group: '7_select', order: 2, mnemonic: 's', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected && explorerProvider == 'bigquery' && explorerSameEngineMultiple" }]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
@@ -561,7 +596,7 @@ export const commandCatalog = {
     title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
     unavailableHint: 'Select a stored procedure, function, or trigger.',
     menus: [
-      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" },
+      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background' && !explorerMultiSelected" },
       { menu: 'search.hit.context', group: '1_query', order: 4, mnemonic: 'y', when: 'explorerSelectionModifiable' }
     ]
   },
@@ -572,8 +607,13 @@ export const commandCatalog = {
     title: 'Peek', category: 'Object Explorer', icon: 'eye', keywords: ['definition', 'properties', 'preview', 'describe'], providers: both,
     precondition: 'backendReady && explorerSelectionPeekable',
     unavailableHint: 'Select an object Peek describes: a SQL Server table, view, procedure, function, index, key, constraint, trigger, database, login, synonym, sequence or type, or a BigQuery table, view, routine or dataset.',
-    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead' }],
+    keybindings: [{ key: 'alt+f12', when: "activePanel == 'explorer' && !inputFocus && !searchHitsFocus" }, { key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead && !explorerServerFocus' }],
     menus: [{ menu: 'explorer.context', group: '1_query', order: 7, mnemonic: 'k', when: 'explorerNodePeekable && !explorerServerLost' }]
+  },
+  'explorer.toggleMultiSelect': {
+    title: 'Toggle Server Selection', category: 'Object Explorer', keywords: ['select', 'multi', 'server', 'connection', 'toggle'], providers: both,
+    precondition: 'explorerHasSelection', unavailableHint: 'Select a connected server in Object Explorer.',
+    keybindings: [{ key: 'space', when: 'explorerFocus && !textInputFocus && !explorerTypeAhead && explorerServerFocus' }, { win: 'ctrl+space', linux: 'ctrl+space', when: 'explorerFocus && !textInputFocus' }]
   },
   // Peek promoted to a document tab, with more room: the card's object while the card is open, otherwise the selection. A
   // Ctrl+click (⌘-click on macOS) on a row opens one too (gestures.ts, explorer.openPeekTab).
@@ -623,7 +663,7 @@ export const commandCatalog = {
   'bigquery.starProjectPrompt': {
     title: 'Star a Project…', category: 'BigQuery', icon: 'star-empty', keywords: ['bigquery', 'star', 'project', 'explorer', 'pin', 'add'],
     precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to BigQuery first.', providers: ['bigquery'], methods: ['bigquery.connectionProjects'], providerContext: 'own',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 8, title: 'Star a Project…', mnemonic: 'p', when: "explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 8, title: 'Star a Project…', mnemonic: 'p', when: "explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost && !explorerMultiSelected" }]
   },
   'bigquery.starProject': {
     title: 'Star Project', category: 'Object Explorer', icon: 'star-empty', keywords: ['bigquery', 'star', 'project', 'explorer', 'pin'],
@@ -645,14 +685,14 @@ export const commandCatalog = {
   },
   'explorer.copyName': {
     title: 'Copy Name', category: 'Object Explorer', icon: 'copy', precondition: 'hasConnection', unavailableHint: 'Select an object that has a name.', providers: both,
-    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "(explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) || explorerFolderInsertable" }]
+    menus: [{ menu: 'explorer.context', group: '5_copy', order: 1, mnemonic: 'a', when: "((explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) || explorerFolderInsertable) && !explorerMultiSelected" }]
   },
   'query.changeConnection': {
-    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy', providers: both,
+    title: 'Change Connection…', category: 'Query', icon: 'server', precondition: 'hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer', providers: both,
     menus: [{ menu: 'query.connection', group: '2_change', order: 1, mnemonic: 'h' }]
   },
   'query.disconnect': {
-    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy', providers: both,
+    title: 'Disconnect', category: 'Query', icon: 'debug-disconnect', precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer', providers: both,
     unavailableHint: 'This query is not connected.', menus: [{ menu: 'query.connection', group: '1_connect', order: 2, mnemonic: 'd' }]
   },
   'query.disconnectAll': {
@@ -661,7 +701,7 @@ export const commandCatalog = {
   },
   'query.changeDatabase': {
     title: 'Change Database…', category: 'Query', icon: 'database', keywords: ['use', 'catalog'], methods: ['databases.list'], providers: both,
-    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy', unavailableHint: 'Connect this query to a server first.',
+    precondition: 'activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer', unavailableHint: 'Connect this query to a server first.',
     // SSMS's Change Database key; Ctrl/⌘+K Ctrl/⌘+U in editor text still reaches Monaco (the dispatcher passes the chord through).
     keybindings: [{ key: 'mod+u' }], menus: [{ menu: 'query', group: '0_connection', order: 2, mnemonic: 'd' }]
   },
@@ -914,12 +954,12 @@ export const commandCatalog = {
     menus: [{ menu: 'edit.bookmarks', group: '4_document', order: 2, mnemonic: 'x' }]
   },
   'edit.insertSnippet': {
-    title: 'Insert Snippet…', category: 'Edit', icon: 'symbol-snippet', keywords: ['template', 'create'], precondition: 'activeDocumentIsQuery && !documentBusy', unavailableHint: openFirst,
+    title: 'Insert Snippet…', category: 'Edit', icon: 'symbol-snippet', keywords: ['template', 'create'], precondition: 'activeDocumentIsQuery && !documentBusy && !activeDocumentCrossFile', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+x', native: true, bridge: true }],
     menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 1, mnemonic: 'i' }, { menu: 'editor.context', group: '0_snippets', order: 1, mnemonic: 'i' }]
   },
   'edit.surroundWith': {
-    title: 'Surround With…', category: 'Edit', icon: 'symbol-snippet', keywords: ['begin', 'if', 'while', 'snippet'], precondition: 'activeDocumentIsQuery && !documentBusy', unavailableHint: openFirst,
+    title: 'Surround With…', category: 'Edit', icon: 'symbol-snippet', keywords: ['begin', 'if', 'while', 'snippet'], precondition: 'activeDocumentIsQuery && !documentBusy && !activeDocumentCrossFile', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+s', native: true, bridge: true }],
     menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 2, mnemonic: 's' }, { menu: 'editor.context', group: '0_snippets', order: 2, mnemonic: 's' }]
   },
@@ -956,18 +996,18 @@ export const commandCatalog = {
   // is free in the query editor: Monaco's indent and outdent lines actions are not loaded, and Tab and Shift+Tab indent.
   'edit.toggleBrackets': {
     title: 'Toggle Brackets', category: 'Edit', keywords: ['brackets', 'quote', 'quotename', 'identifiers', 'names', 'delimit', 'square'],
-    precondition: 'activeDocumentIsQuery', unavailableHint: 'Open a SQL Server query first.',
+    precondition: 'activeDocumentIsQuery && !activeDocumentCrossFile', unavailableHint: 'Open a SQL Server query first.',
     keybindings: [{ key: 'mod+[', when: 'editorTextFocus' }],
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 1, mnemonic: 'b' }, { menu: 'editor.context', group: '3_format', order: 1, mnemonic: 'b' }]
   },
   'edit.commasToFront': {
     title: 'Move Commas to Front', category: 'Edit', keywords: ['commas', 'leading', 'select', 'list', 'format', 'style'],
-    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
+    precondition: 'activeDocumentIsQuery && !activeDocumentCrossFile', unavailableHint: openFirst, providers: both,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 2, mnemonic: 'f' }, { menu: 'editor.context', group: '3_format', order: 2, mnemonic: 'm' }]
   },
   'edit.commasToEnd': {
     title: 'Move Commas to End', category: 'Edit', keywords: ['commas', 'trailing', 'select', 'list', 'format', 'style'],
-    precondition: 'activeDocumentIsQuery', unavailableHint: openFirst, providers: both,
+    precondition: 'activeDocumentIsQuery && !activeDocumentCrossFile', unavailableHint: openFirst, providers: both,
     menus: [{ menu: 'edit.advanced', group: '5_sql', order: 3, mnemonic: 'e' }, { menu: 'editor.context', group: '3_format', order: 3, mnemonic: 'v' }]
   },
   'edit.nextSqlIssue': {
@@ -986,7 +1026,7 @@ export const commandCatalog = {
     menus: [
       // 'm', not 'a': View › Search already has 'a' (tests/command-catalog.test.ts).
       { menu: 'view', group: '2_monitor', order: 1, mnemonic: 'm' },
-      { menu: 'explorer.context', group: '1_query', order: 5, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
+      { menu: 'explorer.context', group: '1_query', order: 5, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected" }
     ]
   },
   // The monitor's header verbs and keys act on the active monitor. Pause stops collecting (no SQL), as SSMS's does.
@@ -1554,7 +1594,7 @@ export const commandCatalog = {
     precondition: 'hasConnection', unavailableHint: noServer,
     menus: [
       { menu: 'view', group: '0_palette', order: 4, mnemonic: 'j' },
-      { menu: 'explorer.context', group: '1_query', order: 6, mnemonic: 'h', when: "((explorerNode == 'server' || explorerNode == 'bqProject' || explorerNode == 'bqDataset') && !explorerServerLost) || explorerNode == 'database'" }
+      { menu: 'explorer.context', group: '1_query', order: 6, mnemonic: 'h', when: "(((explorerNode == 'server' && !explorerMultiSelected) || explorerNode == 'bqProject' || explorerNode == 'bqDataset') && !explorerServerLost) || explorerNode == 'database'" }
     ]
   },
   'explorer.rebuildIndex': {

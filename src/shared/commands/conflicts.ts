@@ -16,6 +16,7 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'editorText', keys: { editorFocus: true, editorTextFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'editorFindInput', keys: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'explorerTree', keys: { activePanel: 'explorer', explorerFocus: true } },
+  { name: 'explorerServer', keys: { activePanel: 'explorer', explorerFocus: true, explorerServerFocus: true } },
   { name: 'explorerTypeAhead', keys: { activePanel: 'explorer', explorerFocus: true, explorerTypeAhead: true } },
   { name: 'explorerRename', keys: { activePanel: 'explorer', explorerFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'explorerSearchBox', keys: { activePanel: 'explorer', inputFocus: true, textInputFocus: true } },

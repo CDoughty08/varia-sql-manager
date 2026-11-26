@@ -48,7 +48,7 @@ describe('generated command documentation', () => {
     for (const menu of contextMenuIds) expect(menus).toMatch(new RegExp(`#### .* \\(\`${menu.replace('.', '\\.')}\`\\)\n\n(Right-c|C)lick `))
     expect(menus).toContain('| `z_quit` | E**x**it | `window.close` | Windows only |')
     expect(menus).toContain('| `z_quit` | **Q**uit | `window.close` | Linux only |')
-    expect(menus).toContain('| `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == \'server\' \\|\\| explorerNode == \'background\'` |')
+    expect(menus).toContain('| `0_connect` | **C**onnect… | `connection.connect` | `(explorerNode == \'server\' && !explorerMultiSelected) \\|\\| explorerNode == \'background\'` |')
     expect(menus).toContain('| `3_file` | **O**pen Containing Folder | `file.revealInFolder` | Windows, Linux only |')
     expect(menus).toContain('| `3_file` | Reveal in Finder | `file.revealInFolder` | macOS only |')
     expect(menus).toContain('| `0_connection` | C**o**nnection › | Submenu: Query › Connection | Always |')

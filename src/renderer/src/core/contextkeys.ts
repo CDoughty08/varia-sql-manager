@@ -31,7 +31,7 @@ export interface FocusFacts {
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
   readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean; readonly objectInspectorFocus: boolean
   readonly agentStepsFocus: boolean
-  readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
+  readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly explorerServerFocus: boolean; readonly optionsDialogFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
 export interface DesignerKeys { readonly editable: boolean; readonly rowSelected: boolean; readonly keyRemovable: boolean }
@@ -65,7 +65,7 @@ export interface FocusElement { matches(selector: string): boolean; closest(sele
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
 const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false, agentStepsFocus: false,
-  messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
+  messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, explorerServerFocus: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
 /** Focus keys for editor text and owned widgets, including widgets hosted outside the editor container. */
@@ -80,6 +80,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   const tree = element.closest('[data-explorer-tree]')
+  const serverFocused = tree?.getAttribute('data-server-focused')
   return {
     editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]') || !!element.closest('[data-output-view="live"]'),
     // Any live view's grid (LiveGridPane marks its frame), with Query Output's menu or its owner's own (Job History); not a
@@ -92,7 +93,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     // picker, which is drawn over the page outside any pane.
     resultsFocus: (pane === 'results' && !element.closest('[data-messages-strip]') && !element.closest('[data-output-view="messages"]')) || !!element.closest('[data-results-picker]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
-    explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]'),
+    explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, explorerServerFocus: serverFocused != null && serverFocused !== 'false', optionsDialogFocus: !!element.closest('[data-options-dialog]'),
     // A job document's Steps section (its list and the selected step's editor), where Alt+Up and Alt+Down move the selected step.
     // Not in a step's command editor: Monaco's focused element (native-edit-context) is no input, and Alt+Up/Down are its own there.
     agentStepsFocus: !!element.closest('[data-agent-steps]') && !element.closest('.monaco-editor')
@@ -197,7 +198,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     // A query's engine follows its connection; every other document is SQL Server's.
-    hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
+    hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsMultiServer: false, activeDocumentCrossFile: false, activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,
     propertiesRefreshable: !!properties?.refreshable, activeDocumentIsTableProperties: active?.kind === 'tableProperties',
     activeDocumentIsNewDatabase: active?.kind === 'newDatabase', newDatabaseCreatable: !!newDatabase?.creatable, newDatabaseCreating: !!newDatabase?.creating,
