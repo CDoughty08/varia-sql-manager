@@ -10,6 +10,7 @@ import {
   jobHistoryStateLabels, jobHistoryStates, jobHistoryTabName, jobHistoryTextColumns, jobHistoryTypeLabels, jobHistoryTypes, qualifiedJobId,
   type HistoryJobRef, type JobHistoryAction, type JobHistoryCancelResult, type JobHistoryDetails, type JobHistoryFilters, type JobHistoryRow, type JobHistoryState as JobState
 } from '../../../shared/bigquery/history'
+import { isPermissionRefusal } from '../../../shared/bigquery/errors'
 import { liveProbes } from '../../../shared/live/catalog'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { JobHistoryContextState, JobHistoryKeys } from '../core/contextkeys'
@@ -141,7 +142,7 @@ export function actionKeys(job: SelectedJob | undefined, refused: JobHistoryRefu
 /** What Cancel Job's answer says: sent (BigQuery ends it shortly), cancelled, already finished (information, never a failure),
  *  or why it failed. */
 export function cancelNotice(job: Pick<SelectedJob, 'jobId' | 'mine'>, result: ApiResult<JobHistoryCancelResult>): JobHistoryNotice {
-  if (!result.ok) return { tone: 'error', text: result.code === 'PERMISSION_DENIED' && !job.mine ? jobHistoryText.cancelDenied(result.error) : jobHistoryText.cancelFailed(result.error), code: result.code }
+  if (!result.ok) return { tone: 'error', text: isPermissionRefusal(result.code, result.error) && !job.mine ? jobHistoryText.cancelDenied(result.error) : jobHistoryText.cancelFailed(result.error), code: result.code }
   const state = result.value.state
   return { tone: 'info', text: state === 'cancelled' ? jobHistoryText.cancelled(job.jobId) : state === 'done' || state === 'failed' ? jobHistoryText.cancelDone(job.jobId) : jobHistoryText.cancelSent(job.jobId) }
 }
@@ -500,8 +501,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const result = await this.request(() => this.options.api.bigQueryJob({ connectionId, jobId: job.jobId, ...job.location ? { location: job.location } : {}, ...job.mine ? {} : { allUsers: true } }))
     if (!this.current(id, 'details', generation, connectionId)) return
     if (result.ok) { this.patch(id, { details: { jobId: job.jobId, loading: false, value: result.value } }); return }
-    if (result.code === 'PERMISSION_DENIED' && !job.mine) this.refuse(connectionId, { get: jobHistoryText.getDenied(result.error) })
-    this.patch(id, { details: { jobId: job.jobId, loading: false, error: { message: result.code === 'PERMISSION_DENIED' && !job.mine ? jobHistoryText.getDenied(result.error) : result.error, ...result.code ? { code: result.code } : {} } } })
+    if (isPermissionRefusal(result.code, result.error) && !job.mine) this.refuse(connectionId, { get: jobHistoryText.getDenied(result.error) })
+    this.patch(id, { details: { jobId: job.jobId, loading: false, error: { message: isPermissionRefusal(result.code, result.error) && !job.mine ? jobHistoryText.getDenied(result.error) : result.error, ...result.code ? { code: result.code } : {} } } })
   }
 
   // --- Actions ---------------------------------------------------------------------------------------------------------------
@@ -562,8 +563,8 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const details = known ? { ok: true as const, value: known } : await this.request(() => this.options.api.bigQueryJob({ connectionId, jobId: job.jobId, ...job.location ? { location: job.location } : {}, ...job.mine ? {} : { allUsers: true } }))
     if (!this.current(id, 'action', generation, connectionId)) return
     if (!details.ok) {
-      if (details.code === 'PERMISSION_DENIED' && !job.mine) this.refuse(connectionId, { get: jobHistoryText.getDenied(details.error) })
-      this.patch(id, { notice: { tone: 'error', text: details.code === 'PERMISSION_DENIED' && !job.mine ? jobHistoryText.getDenied(details.error) : details.error, ...details.code ? { code: details.code } : {} } })
+      if (isPermissionRefusal(details.code, details.error) && !job.mine) this.refuse(connectionId, { get: jobHistoryText.getDenied(details.error) })
+      this.patch(id, { notice: { tone: 'error', text: isPermissionRefusal(details.code, details.error) && !job.mine ? jobHistoryText.getDenied(details.error) : details.error, ...details.code ? { code: details.code } : {} } })
       return
     }
     const sql = details.value.job.sql
@@ -601,7 +602,7 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const result = await this.request(() => this.options.api.bigQueryCancelJob({ connectionId, jobId: job.jobId, ...job.location ? { location: job.location } : {} }))
     const now = this.get(id)
     if (!now || now.connectionId !== connectionId) return
-    if (!result.ok && result.code === 'PERMISSION_DENIED' && !job.mine) this.refuse(connectionId, { cancel: jobHistoryText.cancelDenied(result.error) })
+    if (!result.ok && isPermissionRefusal(result.code, result.error) && !job.mine) this.refuse(connectionId, { cancel: jobHistoryText.cancelDenied(result.error) })
     this.patch(id, { cancelling: now.cancelling.filter(item => item !== job.jobId), notice: cancelNotice(job, result) })
     // The row turns Cancelled on its own from the live view; reading it now shows the change at once.
     if (result.ok) this.handles.get(id)?.refresh()

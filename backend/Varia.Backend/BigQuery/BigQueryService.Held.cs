@@ -159,6 +159,8 @@ internal sealed partial class BigQueryService
         var project = connection.Options.Project;
         Job job;
         try { job = await GetJobAsync(connection, project, jobId, location, token); }
+        // A VPC Service Controls refusal says nothing about whose job it is: PERMISSION_DENIED keeps the job for the next connection.
+        catch (GoogleApiException error) when (Refused(error) && BigQueryErrors.IsPerimeter(BigQueryErrors.Map(error))) { throw BigQueryErrors.Map(error); }
         catch (GoogleApiException error) when (error.HttpStatusCode is HttpStatusCode.NotFound || Refused(error)) { throw NotOwn(); }
         // The emulator lists no jobs by creation time; its single principal owns every job.
         if (environment.Emulator) return job;
@@ -178,6 +180,7 @@ internal sealed partial class BigQueryService
             {
                 // The tab's own held job, which this backend inserted on this connection: the listing only confirms it.
                 if (inserted) return job;
+                if (BigQueryErrors.Map(error) is var mapped && BigQueryErrors.IsPerimeter(mapped)) throw mapped;
                 throw new RequestException("PERMISSION_DENIED", "Re-attaching checks that this account started the BigQuery job, which needs the bigquery.jobs.list permission (the BigQuery User role grants it; Job User does not). Varia left the job running.");
             }
             if (answer.Jobs?.Any(item => item.JobReference?.JobId == jobId) == true) return job;

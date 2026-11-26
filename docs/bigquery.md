@@ -296,7 +296,8 @@ Stop pressed while a restart waits for idle sessions to end reaches the backend 
   job's record, which would otherwise come back at every restore.
 - **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
   that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
-  it; `AUTH_IDENTITY` otherwise, and the job is left alone). The listing needs `bigquery.jobs.list` (BigQuery User has
+  it; `AUTH_IDENTITY` otherwise, and the job is left alone; a VPC Service Controls refusal of either call is that
+  `PERMISSION_DENIED` instead, which keeps the job to re-attach to). The listing needs `bigquery.jobs.list` (BigQuery User has
   it, Job User does not): without it a re-attach answers `PERMISSION_DENIED` naming the permission and leaves the job
   running, except to a job the tab's session inserted in this backend. A running job shows "Re-attached to BigQuery job … started N
   ago" and Stop cancels it (a Stop during the identity check cancels it once the check passes; when the check or the
@@ -391,11 +392,12 @@ type.
   sends.
 - **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
   connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
-  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
+  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), VPC Service
+  Controls blocks the Storage API (asked again on the next query, which passes once back inside the perimeter), Google could not
   be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
   REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
   (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
-  fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
+  fails the query with the error a REST page would give (for example `CONNECTION_LOST`, `AUTH_EXPIRED`, `REMOTE_EXPIRED`, `PERMISSION_DENIED`, including the VPC Service Controls refusal, or `BACKEND_ERROR`).
 - **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
   settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
 
@@ -793,7 +795,9 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 - **Scope.** My jobs (the default) lists the principal's jobs. All users lists the project's (`allUsers`): it needs
   `bigquery.jobs.list` (BigQuery User), and without `bigquery.jobs.listAll` BigQuery leaves out other users' configuration,
   so such a row says "Details hidden by BigQuery" in place of its SQL. A refused All users listing turns the toggle back
-  to My jobs, says why, and keeps it off for the connection. In All users a second, minimal listing without `allUsers`
+  to My jobs, says why, and keeps it off for the connection; a VPC Service Controls refusal is no missing permission and
+  fails the listing with its own error, as it fails a pinned job's or a script's children's read instead of leaving them
+  out. In All users a second, minimal listing without `allUsers`
   marks the principal's own jobs (never an email comparison).
 - **Listing and refresh.** The newest 1,000 top-level jobs in the range, newest first, in pages of 100 with `projection=full`;
   each job's SQL is cut to a one-line, 200-character preview as its page is read, and a refresh reads at most 10 MiB of
@@ -871,7 +875,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 | `AUTH_EXPIRED` | A refused refresh (`invalid_grant`) of a user sign-in, HTTP 401, or no credentials at all | "Your Google sign-in has expired." or "No Google credentials were found.", with `gcloud auth application-default login` |
 | `AUTH_KEY_FILE` | A key or configuration file Varia cannot read or use, a refused shape, a deleted key (`invalid_grant` for a service account), a federated token Google's STS refuses (`invalid_grant` in federation mode), an unreadable subject token | Names the rule or field; choose the file again |
 | `AUTH_IDENTITY` | The credential now signs in as another principal | Reconnect to use the new account |
-| `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect) and the project |
+| `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect, with BigQuery Job User; `bigquery.datasets.get` for Test Connection) and the project, then Google's own text (left out of Search Objects skips, which name no object). projects.list needs no single permission, so its refusal names none |
+| `PERMISSION_DENIED` (VPC Service Controls) | `accessDenied`, HTTP 403 or a Storage API `PermissionDenied` whose message opens "VPC Service Controls:" or "Request is prohibited by organization's policy", or whose details hold an `ErrorInfo` with reason `SECURITY_POLICY_VIOLATED` or a `PreconditionFailure` violation of type `VPC_SERVICE_CONTROLS` | "VPC Service Controls blocked this request…": connect from inside the perimeter or ask an administrator, with Google's identifier for the audit log (left out when longer than 128 characters), never a guessed permission and no project, since the blocked resource may be another's. Job History adds no permission advice to it, and an Object Explorer node it refused keeps Retry |
 | `API_DISABLED` | `accessNotConfigured`, `SERVICE_DISABLED` | Enable the BigQuery API in the Google Cloud console |
 | `BILLING_DISABLED` | `billingNotEnabled` | Explains the sandbox limits |
 | `QUOTA` | `quotaExceeded`, `rateLimitExceeded`, HTTP 429 | Which kind, with Google's text |

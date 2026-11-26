@@ -414,7 +414,8 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   with BigQuery's reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …). On auto-discovered
   projects, `API_DISABLED`, `PERMISSION_DENIED` and `NOT_FOUND` on `datasets.list` are silently ignored so non-BigQuery
   GCP projects do not pollute the skip list, while operational failures (`TIMEOUT`, `QUOTA`, `AUTH_EXPIRED`,
-  `CONNECTION_LOST`, `TOO_LARGE`) still report. A dataset whose objects' details could not all be read keeps their names
+  `CONNECTION_LOST`, `TOO_LARGE`) and a VPC Service Controls refusal (off the network: the project keeps what earlier
+  builds read) still report. A dataset whose objects' details could not all be read keeps their names
   and is counted as "details missing". Each metadata call has 30 s. A dataset dropped since its last read leaves the index
   without a skip.
 - **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): up to 500 discovered projects by default (configurable

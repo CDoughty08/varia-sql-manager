@@ -185,7 +185,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         return IndexCallAsync(connection, BqMethod.RoutinesGet, t => connection.Client.Service.Routines.Get(project, dataset, routine).ExecuteAsync(t), token);
     }
 
-    Exception IBigQueryIndexSource.Map(Exception error, string project, string permission, CancellationToken token) =>
+    Exception IBigQueryIndexSource.Map(Exception error, string project, string? permission, CancellationToken token) =>
         error is TimeoutException ? new RequestException("TIMEOUT", "BigQuery did not answer in time.")
-        : BigQueryErrors.Map(error, string.IsNullOrEmpty(project) ? null : project, permission, token: token);
+        : BigQueryErrors.Map(error, string.IsNullOrEmpty(project) ? null : project, permission, token: token, quote: false);
 }

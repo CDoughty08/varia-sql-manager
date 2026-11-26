@@ -576,6 +576,13 @@ internal static partial class BigQueryChecks
             check(code == expected && message.Contains(text, StringComparison.Ordinal) && !message.Contains("ya29", StringComparison.Ordinal) && !message.Contains('\n'),
                 $"the probe's {fixture} answer is {expected} with a recovery: {code} {message}");
         }
+        var perimeter = await Fails(keyed, fake => fake.On("POST", BigQueryFake.Jobs, BigQueryFake.Fixture("error-vpc-service-controls", 403)));
+        check(perimeter.Code == "PERMISSION_DENIED" && perimeter.Message.StartsWith("VPC Service Controls blocked this request:", StringComparison.Ordinal)
+            && perimeter.Message.Contains("identifier Vpc-Fixture_01", StringComparison.Ordinal) && !perimeter.Message.Contains("bigquery.jobs.create", StringComparison.Ordinal),
+            $"a probe VPC Service Controls refuses names the perimeter and its identifier, not a missing permission: {perimeter}");
+        var deniedProbe = await Fails(keyed, fake => fake.On("POST", BigQueryFake.Jobs, BigQueryFake.Fixture("error-access-denied", 403)));
+        check(deniedProbe.Message.Contains("(BigQuery Job User)", StringComparison.Ordinal) && deniedProbe.Message.Contains("Google says: Access Denied: Project varia-alpha", StringComparison.Ordinal),
+            $"a refused probe keeps Google's own text beside the permission Varia names: {deniedProbe}");
         var revokedUser = await Fails(AdcConnect(BigQueryCredentialChecks.User()), fake => fake.On("POST", BigQueryFake.Token, BigQueryFake.Fixture("token-invalid-grant", 400)));
         check(revokedUser is ("AUTH_EXPIRED", BigQueryErrors.Expired), $"a revoked gcloud sign-in (invalid_grant) is AUTH_EXPIRED naming the sign-in command: {revokedUser}");
         var revokedKey = await Fails(keyed, fake => fake.On("POST", BigQueryFake.Token, BigQueryFake.Fixture("token-invalid-grant", 400)));
@@ -643,7 +650,17 @@ internal static partial class BigQueryChecks
         var denied = BigQueryFake.Google().On("GET", BigQueryFake.Projects, BigQueryFake.Fixture("error-access-denied", 403));
         using var deniedHarness = new Harness(denied);
         var refused = await deniedHarness.Call("bigquery.projects", Args(user));
-        check(refused.Code == "PERMISSION_DENIED", $"a refused projects.list is PERMISSION_DENIED: {refused.Code} {refused.Message}");
+        check(refused.Code == "PERMISSION_DENIED" && !refused.Message.Contains("this project", StringComparison.Ordinal),
+            $"a refused projects.list is PERMISSION_DENIED naming no project, since it lists them all: {refused.Code} {refused.Message}");
+        using var perimeterHarness = new Harness(BigQueryFake.Google()
+            .On("GET", BigQueryFake.Projects, BigQueryFake.Fixture("error-vpc-service-controls", 403))
+            .On("GET", BigQueryFake.DatasetList, BigQueryFake.Fixture("error-vpc-service-controls", 403)));
+        var perimeterProjects = await perimeterHarness.Call("bigquery.projects", Args(user));
+        var perimeterTest = await perimeterHarness.Call("connections.databases", user);
+        check(perimeterProjects.Code == "PERMISSION_DENIED" && perimeterProjects.Message.StartsWith("VPC Service Controls blocked this request:", StringComparison.Ordinal)
+            && perimeterTest.Code == "PERMISSION_DENIED" && perimeterTest.Message.StartsWith("VPC Service Controls blocked this request:", StringComparison.Ordinal)
+            && perimeterTest.Message.Contains("identifier Vpc-Fixture_01", StringComparison.Ordinal) && !perimeterTest.Message.Contains("bigquery.datasets.get", StringComparison.Ordinal),
+            $"Load projects and Test Connection (datasets.list) refused by VPC Service Controls say so: {perimeterProjects.Message} | {perimeterTest.Message}");
         var discovered = await harness.Call("connections.databases", user);
         check(discovered.Code == "ok" && Datasets(discovered.Result).SequenceEqual(["archive@us-east1", "sales@", "staging@US"]) && harness.Fake.To(BigQueryFake.Jobs).Any() is false,
             $"connections.databases with BigQuery's options lists the project's datasets for the Connect dialog without creating any job: {discovered.Code} {discovered.Message}");

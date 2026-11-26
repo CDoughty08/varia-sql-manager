@@ -69,7 +69,8 @@ internal sealed partial class BigQueryService
             _ => "SQL_ERROR"
         };
         var clipped = ExplorerLabels.Clip(message, ExplorerErrors.MaxMessage);
-        return new(code, clipped, code is not ("NOT_FOUND" or "PERMISSION_DENIED"), code == "NOT_FOUND" ? "refreshParent" : null);
+        // A VPC Service Controls refusal passes once the user is back inside the perimeter: Retry stays.
+        return new(code, clipped, code is not ("NOT_FOUND" or "PERMISSION_DENIED") || BigQueryErrors.IsPerimeter(mapped), code == "NOT_FOUND" ? "refreshParent" : null);
     }
 
     async Task<ExplorerChildrenResult> LoadAsync(BigQueryConnection connection, ExplorerRequest request, ExplorerCatalog catalog, CancellationToken token)

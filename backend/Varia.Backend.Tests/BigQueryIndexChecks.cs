@@ -608,6 +608,17 @@ internal static partial class BigQueryIndexChecks
         // Restore discovered projects before testing failed discovery retention.
         await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
 
+        // A discovered project VPC Service Controls blocks (off the network) is no noise: a skip that names the perimeter, and
+        // what an earlier build read of it stays searchable.
+        harness.Fake.On("GET", Base + "disc-ok/datasets", BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        var fenced = await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+        check(fenced.Status.Skipped.Any(skip => skip is { Project: "disc-ok", Database: "", Code: "PERMISSION_DENIED" } && skip.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal))
+            && (await harness.Search("metrics")).Hits.Any(hit => hit.Object is { Project: "disc-ok", Name: "metrics" }),
+            "a discovered project VPC Service Controls blocks is a skip naming the perimeter, and its earlier reads are kept: "
+            + string.Join(" | ", fenced.Status.Skipped.Select(skip => skip.Project + ":" + skip.Code + " " + skip.Message)));
+        harness.Fake.On("GET", Base + "disc-ok/datasets", new BigQueryFake.Reply(200, "{\"datasets\":[{\"datasetReference\":{\"projectId\":\"disc-ok\",\"datasetId\":\"analytics\"},\"location\":\"US\"}]}"));
+        await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+
         // Invalid connectionId on bigquery.connectionProjects and bigquery.indexEstimate returns INVALID_PARAMS, never BACKEND_ERROR.
         var (badProjConn, _, _) = await harness.Call("bigquery.connectionProjects", new JsonObject());
         var (badEstConn, _, _) = await harness.Call("bigquery.indexEstimate", new JsonObject());
@@ -622,6 +633,13 @@ internal static partial class BigQueryIndexChecks
             && (await harness.Search("population")).Hits.Count > 0
             && (await harness.Search("metrics")).Hits.Count > 0,
             "when projects.list fails, one discovery skip is recorded, billing + starred still build, and earlier discovered reads are not pruned");
+        check(failedDiscovery.Status.Skipped.Where(skip => skip.Project == "").All(skip => !skip.Message.Contains("bigquery.projects.list", StringComparison.Ordinal)),
+            "a refused projects.list names no permission, since none grants it: " + string.Join(" | ", failedDiscovery.Status.Skipped.Select(skip => skip.Message)));
+        harness.Fake.On("GET", BigQueryFake.Projects, BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        var perimeterDiscovery = await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+        check(perimeterDiscovery.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "PERMISSION_DENIED" } && skip.Message.StartsWith("VPC Service Controls blocked this request:", StringComparison.Ordinal)
+                && skip.Message.Contains("identifier Vpc-Fixture_01", StringComparison.Ordinal)),
+            "a projects.list VPC Service Controls refuses is a discovery skip that says so: " + string.Join(" | ", perimeterDiscovery.Status.Skipped.Select(skip => skip.Message)));
 
         // 500-project default cap (Cut): > 500 projects in one page, and 500 projects + nextPageToken.
         var fiveHundredOne = new JsonArray([.. Enumerable.Range(0, BigQueryIndexLimits.MaxProjects + 1).Select(index => (JsonNode)new JsonObject { ["id"] = $"cap-proj-{index:D4}" })]);
@@ -1395,6 +1413,6 @@ internal static partial class BigQueryIndexChecks
             throw new NotSupportedException();
         public IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, BigQueryBulkBudget budget,
             Func<string, string, bool> wanted, CancellationToken token) => throw new NotSupportedException();
-        public Exception Map(Exception error, string project, string permission, CancellationToken token) => error;
+        public Exception Map(Exception error, string project, string? permission, CancellationToken token) => error;
     }
 }
