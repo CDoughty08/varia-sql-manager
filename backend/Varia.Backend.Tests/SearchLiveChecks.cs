@@ -10,7 +10,8 @@ namespace Varia.Backend.Tests;
 /// dropped object go, and a disconnect gives the definitions' budget back.</summary>
 internal static class SearchLiveChecks
 {
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database,
+        Func<string, string> ownLogin)
     {
         // A name that breaks out of brackets, strings and comments, and a marker only this run's definitions hold.
         var marker = "varia_marker_" + Guid.NewGuid().ToString("N")[..8];
@@ -53,6 +54,12 @@ internal static class SearchLiveChecks
             (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
                 new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, caseSensitive, wholeWord, regex, scope, Database: inDatabase), json), json);
 
+        // A login with a long name the server's unit is sure to hold: the connecting login may be too short to look for in the
+        // saved files (CI's is sa). The scratch database drops it when it goes.
+        var longLogin = ownLogin("search");
+        created = await sql("CREATE LOGIN [" + longLogin.Replace("]", "]]") + "] WITH PASSWORD = '" + ScratchDatabase.Throwaway().Replace("'", "''") + "', CHECK_POLICY = OFF;", "master");
+        check(created.Error is null, "the search checks create a login with a long name: " + created.Error);
+
         // The saved index (IndexStore), on a temporary folder under a key of the checks' own: the first build saves what it reads.
         var storeRoot = Directory.CreateTempSubdirectory("varia-index-store-live-").FullName;
         var storeFolder = Path.Combine(storeRoot, IndexStoreLimits.FolderName);
@@ -92,12 +99,24 @@ internal static class SearchLiveChecks
             check(equal && resourceEqual, "every unit the real build saved loads back equal to what the index holds");
             // Only needles of 8 bytes or more: ciphertext is random, so a shorter one turns up by chance (CI's login "sa" is 2 bytes
             // in UTF-8, one chance in 65,536 at every position of hundreds of KB). At 8 bytes a chance match is one in 2^64 a position.
-            string[] texts = [hostile, marker, "usp_Find", "srch", database, profile.ServerName ?? "varia-no-server-name", profile.Login ?? "varia-no-login-name", "spt_fallback_db", "sp_who"];
-            var distinctive = texts.Index()
-                .SelectMany(text => new[] { (Label: text.Index + " UTF-8", Bytes: System.Text.Encoding.UTF8.GetBytes(text.Item)), (Label: text.Index + " UTF-16", Bytes: System.Text.Encoding.Unicode.GetBytes(text.Item)) })
+            // Every category keeps at least one long needle, or the check fails rather than pass with nothing to look for; the long
+            // login is checked to be in the index, so its absence from the files means something.
+            (string Category, string Text)[] texts =
+            [
+                ("object", hostile), ("object", "usp_Find"), ("object", "srch"), ("object", "spt_fallback_db"), ("object", "sp_who"),
+                ("database", database), ("server", profile.ServerName ?? ""), ("login", profile.Login ?? ""), ("login", longLogin),
+                ("definition", marker), ("definition", constant),
+            ];
+            var distinctive = texts
+                .SelectMany(text => new[] { (text.Category, Label: text.Category + " UTF-8", Bytes: System.Text.Encoding.UTF8.GetBytes(text.Text)), (text.Category, Label: text.Category + " UTF-16", Bytes: System.Text.Encoding.Unicode.GetBytes(text.Text)) })
                 .Where(needle => needle.Bytes.Length >= 8).ToList();
+            string[] categories = ["object", "database", "server", "login", "definition"];
+            var uncovered = categories.Where(category => !distinctive.Any(needle => needle.Category == category)).ToList();
+            var loginHeld = (await FindIn(null, longLogin, "names", wholeWord: true)).Hits.Count > 0;
+            check(uncovered.Count == 0 && loginHeld, "every category of name the saved files are searched for has a needle of 8 bytes or more (none: "
+                + (uncovered.Count == 0 ? "none" : string.Join(", ", uncovered)) + "), and the long login is in the index");
             var inFiles = files.SelectMany(file => File.ReadAllBytes(file) is var content ? distinctive.Where(needle => content.AsSpan().IndexOf(needle.Bytes) >= 0).Select(needle => needle.Label) : []).Distinct().ToList();
-            check(distinctive.Count >= 12 && inFiles.Count == 0,
+            check(inFiles.Count == 0,
                 "no saved file holds an object's, the database's, the server's or the login's name, or a definition's text, in UTF-8 or UTF-16 ("
                 + distinctive.Count + " needles; found: " + (inFiles.Count == 0 ? "none" : string.Join(", ", inFiles)) + ")");
             check((await service.Search.Store.ClearAsync()) is { Kept: 0 } cleared && cleared.Files == files.Length && Directory.GetFiles(storeFolder).Length == 0, "a clear deletes every file the build saved");
