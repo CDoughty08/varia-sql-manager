@@ -155,7 +155,7 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 
 ### Memory
 
-- All connections share one budget, Options › Object Explorer › Commands › Index memory limit
+- All connections share one budget, Options › SQL Server Object Explorer › Commands › Index memory limit
   (`objectExplorer.search.memoryLimitMiB`, 512 MiB by default, 64 to 16,384). Each object is a packed 24-byte entry in
   its database's `ObjectTable`; names and definitions live in one reference-counted pool shared by every connection, so
   each distinct text (msdb's procedures, master's `spt_` objects, common column names) is held and charged once.
@@ -180,19 +180,25 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   lookup arrays) 3/8 (192 MiB). So BigQuery uses at most 5/8 of the limit less what SQL Server holds, and SQL Server
   always has at least an eighth of the limit (64 MiB) for names and definitions before a definition is left out, in
   practice more, since details stop well before names do. A floor only refuses BigQuery: SQL Server's reads take
-  whatever is free, as before. A rebuild charges the share of the read it replaces first, so a dataset that fitted still
-  fits. A Refresh you ask of one project or dataset reads it at the starred floor, whatever the project.
+  whatever is free, as before, which also means SQL Server's use counts against BigQuery's room: with SQL Server
+  holding 5/8 of the limit or more, a BigQuery index reads nothing new, and says why. A rebuild or refresh charges the
+  share of the read it replaces first, and pass 1 goes on holding the details of the objects pass 2 is about to read
+  again, so a dataset that fitted still fits; only what is new must fit above the floor, and a dataset whose new columns
+  do not is kept without its columns. A Refresh you ask of one project or dataset reads it at the starred floor,
+  whatever the project.
 - **When memory runs out, the index says so.** The status counts the definitions left out for memory (`leftOut`) and
-  the databases or datasets they belong to (`leftOutIn`), apart from definitions only cut at their length and from
-  turning `objectExplorer.search.definitions` off. The index line adds "N definitions left out of M databases (index
-  memory full)", which keeps the line in view in Object Explorer's band; below it in the tab, and in the band's Search
-  and index details, a note says a search inside definitions misses them and names the option to raise. The same note
-  shows when children were left out, a database or dataset did not fit, or BigQuery projects were read by name only.
+  the databases or datasets they belong to (`leftOutIn`; the server's own and the system objects are in none), apart
+  from definitions only cut at their length and from turning `objectExplorer.search.definitions` off. The index line
+  adds "N definitions left out of M databases (not enough index memory)", which keeps the line in view in Object
+  Explorer's band; below it in the tab, and in the band's Search and index details, a note says a search inside
+  definitions misses them and names the option to raise. The same note shows when children were left out, a database or
+  dataset did not fit, or BigQuery projects were read by name only. The system objects are shared between servers: a
+  set whose definitions were left out is read again by the next build that finds room above the names' reserve.
 - **Changing the limit.** Each `explorer.index` carries the option's value (`memoryLimitMiB`), so a change applies from
   the next build of any connection, with the reserve and floors in proportion. Raising it lets that build use the room.
   Lowering it drops nothing: a rebuild reuses its predecessor's share, so an index over the new limit keeps what it has
-  (the Memory panel then shows more than 100 %) and only takes nothing new; it gives its memory back when its server
-  disconnects.
+  (the Memory panel then shows more than 100 %) and takes nothing new, so a database that has grown since is kept
+  without its children, or skipped, at its next read; an index gives its memory back when its server disconnects.
 - The editor metadata is charged per item: 13 bytes a typed column, parameter or function, 14 an index or key,
   5 a key column and 16 a type. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
   840 key columns) beside about 195 KB of entries.

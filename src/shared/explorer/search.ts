@@ -245,7 +245,7 @@ export interface ObjectIndexStatus {
   /** The last full build was stopped before it finished: the index holds only what it read (absent otherwise). */
   readonly stopped?: true
   /** The definitions (counted in `cut` too) left out whole because the index's memory ran out, and the databases (BigQuery:
-   *  datasets) they belong to, the server's own and the system objects each counting as one; both absent when none was. */
+   *  datasets) they belong to (the server's own and the system objects are in none); each absent when zero. */
   readonly leftOut?: number
   readonly leftOutIn?: number
 }

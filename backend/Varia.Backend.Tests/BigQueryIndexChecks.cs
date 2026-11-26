@@ -248,6 +248,14 @@ internal static partial class BigQueryIndexChecks
         var tight = new BigQueryReader(limits, pool, next, detailsFloor: long.MaxValue / 4).Read("p", "d", [entries[0] with { Detail = view with { Definition = "SELECT 9 AS a, 2 AS b FROM t" } }], true, true)!;
         check(tight is { Cut: 1, LeftOut: 1, ChildrenLeftOut: false } && read.LeftOut == 0 && BigQueryEntries.Known(tight, true).Count == 0,
             "a view whose text the details' floor left out is counted as left out for memory (one cut at its length is not) and is read again by the next build");
+        // What was not whole is not reused, but pass 1 carries it until pass 2 reads the object again, still marked not whole:
+        // the dataset keeps the memory its columns hold between the passes, and a build stopped in between reuses nothing stale.
+        var carried = BigQueryEntries.Known(tight, true, carry: true);
+        var held2 = new BigQueryReader(limits, pool, tight).Read("p", "d", [entries[0] with { Detail = carried[("bqView", "v")].Detail }], true, true)!;
+        check(carried[("bqView", "v")].Detail is { Carried: true, Columns.Count: 1 } && BigQueryEntries.Known(read, true, carry: true)[("bqView", "v")].Detail.Carried == false
+            && held2.Table.Count == tight.Table.Count && BigQueryEntries.Known(held2, true).Count == 0 && BigQueryEntries.Known(held2, true, carry: true).Count == 1
+            && BigQueryEntries.Known(bare, true, carry: true)[("bqView", "v")].Detail.Carried && BigQueryEntries.Known(names, true, carry: true).Count == 0,
+            "details that were not whole are carried through pass 1 with their columns, never reused; a read without columns carries nothing");
         var columns = Enumerable.Range(0, BigQueryReader.MaxTypes + 1).Select(at => new BigQueryColumn("c" + at, false, "STRING(" + at + ")", true, null)).ToList();
         List<BigQueryEntry> wide = [new("bqTable", "bqTables", null, "wide", 1, null, Detail: new BigQueryDetail(null, null, null, columns))];
         var budget = new StringPool(new IndexBudget(limits.MemoryBytes));

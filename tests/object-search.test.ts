@@ -1195,8 +1195,8 @@ describe('ObjectSearchService', () => {
     expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0 })).toBe('no index yet')
     // Definitions left out because the indexes' memory ran out are a gap of their own, named per server.
     const starved = { connectionId: 'd', done: 2, total: 2, objects: 30, status: status({ objects: 30, modules: 0, cut: 1204, leftOut: 1204, leftOutIn: 2 }) }
-    expect(indexGap(starved)).toBe('1,204 definitions left out (index memory full)')
-    expect(allIndexesSummary([healthy, starved], label)).toBe('Indexes: 70 objects on 2 servers · srv-d: 1,204 definitions left out (index memory full)')
+    expect(indexGap(starved)).toBe('1,204 definitions left out (not enough index memory)')
+    expect(allIndexesSummary([healthy, starved], label)).toBe('Indexes: 70 objects on 2 servers · srv-d: 1,204 definitions left out (not enough index memory)')
   })
 
   it('reports a failed search and clears results for empty text', async () => {
@@ -1775,9 +1775,11 @@ describe('Search Objects\' summary', () => {
     // Memory ran out: the line says how many definitions were left out and where, apart from the user's own names-only option
     // and from definitions only cut at their length (`cut` alone), and keeps the line in Object Explorer's band.
     const starved = status({ modules: 12, cut: 1206, leftOut: 1204, leftOutIn: 2 })
-    expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out of 2 databases (index memory full)')
-    expect(indexSummary(undefined, status({ cut: 1, leftOut: 1, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 definition left out of 1 database (index memory full)')
-    expect(indexSummary(undefined, status({ provider: 'bigquery', cut: 3, leftOut: 3, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 3 definitions left out of 1 dataset (index memory full)')
+    expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out of 2 databases (not enough index memory)')
+    expect(indexSummary(undefined, status({ cut: 1, leftOut: 1, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 definition left out of 1 database (not enough index memory)')
+    expect(indexSummary(undefined, status({ provider: 'bigquery', cut: 3, leftOut: 3, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 3 definitions left out of 1 dataset (not enough index memory)')
+    // Left out of the server's own or the system objects only: no database to name.
+    expect(indexSummary(undefined, status({ cut: 12, leftOut: 12 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 12 definitions left out (not enough index memory)')
     expect(indexIncomplete(undefined, starved)).toBe(true)
     expect(indexSummary(undefined, status({ cut: 2 }))).toBe('Index: 40 objects, 5 definitions in 2 databases')
     expect(indexIncomplete(undefined, status({ cut: 2 }))).toBe(false)
@@ -1785,8 +1787,8 @@ describe('Search Objects\' summary', () => {
     // What to do about it names the option by its label, and only an index short of memory gets the note: left-out
     // definitions, children left out, a database or dataset that did not fit, or BigQuery projects read by name only.
     const limit = settingDef('objectExplorer.search.memoryLimitMiB').label
-    expect(indexMemoryNote([status(), starved])).toBe(`The index’s memory is full, so a search inside definitions misses the ones left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`)
-    const partly = `The index’s memory is full, so part of what could be indexed was left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`
+    expect(indexMemoryNote([status(), starved])).toBe(`The index does not have enough memory, so a search inside definitions misses the ones left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`)
+    const partly = `The index does not have enough memory, so part of what could be indexed was left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`
     expect(indexMemoryNote([status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] })])).toBe(partly)
     expect(indexMemoryNote([status({ skipped: [{ database: 'Huge', code: 'TOO_LARGE', message: 'The database does not fit in the index\'s memory (512 MiB across every connection).' }] })])).toBe(partly)
     expect(indexMemoryNote([status({ provider: 'bigquery', namesOnly: ['disc-a'] })])).toBe(partly)

@@ -479,7 +479,7 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left);
 /// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise).</summary>
 /// <summary>LeftOut: the definitions (counted in Cut too) left out whole because the index's memory ran out, and LeftOutIn the
-/// databases (BigQuery: datasets) they belong to, the server's own and the system objects each counting as one; both absent when none was.</summary>
+/// databases (BigQuery: datasets) they belong to (the server's own and the system objects are in none); each absent when zero.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
     string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null,
     int? LeftOut = null, int? LeftOutIn = null);

@@ -31,6 +31,8 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
 {
     private readonly object gate = new();
     private readonly Dictionary<ResourceKey, Entry> sets = [];
+    /// <summary>Sets a newer read of the same key replaces (<see cref="Retire"/>), kept charged until their last holder lets go.</summary>
+    private readonly Dictionary<ResourceSet, Entry> retired = new(ReferenceEqualityComparer.Instance);
 
     private sealed class Entry(CancellationTokenSource lifetime)
     {
@@ -50,7 +52,20 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
     public int Sets { get { lock (gate) return sets.Count; } }
 
     /// <summary>The sets read and charged to the budget, each once however many connections hold it (the Memory panel's Nerd metrics).</summary>
-    public List<ResourceSet> Held { get { lock (gate) return [.. sets.Values.Select(entry => entry.Shared).OfType<ResourceSet>()]; } }
+    public List<ResourceSet> Held { get { lock (gate) return [.. sets.Values.Select(entry => entry.Shared).OfType<ResourceSet>(), .. retired.Keys]; } }
+
+    /// <summary>Stops sharing <paramref name="set"/>, so the next <see cref="AcquireAsync"/> for its key reads the objects again: for
+    /// a set whose definitions were left out for memory, once there is room. Connections that hold it keep it, charged, until
+    /// each lets go (its own next build takes the newer set).</summary>
+    public void Retire(ResourceSet set)
+    {
+        lock (gate)
+        {
+            if (!sets.TryGetValue(set.Key, out var entry) || !ReferenceEquals(entry.Shared, set)) return;
+            sets.Remove(set.Key);
+            retired[set] = entry;
+        }
+    }
 
     /// <summary>The set for <paramref name="key"/>, read by <paramref name="read"/> only when no connection holds it (or is reading
     /// it); a caller that shares a read waits for it. The read runs under its own token, limited to <paramref name="limit"/> and
@@ -130,10 +145,17 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
     {
         lock (gate)
         {
-            if (!sets.TryGetValue(set.Key, out var entry) || !ReferenceEquals(entry.Shared, set)) return;
-            if (--entry.Refs > 0) return;
-            sets.Remove(set.Key);
-            Drop(set);
+            if (sets.TryGetValue(set.Key, out var entry) && ReferenceEquals(entry.Shared, set))
+            {
+                if (--entry.Refs > 0) return;
+                sets.Remove(set.Key);
+                Drop(set);
+            }
+            else if (retired.TryGetValue(set, out var old) && --old.Refs <= 0)
+            {
+                retired.Remove(set);
+                Drop(set);
+            }
         }
     }
 

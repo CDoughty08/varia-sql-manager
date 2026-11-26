@@ -120,11 +120,12 @@ export function moreMatches(definition: DefinitionMatch): string | undefined {
  *  BigQuery listing cut short is TOO_LARGE too, and names no memory). */
 const memorySkip = (skip: ObjectIndexSkip): boolean => skip.code === childrenLeftOut || (skip.code === 'TOO_LARGE' && /memory/i.test(skip.message))
 
-/** The definitions an index left out because its memory ran out, for its line: a search inside definitions cannot find them. */
+/** The definitions an index left out because its memory ran out, for its line: a search inside definitions cannot find them.
+ *  The databases (datasets) are named when some are theirs; the server's own and the system objects' are in none. */
 function leftOutText(status: ObjectIndexStatus): string {
   if (!status.leftOut) return ''
   const where = status.leftOutIn ? ` of ${count(status.leftOutIn, status.provider === 'bigquery' ? 'dataset' : 'database')}` : ''
-  return ` · ${count(status.leftOut, 'definition')} left out${where} (index memory full)`
+  return ` · ${count(status.leftOut, 'definition')} left out${where} (not enough index memory)`
 }
 
 /** Whether an index left anything out because the memory every index shares ran out: definitions, children, a whole database
@@ -138,7 +139,7 @@ export function indexMemoryNote(statuses: readonly (ObjectIndexStatus | undefine
   if (!statuses.some(indexMemoryShort)) return undefined
   const definitions = statuses.some(status => !!status?.leftOut)
   const limit = settingDef('objectExplorer.search.memoryLimitMiB')
-  return `The index’s memory is full, so ${definitions ? 'a search inside definitions misses the ones left out' : 'part of what could be indexed was left out'}. `
+  return `The index does not have enough memory, so ${definitions ? 'a search inside definitions misses the ones left out' : 'part of what could be indexed was left out'}. `
     + `Raise ${limit.label} in Tools › Options › ${pagePath(limit.page).map(page => page.title).join(' › ')}, then rebuild the index.`
 }
 
@@ -242,7 +243,7 @@ export function indexGap(entry: IndexEntry): string | undefined {
     status.skipped.some(skip => skip.agent) ? 'SQL Server Agent objects skipped' : '',
     partial ? `children left out of ${count(partial, bigQuery ? 'dataset' : 'database')}` : '',
     namesOnly ? `names only in ${count(namesOnly, 'project')}` : '',
-    status.leftOut ? `${count(status.leftOut, 'definition')} left out (index memory full)` : '',
+    status.leftOut ? `${count(status.leftOut, 'definition')} left out (not enough index memory)` : '',
     status.definitions ? '' : 'names only'
   ].filter(Boolean)
   return gaps.length ? gaps.join(', ') : undefined

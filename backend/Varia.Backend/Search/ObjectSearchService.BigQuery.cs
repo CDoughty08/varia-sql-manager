@@ -514,10 +514,18 @@ internal sealed partial class ObjectSearchService
                 }
                 var key = project + "\u0001" + dataset;
                 var force = (scope is not null && !missingOnly) || marked || stale.Contains(target);
-                var known = force ? [] : BigQueryEntries.Known(state.Index.Get(key), definitions);
+                var earlier = state.Index.Get(key);
+                var known = force ? [] : BigQueryEntries.Known(earlier, definitions);
                 var listed = BigQueryEntries.FromListing(listing);
-                var entries = listed.Select(item => BigQueryEntries.Reuse(known, item)).ToList();
+                // What pass 2 reads: every object with details that this build may not reuse (all of them, when the read is forced).
+                var again = listed.Select(item => BigQueryEntries.HasDetails(item) && BigQueryEntries.Reuse(known, item).Detail is null).ToArray();
                 known.Clear();
+                // Pass 1 still holds what the earlier read had of those objects until pass 2 has read them again: a dataset whose
+                // columns fitted keeps their memory between the passes, rather than give it back and ask for it again above
+                // BigQuery's floor, where it would be refused once anything else has taken memory since.
+                var carried = BigQueryEntries.Known(earlier, definitions, carry: true);
+                var entries = listed.Select(item => BigQueryEntries.Reuse(carried, item)).ToList();
+                carried.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
                 var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop);
@@ -552,8 +560,7 @@ internal sealed partial class ObjectSearchService
                     }
                     SetDatasetSkip(project, dataset, datasetSkip);
                     // A read that fit only without columns reads no details: they would not fit either, and its reused ones are gone.
-                    int[] read = held is null
-                        ? [.. Enumerable.Range(0, entries.Count).Where(at => entries[at].Detail is null && BigQueryEntries.HasDetails(entries[at]))] : [];
+                    int[] read = held is null ? [.. Enumerable.Range(0, entries.Count).Where(at => again[at])] : [];
                     if (read.Length > 0) pending[target] = (listed, read, listing.Cut);
                     else if (!listing.Cut) Clear(target);
                     onDone?.Invoke(target);
@@ -1106,7 +1113,7 @@ internal sealed partial class ObjectSearchService
                                     {
                                         if (Interlocked.Exchange(ref wave2BudgetExhausted, 1) == 0)
                                         {
-                                            Skip(new("", "TOO_LARGE", "Indexing stopped early for auto-discovered projects: BigQuery's part of the index's " + Size + " memory limit is full.", Project: ""));
+                                            Skip(new("", "TOO_LARGE", "Indexing stopped early for auto-discovered projects: " + BigQueryPart + ", and the rest is in use.", Project: ""));
                                             wave2DiscoveredStop.Cancel();
                                         }
                                     },
@@ -1367,11 +1374,15 @@ internal sealed partial class ObjectSearchService
                 throw new OperationCanceledException(token);
             }
             return childrenLeftOut
-                ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: with them BigQuery would pass its part of the index's " + Size + " memory limit.", Project: project)
+                ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project)
                 : null;
         }
         return new(dataset, "TOO_LARGE", old is not null
-            ? "The dataset's updated details would take BigQuery past its part of the index's " + Size + " memory limit; earlier names were kept."
-            : "The dataset was not indexed: it would take BigQuery past its part of the index's " + Size + " memory limit.", Project: project);
+            ? "The dataset's updated details did not fit, so earlier names were kept: " + BigQueryPart + ", and the rest is in use."
+            : "The dataset was not indexed: " + BigQueryPart + ", and the rest is in use.", Project: project);
     }
+
+    /// <summary>Why a BigQuery read was refused with memory still free: true whatever BigQuery itself holds, since SQL Server's
+    /// use counts against the same limit. The renderer and the lookup know a memory skip by the words "memory limit".</summary>
+    private string BigQueryPart => "BigQuery leaves part of the index's " + Size + " memory limit to SQL Server";
 }

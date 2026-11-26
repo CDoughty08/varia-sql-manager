@@ -134,12 +134,16 @@ internal sealed partial class ObjectSearchService : IDisposable
     {
         if (CheckMemoryLimit(mib) is not { } checkedMiB) return;
         var bytes = checkedMiB * 1024L * 1024;
+        var reserve = bytes / ObjectIndexLimits.NamesReserveShare;
         lock (limitGate)
         {
             if (Limits.MemoryBytes == bytes && budget.Limit == bytes) return;
-            Limits.MemoryBytes = bytes;
-            Limits.NamesReserveBytes = bytes / ObjectIndexLimits.NamesReserveShare;
+            // Reads running on other connections take no lock: the reserve (and the floors that follow from it) is never larger
+            // than the limit in force allows, so a read between the two writes is refused nothing it would have been given.
+            if (bytes < budget.Limit) Limits.NamesReserveBytes = reserve;
             budget.Limit = bytes;
+            Limits.MemoryBytes = bytes;
+            Limits.NamesReserveBytes = reserve;
         }
     }
 
@@ -430,13 +434,14 @@ internal sealed partial class ObjectSearchService : IDisposable
                     state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped,
                     bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null);
             }
-            int[] parts = [.. databases.Select(value => value.LeftOut), state.Index.Resource?.LeftOut ?? 0, state.Index.Server?.LeftOut ?? 0];
-            var (leftOut, leftOutIn) = (parts.Sum(), parts.Count(value => value > 0));
+            // LeftOutIn counts databases only: the server's own objects and the system objects are in none.
+            var leftOut = databases.Sum(value => value.LeftOut) + (state.Index.Resource?.LeftOut ?? 0) + (state.Index.Server?.LeftOut ?? 0);
+            var leftOutIn = databases.Count(value => value.LeftOut > 0);
             // A stopped first build that read only the server's own objects still holds an index.
             return new(state.Building ? "building" : state.Built || databases.Count > 0 || state.Index.Objects > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
                 databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
-                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null, LeftOutIn: leftOut > 0 ? leftOutIn : null);
+                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null, LeftOutIn: leftOutIn > 0 ? leftOutIn : null);
         }
     }
 
@@ -710,7 +715,13 @@ internal sealed partial class ObjectSearchService : IDisposable
                 key = new(profile.ProductVersion ?? profile.Major.ToString(CultureInfo.InvariantCulture), profile.EngineEdition, rows.GetInt64(0),
                     rows.IsDBNull(1) ? null : rows.GetDateTime(1), rows.IsDBNull(2) ? 0 : rows.GetInt32(2), definitions);
             }
-            if (state.Index.Resource?.Key == key) return null;
+            if (state.Index.Resource is { } held && held.Key == key)
+            {
+                // The set this connection holds is current. One whose definitions were left out for memory is read again once
+                // there is room above the names' reserve, so raising the limit and rebuilding brings them back.
+                if (held.LeftOut == 0 || budget.Free < Limits.NamesReserveBytes) return null;
+                resources.Retire(held);
+            }
             // The shared read has its own connection and lifetime: other connections may wait for it, so stopping this build (or
             // disconnecting) stops only this wait, and the read ends only when every waiter has gone or its budget runs out.
             var set = await resources.AcquireAsync(key, async readToken =>

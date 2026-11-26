@@ -155,8 +155,9 @@ internal sealed record BigQueryColumn(string Path, bool Record, string Type, boo
 
 /// <summary>What pass 2 read of an object: a clone's subtype, its last change, its view or routine text, columns, size and layout.</summary>
 /// <c>Bulk</c>: read by the billed bulk path, which has no size, layout, signature or last change, so no later build reuses it.
+/// <c>Carried</c>: an earlier read's details that were not whole, held only until pass 2 reads the object again; never reused either.
 internal sealed record BigQueryDetail(string? Subtype, long? Modified, string? Definition, IReadOnlyList<BigQueryColumn> Columns, long? Rows = null, long? Bytes = null,
-    string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false, bool Bulk = false);
+    string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false, bool Bulk = false, bool Carried = false);
 
 /// <summary>An object's facts beside its entry: when it was created (what a refresh compares), whether pass 2 read it, and what it read.</summary>
 /// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for the names' reserve), so a later build may reuse it.
@@ -290,8 +291,9 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                     shards[at] = group;
                 }
                 if (detail is null) continue;
-                // A bulk read lacks facts pass 2 keeps: the next build reads the object again rather than reuse it.
-                if (detail.Bulk) facts[at] = facts[at] with { Whole = false };
+                // A bulk read lacks facts pass 2 keeps, and carried details were not whole: the next build reads the object again
+                // rather than reuse it.
+                if (detail.Bulk || detail.Carried) facts[at] = facts[at] with { Whole = false };
                 if (definitions && detail.Definition is { Length: > 0 } text && !Definition(at, text, detail.DefinitionCut)) facts[at] = facts[at] with { Whole = false };
                 if (detail.ColumnsCut) cut++;
                 if (!children) continue;
@@ -353,7 +355,8 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     {
         var longer = wasCut || text.Length > limits.DefinitionChars;
         var kept = text.Length > limits.DefinitionChars ? text[..limits.DefinitionChars] : text;
-        if (Pooled(DefinitionText.Hold(kept), detailsFloor) is not { } copy) { cut++; leftOut++; return false; }
+        // In a build the details' floor is above the names' reserve; a read given no floor still leaves the reserve.
+        if (Pooled(DefinitionText.Hold(kept), Math.Max(detailsFloor, limits.NamesReserveBytes)) is not { } copy) { cut++; leftOut++; return false; }
         objects.SetDefinition(at, copy, longer);
         modules++;
         if (longer) cut++;
@@ -442,11 +445,16 @@ internal static partial class BigQueryEntries
     public static bool HasDetails(BigQueryEntry entry) => entry.Kind != "bqModel";
 
     /// <summary>What an earlier read of the dataset knows, by kind and name, for the objects it read details of whole: nothing from a
-    /// read that left its columns out, or its text when this build keeps <paramref name="definitions"/>, which pass 2 then reads again.</summary>
-    public static Dictionary<(string Kind, string Name), (long Created, long? Modified, BigQueryDetail Detail)> Known(DatabaseIndex? read, bool definitions)
+    /// read that left its columns out, or its text when this build keeps <paramref name="definitions"/>, which pass 2 then reads again.
+    /// With <paramref name="carry"/>, also the details that were not whole (a bulk read's, one whose text was left out, a read
+    /// without the definitions this build wants), marked <see cref="BigQueryDetail.Carried"/>: pass 1 holds them until pass 2
+    /// has read the object again, so the dataset keeps the memory its columns hold between the two passes.</summary>
+    public static Dictionary<(string Kind, string Name), (long Created, long? Modified, BigQueryDetail Detail)> Known(DatabaseIndex? read, bool definitions, bool carry = false)
     {
         var known = new Dictionary<(string, string), (long, long?, BigQueryDetail)>();
-        if (read?.Facts is not { } facts || read.ChildrenLeftOut || definitions && read.DefinitionsLeftOut) return known;
+        if (read?.Facts is not { } facts || read.ChildrenLeftOut) return known;
+        var bare = definitions && read.DefinitionsLeftOut;
+        if (bare && !carry) return known;
         var table = read.Table;
         var columns = new Dictionary<int, List<BigQueryColumn>>();
         for (var at = 0; at < table.Count; at++)
@@ -458,11 +466,11 @@ internal static partial class BigQueryEntries
         }
         for (var at = 0; at < table.Count; at++)
         {
-            if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true, Whole: true } fact) continue;
+            if (table.Parent(at) >= 0 || facts.Of(at) is not { Detailed: true } fact || !fact.Whole && !carry) continue;
             var modified = table.Modified(at) is { } date ? (long)(date - DateTime.UnixEpoch).TotalMilliseconds : (long?)null;
             var subtype = table.Subtype(at) == "clone" ? "clone" : null;
             known[(table.Kind(at), table.Name(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, table.Definition(at), columns.GetValueOrDefault(at) ?? [],
-                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at)));
+                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole));
         }
         return known;
     }

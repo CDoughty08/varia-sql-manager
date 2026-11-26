@@ -45,8 +45,10 @@ internal static partial class BigQueryIndexChecks
             check(starred.Count == 4 && starred.All(read => !read.ChildrenLeftOut && read.Table.Count == 302) && discovered.Count == 24 && detailed == 0
                 && built.Status.NamesOnly is { Count: 24 } namesOnly && namesOnly.All(project => project.StartsWith("disc-", StringComparison.Ordinal)),
                 $"BigQuery gives up discovered projects' details first: every starred project keeps its columns, {detailed} of 24 discovered projects do, and those are reported as names only ({built.Status.NamesOnly?.Count})");
-            check(free >= limits.BigQueryDetailsFloorBytes && free < limits.BigQueryDiscoveredFloorBytes + 40_000,
-                $"BigQuery fills the budget only down to its floors: {free} bytes free of {limits.MemoryBytes}, above the names' reserve of {limits.NamesReserveBytes}");
+            // One discovered project's details take more than what is left above the discovered floor, which is why none was kept.
+            var oneProject = starred[0].Bytes - discovered[0].Bytes;
+            check(free >= limits.BigQueryDetailsFloorBytes && free - limits.BigQueryDiscoveredFloorBytes < oneProject,
+                $"BigQuery fills the budget only down to its floors: {free} bytes free of {limits.MemoryBytes}, {free - limits.BigQueryDiscoveredFloorBytes} above the discovered floor where a project's columns take {oneProject}");
             // The bug this guards against: with less than the names' reserve free, this read kept names only.
             var sql = Guid.NewGuid().ToString();
             var sales = await SqlRead(search, "Sales", 60);
@@ -62,6 +64,20 @@ internal static partial class BigQueryIndexChecks
             check(rebuilt.Status.State == "ready" && search.Budget.Free >= limits.NamesReserveBytes && again is { Modules: 90, LeftOut: 0 } && other is { Modules: 60, LeftOut: 0 }
                 && DefinitionHits(search.Held(sql), search, "dbo.p88 AS SELECT 88") == 1,
                 $"after BigQuery rebuilds, a SQL Server rebuild with new modules and a second database keep their definitions ({again?.Modules}, {other?.Modules}; {search.Budget.Free} bytes free)");
+            // SQL Server has since taken memory below BigQuery's details floor. A dataset that is read again, by a Refresh of its
+            // project, then by a full rebuild, keeps the columns it held: pass 1 goes on holding them until pass 2 has read them
+            // again, rather than give their memory back and be refused it above the floor.
+            var taken = search.Budget.Free - limits.BigQueryDetailsFloorBytes + 2_000;
+            search.Budget.Force(taken);
+            var refreshed = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred, Scope: new("star-01")), source, CancellationToken.None);
+            var afterRefresh = search.HeldOf(bigQuery).Single(read => read.Database == "star-01");
+            var whole = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred), source, CancellationToken.None);
+            var afterRebuild = search.HeldOf(bigQuery).Where(read => read.Database.StartsWith("star-", StringComparison.Ordinal)).ToList();
+            check(search.Budget.Free < limits.BigQueryDetailsFloorBytes && afterRefresh is { ChildrenLeftOut: false, Table.Count: 302 }
+                && refreshed.Status.Skipped.All(skip => skip.Project != "star-01") && afterRebuild.Count == 4 && afterRebuild.All(read => read is { ChildrenLeftOut: false, Table.Count: 302 })
+                && whole.Status.Skipped.All(skip => skip.Code != ObjectSearchService.ChildrenLeftOut),
+                $"below its details floor a BigQuery dataset read again by a Refresh or a rebuild keeps the columns it held ({afterRefresh.Table.Count} entries after the Refresh, {search.Budget.Free} bytes free)");
+            search.Budget.Release(taken);
             // Its lookup arrays are BigQuery's too: at the names floor they are not built and the lookup scans; with room, they are.
             var wide = search.HeldOf(bigQuery).Single(read => read.Database == "star-01");
             var spare = search.Budget.Free - limits.BigQueryNamesFloorBytes;
@@ -134,8 +150,27 @@ internal static partial class BigQueryIndexChecks
             check(starved is { Modules: 0, Cut: 7, LeftOut: 7 } && status is { Modules: 5, Cut: 7, LeftOut: 7, LeftOutIn: 1 }
                 && wire.GetProperty("leftOut").GetInt32() == 7 && wire.GetProperty("leftOutIn").GetInt32() == 1,
                 $"a status counts the definitions left out for memory and the databases they belong to ({status.LeftOut} in {status.LeftOutIn})");
+            // The server's own objects are in no database: they add to the count, not to the databases.
+            var serverText = SearchCostChecks.Procedures(2);
+            search.Held(id).PutServer((await new DatabaseReader(ObjectSearchService.ServerScope, limits, search.Pool).ReadAsync(serverText, true, CancellationToken.None, children: false))!);
+            status = search.IndexStatus(new ObjectIndexStatusArgs(id), bigQuery: true).Status;
+            check(status is { LeftOut: 9, LeftOutIn: 1 }, $"definitions left out of the server's own objects count, in no database ({status.LeftOut} in {status.LeftOutIn})");
             var healthy = System.Text.Json.JsonSerializer.SerializeToElement(new ObjectIndexStatus("ready", 1, 1, 5, 5, 0, [], true), Wire);
             check(!healthy.TryGetProperty("leftOut", out _) && !healthy.TryGetProperty("leftOutIn", out _), "a status with nothing left out for memory carries neither count");
+        }
+
+        // A BigQuery index's status counts them by dataset.
+        {
+            using var search = new ObjectSearchService(new UnusedHost(), ShareLimits());
+            var id = Guid.NewGuid().ToString();
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), AllProjects: false), ShareSource(), CancellationToken.None);
+            var view = new BigQueryDetail(null, null, "SELECT 1 AS a FROM t", []);
+            var floor = search.Budget.Free;
+            var short1 = new BigQueryReader(search.Limits, search.Pool, null, 0, floor).Read("varia-alpha", "views", [new("bqView", "bqViews", null, "v", 1, null, Detail: view)], true, true)!;
+            search.Held(id).Put(short1);
+            var status = search.IndexStatus(new ObjectIndexStatusArgs(id), bigQuery: true).Status;
+            check(short1 is { LeftOut: 1, Cut: 1 } && status is { Provider: Providers.BigQuery, LeftOut: 1, LeftOutIn: 1, Cut: 1 },
+                $"a BigQuery status counts the view and routine text left out for memory, by dataset ({status.LeftOut} in {status.LeftOutIn})");
         }
 
         // 4. The limit a build carries: checked, applied from that build on with the reserve and floors in proportion, and never

@@ -821,6 +821,31 @@ internal static class SearchChecks
             && ReferenceEquals(other.Table.Name(1), first.Table.Name(1)), "two builds' sets hold the names and definitions they share once");
         check(budget.Used == first.Bytes + other.Bytes + Costs("sp_0", "sp_1", "sys", "CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2", "CREATE PROCEDURE sys.sp_1 AS 3"),
             "the budget is charged for distinct texts only");
+        // A set shared while less than the names' reserve was free leaves its definitions out, counted as left out for memory.
+        // Retired, it is read again by the next build with room; a connection still holding the old one keeps it charged until it
+        // lets go, and then only the newer set is left.
+        {
+            var room = new IndexBudget(1 << 20);
+            var texts = new StringPool(room);
+            long reserve = long.MaxValue / 4;
+            var shared = new ResourceCatalog(texts, () => reserve);
+            var starved = await shared.AcquireAsync(key, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"));
+            var again = await shared.AcquireAsync(key, Read("never read"));
+            check(starved is { Modules: 0, Cut: 2, LeftOut: 2 } && ReferenceEquals(starved, again) && shared.Held.Count == 1, "a set shared below the names' reserve counts its definitions as left out for memory");
+            reserve = 0;
+            shared.Retire(starved);
+            var fresh = await shared.AcquireAsync(key, Read("CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"));
+            check(fresh is { Modules: 2, LeftOut: 0 } && !ReferenceEquals(fresh, starved) && shared.Sets == 1 && shared.Held.Count == 2,
+                "a retired set is read again once there is room, while its holders keep the old one");
+            shared.Release(starved);
+            var oneLeft = shared.Held.Count;
+            shared.Release(again);
+            check(oneLeft == 2 && shared.Held is [var only] && ReferenceEquals(only, fresh)
+                && room.Used == fresh.Bytes + Costs("sp_0", "sp_1", "sys", "CREATE PROCEDURE sys.sp_0 AS 1", "CREATE PROCEDURE sys.sp_1 AS 2"),
+                $"a retired set stays charged until its last holder lets go, and then gives everything back ({room.Used} bytes)");
+            shared.Release(fresh);
+            check(room.Used == 0 && shared.Sets == 0 && texts.Count == 0, "the newer set's release leaves nothing charged");
+        }
         try { await catalog.AcquireAsync(key with { Checksum = 9 }, _ => throw new InvalidOperationException("boom")); check(false, "a failed read throws"); }
         catch (InvalidOperationException) { check(catalog.Sets == 2, "a failed read keeps nothing, so the next build reads again"); }
 
