@@ -450,8 +450,10 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// Scope re-reads one project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
 /// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
 /// bigquery.indexEstimate and the cost prompts).</summary>
+/// <summary>MemoryLimitMiB (either engine): the memory every connection's index shares, as Options sets it
+/// (ObjectIndexLimits.MinMemoryMiB..MaxMemoryMiB); it applies from this build on, and absent leaves the limit as it is.</summary>
 internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, List<string>? StarredProjects = null, bool? AllProjects = null,
-    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null);
+    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null, int? MemoryLimitMiB = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
 /// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and
@@ -476,8 +478,11 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// projects whose details could not be read due to the memory budget; Bulk is the last full build's billed bulk path, when it ran;
 /// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left);
 /// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise).</summary>
+/// <summary>LeftOut: the definitions (counted in Cut too) left out whole because the index's memory ran out, and LeftOutIn the
+/// databases (BigQuery: datasets) they belong to (the server's own and the system objects are in none); each absent when zero.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null,
+    int? LeftOut = null, int? LeftOutIn = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.indexStatus: what a connection's index holds now, without building or searching.</summary>
 internal sealed record ObjectIndexStatusArgs(string ConnectionId);

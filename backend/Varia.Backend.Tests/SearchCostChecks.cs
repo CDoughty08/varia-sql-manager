@@ -136,7 +136,7 @@ internal static class SearchCostChecks
     /// <summary>A database batch without children: <paramref name="count"/> procedures after plan guides with their names and
     /// statements, then each procedure's definition (<paramref name="text"/>'s, or its own). Without <paramref name="definitions"/>
     /// it has no definitions set, as the real batch then has none; the collation's case set is left out either way.</summary>
-    private static Batch Procedures(int count, (string Name, string Text)[]? guides = null, string? text = null, bool definitions = true)
+    internal static Batch Procedures(int count, (string Name, string Text)[]? guides = null, string? text = null, bool definitions = true)
     {
         var at = DateTime.UnixEpoch;
         var ids = Enumerable.Range(1, count).ToList();
@@ -216,8 +216,12 @@ internal static class SearchCostChecks
         // much of it is read as could show it is a short text the read holds.
         var starved = Procedures(3, text: new string('x', 100_000));
         index = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 1 << 20 }, new StringPool(new IndexBudget(1 << 20))).ReadAsync(starved, true, CancellationToken.None, children: false);
-        check(index is { Modules: 0, Cut: 3 } && index.Table.Count == 3 && index.Table.Rows().All(item => item.Definition is null) && starved.CharsRead <= 3 * (DatabaseReader.RepeatChars + 1),
-            "below the names' reserve a definition is left out, counted as cut, after at most a short text's length: " + starved.CharsRead + " characters read");
+        check(index is { Modules: 0, Cut: 3, LeftOut: 3 } && index.Table.Count == 3 && index.Table.Rows().All(item => item.Definition is null) && starved.CharsRead <= 3 * (DatabaseReader.RepeatChars + 1),
+            "below the names' reserve a definition is left out, counted as cut and as left out for memory, after at most a short text's length: " + starved.CharsRead + " characters read");
+        // A definition cut at the per-definition limit is cut, not left out for memory: the status reports the two apart.
+        var longer = await new DatabaseReader("Sales", new ObjectIndexLimits { NamesReserveBytes = 0, DefinitionChars = 10 }, new StringPool(new IndexBudget(1 << 20)))
+            .ReadAsync(Procedures(3), true, CancellationToken.None, children: false);
+        check(longer is { Modules: 3, Cut: 3, LeftOut: 0 }, $"a definition cut at its length limit is not counted as left out for memory ({longer?.Cut} cut, {longer?.LeftOut} left out)");
 
         // A short definition the read already holds costs nothing, so it is kept even below the reserve: the first plan guide's
         // statement is pooled while there is room, the second guide's long name (names may use the reserve) then takes free

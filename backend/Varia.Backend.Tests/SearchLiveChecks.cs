@@ -251,6 +251,37 @@ internal static class SearchLiveChecks
             check(stopped && stopping is { State: LookupState.Building, Skip.Code: "TOO_LARGE" } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
                 "a stopped real build leaves a database it did not reach skipped as before, never absent or ready: " + stopping + " then " + tight.Lookup(connectionId)?.Database(database));
         }
+        // Another connection's BigQuery index holding everything its floors allow, the most BigQuery can take of the budget, under
+        // a limit this build's own request raises to 1,024 MiB (so the 640 MiB held is over the limit until the build applies
+        // it): this server's definitions still fit, none is left out for memory, and a search inside them finds this run's
+        // marker. (A server whose index needs more than the 128 MiB that leaves above the names' reserve would fail this.)
+        using (var beside = new ObjectSearchService(service))
+        {
+            const long MiB = 1024 * 1024;
+            beside.Budget.Force(1024 * MiB - 1024 * MiB / 8 * 3);
+            var full = await beside.IndexAsync(new(connectionId, Guid.NewGuid().ToString(), MemoryLimitMiB: 1024), CancellationToken.None);
+            var inside = beside.Search(new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), marker, In: "definitions", Database: database), CancellationToken.None);
+            check(beside.Budget.Limit == 1024 * MiB && beside.Limits is { NamesReserveBytes: 256 * MiB, BigQueryNamesFloorBytes: 384 * MiB },
+                "a SQL Server build's memory limit reaches the budget on a real connection, with the reserve and floors in proportion");
+            check(full.Status is { State: "ready", LeftOut: null, LeftOutIn: null, Modules: > 0 } && full.Status.Skipped.All(skip => skip.Code is not ("TOO_LARGE" or ObjectSearchService.ChildrenLeftOut))
+                && inside.Total >= 1 && beside.Budget.Free >= beside.Limits.NamesReserveBytes,
+                $"beside a BigQuery index at its floor a real server keeps its definitions ({full.Status.Modules} kept, {full.Status.LeftOut ?? 0} left out, {inside.Total} hits inside them, {beside.Budget.Free / MiB} MiB free)");
+        }
+        // Memory that ran out and came back: built with less than the names' reserve free, every definition is left out, the
+        // shared system objects' too, and the status says so; once there is room, a rebuild reads them all, the system objects
+        // again as well, and the count goes.
+        using (var starved = new ObjectSearchService(service))
+        {
+            var others = starved.Limits.MemoryBytes - starved.Limits.NamesReserveBytes + 1;
+            starved.Budget.Force(others);
+            var without = await starved.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            var system = starved.IndexOf(connectionId)?.Resource?.LeftOut ?? -1;
+            starved.Budget.Release(others);
+            var with = await starved.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            check(without.Status is { LeftOut: > 0, LeftOutIn: > 0 } && system > 0 && with.Status is { LeftOut: null, LeftOutIn: null } && with.Status.Modules > without.Status.Modules
+                && starved.IndexOf(connectionId)?.Resource is { LeftOut: 0, Modules: > 0 } && starved.Resources.Held.Count == 1,
+                $"definitions left out for memory are counted ({without.Status.LeftOut} in {without.Status.LeftOutIn} databases, {system} of the system objects) and all read once a rebuild finds room ({with.Status.Modules} kept)");
+        }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing
         // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.

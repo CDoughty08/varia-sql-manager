@@ -66,7 +66,13 @@ export const objectExplorerSettings = [
   {
     key: 'objectExplorer.search.definitions', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index module definitions', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'definitions', 'procedures', 'text'],
-    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build.'
+    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index memory limit). Applies to the next build.'
+  },
+  {
+    key: 'objectExplorer.search.memoryLimitMiB', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index memory limit',
+    type: 'integer', min: objectSearchLimits.memoryMiB.min, max: objectSearchLimits.memoryMiB.max, default: objectSearchLimits.memoryMiB.default, unit: 'MiB', varia: true,
+    keywords: ['search', 'index', 'memory', 'limit', 'definitions', 'bigquery', 'ram'],
+    description: 'The most memory the Search Objects indexes of all connections hold together. Definitions stop being kept once less than a quarter of it is free, and BigQuery indexes take at most five eighths of it between them (less what SQL Server holds), so SQL Server’s definitions keep their room; Search Objects says when anything was left out for memory. Applies to the next build. Lowering it drops nothing an index already holds: disconnect the server to give its memory back.'
   },
   {
     key: 'objectExplorer.search.bigQueryAccessibleProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index all accessible BigQuery projects', type: 'boolean', default: true, varia: true,

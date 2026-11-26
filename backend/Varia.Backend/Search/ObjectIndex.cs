@@ -55,11 +55,19 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
+    /// <summary>The part of <see cref="Cut"/> left out whole because the index's memory ran out (the names' reserve, or
+    /// BigQuery's floor), which the status reports apart: a search inside definitions cannot find these.</summary>
+    public int LeftOut { get; init; }
     /// <summary>Read without its children (CHILDREN_LEFT_OUT) because with them it did not fit: set before it is held, and kept
     /// with it however later builds end, for the Memory panel's Nerd metrics.</summary>
     public bool ChildrenLeftOut { get; set; }
     /// <summary>Read by a build without definitions: no entry has one.</summary>
     public bool DefinitionsLeftOut { get; set; }
+    /// <summary>BigQuery: the read holds some object's details (its columns): what a later read of the dataset keeps hold of.</summary>
+    public bool Detailed { get; init; }
+    /// <summary>BigQuery: the part of <see cref="Bytes"/> its names hold (records, facts, text slots). A read that replaces this
+    /// one charges its names to that part and its details to the rest, so neither pushes the other out of the share.</summary>
+    public long NameBytes { get; init; }
     /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
     /// read did not reach it (a batch that failed part way).</summary>
     public bool? CaseSensitive { get; set; }
@@ -90,8 +98,8 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
 
     /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
     /// <paramref name="built"/> is told when this call built them. Null once it is dropped, while another call is building them, or
-    /// when the budget cannot take them: the lookup then scans the table.</summary>
-    public TableLookup? Lookup(IndexBudget budget, Action? built = null)
+    /// when the budget cannot take them and leave <paramref name="keepFree"/> free (BigQuery's floor): the lookup then scans the table.</summary>
+    public TableLookup? Lookup(IndexBudget budget, Action? built = null, long keepFree = 0)
     {
         if (Volatile.Read(ref lookup) is { } held) return held;
         var bytes = TableLookup.BytesFor(Table);
@@ -100,7 +108,7 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
         lock (gate)
         {
             if (lookup is not null || dropped || lookupBuilding) return lookup;
-            if (!budget.TryTake(bytes)) return null;
+            if (!budget.TryTake(bytes, keepFree)) return null;
             lookupBuilding = true;
         }
         TableLookup made;
@@ -172,12 +180,36 @@ internal static class IndexMemory
 /// <summary>Bounds on the index and its searches (objectSearchLimits in src/shared/explorer/search.ts).</summary>
 internal sealed class ObjectIndexLimits
 {
+    /// <summary>The memory limit in MiB as Options sets it (objectExplorer.search.memoryLimitMiB): its default and bounds.</summary>
+    public const int DefaultMemoryMiB = 512;
+    public const int MinMemoryMiB = 64;
+    public const int MaxMemoryMiB = 16_384;
+    /// <summary>The names' reserve is one part in this many of the limit.</summary>
+    public const int NamesReserveShare = 4;
+
     /// <summary>The memory every connection's index holds together (<see cref="IndexMemory"/>): a database that would pass it is
-    /// read again without its children (CHILDREN_LEFT_OUT), and one that still would is skipped as TOO_LARGE.</summary>
-    public long MemoryBytes { get; init; } = 512L * 1024 * 1024;
+    /// read again without its children (CHILDREN_LEFT_OUT), and one that still would is skipped as TOO_LARGE. A build may
+    /// change it (<see cref="ObjectSearchService.SetMemoryLimit"/>).</summary>
+    public long MemoryBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024;
     /// <summary>The part of <see cref="MemoryBytes"/> definitions leave to names: a definition is left out (counted as cut) once
     /// less than this is free.</summary>
-    public long NamesReserveBytes { get; init; } = 128L * 1024 * 1024;
+    public long NamesReserveBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024 / NamesReserveShare;
+    // What a BigQuery read keeps free, so that however much BigQuery metadata is indexed, and whichever connection was built
+    // first, a SQL Server read still finds room above the names' reserve for its definitions. Each floor is the names' reserve
+    // and a part more, so BigQuery gives way in order: discovered projects' details first, then the billing and starred
+    // projects', then names. A floor only refuses BigQuery; SQL Server's reads never see it.
+    /// <summary>Kept free by everything a BigQuery index holds (names, records, lookup arrays): 3/8 of the limit.</summary>
+    public long BigQueryNamesFloorBytes => NamesReserveBytes + NamesReserveBytes / 2;
+    /// <summary>Kept free by the billing and starred projects' details (columns, view and routine text): 7/16 of the limit.</summary>
+    public long BigQueryDetailsFloorBytes => NamesReserveBytes + NamesReserveBytes / 4 * 3;
+    /// <summary>Kept free by discovered projects' details, the first to give way: half the limit.</summary>
+    public long BigQueryDiscoveredFloorBytes => NamesReserveBytes * 2;
+
+    /// <summary>The floor a BigQuery dataset's details keep free: its project's, or one step lower for a dataset that already
+    /// <paramref name="holds"/> details, so what it holds can grow a little (a column added, a table recreated a little wider)
+    /// without the dataset losing its columns at the very line the build stopped at.</summary>
+    public long BigQueryDetailsFloor(bool discovered, bool holds) =>
+        discovered ? holds ? BigQueryDetailsFloorBytes : BigQueryDiscoveredFloorBytes : holds ? BigQueryNamesFloorBytes : BigQueryDetailsFloorBytes;
     /// <summary>The longest part of one definition the index keeps.</summary>
     public int DefinitionChars { get; init; } = 1_000_000;
     /// <summary>Databases indexed at once across every connection, and per connection.</summary>
@@ -200,8 +232,13 @@ internal sealed class ObjectIndexLimits
 internal sealed class IndexBudget(long limit)
 {
     private long used;
-    public long Limit => limit;
+    private long cap = limit;
+    /// <summary>A limit set below what is held drops nothing: it only refuses what is asked from then on, until enough has
+    /// been given back.</summary>
+    public long Limit { get => Interlocked.Read(ref cap); set => Interlocked.Exchange(ref cap, value); }
     public long Used => Interlocked.Read(ref used);
+    /// <summary>What is left of the limit; negative while a lowered limit is below what is held.</summary>
+    public long Free => Limit - Used;
 
     /// <summary>Takes <paramref name="bytes"/> when that leaves at least <paramref name="keepFree"/> of the limit free.</summary>
     public bool TryTake(long bytes, long keepFree = 0)
@@ -209,7 +246,7 @@ internal sealed class IndexBudget(long limit)
         while (true)
         {
             var current = Interlocked.Read(ref used);
-            if (current + bytes > limit - keepFree) return false;
+            if (current + bytes > Limit - keepFree) return false;
             if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) return true;
         }
     }

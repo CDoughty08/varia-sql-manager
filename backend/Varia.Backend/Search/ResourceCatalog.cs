@@ -6,7 +6,7 @@ internal sealed record ResourceKey(string Version, int Edition, long Count, Date
 
 /// <summary>The resource database's objects for one key: the sys and INFORMATION_SCHEMA views, procedures and functions that
 /// every database of every server with that key shows. Search lists them once per connection, not once per database.</summary>
-internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int modules, int cut, long bytes = 0)
+internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int modules, int cut, long bytes = 0, int leftOut = 0)
 {
     public ResourceKey Key { get; } = key;
     /// <summary>The memory its records hold, charged once whatever the connections that share it; its names and definitions are
@@ -15,6 +15,8 @@ internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int module
     public ObjectTable Table { get; } = table;
     public int Modules { get; } = modules;
     public int Cut { get; } = cut;
+    /// <summary>The part of <see cref="Cut"/> left out whole because the index's memory ran out.</summary>
+    public int LeftOut { get; } = leftOut;
 }
 
 /// <summary>
@@ -22,12 +24,15 @@ internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int module
 /// when the last connection lets go. Its names and definitions come from the <see cref="StringPool"/>, so two builds whose
 /// system modules overlap (a cumulative update changes few of them), and the databases that hold the same text, share each
 /// identical text. A set's records and names are charged whatever the budget holds (every connection needs them, and they are a
-/// few MiB); a definition is left out when less than <paramref name="keepFree"/> is free.
+/// few MiB); a definition is left out when less than <paramref name="keepFree"/> (the names' reserve, read as each set is
+/// shared, since a build may change the limit) is free.
 /// </summary>
-internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
+internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = null)
 {
     private readonly object gate = new();
     private readonly Dictionary<ResourceKey, Entry> sets = [];
+    /// <summary>Sets a newer read of the same key replaces (<see cref="Retire"/>), kept charged until their last holder lets go.</summary>
+    private readonly Dictionary<ResourceSet, Entry> retired = new(ReferenceEqualityComparer.Instance);
 
     private sealed class Entry(CancellationTokenSource lifetime)
     {
@@ -47,7 +52,26 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     public int Sets { get { lock (gate) return sets.Count; } }
 
     /// <summary>The sets read and charged to the budget, each once however many connections hold it (the Memory panel's Nerd metrics).</summary>
-    public List<ResourceSet> Held { get { lock (gate) return [.. sets.Values.Select(entry => entry.Shared).OfType<ResourceSet>()]; } }
+    public List<ResourceSet> Held { get { lock (gate) return [.. sets.Values.Select(entry => entry.Shared).OfType<ResourceSet>(), .. retired.Keys]; } }
+
+    /// <summary>Whether <paramref name="set"/> is the one its key is shared as now (not retired for a newer read).</summary>
+    public bool Current(ResourceSet set)
+    {
+        lock (gate) return sets.TryGetValue(set.Key, out var entry) && ReferenceEquals(entry.Shared, set);
+    }
+
+    /// <summary>Stops sharing <paramref name="set"/>, so the next <see cref="AcquireAsync"/> for its key reads the objects again: for
+    /// a set whose definitions were left out for memory, once there is room. Connections that hold it keep it, charged, until
+    /// each lets go (its own next build takes the newer set).</summary>
+    public void Retire(ResourceSet set)
+    {
+        lock (gate)
+        {
+            if (!sets.TryGetValue(set.Key, out var entry) || !ReferenceEquals(entry.Shared, set)) return;
+            sets.Remove(set.Key);
+            retired[set] = entry;
+        }
+    }
 
     /// <summary>The set for <paramref name="key"/>, read by <paramref name="read"/> only when no connection holds it (or is reading
     /// it); a caller that shares a read waits for it. The read runs under its own token, limited to <paramref name="limit"/> and
@@ -89,6 +113,8 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
                     sets.Remove(key);
                     Drop(set);
                 }
+                // The same, for a set retired meanwhile.
+                else if (entry.Refs == 0 && entry.Shared is { } gone && retired.Remove(gone)) Drop(gone);
             }
             try { stop?.Cancel(); } catch (ObjectDisposedException) { }
             throw;
@@ -127,10 +153,17 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
     {
         lock (gate)
         {
-            if (!sets.TryGetValue(set.Key, out var entry) || !ReferenceEquals(entry.Shared, set)) return;
-            if (--entry.Refs > 0) return;
-            sets.Remove(set.Key);
-            Drop(set);
+            if (sets.TryGetValue(set.Key, out var entry) && ReferenceEquals(entry.Shared, set))
+            {
+                if (--entry.Refs > 0) return;
+                sets.Remove(set.Key);
+                Drop(set);
+            }
+            else if (retired.TryGetValue(set, out var old) && --old.Refs <= 0)
+            {
+                retired.Remove(set);
+                Drop(set);
+            }
         }
     }
 
@@ -149,16 +182,18 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
         var names = table.NameTexts();
         var texts = table.Texts;
         var copies = new object?[texts.Count];
+        var reserve = keepFree?.Invoke() ?? 0;
         for (var at = 0; at < copies.Length; at++)
-            if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, keepFree);
+            if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, reserve);
         var shared = table.WithTexts(copies);
         var modules = 0;
         var cut = 0;
+        var leftOut = 0;
         for (var at = 0; at < shared.Count; at++)
         {
             if (shared.HasDefinition(at)) { modules++; if (shared.DefinitionCut(at)) cut++; }
-            else if (table.HasDefinition(at)) cut++;
+            else if (table.HasDefinition(at)) { cut++; leftOut++; }
         }
-        return new ResourceSet(key, shared, modules, cut, bytes);
+        return new ResourceSet(key, shared, modules, cut, bytes, leftOut);
     }
 }

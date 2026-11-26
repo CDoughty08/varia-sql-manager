@@ -154,6 +154,7 @@ export const part = {
   objectSearchTab: '[data-object-search]',
   /** The Search Objects tab's summary status line (distinct from SearchDetails' FactGrid copy live region). */
   objectSearchSummary: '.object-search-summary',
+  objectSearchIndex: '.object-search-index',
   explorerSearchField: '.object-search-pane .object-search-field',
   explorerSearchBar: '.object-search-pane .object-search-bar',
   explorerSearchFilters: '.object-search-pane .object-search-pane-filters',
@@ -923,6 +924,10 @@ export const objectSearchHits = page => page.locator(part.objectSearchTab).getBy
 export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
 /** The Search Objects tab's own summary status line (`role="status"`). */
 export const objectSearchSummary = page => page.locator(part.objectSearchTab).locator(part.objectSearchSummary)
+/** The Search Objects tab's index lines: what the index holds, then (when its memory ran out) what to do about it. */
+export const objectSearchIndexLines = page => page.locator(part.objectSearchTab).locator(part.objectSearchIndex)
+/** Object Explorer's search band's index line, shown while a build runs or the index leaves something out. */
+export const explorerSearchIndexLine = page => page.locator(part.explorerSearch).locator(`:scope > .object-search-query > ${part.objectSearchIndex}`)
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })

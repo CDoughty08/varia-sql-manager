@@ -376,6 +376,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.statusReads.delete(connectionId)
     const previous = this.getSnapshot().indexes[connectionId]
     const definitions = this.o.settings.get('objectExplorer.search.definitions')
+    // The limit every connection's index shares rides on each build, so a change in Options applies from the next one.
+    const memoryLimitMiB = this.o.settings.get('objectExplorer.search.memoryLimitMiB')
     const allProjects = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryAccessibleProjects') : undefined
     const maxProjects = bigQuery && allProjects !== false ? this.o.settings.get('objectExplorer.search.bigQueryMaxProjects') : undefined
     const rawStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
@@ -408,7 +410,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         finalBulk = locations.length ? { ...finalBulk, locations } : undefined
       }
       void this.o.api.explorerIndex({
-        connectionId, requestId, definitions,
+        connectionId, requestId, definitions, memoryLimitMiB,
         ...allProjects !== undefined ? { allProjects } : {}, ...maxProjects !== undefined ? { maxProjects } : {}, ...currentStarred ? { starredProjects: currentStarred } : {},
         ...bigQuery && partial ? partial : {}, ...finalBulk ? { bulk: finalBulk } : {}
       }).then(result => {

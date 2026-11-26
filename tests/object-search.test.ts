@@ -20,8 +20,9 @@ import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSe
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, bigQueryIndexSummary, BigQueryScope, DatabaseScope, groupNote, indexGap, indexIncomplete, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, bigQueryIndexSummary, BigQueryScope, DatabaseScope, groupNote, indexGap, indexIncomplete, indexMemoryNote, indexMemoryShort, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
 import { indexStatusText } from '../src/renderer/src/search/IndexStatus'
+import { settingDef } from '../src/shared/settings/catalog'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -55,10 +56,24 @@ describe('object search contracts', () => {
     expect(index).toContain(`SearchBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.searchMs / 1000});`)
     expect(index).toContain(`DatabaseBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.databaseMs / 1000});`)
     expect(index).toContain(`DefinitionChars { get; init; } = ${objectSearchLimits.definitionChars.toLocaleString('en-US').replaceAll(',', '_')};`)
-    expect(index).toContain('MemoryBytes { get; init; } = 512L * 1024 * 1024;')
-    expect(objectSearchLimits.memoryBytes).toBe(512 * 1024 * 1024)
-    expect(index).toContain('NamesReserveBytes { get; init; } = 128L * 1024 * 1024;')
-    expect(objectSearchLimits.namesReserveBytes).toBe(128 * 1024 * 1024)
+    // The memory limit is Options' (objectExplorer.search.memoryLimitMiB): its default and bounds, the names' reserve as a part
+    // of it, and the floors BigQuery's reads keep free, in sixteenths of the limit (multiples of the reserve in C#).
+    const memory = objectSearchLimits.memoryMiB
+    expect(index).toContain(`public const int DefaultMemoryMiB = ${memory.default};`)
+    expect(index).toContain(`public const int MinMemoryMiB = ${memory.min};`)
+    expect(index.replaceAll('_', '')).toContain(`public const int MaxMemoryMiB = ${memory.max};`)
+    expect(index).toContain(`public const int NamesReserveShare = ${objectSearchLimits.namesReserveShare};`)
+    expect(index).toContain('MemoryBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024;')
+    expect(index).toContain('NamesReserveBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024 / NamesReserveShare;')
+    expect(objectSearchLimits.memoryBytes).toBe(memory.default * 1024 * 1024)
+    expect(objectSearchLimits.namesReserveBytes).toBe(objectSearchLimits.memoryBytes / objectSearchLimits.namesReserveShare)
+    expect(index).toContain('BigQueryNamesFloorBytes => NamesReserveBytes + NamesReserveBytes / 2;')
+    expect(index).toContain('BigQueryDetailsFloorBytes => NamesReserveBytes + NamesReserveBytes / 4 * 3;')
+    expect(index).toContain('BigQueryDiscoveredFloorBytes => NamesReserveBytes * 2;')
+    const reserve16 = 16 / objectSearchLimits.namesReserveShare
+    expect(objectSearchLimits.bigQueryFloors).toEqual({ names: reserve16 * 1.5, details: reserve16 * 1.75, discovered: reserve16 * 2 })
+    // The setting offers exactly what the backend accepts.
+    expect(settingDef('objectExplorer.search.memoryLimitMiB')).toMatchObject({ type: 'integer', min: memory.min, max: memory.max, default: memory.default, unit: 'MiB' })
   })
 
   it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
@@ -138,6 +153,10 @@ describe('object search contracts', () => {
     expect(index({ scope: { project: 'varia-alpha' } })).toBe(true)
     expect(index({ scope: { project: 'varia-alpha' }, missingOnly: true })).toBe(true)
     expect(index({ stale: true })).toBe(true)
+    // The memory limit rides on either engine's build, within the setting's bounds.
+    for (const memoryLimitMiB of [objectSearchLimits.memoryMiB.min, objectSearchLimits.memoryMiB.default, objectSearchLimits.memoryMiB.max]) expect(index({ memoryLimitMiB })).toBe(true)
+    for (const memoryLimitMiB of [objectSearchLimits.memoryMiB.min - 1, objectSearchLimits.memoryMiB.max + 1, 0, -512, 512.5, '512', null])
+      expect(index({ memoryLimitMiB }), String(memoryLimitMiB)).toBe(false)
     for (const bad of [
       { scope: { project: 'varia-alpha' }, stale: true }, { missingOnly: true }, { scope: { project: 'varia-alpha' }, missingOnly: false }, { stale: false }, { scope: { dataset: 'sales' } }, { scope: { project: 'varia-alpha', extra: 1 } }, { scope: { project: 'x' } },
       { extraDetails: true }, { allProjects: 'yes' }, { maxProjects: 0 }, { maxProjects: objectSearchLimits.bigQuery.maxProjectsCap + 1 }, { maxProjects: 1.5 }, { maxProjects: '500' },
@@ -234,7 +253,7 @@ class Connections extends SnapshotStore<readonly LiveConnection[]> {
 }
 const connection = (id: string, lost = false) => ({ id, server: 'srv-' + id, database: 'master', serverVersion: '16.0', options: {}, ...lost ? { lost: true } : {} }) as unknown as LiveConnection
 
-function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; allProjects?: boolean; maxProjects?: number; starredProjects?: (connectionId: string) => readonly string[] } = {}) {
+function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; allProjects?: boolean; maxProjects?: number; memoryLimitMiB?: number; starredProjects?: (connectionId: string) => readonly string[] } = {}) {
   const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], search: [] as Parameters<VariaApi['explorerSearch']>[0][], cancel: [] as string[][] }
   const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const pendingSearch: ((result: ApiResult<ObjectSearchResult>) => void)[] = []
@@ -256,7 +275,8 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; al
   // Read from `settings` each time, so a test can change one as Options would.
   const values: Record<string, boolean | number> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true },
     get 'objectExplorer.search.bigQueryAccessibleProjects'() { return settings.allProjects ?? true },
-    get 'objectExplorer.search.bigQueryMaxProjects'() { return settings.maxProjects ?? objectSearchLimits.bigQuery.maxProjects } }
+    get 'objectExplorer.search.bigQueryMaxProjects'() { return settings.maxProjects ?? objectSearchLimits.bigQuery.maxProjects },
+    get 'objectExplorer.search.memoryLimitMiB'() { return settings.memoryLimitMiB as number } }
   const listeners = new Set<(event: WorkbenchEvent) => void>()
   const events = { subscribe: (listener: (event: WorkbenchEvent) => void) => { listeners.add(listener); return { dispose: () => { listeners.delete(listener) } } }, emit: (event: WorkbenchEvent) => listeners.forEach(listener => listener(event)) }
   const timers: Timers & { run(): void } = (() => {
@@ -389,6 +409,19 @@ describe('ObjectSearchService', () => {
     expect(calls.search.at(-1)).not.toHaveProperty('dataset')
     expect(calls.search.at(-1)).not.toHaveProperty('database')
     expect(service.getSnapshot().documents[sqlWithBq].project).toBe('varia-alpha')
+    service.dispose()
+  })
+
+  it('sends Options\' index memory limit with every build, on either engine, as it is when the build starts', () => {
+    const settings = { memoryLimitMiB: 1024 }
+    const { service, calls, connections } = harness(settings)
+    connections.set([connection('a'), { ...connection('bq'), providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha' } } as unknown as LiveConnection])
+    expect(calls.index.map(call => [call.connectionId, call.memoryLimitMiB])).toEqual([['a', 1024], ['bq', 1024]])
+    // Changed in Options: nothing is sent until the next build, which carries it (a refresh of part of an index too).
+    settings.memoryLimitMiB = 2048
+    expect(calls.index).toHaveLength(2)
+    service.build('a')
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'a', memoryLimitMiB: 2048 })
     service.dispose()
   })
 
@@ -1160,6 +1193,10 @@ describe('ObjectSearchService', () => {
     expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0, status: status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }, { database: 'Big', code: childrenLeftOut, message: 'm' }] }) }))
       .toBe('server objects skipped, children left out of 1 database')
     expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0 })).toBe('no index yet')
+    // Definitions left out because the indexes' memory ran out are a gap of their own, named per server.
+    const starved = { connectionId: 'd', done: 2, total: 2, objects: 30, status: status({ objects: 30, modules: 0, cut: 1204, leftOut: 1204, leftOutIn: 2 }) }
+    expect(indexGap(starved)).toBe('1,204 definitions left out (not enough index memory)')
+    expect(allIndexesSummary([healthy, starved], label)).toBe('Indexes: 70 objects on 2 servers · srv-d: 1,204 definitions left out (not enough index memory)')
   })
 
   it('reports a failed search and clears results for empty text', async () => {
@@ -1467,7 +1504,7 @@ describe('ObjectSearchService', () => {
     expect(indexedCount(status({ indexed: 1 }))).toBe('1 database')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: 'census', project: 'varia-beta', code: 'NOT_FOUND', message: 'm' }, { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', message: 'm', details: true }] }) }))
       .toBe('1 dataset skipped, details missing')
-    expect(indexSummary(undefined, bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects because the index reached its 512 MiB memory limit.' }] })))
+    expect(indexSummary(undefined, bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })))
       .toContain('index memory limit reached')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'You have access to more than 500 projects; the index keeps the first 500.' }, { database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects because the index reached its 512 MiB memory limit.' }] }) }))
       .toBe('project list truncated, index memory limit reached')
@@ -1735,6 +1772,48 @@ describe('Search Objects\' summary', () => {
       { bq: { connectionId: 'bq', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' } })).toContain('varia-alpha still discovering projects')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
+    // Memory ran out: the line says how many definitions were left out, apart from the user's own names-only option
+    // and from definitions only cut at their length (`cut` alone), and keeps the line in Object Explorer's band.
+    const starved = status({ modules: 12, cut: 1206, leftOut: 1204, leftOutIn: 2 })
+    expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out (not enough index memory)')
+    expect(indexSummary(undefined, status({ cut: 1, leftOut: 1, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 definition left out (not enough index memory)')
+    expect(indexSummary(undefined, status({ provider: 'bigquery', cut: 3, leftOut: 3, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 3 definitions left out (not enough index memory)')
+    // The count is the index's: some may be the server's own or the system objects', which are in no database.
+    expect(indexSummary(undefined, status({ cut: 12, leftOut: 12 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 12 definitions left out (not enough index memory)')
+    expect(indexIncomplete(undefined, starved)).toBe(true)
+    expect(indexSummary(undefined, status({ cut: 2 }))).toBe('Index: 40 objects, 5 definitions in 2 databases')
+    expect(indexIncomplete(undefined, status({ cut: 2 }))).toBe(false)
+    expect(indexSummary(undefined, status({ definitions: false }))).not.toContain('memory')
+    // What to do about it names the option by its label, and only an index short of memory gets the note: left-out
+    // definitions, children left out, a database or dataset that did not fit, or BigQuery projects read by name only.
+    const limit = settingDef('objectExplorer.search.memoryLimitMiB').label
+    expect(indexMemoryNote([status(), starved])).toBe(`The index does not have enough memory, so a search inside definitions misses the ones left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`)
+    const partly = `The index does not have enough memory, so part of what could be indexed was left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`
+    expect(indexMemoryNote([status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] })])).toBe(partly)
+    expect(indexMemoryNote([status({ skipped: [{ database: 'Huge', code: 'TOO_LARGE', message: 'The database does not fit in the index\'s memory (512 MiB across every connection).' }] })])).toBe(partly)
+    expect(indexMemoryNote([status({ provider: 'bigquery', namesOnly: ['disc-a'] })])).toBe(partly)
+    // A BigQuery dataset that kept what it held while new objects' details did not fit: details missing, and the note.
+    const partial = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE', details: true,
+      message: 'The details of 3 objects were left out: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest does not hold them.' }] })
+    expect(indexSummary(undefined, partial)).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
+    expect(indexGap({ connectionId: 'bq', done: 0, total: 0, objects: 0, status: partial })).toBe('details missing')
+    // The same dataset with a failed read as well still counts once; another dataset counts too.
+    const failedToo = { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', details: true, message: 'The details of 1 object could not be read: timed out.' } as const
+    expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, failedToo] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
+    expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, { ...failedToo, project: 'varia-beta' }] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 2 datasets')
+    // A dataset whose new names did not fit is left as it was read before: listed as skipped, with the note.
+    const keptAsWas = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE',
+      message: 'The dataset\'s changes did not fit, so it was kept as it was read before: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })
+    expect(indexSummary(undefined, keptAsWas)).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 dataset skipped')
+    expect(indexMemoryNote([keptAsWas])).toBe(partly)
+    expect(indexMemoryNote([partial])).toBe(partly)
+    expect(indexMemoryShort(starved)).toBe(true)
+    for (const fine of [status(), status({ cut: 2 }), status({ definitions: false }), status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }),
+      status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'p', code: 'TOO_LARGE', message: 'The dataset has more objects than the index lists; it keeps the first ones.' }] }),
+      status({ state: 'none', leftOut: 1 }), undefined]) {
+      expect(indexMemoryShort(fine), JSON.stringify(fine)).toBe(false)
+      expect(indexMemoryNote([fine])).toBeUndefined()
+    }
     // Build index is offered for the servers with no index and none building.
     const building = { connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0 }, built = { connectionId: 'c', done: 1, total: 1, objects: 3, status: status() }
     expect(unindexedServers(['a', 'b', 'c', 'd'], { b: building, c: built, d: { connectionId: 'd', done: 0, total: 0, objects: 0, error: 'failed' } })).toEqual(['a', 'd'])

@@ -155,9 +155,10 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 
 ### Memory
 
-- All connections share one budget. Each object is a packed 24-byte entry in its database's `ObjectTable`; names and
-  definitions live in one reference-counted pool shared by every connection, so each distinct text (msdb's procedures,
-  master's `spt_` objects, common column names) is held and charged once.
+- All connections share one budget, Options › SQL Server Object Explorer › Commands › Index memory limit
+  (`objectExplorer.search.memoryLimitMiB`, 512 MiB by default, 64 to 16,384). Each object is a packed 24-byte entry in
+  its database's `ObjectTable`; names and definitions live in one reference-counted pool shared by every connection, so
+  each distinct text (msdb's procedures, master's `spt_` objects, common column names) is held and charged once.
 - A definition of 512 characters or more is held compressed (`PackedText`: one zstd frame of its UTF-8 text, level 3),
   about a seventh of the string on real module definitions, and charged at its compressed size. The same text always
   compresses to the same frame, so the pool still holds a definition shared by several databases or servers once. A
@@ -167,16 +168,65 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   each million or so characters it unpacks, as well as every 64 objects. Packing a definition as it is read borrows
   pooled buffers of a few times its size while it compresses. Shorter definitions (defaults, most computed columns)
   stay strings, and so does a text with an unpaired surrogate, which UTF-8 cannot hold exactly.
-- Once less than 128 MiB is free, definitions stop being kept: a build reads at most each one's first 256 characters,
-  only to keep short texts already pooled (a default's `((0))`); others are counted as cut. A rebuild may reuse its
-  predecessor's memory (and reads definitions whole while that share is left), so a database that fitted still fits.
+- Once less than a quarter of the limit (the names' reserve, 128 MiB at the default) is free, definitions stop being
+  kept: a build reads at most each one's first 256 characters, only to keep short texts already pooled (a default's
+  `((0))`); others are counted as cut and as left out for memory. A rebuild may reuse its predecessor's memory (and reads
+  definitions whole while that share is left), so a database that fitted still fits.
+- **BigQuery leaves SQL Server its room.** What a BigQuery index takes must leave a floor of the budget free, each floor
+  above the names' reserve, so however much BigQuery metadata is indexed, and whichever connection was built first, a
+  SQL Server database still finds room for its definitions. The floors are parts of the limit, and BigQuery gives way
+  in this order: discovered projects' columns and view and routine text keep half the limit free (256 MiB at the
+  default), the billing and starred projects' 7/16 (224 MiB), and everything else BigQuery holds (names, records, its
+  lookup arrays) 3/8 (192 MiB). So BigQuery uses at most 5/8 of the limit less what SQL Server holds, and SQL Server
+  always has at least an eighth of the limit (64 MiB) for names and definitions before a definition is left out, in
+  practice more, since details stop well before names do. A floor only refuses BigQuery: SQL Server's reads take
+  whatever is free, which also means SQL Server's use counts against BigQuery's room: with SQL Server holding 5/8 of
+  the limit or more (or the two engines together), a BigQuery index reads nothing new, and says why.
+- **What a BigQuery dataset holds, it keeps.** A rebuild or refresh charges the share of the read it replaces, names
+  to the part its names held and details (columns, signatures, layout, text slots) to the rest, so a new object's name
+  does not push a held column out of that share; each part lends to the other only once the budget has refused, so a
+  read no larger than the one it replaces always fits. Pass 1 goes on holding, by name (a date-sharded group by its
+  prefix, since a new shard renames its entry; not across a table becoming a group or the reverse), the details of the
+  objects pass 2 is about to read again (a forced read's, a table created again, one not read whole), marked so that a
+  build stopped or a read that fails in between leaves nothing a later build reuses. A
+  dataset that already holds details keeps one floor less free than its project's (7/16 for a discovered project, 3/8
+  for the billing and starred projects) for whatever details it reads, so what it holds can grow, and
+  discovered datasets that hold details are read before the half-free line is checked, whatever the names pass found.
+  An object whose pass 2 read fails keeps the details it had, to be read again by the next build, unless it was
+  created or changed since, whose carried details were another generation's and are dropped (a date-sharded group is
+  the same table whatever its newest shard). When pass 2's read of the dataset does not fit even there, objects go back
+  to what the dataset held of them (nothing, for a new one), in this order until the read fits: the new objects; those
+  whose details grew; the one the read ran out of room at (a column renamed in place), up to 16 times; then every
+  object. An object no larger than before keeps what pass 2 read (one created again keeps it only when its columns are
+  the same). Either way the dataset keeps what it held, lists what is new by
+  name, and reports details missing. In pass 1, when the names of what is new do not fit beside what it holds (a new
+  name's text is always new memory), the dataset is left as it was read before (skipped as `TOO_LARGE`, its earlier
+  read kept) until there is room. A new dataset of a discovered project that does not fit stops the names pass for new
+  datasets only: datasets the index already holds are still listed and read; details carried from a build stopped
+  between its passes stay until a build's pass 2 reads them again. A
+  read never swaps a dataset that holds details for one without them: only a dataset that holds none is kept without
+  its columns (`CHILDREN_LEFT_OUT`). A read of one project or dataset (Refresh, or a project a search hit reveals)
+  uses the billing and starred floors, whatever the project.
+- **When memory runs out, the index says so.** The status counts the definitions left out for memory (`leftOut`) and
+  the databases or datasets they belong to (`leftOutIn`; the server's own and the system objects are in none), apart
+  from definitions only cut at their length and from turning `objectExplorer.search.definitions` off. The index line
+  adds "N definitions left out (not enough index memory)", which keeps the line in view in Object
+  Explorer's band; below it in the tab, and in the band's Search and index details, a note says a search inside
+  definitions misses them and names the option to raise. The same note shows when children were left out, a database or
+  dataset did not fit, or BigQuery projects were read by name only. The system objects are shared between servers: a
+  set whose definitions were left out is read again by the next build that finds room above the names' reserve.
+- **Changing the limit.** Each `explorer.index` carries the option's value (`memoryLimitMiB`), so a change applies from
+  the next build of any connection, with the reserve and floors in proportion. Raising it lets that build use the room.
+  Lowering it drops nothing: a rebuild reuses its predecessor's share, so an index over the new limit keeps what it has
+  (the Memory panel then shows more than 100 %) and takes nothing new, so a database that has grown since is kept
+  without its children, or skipped, at its next read; an index gives its memory back when its server disconnects.
 - The editor metadata is charged per item: 13 bytes a typed column, parameter or function, 14 an index or key,
   5 a key column and 16 a type. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
   840 key columns) beside about 195 KB of entries.
 - A database's first editor lookup builds its lookup arrays (names, children by parent, and foreign keys by the table
   they reference, 4 bytes per entry and per such foreign key), charged until its read is replaced or dropped; where the
-  budget cannot take them, lookups scan the table instead. The Memory panel counts them with the records, walking the
-  index again once they are built.
+  budget cannot take them (for a BigQuery dataset, above its names floor), lookups scan the table instead. The Memory
+  panel counts them with the records, walking the index again once they are built.
 - A database that does not fit with its children is read again without columns, indexes, statistics and parameters
   (status: `CHILDREN_LEFT_OUT`); one that still does not fit is skipped as `TOO_LARGE`. A read that runs out of room
   cancels its batch at once.
@@ -185,8 +235,11 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 
 | Limit | Value |
 |---|---|
-| Memory across all connections (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 512 MiB |
-| Memory definitions leave free for names | 128 MiB |
+| Memory across all connections (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 512 MiB by default, 64 to 16,384 MiB (`objectExplorer.search.memoryLimitMiB`) |
+| Memory definitions leave free for names | 1/4 of the limit (128 MiB) |
+| Memory a BigQuery index's names, records and lookup arrays leave free | 3/8 of the limit (192 MiB) |
+| Memory the billing and starred projects' details leave free | 7/16 of the limit (224 MiB) |
+| Memory discovered projects' details leave free | 1/2 of the limit (256 MiB) |
 | Characters kept per definition (longer ones are cut and marked) | 1,000,000 |
 | Databases read at once | 2 |
 | Time per database | 120 s |
@@ -343,12 +396,14 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   details act on its own server.
 - **Summary.** Servers, total results, slowest server's time, and servers still searching or indexing, unsearchable or
   disconnected. The index line counts every server's index and names each that leaves objects out (skipped databases,
-  server objects or SQL Server Agent objects skipped, names only, no index, a failed build).
+  server objects or SQL Server Agent objects skipped, names only, definitions left out for memory, no index, a failed
+  build), with the [memory note](#memory) below it when any server's index ran short.
 
 ## BigQuery
 
 A BigQuery connection has an index of its own, searched in every way above (the box, the tab, the header's Search and All
-servers, which spans SQL Server and BigQuery connections together). It lives under the same 512 MiB budget and is built and
+servers, which spans SQL Server and BigQuery connections together). It lives under the same budget, of which it may use
+only a part so that SQL Server's definitions keep their room ([Memory](#memory)), and is built and
 dropped the same way, from BigQuery's free metadata calls only: no job runs and nothing is billed.
 
 - **Three prioritized waves.** Every build reads free REST metadata through the principal's shared limiter (each method
@@ -366,9 +421,11 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
      time), swapping each dataset into the index immediately so every table, view, routine, model and dataset across all
      accessible projects becomes searchable within seconds.
   3. **Starred, then discovered projects (details).** Reads `tables.get` and `routines.get` (64 at a time) for starred
-     projects first, then discovered projects, swapping each dataset as it finishes. If the shared 512 MiB memory budget
-     tightens on discovered projects, pass 2 stops early for remaining discovered projects (recording them as names only)
-     while keeping Wave 1 and Wave 2 intact.
+     projects first, then discovered projects, swapping each dataset as it finishes. Once less than half the memory
+     limit is free (discovered projects' floor, [Memory](#memory)), pass 2 stops early for the remaining discovered
+     projects (recording them as names only) while keeping Wave 1 and Wave 2 intact; the billing and starred projects'
+     details go on until 7/16 is free (3/8 for a dataset that already holds details), after which a dataset that holds
+     no details keeps its names without its columns and one that does keeps what it held.
   The status says "Discovering accessible BigQuery projects…", then "Indexing N of M datasets", then "Reading details of
   N of M objects"; the finished index line reports the project count when more than one project is indexed. The status
   bar names the pass the same way ("Listing BigQuery datasets N / M", "Reading BigQuery object details N / M"). While wave
@@ -491,3 +548,6 @@ cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Fai
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
 takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a project, or a project's dataset), `stale` and `bulk` (SQL Server refuses them), and
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).
+On either engine `explorer.index` takes `memoryLimitMiB` (64 to 16,384, checked in zod and in C#), the limit every
+connection's index shares from that build on; a status carries `leftOut` and `leftOutIn` when definitions were left out
+for memory.

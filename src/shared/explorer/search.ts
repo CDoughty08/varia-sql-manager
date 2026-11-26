@@ -25,11 +25,21 @@ export const objectSearchLimits = {
   databaseMs: 120_000,
   /** The longest part of one definition the index keeps, in characters. */
   definitionChars: 1_000_000,
-  /** The memory every connection's index holds together, in bytes (records, names and definitions, each charged once): a
-   *  database that would pass it is kept without its children (CHILDREN_LEFT_OUT), or skipped as TOO_LARGE. */
+  /** The memory every connection's index holds together, in MiB, as Options sets it (objectExplorer.search.memoryLimitMiB) and
+   *  explorer.index carries it (records, names and definitions, each charged once): a database that would pass it is kept
+   *  without its children (CHILDREN_LEFT_OUT), or skipped as TOO_LARGE. */
+  memoryMiB: { default: 512, min: 64, max: 16_384 },
+  /** The default limit, in bytes. */
   memoryBytes: 512 * 1024 * 1024,
-  /** The part of `memoryBytes` definitions leave to names: a definition is left out once less than this is free. */
+  /** The part of the limit definitions leave to names, one part in `namesReserveShare`: a definition is left out once less
+   *  than this is free (`namesReserveBytes` at the default limit). */
+  namesReserveShare: 4,
   namesReserveBytes: 128 * 1024 * 1024,
+  /** What a BigQuery index's reads keep free of the limit, in sixteenths, so SQL Server's definitions find room above the
+   *  names' reserve whatever BigQuery holds (at least the two sixteenths between the reserve and the names floor): its names,
+   *  the billing and starred projects' details, and discovered projects' details, which give way first
+   *  (ObjectIndexLimits.BigQuery*FloorBytes). */
+  bigQueryFloors: { names: 6, details: 7, discovered: 8 },
   /** Index progress pushed to the window, at most, per second. */
   progressPerSecond: 4,
   /** How long the Search Objects box waits after a key before it searches, in ms. */
@@ -200,6 +210,9 @@ export interface ObjectIndexParams {
   readonly stale?: true
   /** A full build only: pass 2 reads these locations with the billed bulk queries. */
   readonly bulk?: BigQueryBulkIndex
+  /** Either engine: the memory every connection's index shares, in MiB (objectExplorer.search.memoryLimitMiB), from this build
+   *  on; absent leaves the limit as it is. Nothing held is dropped when it is lowered. */
+  readonly memoryLimitMiB?: number
 }
 /** `agent`: SQL Server Agent's objects were left out, not the database named (msdb, where they are read). `project`: a BigQuery
  *  dataset's project (`database` is the dataset, or empty when the project's listing failed). `details`: the dataset is indexed, but
@@ -232,6 +245,10 @@ export interface ObjectIndexStatus {
   readonly staleMark?: number
   /** The last full build was stopped before it finished: the index holds only what it read (absent otherwise). */
   readonly stopped?: true
+  /** The definitions (counted in `cut` too) left out whole because the index's memory ran out, and the databases (BigQuery:
+   *  datasets) they belong to (the server's own and the system objects are in none); each absent when zero. */
+  readonly leftOut?: number
+  readonly leftOutIn?: number
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 /** explorer.indexStatus: what a connection's index holds now, without building or searching. */
@@ -380,7 +397,8 @@ export const objectIndexParamsSchema = z.object({
   bulk: z.object({
     locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     budgetBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
-  }).strict().optional()
+  }).strict().optional(),
+  memoryLimitMiB: z.number().int().min(objectSearchLimits.memoryMiB.min).max(objectSearchLimits.memoryMiB.max).optional()
 }).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.')
   .refine(value => !value.missingOnly || value.scope !== undefined, 'missingOnly requires a scope.')
   .refine(value => !(value.bulk && (value.scope || value.stale)), 'The bulk path reads a full build only.') satisfies z.ZodType<ObjectIndexParams>

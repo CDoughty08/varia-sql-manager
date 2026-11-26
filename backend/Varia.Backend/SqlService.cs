@@ -116,6 +116,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
     private long reportedIndexBytes = -1;
+    /// <summary>The index's limit as last sent: a build that changes it (explorer.index's memoryLimitMiB) sends a report.</summary>
+    private long reportedIndexLimit = -1;
     private long indexMemorySeq;
     private long reportedIndexFinished = -1;
     /// <summary>The index detail last sent: a walk whose event was refused is still unsent, so the next check sends it.</summary>
@@ -3041,11 +3043,12 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var forgets = search.Forgets;
             IndexCountersRead?.Invoke();
             var used = search.MemoryUsed;
+            var limit = search.Budget.Limit;
             var now = IndexDetailClock();
             // A read held changes no byte (its records and texts were charged while it ran), so a last walk that still shows
             // reading is walked again once the interval has passed, though nothing else moved.
             var due = walkedIndexDetail is { Detail.ReadingBytes: > 0 } last && now - last.WalkedAt >= IndexDetailWalkMs;
-            var sent = used == reportedIndexBytes && finished == reportedIndexFinished;
+            var sent = used == reportedIndexBytes && finished == reportedIndexFinished && limit == reportedIndexLimit;
             if (publish is null || sent && !due && ReferenceEquals(walkedIndexDetail?.Detail, reportedIndexDetail)) return;
             // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
             // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
@@ -3072,9 +3075,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 walkedIndexDetail = (used, builds, forgets, reportedIndexDetail!, walkedAt, walkedUsed);
                 return;
             }
-            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
+            if (!publish(new IndexMemoryEvent(used, limit, indexMemorySeq + 1, detail))) return;
             indexMemorySeq++;
             reportedIndexBytes = used;
+            reportedIndexLimit = limit;
             reportedIndexFinished = finished;
             reportedIndexDetail = detail;
         }
