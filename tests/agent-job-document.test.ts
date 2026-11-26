@@ -744,6 +744,19 @@ describe("the job document's Flow overlays", () => {
     expect(jobDocuments.flowOverlayOf(id)).toBeUndefined()
     expect(historyView()?.owner.visible?.()).toBe(false)
   })
+  it("leaves History's Failed filter and picked run alone when the job starts, unless Live run shows in Flow", async () => {
+    const { jobDocuments, live } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const run = { job: '11111111-1111-1111-1111-111111111111', instance: 7 }
+    jobDocuments.history.attach(id, run.job)
+    jobDocuments.history.selectRun(id, run)
+    const watched = (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job:' + id)!
+    // On List (the overlay turns Live run on for Flow, but nothing draws it) the run History shows stays picked.
+    tick(watched, 1, 1, 1)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('live')
+    expect(jobDocuments.history.get(id)).toMatchObject({ selected: run, pinned: true })
+  })
   it("shows a History run in Flow: the Steps section, Flow's Last run and that run selected", async () => {
     const { jobDocuments } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')

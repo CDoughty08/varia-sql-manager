@@ -49,6 +49,33 @@ describe('the Flow view\'s run overlays', () => {
     expect(runStepIndex(steps, { stepId: 2, name: 'Renamed' })).toBe(1)
     expect(runStepIndex(steps, { stepId: 7, name: 'Gone' })).toBe(-1)
   })
+  it("places a deleted middle step's passes nowhere, though its saved id now belongs to the step after it", () => {
+    // Rebuild indexes (step 2) was deleted and saved: msdb renumbered Update statistics to 2 and Notify operators to 3.
+    const after = job([['Check integrity', 'next', 'qf'], ['Update statistics', 'qs', 3], ['Notify operators', 'qf', 'qf']])
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Rebuild indexes', 'Failed', '2026-11-09 02:00:01', 1),
+      row(3, 'Update statistics', 'Succeeded', '2026-11-09 02:00:02', 1)]
+    const passes = runPasses(rows, after.steps)
+    expect(passes.map(pass => pass.at)).toEqual([0, -1, 1])
+    const drawing = lastRunDrawing(stepsFlow(after), passes, true)
+    expect(drawing.unplaced).toBe(1)
+    expect(drawing.steps[1]!.right.map(part => part.text)).toEqual(['✓ 00:00:01'])
+  })
+  it("lists a loop's last passes on the node with ×N, and every pass in the step's words for a screen reader", () => {
+    const rows = [1, 2, 3].flatMap(n => [row(1, 'Check integrity', 'Succeeded', `2026-11-09 02:0${n}:00`, n), row(2, 'Rebuild indexes', 'Failed', `2026-11-09 02:0${n}:10`, 1)])
+    const drawing = lastRunDrawing(stepsFlow(nightly()), runPasses(rows, nightly().steps), false)
+    expect(drawing.steps[0]!.right.map(part => part.text)).toEqual(['×3', '…', '✓ 00:00:02', '✓ 00:00:03'])
+    expect(drawing.steps[0]!.spoken).toBe('ran 3 times: succeeded in 00:00:01, then succeeded in 00:00:02, then succeeded in 00:00:03')
+    expect(drawing.steps[2]!.spoken).toBe('not run')
+    const retried = runPasses([row(1, 'Check integrity', 'Retry', '2026-11-09 02:00:00', 4), row(1, 'Check integrity', 'Failed', '2026-11-09 02:00:34', 6)], nightly().steps)
+    expect(lastRunDrawing(stepsFlow(nightly()), retried, true).steps[0]!.spoken).toBe('failed in 00:00:10 after 1 retry')
+  })
+  it("draws a run whose rows History cut short: no last edge, and the steps past the rows read not known rather than Not run", () => {
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Rebuild indexes', 'Succeeded', '2026-11-09 02:00:01', 1)]
+    const drawing = lastRunDrawing(stepsFlow(nightly()), runPasses(rows, nightly().steps), true, true)
+    expect([...drawing.hot]).toEqual(['0:success'])
+    expect(drawing.steps[2]).toMatchObject({ fade: true, right: [{ text: '—' }] })
+    expect(drawing.steps[3]!.spoken).toBe('not known: past the rows History reads')
+  })
   it('draws Last run: the path bold and numbered, an edge taken twice numbered twice, the last pass to its quit', () => {
     const flow = stepsFlow(nightly())
     const drawing = lastRunDrawing(flow, runPasses(failedRun(), nightly().steps), true)
@@ -111,5 +138,8 @@ describe('the Flow view\'s run overlays', () => {
     expect(currentStepSeconds([], 20261109020000, 20261109020025)).toBe(25)
     expect(currentStepSeconds([], undefined, 20261109020025)).toBeUndefined()
     expect(currentStepSeconds(rows, 20261109020000, undefined)).toBeUndefined()
+    // Without this run's rows, step 3's time is not the job's whole elapsed time.
+    expect(currentStepSeconds([], 20261109020000, 20261109021240, false, 3)).toBeUndefined()
+    expect(currentStepSeconds([], 20261109020000, 20261109020025, false, 1)).toBe(25)
   })
 })

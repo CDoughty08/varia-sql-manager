@@ -23,7 +23,7 @@ vi.mock('pixi.js', async original => {
   }
   class TextStyle { fill = ''; styleKey = `style${styles++}`; constructor(_options: unknown) {} clone() { return new TextStyle({}) } destroy() {} }
   class Text extends Container {
-    text = ''; style: TextStyle; visible = true; private rasterResolution: number | null = null; roundPixels: boolean
+    text = ''; style: TextStyle; visible = true; alpha = 1; private rasterResolution: number | null = null; roundPixels: boolean
     _resolution: number | null = null; private currentKey = ''
     get resolution() { return this.rasterResolution }
     set resolution(value: number | null) { this.rasterResolution = this._resolution = value }
@@ -140,6 +140,30 @@ it("draws the run overlay's order badges under their numbers, not on the layer a
     // The labels layer sits between cards and front (world: back, edges, cards, labels, front): a pill on front hides its number.
     expect(rendering.front.shapes).toEqual([])
     expect(rendering.cards.shapes.some(box => box[3] === 16 && box[4] === 8)).toBe(true)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it("fades a faded step's and an off-path pill's text with its box, and brings it back when the overlay goes", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const root = sized(900, 600)
+  const canvas = create(root), rendering = canvas as unknown as { draw(): void; pool: { active: Map<string, { alpha: number }> } }
+  const alpha = (key: string) => rendering.pool.active.get(key)?.alpha
+  try {
+    await Promise.resolve()
+    const shown = model()
+    // Step 1 succeeded to step 2, which is running; step 3 never ran. Step 1's failure Quit is off the path.
+    canvas.update({ ...shown, nodes: shown.nodes.map((node, at) => ({ ...node, fade: at === 2, right: [{ text: at === 2 ? 'Waiting' : '✓ 00:00:01', tone: 'muted' as const }] })),
+      hot: new Set(['0:success']), lit: new Set(['1:success', '1:fail']), fadeRest: true }, 0, false, true)
+    rendering.draw()
+    expect(alpha('name:2')).toBeLessThan(1)
+    expect(alpha('right:2:0')).toBeLessThan(1)
+    expect(alpha('name:0')).toBe(1)
+    expect(alpha('quit:0:fail')).toBeLessThan(1)
+    expect(alpha('quit:1:fail')).toBe(1)
+    canvas.update(shown, 0, false, true)
+    rendering.draw()
+    expect(alpha('name:2')).toBe(1)
+    expect(alpha('quit:0:fail')).toBe(1)
   } finally { canvas.dispose(); frames.mockRestore() }
 })
 

@@ -17,6 +17,7 @@ import type { Camera } from '../plans/geometry'
 import type { FlowCanvas, FlowCanvasColors, FlowCanvasModel, FlowCanvasNode } from './FlowCanvas'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
 import { LastRunPanel, LiveRunPanel, RunPicker, useFlowRun } from './FlowRunPanel'
+import { jobHistoryCopy } from './JobHistory'
 
 interface FlowProps {
   readonly state: JobDocumentState
@@ -61,12 +62,12 @@ function changedEdges(draft: AgentStepsDraft, model: AgentJobDocumentModel): Set
   return changed
 }
 /** The accessible name of a step's tree item, which says what the node draws. */
-function stepLabel(flow: StepsFlow, step: AgentStepDraft, at: number, run?: readonly { readonly text: string }[]): string {
+function stepLabel(flow: StepsFlow, step: AgentStepDraft, at: number, run?: string): string {
   const edge = (which: FlowWhich) => flow.edges[at * 2 + (which === 'success' ? 0 : 1)]!
   return `Step ${at + 1}, ${step.name || 'Unnamed step'}, ${stepTypeShort(step.subsystem)}${flow.start === at ? ', Start step' : ''}${flowNeverRuns(flow, at) ? ', never runs' : ''}. `
     + `On success, ${flowActionWords(edge('success'))}. On failure, ${flowActionWords(edge('fail'))}.`
-    // An overlay's words for the step, as the node draws them: "This run: ×2, ✓ 00:00:03, ✗ 00:00:02".
-    + (run?.length ? ` This run: ${run.map(part => part.text).join(', ')}.` : '')
+    // An overlay's state for the step in words (the node's glyphs read badly): "This run: ran 2 times: failed in 00:00:20, then succeeded in 00:00:33".
+    + (run ? ` This run: ${run}.` : '')
 }
 /** "Go to the next step · 5 Merge facts", in the summary. */
 function actionLine(edge: FlowEdge, steps: readonly AgentStepDraft[]): string {
@@ -128,7 +129,27 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   // Show: Targets only, or a run drawn over the graph (Last run, or Live run while the job runs).
   const run = useFlowRun(state, model, draft.steps, flow, service)
   const running = !!state.live?.running
-  const shown = run?.overlay ?? 'targets'
+  // The switch shows the overlay chosen, even while its run is not readable yet (no connection): the panel says why nothing is drawn.
+  const shown = service.flowOverlayOf(state.id) ?? 'targets'
+  // A job not saved yet has no history to draw.
+  const unsaved = !model.job?.jobId
+  // Live run turning on or off by itself unmounts the panel (or disables its radio) under the keyboard focus: it goes to the Show switch, and
+  // the change is said. The focus is read as this render starts, before the commit takes the panel away.
+  const sideRef = useRef<HTMLDivElement>(null), toolbarRef = useRef<HTMLDivElement>(null)
+  const focusWasIn = useRef(false)
+  focusWasIn.current = !!document.activeElement && (!!sideRef.current?.contains(document.activeElement) || !!toolbarRef.current?.contains(document.activeElement))
+  const shownBefore = useRef(shown)
+  const [showNotice, setShowNotice] = useState('')
+  useLayoutEffect(() => {
+    if (shownBefore.current === shown) return
+    const was = shownBefore.current
+    shownBefore.current = shown
+    if (was !== 'live' && shown !== 'live') return
+    setShowNotice(`Showing ${shown === 'live' ? 'Live run' : shown === 'last' ? 'Last run' : 'Targets only'}.`)
+    const active = document.activeElement as HTMLElement | null
+    if (focusWasIn.current && (!active || active === document.body || !active.isConnected || (active as HTMLButtonElement).disabled))
+      toolbarRef.current?.querySelector<HTMLElement>(`[data-show="${shown}"]`)?.focus()
+  }, [shown])
   const canvasModel: FlowCanvasModel = useMemo(() => {
     const accent = changedEdges(draft.steps, model)
     const nodes = steps.map((step, at): FlowCanvasNode => ({
@@ -254,13 +275,36 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   const loopOf = (edge: FlowEdge) => edge.loop
   const edgeOf = (which: FlowWhich) => flow.edges[selected * 2 + (which === 'success' ? 0 : 1)]
   const canStartHere = selectedStep ? service.canStartAtStep(state.id, selectedStep.key) : false
+  // The selected step's summary: beside the graph, and under a run's panel, so Edit step and Start at step stay one click away.
+  const selectedSection = selectedStep && fact && <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-selected`}>
+    <h4 id={`agent-flow-${state.id}-selected`}>Selected step<span className="agent-flow-sec-right"><Icon name={stepIcon(selectedStep.subsystem)} />{stepTypeShort(selectedStep.subsystem)}</span></h4>
+    <p className="agent-flow-name"><span className="agent-flow-no">{selected + 1}</span>{selectedStep.name || 'Unnamed step'}</p>
+    <dl className="agent-flow-facts">
+      <div className="agent-flow-fact"><dt>{fact.label}</dt><dd>{fact.value}</dd></div>
+      {fact.label !== 'Retries' && <div className="agent-flow-fact"><dt>Retries</dt><dd>{retriesText(selectedStep)}</dd></div>}
+      {(['success', 'fail'] as const).map(which => {
+        const edge = edgeOf(which)!
+        return <div key={which} className="agent-flow-fact">
+          <dt>{which === 'success' ? 'On success' : 'On failure'}</dt>
+          <dd><span className={which === 'success' ? 'agent-step-ok' : 'agent-step-bad'}><Icon name={which === 'success' ? 'check' : 'close'} /></span> {actionLine(edge, steps)}
+            {loopOf(edge) && <span className="agent-step-tag" data-tone="warning">Loop</span>}</dd>
+        </div>
+      })}
+      <div className="agent-flow-fact"><dt>Reached from</dt><dd>{flowReachedFrom(flow, selected)}</dd></div>
+    </dl>
+    <span className="agent-step-inline">
+      <button type="button" onClick={() => service.openStepEditor(state.id, selectedStep.key)}><Icon name="edit" />Edit step</button>
+      <button type="button" disabled={!canStartHere} title={canStartHere ? undefined : 'Save the step first; the job must not be running.'} onClick={() => void service.startAtStep(state.id, selectedStep.key)}><Icon name="play" />{`Start at step ${selected + 1}`}</button>
+    </span>
+    {!run && <p className="field-note">Double-click a step, or press Enter, to edit it here. Right-click it, or press Shift+F10, for its actions. Drag a step’s success or failure port onto a step to go to it.</p>}
+  </section>
   return <div className="agent-flow" data-agent-steps="">
-    <div className="agent-flow-toolbar" role="toolbar" aria-label="Steps flow">
+    <div className="agent-flow-toolbar" role="toolbar" aria-label="Steps flow" ref={toolbarRef}>
       {switcher}
       <span className="agent-flow-sep" />
       <span className="agent-flow-label" id={`agent-flow-${state.id}-show`}>Show</span>
       <span className="segmented agent-flow-show" role="radiogroup" aria-labelledby={`agent-flow-${state.id}-show`} onKeyDown={event => {
-        const order: readonly ('targets' | 'last' | 'live')[] = running ? ['targets', 'last', 'live'] : ['targets', 'last']
+        const order: readonly ('targets' | 'last' | 'live')[] = unsaved ? ['targets'] : running ? ['targets', 'last', 'live'] : ['targets', 'last']
         const keys: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
         if (!(event.key in keys) || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
         event.preventDefault()
@@ -269,9 +313,11 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
         event.currentTarget.querySelector<HTMLElement>(`[data-show="${next}"]`)?.focus()
       }}>
         {([['targets', 'Targets only'], ['last', 'Last run'], ['live', 'Live run']] as const).map(([value, label]) => <button key={value} type="button" role="radio" className="segmented-option" data-show={value}
-          aria-checked={shown === value} tabIndex={shown === value ? 0 : -1} disabled={value === 'live' && !running} title={value === 'live' && !running ? 'Live run shows while the job runs; it turns on by itself when the job starts.' : undefined}
+          aria-checked={shown === value} tabIndex={shown === value ? 0 : -1} disabled={value !== 'targets' && unsaved || value === 'live' && !running}
+          title={value !== 'targets' && unsaved ? 'A new job has no runs to draw: save it first.' : value === 'live' && !running ? 'Live run shows while the job runs; it turns on by itself when the job starts.' : undefined}
           onClick={() => service.setFlowOverlay(state.id, value)}>{value === 'live' && running && <Icon name="play" />}{label}</button>)}
       </span>
+      <span className="visually-hidden" role="status">{showNotice}</span>
       {shown === 'last' && <RunPicker state={state} service={service} />}
       <span className="agent-flow-sep" />
       <button type="button" disabled={!editable || steps.length >= agentLimits.stepsPerJob} title={steps.length >= agentLimits.stepsPerJob ? stepText.tooMany : undefined}
@@ -303,39 +349,25 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
             const next = steps[at]
             if (next) service.selectStep(state.id, next.key)
           }}>
-          {steps.map((step, at) => <div key={step.key} id={`agent-flow-${state.id}-${step.key}`} role="treeitem" aria-selected={at === selected} aria-label={stepLabel(flow, step, at, run?.drawing.steps[at]?.right)}
+          {steps.map((step, at) => <div key={step.key} id={`agent-flow-${state.id}-${step.key}`} role="treeitem" aria-selected={at === selected} aria-label={stepLabel(flow, step, at, run?.drawing.steps[at]?.spoken)}
             className="agent-flow-item" data-step-key={step.key} ref={element => { if (element) { items.current.set(step.key, element); menuTarget(element) } else items.current.delete(step.key) }} />)}
           <span ref={dropMarker} className="agent-flow-drop" aria-hidden="true" />
         </div>
       </div>
-      <div className="agent-flow-side">
-        {run && !editing ? run.overlay === 'last' ? <LastRunPanel state={state} run={run} service={service} /> : <LiveRunPanel state={state} run={run} flow={flow} service={service} /> : editing ? <>
+      <div className="agent-flow-side" ref={sideRef}>
+        {run && !editing ? <>
+          {run.overlay === 'last' ? <LastRunPanel state={state} model={model} run={run} service={service} select={at => { const step = steps[at]; if (step) service.selectStep(state.id, step.key) }} />
+            : <LiveRunPanel state={state} model={model} run={run} flow={flow} service={service} />}
+          {selectedSection}
+        </> : shown !== 'targets' && !editing ? <>
+          <section className="agent-flow-sec"><p className="field-note">{unsaved ? 'A new job has no runs to draw: save it first.' : jobHistoryCopy.disconnected}</p></section>
+          {selectedSection}
+        </> : editing ? <>
           <div className="agent-flow-head"><span>{`Step ${selected + 1} of ${steps.length}`}</span>
             <button type="button" onClick={() => service.closeStepEditor(state.id)}><Icon name="close" />Close editor</button></div>
           {editor(selectedStep!, selected)}
         </> : <>
-          {selectedStep && fact && <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-selected`}>
-            <h4 id={`agent-flow-${state.id}-selected`}>Selected step<span className="agent-flow-sec-right"><Icon name={stepIcon(selectedStep.subsystem)} />{stepTypeShort(selectedStep.subsystem)}</span></h4>
-            <p className="agent-flow-name"><span className="agent-flow-no">{selected + 1}</span>{selectedStep.name || 'Unnamed step'}</p>
-            <dl className="agent-flow-facts">
-              <div className="agent-flow-fact"><dt>{fact.label}</dt><dd>{fact.value}</dd></div>
-              {fact.label !== 'Retries' && <div className="agent-flow-fact"><dt>Retries</dt><dd>{retriesText(selectedStep)}</dd></div>}
-              {(['success', 'fail'] as const).map(which => {
-                const edge = edgeOf(which)!
-                return <div key={which} className="agent-flow-fact">
-                  <dt>{which === 'success' ? 'On success' : 'On failure'}</dt>
-                  <dd><span className={which === 'success' ? 'agent-step-ok' : 'agent-step-bad'}><Icon name={which === 'success' ? 'check' : 'close'} /></span> {actionLine(edge, steps)}
-                    {loopOf(edge) && <span className="agent-step-tag" data-tone="warning">Loop</span>}</dd>
-                </div>
-              })}
-              <div className="agent-flow-fact"><dt>Reached from</dt><dd>{flowReachedFrom(flow, selected)}</dd></div>
-            </dl>
-            <span className="agent-step-inline">
-              <button type="button" onClick={() => service.openStepEditor(state.id, selectedStep.key)}><Icon name="edit" />Edit step</button>
-              <button type="button" disabled={!canStartHere} title={canStartHere ? undefined : 'Save the step first; the job must not be running.'} onClick={() => void service.startAtStep(state.id, selectedStep.key)}><Icon name="play" />{`Start at step ${selected + 1}`}</button>
-            </span>
-            <p className="field-note">Double-click a step, or press Enter, to edit it here. Right-click it, or press Shift+F10, for its actions. Drag a step’s success or failure port onto a step to go to it.</p>
-          </section>}
+          {selectedSection}
           <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-checks`}>
             <h4 id={`agent-flow-${state.id}-checks`}>Flow checks<span className="agent-flow-sec-right">{truncated ? 'Not checked' : problemCount === 0 ? 'No problems' : `${problemCount} ${problemCount === 1 ? 'problem' : 'problems'}`}</span></h4>
             {truncated ? <p className="field-note" role="note">{stepText.stepsTruncated}{flow.startUnread !== undefined ? ` The job starts at step ${flow.startUnread}, past the steps read.` : ''}</p> : <div role="list" aria-labelledby={`agent-flow-${state.id}-checks`}>

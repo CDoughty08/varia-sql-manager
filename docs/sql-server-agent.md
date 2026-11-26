@@ -225,16 +225,23 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   **Last run** draws the run picked in the run box beside the switch, which is History's selected run (picking one picks it in both;
   History's run summary has **Show in Flow**, and the panel's **Open in History** goes back). The path it took is bold with the order
   on each edge ("1 · 3" for an edge taken twice), each step says how its passes ended and how long they took (×N for a step a loop
-  ran more than once, and its retries; a pass is a step's rows up to its first row that is not a Retry), and steps it never reached
-  fade and say Not run. An edge the draft has changed since the run is left off rather than drawn wrong; a pass of a step the job no
-  longer has is counted in the panel. The panel has the run (started, duration against the usual time, invoked by, the step that
-  failed and Agent's message), every pass in order and the chosen pass's whole message with Copy. **Live run** turns on by itself
-  when the job starts and goes back to the overlay before it when the run ends; it rings the current step (from the header's watched
-  state) with how long it has run on the server's clock, its usual time and a bar, lights both ways it can go next, and fades the
-  steps to come: Waiting where the steps so far lead on success, else On failure only. Finished steps come from History's rows of
-  the in-progress run, so Live run follows the newest run in History (Failed off, unpinned); until those rows are read only the
-  current step is known. Its panel has the run against its usual time, the current step with where it goes next, and Stop job. Each
-  step's accessible name adds the overlay's words ("This run: ×2, ✓ 00:00:15, ✓ 00:00:12"). The usual time is per step, not per pass.
+  ran more than once with its last two passes, and its retries; a pass is a step's rows up to its first row that is not a Retry), and
+  steps it never reached fade and say Not run. A run whose rows History cut short draws no last edge, and the steps past the rows read
+  show — rather than Not run. An edge the draft has changed since the run is left off rather than drawn wrong; a pass of a step the job
+  no longer has (deleted, even when a later step took its id) or of a step past the ones Varia reads is counted in the panel. The panel
+  numbers steps as the graph does and has the run (started, duration against the usual time, invoked by, the step that failed and
+  Agent's message), every pass in order (a pass selects its step on the graph) and the chosen pass's whole message with Copy; with
+  History's Failed on, the run box lists failed runs only and says so. **Live run** turns on by itself when the job starts and goes
+  back to the overlay before it when the run ends (the keyboard focus, if the panel had it, goes to the Show switch, and the change is
+  announced); it rings the current step (from the header's watched state) with how long it has run on the server's clock, its usual
+  time and a bar, lights both ways it can go next, and fades the steps to come: Waiting where the steps so far lead on success, else On
+  failure only. Finished steps come from History's rows of the in-progress run, so while Live run shows in Flow History's list follows
+  the newest run (Failed off, unpinned); in List and History alone a job starting leaves History's filter and pick as they were. Until
+  those rows are read only the current step is known, and past step 1 its time too is unknown. Its panel has the run against its usual
+  time, the current step with where it goes on success and on failure (and Longer than usual past its usual time), and Stop job. Under
+  either panel the selected step's summary keeps Edit step and Start at step; a History that cannot be read shows its error with Retry,
+  and a job not saved yet has no runs to draw. Each step's accessible name adds the overlay's state in words ("This run: ran 2 times:
+  failed in 00:00:20, then succeeded in 00:00:33"), with every pass. The usual time is per step, not per pass.
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:

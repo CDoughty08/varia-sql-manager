@@ -67,11 +67,14 @@ try {
   await show.getByRole('radio', { name: 'Last run' }).click()
   await expect(passes.getByRole('row')).toHaveCount(7)
   await expect(job.getByText('Failed at step 3 (Update statistics)')).toBeVisible()
-  await expect(item(1)).toHaveAccessibleName(/This run: 1 retry, ×2, ✓ 00:00:15, ✓ 00:00:12\.$/)
-  await expect(item(2)).toHaveAccessibleName(/This run: ×2, ✗ 00:00:20, ✓ 00:00:33\.$/)
-  await expect(item(4)).toHaveAccessibleName(/This run: ✓ 00:00:01\.$/)
+  await expect(item(1)).toHaveAccessibleName(/This run: ran 2 times: succeeded in 00:00:15 after 1 retry, then succeeded in 00:00:12\.$/)
+  await expect(item(2)).toHaveAccessibleName(/This run: ran 2 times: failed in 00:00:20, then succeeded in 00:00:33\.$/)
+  await expect(item(4)).toHaveAccessibleName(/This run: succeeded in 00:00:01\.$/)
   // A pass's step opens its message below the table.
   await passes.getByRole('button', { name: '3 · Update statistics' }).click()
+  // ...and selects its step on the graph, whose summary stays under the run's panel.
+  await expect(item(3)).toHaveAttribute('aria-selected', 'true')
+  await expect(job.getByRole('group', { name: 'Steps', exact: true }).getByRole('button', { name: 'Start at step 3' })).toBeVisible()
   await expect(job.getByRole('group', { name: 'Steps', exact: true }).getByRole('region', { name: 'Step 3 message', exact: true })).toContainText('Lock request time out period exceeded.')
   await shot('lastrun-dark')
   await theme('light')
@@ -82,7 +85,7 @@ try {
   // The run box picks the older run, which never reached step 4: it fades and says Not run.
   await runBox.selectOption({ label: await runBox.locator('option', { hasText: 'Succeeded' }).first().textContent() })
   await expect(passes.getByRole('row')).toHaveCount(4)
-  await expect(item(4)).toHaveAccessibleName(/This run: Not run\.$/)
+  await expect(item(4)).toHaveAccessibleName(/This run: not run\.$/)
 
   step = 'show in flow'
   // Open in History goes to the same run there; History's Show in Flow brings the newest run back to Last run.
@@ -97,15 +100,15 @@ try {
   // Start: Live run turns on by itself, rings the current step with its time and usual time, and follows Agent from step to step.
   await job.getByRole('button', { name: 'Start', exact: true }).click()
   await expect(show.getByRole('radio', { name: 'Live run' })).toHaveAttribute('aria-checked', 'true', { timeout: 30000 })
-  await expect(item(1)).toHaveAccessibleName(/This run: ▶ /)
+  await expect(item(1)).toHaveAccessibleName(/This run: running/)
   await expect(job.getByRole('region', { name: 'Current step' })).toContainText('Check integrity')
-  await expect(item(3)).toHaveAccessibleName(/This run: Waiting\.$/)
-  await expect(item(4)).toHaveAccessibleName(/This run: On failure only\.$/)
+  await expect(item(3)).toHaveAccessibleName(/This run: waiting\.$/)
+  await expect(item(4)).toHaveAccessibleName(/This run: runs only after a failure\.$/)
   // Step 2 fails back to step 1, then step 2 runs again: its earlier pass stays drawn beside the current one.
-  await expect(item(2)).toHaveAccessibleName(/This run: ▶ 00:00:04, usual 00:00:30\.$/, { timeout: 30000 })
+  await expect(item(2)).toHaveAccessibleName(/This run: running for 00:00:04, usual 00:00:30\.$/, { timeout: 30000 })
   await shot('live-dark')
-  await expect(item(2)).toHaveAccessibleName(/This run: ✗ 00:00:09, ▶ 00:00:04, usual 00:00:30\.$/, { timeout: 30000 })
-  await expect(item(1)).toHaveAccessibleName(/This run: ×2, ✓ 00:00:13, ✓ 00:00:12\.$/)
+  await expect(item(2)).toHaveAccessibleName(/This run: failed in 00:00:09; now running for 00:00:04, usual 00:00:30\.$/, { timeout: 30000 })
+  await expect(item(1)).toHaveAccessibleName(/This run: ran 2 times: succeeded in 00:00:13, then succeeded in 00:00:12\.$/)
   await theme('light')
   await shot('live-light')
   await theme('dark')
@@ -116,8 +119,8 @@ try {
   await expect(show.getByRole('radio', { name: 'Live run' })).toBeDisabled()
   await expect(documentState(job)).toContainText('Last run succeeded', { timeout: 30000 })
   await expect(passes.getByRole('row')).toHaveCount(6, { timeout: 30000 })
-  await expect(item(3)).toHaveAccessibleName(/This run: ✓ 00:00:06\.$/)
-  await expect(item(4)).toHaveAccessibleName(/This run: Not run\.$/)
+  await expect(item(3)).toHaveAccessibleName(/This run: succeeded in 00:00:06\.$/)
+  await expect(item(4)).toHaveAccessibleName(/This run: not run\.$/)
   await shot('lastrun-after-dark')
   console.log('Flow run overlays passed: Last run draws a run\'s passes, the run box and Show in Flow pick runs, and Live run follows a run to its end.')
 } catch (error) {

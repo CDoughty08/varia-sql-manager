@@ -274,7 +274,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private historyShows(id: string): boolean {
     const state = this.get(id)
     if (this.options.documents.getSnapshot().activeId !== id || !state) return false
-    return !state.frame.collapsed.includes('history') || (state.stepsView === 'flow' && !!this.flowOverlayOf(id))
+    return !state.frame.collapsed.includes('history') || (state.stepsView === 'flow' && !state.frame.collapsed.includes('steps') && !!this.flowOverlayOf(id))
   }
   /** The overlay Flow draws now: Live run only while the job runs (else the one before it). */
   flowOverlayOf(id: string): 'last' | 'live' | undefined {
@@ -282,13 +282,13 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.flowOverlay) return undefined
     return state.flowOverlay === 'live' && !state.live?.running ? state.flowBefore : state.flowOverlay
   }
-  /** Show: Targets only, Last run or Live run (only while the job runs). Both overlays read History's runs; Live run follows the running one. */
+  /** Show: Targets only, Last run or Live run (only while the job runs). Both overlays read History's runs; Live run follows the running one (useFlowRun). */
   setFlowOverlay(id: string, overlay: 'targets' | 'last' | 'live'): void {
     const state = this.get(id)
     if (!state || (overlay === 'live' && !state.live?.running)) return
     if (overlay === 'targets') this.patch(id, { flowOverlay: undefined, flowBefore: undefined })
     else if (overlay === 'last') this.patch(id, { flowOverlay: 'last', flowBefore: undefined })
-    else { this.patch(id, { flowOverlay: 'live', flowBefore: state.flowOverlay === 'last' ? 'last' : undefined }); this.history.followNewest(id) }
+    else this.patch(id, { flowOverlay: 'live', flowBefore: state.flowOverlay === 'last' ? 'last' : undefined })
   }
   /** History's Show in Flow: Steps › Flow with that run as Last run, its run picked in both. */
   showRunInFlow(id: string, run: HistoryRunKey): void {
@@ -956,7 +956,6 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
         ...started && state.flowOverlay !== 'live' ? { flowOverlay: 'live' as const, flowBefore: state.flowOverlay === 'last' ? 'last' as const : undefined } : {},
         ...stopped && state.flowOverlay === 'live' ? { flowOverlay: state.flowBefore, flowBefore: undefined } : {}
       })
-      if (started) this.history.followNewest(id)
       // A step ended or the run did: History, while it shows, reads it now rather than at its next sample (event-driven, not a timer); hidden, it
       // stays paused and samples afresh when it shows again.
       if (moved && this.historyShows(id) && (next?.step !== state.live?.step || next?.running !== state.live?.running)) this.history.refresh(id)

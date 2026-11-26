@@ -27,12 +27,15 @@ const toneOf = (row: JobHistoryStep): FlowPass['tone'] => row.tone === 'error' ?
 
 /**
  * The draft step a history row names. History records the step's id and name as they were when it ran, and a reorder since moves ids, so a
- * name that one step of the draft has wins (as History's Edit step finds it); else the saved step with that id.
+ * name that one step of the draft has wins (as History's Edit step finds it); else the saved step with that id, when it was renamed since.
+ * A step whose own name the run also recorded is not a renamed one: the id moved to it when an earlier step was deleted, so the row's step
+ * is gone (`names` holds every step name in the run's rows).
  */
-export function runStepIndex(steps: readonly FlowRunStep[], row: { readonly stepId: number; readonly name: string }): number {
+export function runStepIndex(steps: readonly FlowRunStep[], row: { readonly stepId: number; readonly name: string }, names?: ReadonlySet<string>): number {
   const named = steps.flatMap((step, at) => step.name === row.name ? [at] : [])
   if (named.length === 1) return named[0]!
-  return steps.findIndex(step => step.from === row.stepId)
+  const at = steps.findIndex(step => step.from === row.stepId)
+  return at >= 0 && steps[at]!.name !== row.name && names?.has(steps[at]!.name) ? -1 : at
 }
 
 /**
@@ -41,6 +44,7 @@ export function runStepIndex(steps: readonly FlowRunStep[], row: { readonly step
  */
 export function runPasses(rows: readonly JobHistoryStep[], steps: readonly FlowRunStep[]): FlowPass[] {
   const ordered = rows.filter(row => row.stepId > 0).sort((a, b) => a.instance - b.instance)
+  const names = new Set(ordered.map(row => row.name))
   const passes: FlowPass[] = []
   let pending: JobHistoryStep[] = []
   for (const row of ordered) {
@@ -51,14 +55,17 @@ export function runPasses(rows: readonly JobHistoryStep[], steps: readonly FlowR
     const own = pending
     pending = []
     const seconds = own.every(item => item.seconds !== undefined) ? own.reduce((sum, item) => sum + item.seconds!, 0) : undefined
-    passes.push({ at: runStepIndex(steps, row), stepId: row.stepId, name: row.name, outcome: row.outcome, tone: toneOf(row), ...seconds !== undefined ? { seconds } : {}, retries: own.length - 1, rows: own })
+    passes.push({ at: runStepIndex(steps, row, names), stepId: row.stepId, name: row.name, outcome: row.outcome, tone: toneOf(row), ...seconds !== undefined ? { seconds } : {}, retries: own.length - 1, rows: own })
   }
   return passes
 }
 
-/** What the canvas draws for a run: per step its state words, faded or current; the path's edges bold, with the order each was taken. */
+/**
+ * What the canvas draws for a run: per step its state words, faded or current; the path's edges bold, with the order each was taken. `spoken`
+ * says the same in words for the step's accessible name (the node's glyphs read badly), with every pass the node may leave out.
+ */
 export interface FlowRunDrawing {
-  readonly steps: readonly { readonly fade: boolean; readonly current?: boolean; readonly bar?: number; readonly right: readonly { readonly text: string; readonly tone: 'ok' | 'bad' | 'muted' | 'run' }[] }[]
+  readonly steps: readonly { readonly fade: boolean; readonly current?: boolean; readonly bar?: number; readonly right: readonly { readonly text: string; readonly tone: 'ok' | 'bad' | 'muted' | 'run' }[]; readonly spoken: string }[]
   readonly hot: ReadonlySet<string>
   /** Edges shown at full strength without being on the path: Live run's two ways the current step can go next. */
   readonly lit: ReadonlySet<string>
@@ -92,22 +99,41 @@ function runPath(flow: StepsFlow, passes: readonly FlowPass[], finished: boolean
   return { hot, sequence: new Map([...order].map(([key, numbers]) => [key, numbers.join(' · ')])) }
 }
 
-/** Each step's words for a run: ×N for more than one pass, each pass's glyph and duration, and its retries. */
-function stepWords(passes: readonly FlowPass[]): FlowRunDrawing['steps'][number]['right'] {
+/** The most passes a node lists; ×N still counts them all, and the panel and the accessible name have every one. */
+export const flowNodePasses = 2
+/**
+ * Each step's words for a run: its retries, ×N for more than one pass, and each pass's glyph and duration: the last `flowNodePasses` of
+ * them (the running step's last one, beside its ▶), so a loop that ran a step many times still fits on its node.
+ */
+function stepWords(passes: readonly FlowPass[], most = flowNodePasses): FlowRunDrawing['steps'][number]['right'] {
   const words: { text: string; tone: 'ok' | 'bad' | 'muted' | 'run' }[] = []
   const retries = passes.reduce((sum, pass) => sum + pass.retries, 0)
   if (retries) words.push({ text: `${retries} ${retries === 1 ? 'retry' : 'retries'}`, tone: 'muted' })
   if (passes.length > 1) words.push({ text: `×${passes.length}`, tone: 'muted' })
-  for (const pass of passes) words.push({ text: `${glyph[pass.tone]} ${pass.seconds !== undefined ? durationText(pass.seconds) : pass.outcome}`, tone: pass.tone })
+  if (passes.length > most) words.push({ text: '…', tone: 'muted' })
+  for (const pass of passes.slice(-most)) words.push({ text: `${glyph[pass.tone]} ${pass.seconds !== undefined ? durationText(pass.seconds) : pass.outcome}`, tone: pass.tone })
   return words
 }
+/** A pass in words: "succeeded in 00:00:15 after 1 retry". */
+const passSpoken = (pass: FlowPass): string =>
+  `${pass.outcome.toLowerCase()}${pass.seconds !== undefined ? ` in ${durationText(pass.seconds)}` : ''}${pass.retries ? ` after ${pass.retries} ${pass.retries === 1 ? 'retry' : 'retries'}` : ''}`
+/** A step's passes in words: "ran 2 times: failed in 00:00:20, then succeeded in 00:00:33". */
+function stepSpoken(passes: readonly FlowPass[]): string {
+  if (passes.length === 1) return passSpoken(passes[0]!)
+  return `ran ${passes.length} times: ${passes.map(passSpoken).join(', then ')}`
+}
 
-/** Last run: the run's passes over the steps; steps it never reached are faded and say Not run. */
-export function lastRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], finished: boolean): FlowRunDrawing {
-  const { hot, sequence } = runPath(flow, passes, finished)
+/**
+ * Last run: the run's passes over the steps; steps it never reached are faded and say Not run. With the run's rows cut (`cut`: History read
+ * only its first rows) the run went on past the last pass read, so its last edge is not drawn and an unreached step is not known, not Not run.
+ */
+export function lastRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], finished: boolean, cut = false): FlowRunDrawing {
+  const { hot, sequence } = runPath(flow, passes, finished && !cut)
   const steps = Array.from({ length: flow.count }, (_, at) => {
     const own = passes.filter(pass => pass.at === at)
-    return own.length ? { fade: false, right: stepWords(own) } : { fade: true, right: [{ text: 'Not run', tone: 'muted' as const }] }
+    if (own.length) return { fade: false, right: stepWords(own), spoken: stepSpoken(own) }
+    return cut ? { fade: true, right: [{ text: '—', tone: 'muted' as const }], spoken: 'not known: past the rows History reads' }
+      : { fade: true, right: [{ text: 'Not run', tone: 'muted' as const }], spoken: 'not run' }
   })
   return { steps, hot, lit: new Set(), sequence, unplaced: passes.filter(pass => pass.at < 0).length }
 }
@@ -129,15 +155,18 @@ export function liveRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], cur
   const steps = Array.from({ length: flow.count }, (_, at) => {
     if (current?.at === at) {
       // A step a loop runs again keeps its finished passes before the running one.
-      const words: { text: string; tone: 'ok' | 'bad' | 'muted' | 'run' }[] = [...stepWords(shown.filter(pass => pass.at === at)), { text: `▶ ${current.seconds !== undefined ? durationText(current.seconds) : current.retrying ? 'Between retries' : 'Executing'}`, tone: 'run' as const }]
+      const words: { text: string; tone: 'ok' | 'bad' | 'muted' | 'run' }[] = [...stepWords(shown.filter(pass => pass.at === at), 1), { text: `▶ ${current.seconds !== undefined ? durationText(current.seconds) : current.retrying ? 'Between retries' : 'Executing'}`, tone: 'run' as const }]
       if (current.usual !== undefined) words.push({ text: `usual ${durationText(current.usual)}`, tone: 'muted' as const })
       const bar = current.seconds !== undefined && current.usual ? Math.min(1, current.seconds / current.usual) : undefined
-      return { fade: false, current: true, ...bar !== undefined ? { bar } : {}, right: words }
+      const before = shown.filter(pass => pass.at === at)
+      const running = `${current.retrying ? 'between retries' : 'running'}${current.seconds !== undefined ? ` for ${durationText(current.seconds)}` : ''}${current.usual !== undefined ? `, usual ${durationText(current.usual)}` : ''}`
+      return { fade: false, current: true, ...bar !== undefined ? { bar } : {}, right: words, spoken: before.length ? `${stepSpoken(before)}; now ${running}` : running }
     }
     const own = shown.filter(pass => pass.at === at)
-    if (own.length) return { fade: false, right: stepWords(own) }
-    if (!known) return { fade: true, right: [{ text: '—', tone: 'muted' as const }] }
-    return { fade: true, right: [{ text: bySuccess[at] ? 'Waiting' : 'On failure only', tone: 'muted' as const }] }
+    if (own.length) return { fade: false, right: stepWords(own), spoken: stepSpoken(own) }
+    if (!known) return { fade: true, right: [{ text: '—', tone: 'muted' as const }], spoken: 'not known yet' }
+    return bySuccess[at] ? { fade: true, right: [{ text: 'Waiting', tone: 'muted' as const }], spoken: 'waiting' }
+      : { fade: true, right: [{ text: 'On failure only', tone: 'muted' as const }], spoken: 'runs only after a failure' }
   })
   return { steps, hot, lit, sequence, unplaced: shown.filter(pass => pass.at < 0).length }
 }
@@ -169,10 +198,11 @@ export function nextWords(flow: StepsFlow, at: number, which: FlowWhich): string
 /**
  * How long the current step has run: the server's clock less the end of this run's last finished row (its start plus its duration), or less the
  * run's start before any row; undefined where a time is not readable. msdb writes a step's row only when it ends, so this is the one estimate.
+ * Without this run's rows (`known` false) only the run's start is known, which is the current step's start only at step 1 (`step`).
  */
-export function currentStepSeconds(rows: readonly JobHistoryStep[], started: number | undefined, now: number | undefined): number | undefined {
+export function currentStepSeconds(rows: readonly JobHistoryStep[], started: number | undefined, now: number | undefined, known = true, step = 1): number | undefined {
   const nowSeconds = now ? stampSeconds(now) : undefined
-  if (nowSeconds === undefined) return undefined
+  if (nowSeconds === undefined || (!known && step > 1)) return undefined
   let from = started ? stampSeconds(started) : undefined
   for (const row of rows) {
     if (row.stepId <= 0 || row.seconds === undefined) continue
