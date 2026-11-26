@@ -89,6 +89,9 @@ internal sealed class IndexFileRefused(IndexFileProblem problem) : Exception
 /// In clear text each tag is a SHA-256 over the same things instead: it catches damage, not a forger, so the content's own
 /// checks must stand alone. Inside the chunks the body is a run of blocks, each u8 codec (0 stored, 1 zstd) | u32 raw bytes |
 /// (zstd: u32 stored bytes) | bytes, so what is already compressed (a <see cref="PackedText"/> frame) is stored as it is.
+/// A zstd block that packs better than <see cref="MaxRatio"/> to one is followed by padding up to that ratio, so a file never
+/// unpacks to more than that many times its size: the bound on what a small file can make a load read, hold or allocate
+/// (<see cref="PayloadReader.Backed"/>).
 /// </summary>
 internal static class IndexFileContainer
 {
@@ -101,6 +104,9 @@ internal static class IndexFileContainer
     public const int ChunkBytes = 1 << 18;
     /// <summary>A block's raw bytes: what is compressed, and unpacked, at once.</summary>
     public const int BlockBytes = 1 << 20;
+    /// <summary>The most a block unpacks to for each byte it takes in the file. Real content stays far below it (names and
+    /// entries pack a few times over); only runs of one repeated value reach it, and they pay a sixty-fourth of their size.</summary>
+    public const int MaxRatio = 64;
     private const int ChunkHeadBytes = 5;
     /// <summary>The header without the caller's identity and sync state.</summary>
     public const int FixedHeaderBytes = 4 + 8 + 4 + 8 + 2 + 4;
@@ -109,6 +115,9 @@ internal static class IndexFileContainer
     private const int Level = 3;
 
     public static IndexFileRefused Refused(IndexFileProblem problem) => new(problem);
+
+    /// <summary>The padding after a zstd block of <paramref name="raw"/> bytes stored in <paramref name="stored"/>.</summary>
+    private static int Padding(uint raw, uint stored) => (int)Math.Max(0, (raw + MaxRatio - 1) / MaxRatio - (long)stored);
 
     /// <summary>Room for <paramref name="bytes"/> in <paramref name="buffer"/>, keeping what it holds: buffers start small and
     /// grow to their fixed size only for a file that needs it, since most units are a few KiB.</summary>
@@ -388,6 +397,14 @@ internal static class IndexFileContainer
         private long index;
         private long read = headerBytes;
         private bool ended;
+        // What the stream had left when the body began; a stream that cannot say is taken to hold the largest file.
+        private readonly long body = stream.CanSeek ? Math.Max(0, stream.Length - stream.Position) : IndexFileLimits.FileBytes;
+        private long consumed;
+
+        /// <summary>The body's bytes not yet handed on: what is left of this chunk, and of the file.</summary>
+        public long Unread => length - at + (ended ? 0 : Math.Max(0, body - consumed));
+
+        public void Check() => token.ThrowIfCancellationRequested();
 
         /// <summary>Up to <paramref name="destination"/>'s length of the body; 0 once the last chunk is read.</summary>
         public int Read(Span<byte> destination)
@@ -414,6 +431,7 @@ internal static class IndexFileContainer
             var stored = record.AsSpan(0, (int)size + TagBytes);
             if (stream.ReadAtLeast(stored, stored.Length, throwOnEndOfStream: false) < stored.Length) throw Refused(IndexFileProblem.Truncated);
             read += ChunkHeadBytes + stored.Length;
+            consumed += ChunkHeadBytes + stored.Length;
             if (read > IndexFileLimits.FileBytes) throw Refused(IndexFileProblem.Limits);
             if (!seal.OpenChunk(index++, last == 1, stored[..(int)size], stored[(int)size..], plain.AsSpan(0, (int)size))) throw Refused(IndexFileProblem.Corrupt);
             (at, length) = (0, (int)size);
@@ -427,10 +445,11 @@ internal static class IndexFileContainer
     }
 
     /// <summary>The body's content as the unit writes it: values into blocks, each compressed when that makes it smaller, and
-    /// bytes that are compressed already (<see cref="Stored"/>) as they are.</summary>
+    /// bytes that are compressed already (<see cref="Frame"/>) as they are.</summary>
     internal sealed class PayloadWriter(ChunkWriter chunks)
     {
         private static readonly int MostPacked = (int)ZstandardEncoder.GetMaxCompressedLength(BlockBytes);
+        private static readonly byte[] Zeros = new byte[BlockBytes / MaxRatio];
         private byte[] block = [];
         private byte[] packed = [];
         private int used;
@@ -449,7 +468,7 @@ internal static class IndexFileContainer
         }
 
         /// <summary>Bytes no compressor would shrink: written in blocks of their own, not through zstd again.</summary>
-        public void Stored(ReadOnlySpan<byte> data)
+        public void Frame(ReadOnlySpan<byte> data)
         {
             Flush();
             Span<byte> head = stackalloc byte[5];
@@ -476,6 +495,7 @@ internal static class IndexFileContainer
                 BinaryPrimitives.WriteUInt32LittleEndian(head[5..], (uint)size);
                 chunks.Write(head);
                 chunks.Write(packed.AsSpan(0, size));
+                chunks.Write(Zeros.AsSpan(0, Padding((uint)used, (uint)size)));
             }
             else
             {
@@ -542,6 +562,14 @@ internal static class IndexFileContainer
         private byte[] packed = [];
         private int at, length;
 
+        /// <summary>Refuses a size the file cannot hold: the content still to come is at most what this block has left and
+        /// <see cref="MaxRatio"/> times the file's unread bytes. Called before anything is allocated by a count the content
+        /// states, with the fewest bytes that many items take, so an allocation is never more than the file's size justifies.</summary>
+        public void Backed(long bytes)
+        {
+            if (bytes > length - at + MaxRatio * chunks.Unread) throw Refused(IndexFileProblem.Corrupt);
+        }
+
         public void Bytes(Span<byte> destination)
         {
             while (!destination.IsEmpty)
@@ -579,6 +607,7 @@ internal static class IndexFileContainer
 
         private void Refill()
         {
+            chunks.Check();
             Span<byte> head = stackalloc byte[5];
             Fill(head);
             var raw = BinaryPrimitives.ReadUInt32LittleEndian(head[1..]);
@@ -594,6 +623,8 @@ internal static class IndexFileContainer
                 if (stored == 0 || stored >= raw) throw Refused(IndexFileProblem.Corrupt);
                 Grow(ref packed, (int)stored, BlockBytes);
                 Fill(packed.AsSpan(0, (int)stored));
+                // The padding that keeps the block within the ratio: read past, into the room the block is about to fill.
+                Fill(block.AsSpan(0, Padding(raw, stored)));
                 if (!ZstandardDecoder.TryDecompress(packed.AsSpan(0, (int)stored), block.AsSpan(0, (int)raw), out var written) || written != raw) throw Refused(IndexFileProblem.Corrupt);
             }
             (at, length) = (0, (int)raw);
@@ -661,15 +692,20 @@ internal static class IndexFileContainer
         }
 
         /// <summary>A text of <paramref name="chars"/> UTF-16 code units, read straight into the string.</summary>
-        public string Chars(int chars) => chars == 0 ? "" : string.Create(chars, this, static (span, reader) =>
+        public string Chars(int chars)
         {
-            reader.Bytes(MemoryMarshal.AsBytes(span));
-            if (!BitConverter.IsLittleEndian)
-            {
-                var units = MemoryMarshal.Cast<char, ushort>(span);
-                BinaryPrimitives.ReverseEndianness(units, units);
-            }
-        });
+            if (chars == 0) return "";
+            Backed(2L * chars);
+            return string.Create(chars, this, static (span, reader) => reader.Units(span));
+        }
+
+        private void Units(Span<char> span)
+        {
+            Bytes(MemoryMarshal.AsBytes(span));
+            if (BitConverter.IsLittleEndian) return;
+            var units = MemoryMarshal.Cast<char, ushort>(span);
+            BinaryPrimitives.ReverseEndianness(units, units);
+        }
 
         /// <summary>A text with its length, refused past <paramref name="most"/> code units.</summary>
         public string Text(int most) => Chars(Count(most));

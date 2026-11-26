@@ -38,10 +38,13 @@ internal static partial class IndexFileChecks
             var room = new byte[size];
             if (!ZstandardDecoder.TryDecompress(raw.AsSpan(at + 9, stored), room, out var written) || written != size) throw new InvalidOperationException("A block did not unpack.");
             content.Write(room);
-            at += 9 + stored;
+            at += 9 + stored + Padding(size, stored);
         }
         return content.ToArray();
     }
+
+    /// <summary>The padding after a compressed block: what keeps it within the format's ratio (IndexFileContainer.MaxRatio).</summary>
+    private static int Padding(int raw, int stored) => Math.Max(0, (raw + IndexFileContainer.MaxRatio - 1) / IndexFileContainer.MaxRatio - stored);
 
     internal static IndexFileHeader Header(byte[] file, IndexFileProtection protection)
     {
@@ -82,6 +85,8 @@ internal static partial class IndexFileChecks
         public byte[] Extra = [];
         public int? PackedCount;
         public int? DetailEntries;
+        /// <summary>Bits added to every fact's flags.</summary>
+        public ushort FactFlags;
 
         private bool Detail(in ObjectEntry entry) =>
             (entry.Flags & ObjectTable.ChildFlag) != 0 && entry.Shape < Shapes.Count && Shapes[entry.Shape].Kind is "column" or "index" or "statistic" or "parameter" or "bqColumn";
@@ -118,14 +123,25 @@ internal static partial class IndexFileChecks
             var uses = new byte[Texts.Count];
             void Use(int id, int use)
             {
-                if ((uint)id < (uint)uses.Length) uses[id] |= (byte)use;
+                if ((uint)id >= (uint)uses.Length) return;
+                // 16: named by a kept entry only after something else named it.
+                if (use == 1 && uses[id] != 0 && (uses[id] & 1) == 0) uses[id] |= 16;
+                uses[id] |= (byte)use;
             }
-            foreach (var entry in Entries)
+            var typed = 0;
+            for (var at = 0; at < Entries.Length; at++)
             {
+                var entry = Entries[at];
                 var detail = Detail(entry);
                 Use(entry.Name, detail ? 2 : 1);
                 Use(entry.Schema, detail ? 2 : 1);
                 Use(entry.Definition, detail ? 8 : 4);
+                for (; Details is not null && typed < Details.TypedAt.Length && Details.TypedAt[typed] <= at; typed++)
+                    if (Details.TypedType[typed] < Details.TypeName.Length)
+                    {
+                        Use(Details.TypeName[Details.TypedType[typed]], 2);
+                        Use(Details.TypeSchema[Details.TypedType[typed]], 2);
+                    }
             }
             if (Details is not null)
                 for (var type = 0; type < Details.TypeName.Length; type++)
@@ -217,7 +233,8 @@ internal static partial class IndexFileChecks
                     writer.Write(at);
                     writer.Write(fact.Created);
                     writer.Write((ushort)((fact.Detailed ? 1 : 0) | (fact.Whole ? 2 : 0) | (fact.ColumnsCut ? 4 : 0) | (fact.Rows is not null ? 8 : 0) | (fact.Bytes is not null ? 16 : 0)
-                        | (fact.Listed is not null ? 32 : 0) | (fact.Partitioning is not null ? 64 : 0) | (fact.Clustering is not null ? 128 : 0) | (fact.Signature is not null ? 256 : 0)));
+                        | (fact.Listed is not null ? 32 : 0) | (fact.Partitioning is not null ? 64 : 0) | (fact.Clustering is not null ? 128 : 0) | (fact.Signature is not null ? 256 : 0)
+                        | (fact.Stale ? 512 : 0) | FactFlags));
                     if (fact.Rows is { } rows) writer.Write(rows);
                     if (fact.Bytes is { } bytes) writer.Write(bytes);
                     if (fact.Listed is { } listed) writer.Write(listed);
@@ -486,10 +503,12 @@ internal static partial class IndexFileChecks
                     Refused("more long definitions than are tagged", raw => raw.PackedCount = raw.Texts.OfType<PackedText>().Count() + 1);
                 }
                 // Texts and their tags.
-                Refused("a definition that names a text given back", raw => { raw.Texts[raw.Entries[defined].Definition] = null; }, retag: false);
-                Refused("a text given back that an entry names", raw => raw.Texts[raw.Entries[top].Name] = null);
+                Refused("a text id with no text", raw => { raw.Texts.Add(null); raw.Tags.Add(0); }, retag: false);
+                Refused("a definition that names a text id with no text", raw => { raw.Texts[raw.Entries[defined].Definition] = null; raw.Tags[raw.Entries[defined].Definition] = 4 << 2; }, retag: false);
                 Refused("a tag of no known form", raw => raw.Tags[0] |= 3, retag: false);
-                Refused("a tag with unknown uses", raw => raw.Tags[0] |= 0x40, retag: false);
+                Refused("a tag with unknown uses", raw => raw.Tags[0] |= 0x80, retag: false);
+                Refused("a text named first by a detail that no kept entry names", raw => raw.Tags[raw.Entries[defined].Definition] |= 16 << 2, retag: false);
+                Refused("a parent without a schema", raw => raw.Entries[raw.Entries[child].Owner].Schema = -1, details: passed);
                 Refused("a name tagged as a definition only", raw => raw.Tags[raw.Entries[top].Name] = 1 | 4 << 2, retag: false);
                 Refused("a definition tagged as a name", raw => raw.Tags[raw.Entries[defined].Definition] |= 1 << 2, retag: false);
                 Refused("a text longer than the format allows", raw => raw.Texts[raw.Entries[top].Name] = new string('x', IndexFileLimits.TextChars + 1), IndexFileProblem.Limits);
@@ -543,8 +562,22 @@ internal static partial class IndexFileChecks
                     Refused("a description of no column", raw => raw.Descriptions[0] = (top, raw.Descriptions[0].Text));
                     Refused("a description of no entry", raw => raw.Descriptions[^1] = (-1, raw.Descriptions[^1].Text));
                     Refused("a shard group of a column", raw => raw.Shards[0] = (child, raw.Shards[0].Group));
+                    Refused("a fact with unknown flags", raw => raw.FactFlags = 0x800);
                     Refused("a shard group of fewer than none", raw => raw.Shards[0] = (raw.Shards[0].At, raw.Shards[0].Group with { Count = -1 }));
                     Refused("a fact longer than the format allows", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Signature = new string('s', IndexFileLimits.FactChars + 1) }), IndexFileProblem.Limits);
+                }
+                // Texts no entry names are still texts the load holds: each is charged its slot, however many the file states.
+                {
+                    cases++;
+                    var raw = Raw.Of(unit);
+                    for (var extra = 0; extra < 20_000; extra++) raw.Texts.Add("unnamed");
+                    raw.Retag();
+                    var before = world.Budget.Used;
+                    var loaded = Load(world, Forge(header with { MemoryBytes = raw.Whole }, raw.Write(), protection), kind, protection);
+                    if (loaded.Value is not { } many || many.Table.Texts.Count != raw.Texts.Count || many.Pooled.Length != raw.Texts.Count || many.Bytes != raw.Whole
+                        || world.Budget.Used - before < 20_000 * IndexMemory.SlotBytes) failures.Add($"{kind} 20,000 texts no entry names: {loaded.Problem}, {world.Budget.Used - before} bytes charged");
+                    if (loaded.Value is not null) world.Connection.Abandon(loaded.Value);
+                    if (!world.Empty) failures.Add($"{kind} 20,000 texts no entry names left {world.Budget.Used} bytes");
                 }
                 Refused("extra bytes past the format's limit", raw => raw.Extra = new byte[IndexFileLimits.ExtraBytes + 1], IndexFileProblem.Limits);
                 // Content that ends early, or goes on, inside chunks that are whole.
@@ -680,7 +713,7 @@ internal static partial class IndexFileChecks
                 chunks.Finish();
                 return stream.ToArray();
             }
-            static void Block(MemoryStream body, byte codec, uint raw, byte[] bytes, uint? stored = null)
+            static void Block(MemoryStream body, byte codec, uint raw, byte[] bytes, uint? stored = null, bool padded = true)
             {
                 Span<byte> head = stackalloc byte[9];
                 head[0] = codec;
@@ -688,6 +721,7 @@ internal static partial class IndexFileChecks
                 BinaryPrimitives.WriteUInt32LittleEndian(head[5..], stored ?? (uint)bytes.Length);
                 body.Write(head[..(codec == 0 ? 5 : 9)]);
                 body.Write(bytes);
+                if (codec == 1 && padded && raw <= IndexFileContainer.BlockBytes) body.Write(new byte[Padding((int)raw, (int)(stored ?? (uint)bytes.Length))]);
             }
             var packed = new byte[content.Length + 1024];
             ZstandardEncoder.TryCompress(content, packed, out var size, 3, 0);
@@ -715,6 +749,24 @@ internal static partial class IndexFileChecks
                 && Problem(Blocks(body => Block(body, 1, 16, content[..64]))) == IndexFileProblem.Corrupt,
                 "a block that states the wrong size, an unknown codec, no bytes, more than a block, or that is not smaller compressed, is refused; a block never unpacks past the fixed block size");
             check(world.Budget.Used == before, "and none of them leaves anything charged");
+
+            // A block may not unpack to more than 64 times what it takes in the file: one that packs better is padded to that,
+            // so a megabyte of file never yields more than 64 of content, and a count the file is too small to back is
+            // refused before anything is allocated by it.
+            var flat = new byte[3 << 20];
+            var padded = Save(small, IndexUnitKind.Database, Clear, extra: flat);
+            var unpadded = Save(small, IndexUnitKind.Database, Clear);
+            var loaded = Load(world, padded, IndexUnitKind.Database, Clear);
+            check(loaded.Value is not null && loaded.Extra!.AsSpan().SequenceEqual(flat) && padded.Length - unpadded.Length is var grown && grown >= flat.Length / IndexFileContainer.MaxRatio
+                && grown < flat.Length / IndexFileContainer.MaxRatio + 4096 && Payload(padded, Clear).Length <= (long)IndexFileContainer.MaxRatio * padded.Length,
+                $"three megabytes of one repeated byte take a sixty-fourth of their size in the file, and load back ({padded.Length - unpadded.Length} bytes)");
+            if (loaded.Value is not null) world.Connection.Abandon(loaded.Value);
+            var zeroBlock = Zstd(new byte[IndexFileContainer.BlockBytes]);
+            var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+            check(Problem(Blocks(body => { for (var block = 0; block < 64; block++) Block(body, 1, IndexFileContainer.BlockBytes, zeroBlock, padded: false); })) == IndexFileProblem.Corrupt
+                && GC.GetAllocatedBytesForCurrentThread() - allocatedBefore < 32 << 20,
+                "blocks that pack better than the ratio without their padding are refused");
+            check(world.Budget.Used == before, "and leave nothing charged");
             world.Connection.Abandon(small);
         }
     }

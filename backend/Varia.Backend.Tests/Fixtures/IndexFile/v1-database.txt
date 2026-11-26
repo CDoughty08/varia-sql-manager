@@ -1,4 +1,4 @@
-Sales||Sales|2185|13|1|0|False|False|False|False|True|False|0:Utc|48|66|False
+Sales||Sales|2185|13|1|0|False|False|False|False|True|False|0:Utc|48|66|False|0
 0|trigger|tableTriggers|||trg_orders|table.dbo.Orders.tables|1|-1||639291186000000000:Utc|S68:0B88D90C9FE0598C||dbo.Orders.trg_orders|21|-||-1
 1|table|tables||dbo|Orders|...|-1|-1||639291186000000000:Utc|-||dbo.Orders|10|-||-1
 2|table|tables||dbo|Customers|...|-1|-1||599265216000000000:Unspecified|-||dbo.Customers|13|-||-1

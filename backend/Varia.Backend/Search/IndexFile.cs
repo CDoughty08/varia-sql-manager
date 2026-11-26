@@ -86,7 +86,7 @@ internal static class IndexFile
             // Everything that could refuse the unit is checked before a byte is written.
             var plan = IndexFileUnit.Prepare(unit, options.Extra.Length);
             var header = new IndexFileHeader(IndexFileContainer.Version, options.Protection.IsEncrypted, unit.Kind, unit.Provider, unit.ReadAt, !unit.DefinitionsLeftOut,
-                !unit.ChildrenLeftOut, unit.Table.Count, unit.Bytes, options.Identity.ToArray(), options.Sync.ToArray());
+                !unit.ChildrenLeftOut, unit.Table.Count, plan.Charge, options.Identity.ToArray(), options.Sync.ToArray());
             var (seal, headerBytes) = IndexFileContainer.WriteHeader(stream, header, options.Protection.Key);
             using var sealing = seal;
             var chunks = new IndexFileContainer.ChunkWriter(stream, seal, headerBytes, token);
@@ -115,7 +115,10 @@ internal static class IndexFile
         var problem = IndexFileProblem.Io;
         try
         {
-            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.None))
+            // The file is the user's alone where the system has such modes: in clear text it holds names and definitions.
+            var create = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, BufferSize = 0 };
+            if (!OperatingSystem.IsWindows()) create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            using (var stream = new FileStream(temporary, create))
             {
                 problem = write(stream);
                 if (problem == IndexFileProblem.None) stream.Flush(flushToDisk: true);
@@ -154,8 +157,7 @@ internal static class IndexFile
             seal.Dispose();
             return new(header, IndexFileProblem.None, header);
         }
-        catch (IndexFileRefused refused) { return new(null, refused.Problem); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or NotSupportedException or ObjectDisposedException) { return new(null, IndexFileProblem.Io); }
+        catch (Exception error) { return new(null, Problem(error)); }
     }
 
     public static IndexLoad<IndexFileHeader> ReadHeaderFile(string path, IndexFileProtection protection)
@@ -171,7 +173,10 @@ internal static class IndexFile
     // ---- Loading ----
 
     /// <summary>Loads a read. Its texts are the pool's and its share is charged to the pool's budget, so the caller holds it as
-    /// it holds a read (<see cref="ConnectionIndex.Put"/>) or gives it back (<see cref="ConnectionIndex.Abandon"/>).</summary>
+    /// it holds a read (<see cref="ConnectionIndex.Put"/>) or gives it back (<see cref="ConnectionIndex.Abandon"/>). The unit's
+    /// database and dataset are the file's own, and the index holds a read under them (<see cref="DatabaseIndex.Key"/>): the
+    /// identity says the file is the one asked for, and in clear text only the caller comparing those names with what it asked
+    /// for says the content is. The unit is stamped as read now (<see cref="DatabaseIndex.Stamp"/>), as any new read is.</summary>
     public static IndexLoad<DatabaseIndex> Load(Stream stream, IndexLoadOptions options, ObjectIndexLimits limits, StringPool pool, CancellationToken token = default)
     {
         if (options.Kind == IndexUnitKind.Resource) return new(null, IndexFileProblem.Kind);
@@ -194,7 +199,7 @@ internal static class IndexFile
                 account.Credited > 0 ? account.Credit : null, pooled: true, readAt: header.ReadAt)
             {
                 Dataset = unit.Dataset, Facts = unit.Facts, LeftOut = unit.LeftOut, ChildrenLeftOut = unit.ChildrenLeftOut, DefinitionsLeftOut = unit.DefinitionsLeftOut,
-                Detailed = unit.Detailed, FailedPart = unit.FailedPart, CaseSensitive = unit.CaseSensitive, DottedI = unit.DottedI
+                Detailed = unit.Detailed, FailedPart = unit.FailedPart, CaseSensitive = unit.CaseSensitive, DottedI = unit.DottedI, NameBytes = account.NameBytes
             };
             return new(index, IndexFileProblem.None, header, unit.Extra);
         }

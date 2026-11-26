@@ -250,6 +250,8 @@ internal static partial class IndexFileChecks
                 Fields =
                 [
                     new TableFieldSchema { Name = "bucket", Type = "INTEGER", Mode = "REQUIRED", Description = "The range partition." },
+                    // Named as a routine listed after the tables: the read charges the text once, as this column's.
+                    new TableFieldSchema { Name = "to_cents", Type = "INTEGER" },
                     new TableFieldSchema
                     {
                         Name = "customer", Type = "RECORD", Description = new string('d', 2000),
@@ -277,6 +279,8 @@ internal static partial class IndexFileChecks
             };
             // One table pass 2 never reached: listed, without details.
             if (detail is not null && !skipped && entry.Kind == "bqTable" && entry.Name.StartsWith("audit_", StringComparison.Ordinal)) (detail, skipped) = (null, true);
+            // One whose details are carried from an earlier generation of it, until pass 2 reads it again.
+            if (entry.Name == "orders_copy") detail = detail! with { Carried = true, Stale = true };
             entries.Add(entry with { Detail = detail });
         }
         return entries;
@@ -323,7 +327,7 @@ internal static partial class IndexFileChecks
 
     /// <summary>A table as it is held: every entry through every accessor, its texts in id order (their form and content), which
     /// of them are names and definitions, and its details. Two tables with the same text are the same table to any reader.</summary>
-    internal static string Dump(ObjectTable table, BigQueryFacts? facts = null)
+    internal static string Dump(ObjectTable table, BigQueryFacts? facts = null, bool texts = true)
     {
         var text = new StringBuilder();
         for (var at = 0; at < table.Count; at++)
@@ -343,10 +347,12 @@ internal static partial class IndexFileChecks
                     .Append('|').Append(facts.Shards(at) is { } shards ? JsonSerializer.Serialize(shards, Json) : "-");
             text.Append('\n');
         }
+        // The texts held, in order: a text the table gave back (a definition left out for memory) is no reader's.
         var (names, definitions) = (table.NameTexts(), table.DefinitionTexts());
-        for (var id = 0; id < table.Texts.Count; id++)
-            text.Append('t').Append(id).Append('|').Append(table.Texts[id] switch { null => "-", string value => "S" + value.Length + ":" + Hash(value), var packed => "P" + DefinitionText.Length(packed!) + ":" + Hash(DefinitionText.ToText(packed!)) })
-                .Append(names[id] ? "|name" : "").Append(definitions[id] ? "|definition" : "").Append('\n');
+        for (int id = 0, held = 0; texts && id < table.Texts.Count; id++)
+            if (table.Texts[id] is { } stored)
+                text.Append('t').Append(held++).Append('|').Append(stored is string value ? "S" + value.Length + ":" + Hash(value) : "P" + DefinitionText.Length(stored) + ":" + Hash(DefinitionText.ToText(stored)))
+                    .Append(names[id] ? "|name" : "").Append(definitions[id] ? "|definition" : "").Append('\n');
         if (table.Details is { } details)
             text.Append("details|").Append(details.Types).Append('|').Append(details.TypedCount).Append('|').Append(details.KeyCount).Append('|').Append(details.KeyColumns).Append('|').Append(details.Bytes)
                 .Append('|').Append(string.Join(",", details.ForeignKeys().Select(key => key.At + ">" + key.Referenced))).Append('\n');
@@ -355,9 +361,11 @@ internal static partial class IndexFileChecks
     }
 
     /// <summary>A read: what the status and the Memory panel count of it, and its table.</summary>
-    internal static string Dump(DatabaseIndex unit, bool readAt = true) =>
+    /// <param name="texts">Without: not the order its texts are held in, which is the order a read first named them (a load
+    /// without children holds them in the order the whole read did).</param>
+    internal static string Dump(DatabaseIndex unit, bool readAt = true, bool texts = true) =>
         $"{unit.Database}|{unit.Dataset}|{unit.Key.Replace('\u0001', '/')}|{unit.Bytes}|{unit.Modules}|{unit.Cut}|{unit.LeftOut}|{unit.ChildrenLeftOut}|{unit.DefinitionsLeftOut}|{unit.Detailed}"
-        + $"|{unit.CaseSensitive}|{unit.DottedI}|{unit.FailedPart}|{(readAt ? unit.ReadAt.Ticks : 0)}:{unit.ReadAt.Kind}|{unit.Table.Count}|{unit.Pooled.Length}|{unit.Facts is not null}\n" + Dump(unit.Table, unit.Facts);
+        + $"|{unit.CaseSensitive}|{unit.DottedI}|{unit.FailedPart}|{(readAt ? unit.ReadAt.Ticks : 0)}:{unit.ReadAt.Kind}|{unit.Table.Count}|{unit.Pooled.Length}|{unit.Facts is not null}|{unit.NameBytes}\n" + Dump(unit.Table, unit.Facts, texts);
 
     private static readonly (string Text, bool Case, bool Word, bool Regex, bool Names, bool Definitions, string[]? Kinds, int Limit, bool Fuzzy)[] Queries =
     [
@@ -740,10 +748,43 @@ internal static partial class IndexFileChecks
                 var (mine, theirs) = (Searches(world) + Lookups(world, readAt: false), Searches(liveWorld) + Lookups(liveWorld, readAt: false));
                 check(mine == theirs, "searches and lookups of a database loaded without its children answer as the read without children does" + Difference(theirs, mine));
             }
+            // A budget that holds exactly the read without children holds the load without children: what the load reads past
+            // (the columns and their names, several times the entries it keeps) asks nothing of the budget.
+            var exact = new World(new ObjectIndexLimits { DefinitionChars = 2000, MemoryBytes = liveWorld.Budget.Used, NamesReserveBytes = 0 });
+            var fitted = Load(exact, file, IndexUnitKind.Database, Sealed, children: false);
+            check(fitted.Value is not null && exact.Budget.Used <= exact.Budget.Limit && Load(exact, file, IndexUnitKind.Database, Sealed).Problem == IndexFileProblem.Budget,
+                $"a budget just large enough for the read without children takes the load without children (definitions {definitions}), and refuses the whole unit: {fitted.Problem}");
+            if (fitted.Value is not null) exact.Connection.Abandon(fitted.Value);
             world.Connection.Dispose();
             liveWorld.Connection.Dispose();
             source.Connection.Abandon(unit);
-            check(world.Empty && liveWorld.Empty, "the loads without children give everything back");
+            check(world.Empty && liveWorld.Empty && exact.Empty, "the loads without children give everything back");
+        }
+
+        // A read kept after it failed part way (KeepPartial): every row still waiting for its parent was charged and then left
+        // out, so its charge is far above its content. It is saved with the most a load believes, and loads.
+        {
+            var world = new World();
+            var children = Enumerable.Range(0, 6000).Select(at => new object?[] { 100 + at, "dbo", "ck_amount", "C", At, 10, false, (byte)0, null });
+            var broken = new SearchCostChecks.Batch([
+                Rows([("id", typeof(int)), ("schema", typeof(string)), ("name", typeof(string)), ("type", typeof(string)), ("modified", typeof(DateTime)), ("parent", typeof(int)),
+                    ("system", typeof(bool)), ("variant", typeof(byte)), ("current", typeof(int))], [[10, "dbo", "Orders", "U", At, 0, false, (byte)0, null], .. children])
+            ]) { FailAtResult = 1 };
+            var reader = new DatabaseReader("Sales", world.Limits, world.Pool);
+            try { await reader.ReadAsync(broken, false, CancellationToken.None); }
+            catch (InvalidOperationException) { }
+            DatabaseIndex? partial = null;
+            ObjectSearchService.KeepPartial(reader, held: false, value => partial = value);
+            var file = Save(partial!, IndexUnitKind.Database, Sealed);
+            var header = Header(file, Sealed);
+            var into = new World();
+            var loaded = Load(into, file, IndexUnitKind.Database, Sealed);
+            check(partial is { FailedPart: true, Table.Count: 1 } && partial.Bytes > 6000 * IndexMemory.RecordBytes && header.MemoryBytes < partial.Bytes && header.MemoryBytes > 64 * 1024
+                && loaded.Value is { FailedPart: true } kept && kept.Bytes == header.MemoryBytes && kept.Table.Rows().SequenceEqual(partial.Table.Rows()) && into.Budget.Used == kept.Bytes + kept.Pooled.Sum(StringPool.Cost),
+                $"a read kept after failing part way saves and loads, marked as failed part way, its charge stated as the most a load believes: {loaded.Problem}, {partial?.Bytes} stated as {header.MemoryBytes}");
+            if (loaded.Value is not null) into.Connection.Abandon(loaded.Value);
+            world.Connection.Abandon(partial!);
+            check(world.Empty && into.Empty, "and both give everything back");
         }
 
         // BigQuery: the floors. Whatever is free, a dataset's columns must leave the details' floor free, and its names the
@@ -770,9 +811,9 @@ internal static partial class IndexFileChecks
             var bare = Load(tight, file, IndexUnitKind.Dataset, Sealed, children: false);
             var liveWorld = new World();
             var live = Dataset(liveWorld, DatasetEntries(), children: false);
-            check(bare.Value is { ChildrenLeftOut: true, Detailed: false, Table.Details: null } kept && Dump(kept, readAt: false) == Dump(live, readAt: false)
+            check(bare.Value is { ChildrenLeftOut: true, Detailed: false, Table.Details: null } kept && Dump(kept, readAt: false, texts: false) == Dump(live, readAt: false, texts: false)
                 && tight.Budget.Free >= tight.Limits.BigQueryNamesFloorBytes,
-                $"loaded without its columns the dataset is the read without columns, above the names' floor: {bare.Problem}" + (bare.Value is null ? "" : Difference(Dump(live, readAt: false), Dump(bare.Value, readAt: false))));
+                $"loaded without its columns the dataset is the read without columns, above the names' floor: {bare.Problem}" + (bare.Value is null ? "" : Difference(Dump(live, readAt: false, texts: false), Dump(bare.Value, readAt: false, texts: false))));
             if (bare.Value is not null)
             {
                 tight.Hold(bare.Value, IndexUnitKind.Dataset);

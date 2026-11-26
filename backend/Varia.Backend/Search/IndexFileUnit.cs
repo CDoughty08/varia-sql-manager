@@ -17,7 +17,10 @@ internal enum TextUse : byte
     /// <summary>The definition of an entry a read without children keeps.</summary>
     Definition = 4,
     /// <summary>The definition of a column (a computed column's expression).</summary>
-    ChildDefinition = 8
+    ChildDefinition = 8,
+    /// <summary>Beside <see cref="Name"/>: something else named the text first (a column, a type, a definition), in entry order.
+    /// A BigQuery read charges a text once, as whatever interned it first, so a load charges it as a detail too.</summary>
+    DetailFirst = 16
 }
 
 /// <summary>One unit as <see cref="IndexFile"/> saves it: a read (<see cref="DatabaseIndex"/>) or the shared resource set, with
@@ -48,7 +51,7 @@ internal sealed record LoadedUnit(string Name, string? Dataset, ObjectTable Tabl
 /// unit:     u16 flags | text name | (text dataset) | i32 modules, cut, left out |
 ///           (resource: i32 edition | i64 count | u8 has latest | i64 latest | i32 checksum)
 /// shapes:   i32 n, each text kind | text folder | u8 has subtype | (text subtype)
-/// tags:     i32 texts | u8 tag[texts] (form: 0 none, 1 string, 2 packed; then its TextUse)
+/// tags:     i32 texts | u8 tag[texts] (form: 1 string, 2 packed; then its TextUse)
 /// entries:  i32 n | i32 how many are detail children | u8 flags[n] | u16 shape[n] | i32 name[n] | schema[n] | owner[n] |
 ///           definition[n] | u32 modified[n]
 /// dates:    i32 n, each i32 entry | i64 ticks and kind
@@ -61,6 +64,8 @@ internal sealed record LoadedUnit(string Name, string? Dataset, ObjectTable Tabl
 /// facts, then names) before the first definition, which may be left out, asks for room. The entries state how many of them a
 /// read without children leaves out (<see cref="DetailChild"/>), and their flags and shapes come first, so a load charges the
 /// entries it keeps before it has anywhere to put them, and a load without children never holds the ones it does not keep.
+/// A text a table gave back (<see cref="ObjectTable.WithTexts"/>) is not written: every text id in a file has a text, so every
+/// place in a loaded table's text array is one the load was charged for.
 /// A file is untrusted, and in clear text nothing below vouches for it, so <see cref="Load"/> checks everything a search or a
 /// lookup relies on (<see cref="CheckEntries"/>, <see cref="CheckDetails"/>) before a table exists, and <see cref="Write"/>
 /// refuses a unit those checks would refuse, so no file is written that cannot be loaded.
@@ -71,7 +76,7 @@ internal static class IndexFileUnit
         FactsFlag = 128, DatasetFlag = 256, UnitFlags = 511;
     private const byte NoText = 0, StringText = 1, PackedForm = 2;
     private const ushort FactDetailed = 1, FactWhole = 2, FactColumnsCut = 4, FactRows = 8, FactBytes = 16, FactListed = 32, FactPartitioning = 64, FactClustering = 128,
-        FactSignature = 256, FactFlags = 511;
+        FactSignature = 256, FactStale = 512, FactFlags = 1023;
     private const byte EntryFlags = ObjectTable.SystemFlag | ObjectTable.CutFlag | ObjectTable.ChildFlag;
     /// <summary>What a read's charge may exceed its content's by: rows it charged and then left out (a child whose parent the
     /// login cannot see). Past as much again as the content, and this, a file's stated charge is not believed.</summary>
@@ -101,8 +106,9 @@ internal static class IndexFileUnit
     // ---- Checks: the rules a table must keep for Search and the lookups, shared by the writer and the loader ----
 
     /// <summary>Every entry's references are in range and of the right form (<paramref name="tags"/>, by text): a name and a
-    /// schema are strings, a definition any text held; only a definition is cut; a child's parent is not a child; and the table a
-    /// history table is shown below is itself shown below none, so no walk from an entry to its owner goes further than two steps.</summary>
+    /// schema are strings, a definition any text held; only a definition is cut; a child's parent is not a child and has a
+    /// schema; and the table a history table is shown below has one too and is itself shown below none, so no walk from an
+    /// entry to its owner goes further than two steps.</summary>
     public static void CheckEntries(ReadOnlySpan<ObjectEntry> entries, ReadOnlySpan<byte> tags, int shapeCount)
     {
         var texts = tags.Length;
@@ -122,7 +128,8 @@ internal static class IndexFileUnit
             }
             if ((uint)entry.Owner >= (uint)entries.Length || entry.Owner == at) throw Corrupt();
             ref readonly var owner = ref entries[entry.Owner];
-            if ((owner.Flags & ObjectTable.ChildFlag) != 0 || !child && owner.Owner != -1) throw Corrupt();
+            // A parent, and the table a history table is shown below, has a schema: results name it by schema and name.
+            if ((owner.Flags & ObjectTable.ChildFlag) != 0 || owner.Schema < 0 || !child && owner.Owner != -1) throw Corrupt();
         }
     }
 
@@ -172,24 +179,38 @@ internal static class IndexFileUnit
     }
 
     /// <summary>Each text's use, from the entries and the details that name it (which <see cref="CheckEntries"/> and
-    /// <see cref="CheckDetails"/> have passed).</summary>
+    /// <see cref="CheckDetails"/> have passed), in the order a read names them: entry by entry, its name and schema, its
+    /// definition, then its type.</summary>
     private static byte[] Uses(ReadOnlySpan<ObjectEntry> entries, bool[] detailShape, ObjectDetails.Parts? details, int texts)
     {
         var uses = new byte[texts];
-        foreach (ref readonly var entry in entries)
+        void Name(int id, bool detail)
         {
-            var detail = (entry.Flags & ObjectTable.ChildFlag) != 0 && detailShape[entry.Shape];
-            var name = (byte)(detail ? TextUse.ChildName : TextUse.Name);
-            uses[entry.Name] |= name;
-            if (entry.Schema >= 0) uses[entry.Schema] |= name;
-            if (entry.Definition >= 0) uses[entry.Definition] |= (byte)(detail ? TextUse.ChildDefinition : TextUse.Definition);
-        }
-        if (details is not null)
-            for (var type = 0; type < details.TypeName.Length; type++)
+            ref var use = ref uses[id];
+            if (detail) use |= (byte)TextUse.ChildName;
+            else
             {
-                uses[details.TypeName[type]] |= (byte)TextUse.ChildName;
-                if (details.TypeSchema[type] >= 0) uses[details.TypeSchema[type]] |= (byte)TextUse.ChildName;
+                if (use != 0 && (use & (byte)TextUse.Name) == 0) use |= (byte)TextUse.DetailFirst;
+                use |= (byte)TextUse.Name;
             }
+        }
+        void Type(int type)
+        {
+            uses[details!.TypeName[type]] |= (byte)TextUse.ChildName;
+            if (details.TypeSchema[type] >= 0) uses[details.TypeSchema[type]] |= (byte)TextUse.ChildName;
+        }
+        var typed = 0;
+        for (var at = 0; at < entries.Length; at++)
+        {
+            ref readonly var entry = ref entries[at];
+            var detail = (entry.Flags & ObjectTable.ChildFlag) != 0 && detailShape[entry.Shape];
+            Name(entry.Name, detail);
+            if (entry.Schema >= 0) Name(entry.Schema, detail);
+            if (entry.Definition >= 0) uses[entry.Definition] |= (byte)(detail ? TextUse.ChildDefinition : TextUse.Definition);
+            for (; details is not null && typed < details.TypedAt.Length && details.TypedAt[typed] <= at; typed++) Type(details.TypedType[typed]);
+        }
+        // The types no entry is typed by (a SQL Server read lists every type of the database).
+        for (var type = 0; details is not null && type < details.TypeName.Length; type++) Type(type);
         return uses;
     }
 
@@ -201,7 +222,9 @@ internal static class IndexFileUnit
     // ---- Writing ----
 
     /// <summary>What the unit's table and facts need of the format, worked out once before anything is written.</summary>
-    internal sealed record Plan(byte[] Tags, ObjectShapes.Shape[] Shapes, ushort[] ShapeIds, int DetailEntries, ObjectDetails.Parts? Details, KeyValuePair<int, DateTime>[] Dates,
+    /// <param name="TextIds">Where the table gave texts back: each text's id in the file, which has none of those (-1).</param>
+    /// <param name="Charge">The charge the header states: the unit's, kept within what a load believes.</param>
+    internal sealed record Plan(byte[] Tags, int[]? TextIds, long Charge, ObjectShapes.Shape[] Shapes, ushort[] ShapeIds, int DetailEntries, ObjectDetails.Parts? Details, KeyValuePair<int, DateTime>[] Dates,
         KeyValuePair<int, BigQueryObjectFacts>[] Facts, KeyValuePair<int, string>[] Descriptions, KeyValuePair<int, Varia.Backend.BigQueryShardsDto>[] Shards);
 
     /// <summary>Checks <paramref name="unit"/> against the format's limits and rules: refused as Limits or Unsupported, so that
@@ -247,12 +270,27 @@ internal static class IndexFileUnit
             var detailShape = new bool[all.Count];
             for (var id = 0; id < detailShape.Length; id++) detailShape[id] = DetailChild(all[id].Kind);
             var uses = Uses(entries, detailShape, details, tags.Length);
+            // The texts the file holds: all but those the table gave back, numbered afresh where there are any of those.
+            var held = 0;
+            int[]? textIds = null;
             for (var id = 0; id < tags.Length; id++)
             {
                 // A long definition is never a name, and a text given back names nothing.
                 if (tags[id] == PackedForm && (uses[id] & (byte)(TextUse.Name | TextUse.ChildName)) != 0 || tags[id] == NoText && uses[id] != 0) throw Corrupt();
-                tags[id] |= (byte)(uses[id] << 2);
+                if (tags[id] == NoText)
+                {
+                    if (textIds is null)
+                    {
+                        textIds = new int[tags.Length];
+                        for (var before = 0; before < id; before++) textIds[before] = before;
+                    }
+                    textIds[id] = -1;
+                    continue;
+                }
+                if (textIds is not null) textIds[id] = held;
+                tags[held++] = (byte)(tags[id] | uses[id] << 2);
             }
+            Array.Resize(ref tags, held);
             var dates = (table.Dates ?? new Dictionary<int, DateTime>()).OrderBy(pair => pair.Key).ToArray();
             CheckDates(entries, dates.Length);
             foreach (var (at, _) in dates)
@@ -281,7 +319,14 @@ internal static class IndexFileUnit
             var detailEntries = 0;
             foreach (ref readonly var entry in entries)
                 if ((entry.Flags & ObjectTable.ChildFlag) != 0 && detailShape[entry.Shape]) detailEntries++;
-            return new(tags, [.. used], ids, detailEntries, details, dates, facts, descriptions, shards);
+            // What the content costs, as a load will work it out. A read's charge is that and what it charged for rows it then
+            // left out: a charge below its content is no read's, and one far above it (a read that failed part way, with most
+            // of its rows still waiting for their parent) is stated as the most a load believes.
+            var whole = entries.Length * IndexMemory.RecordBytes + held * IndexMemory.SlotBytes + (table.Details?.Bytes ?? 0) + facts.Sum(pair => FactBytesOf(pair.Value))
+                + descriptions.Sum(pair => DescriptionBytesOf(pair.Value)) + shards.Sum(pair => ShardBytesOf(pair.Value));
+            if (resource ? unit.Bytes != entries.Length * IndexMemory.RecordBytes + (table.Details?.Bytes ?? 0) : unit.Bytes < whole) throw Corrupt();
+            var charge = resource ? unit.Bytes : Math.Min(unit.Bytes, 2 * whole + ChargeSlack);
+            return new(tags, textIds, charge, [.. used], ids, detailEntries, details, dates, facts, descriptions, shards);
         }
         catch (IndexFileRefused refused) when (refused.Problem == IndexFileProblem.Corrupt)
         {
@@ -320,7 +365,9 @@ internal static class IndexFileUnit
         }
 
         var texts = table.Texts;
-        writer.Int32(texts.Count);
+        var textIds = plan.TextIds;
+        int Id(int id) => id < 0 || textIds is null ? id : textIds[id];
+        writer.Int32(plan.Tags.Length);
         writer.Bytes(plan.Tags);
 
         writer.Int32(entries.Length);
@@ -345,7 +392,7 @@ internal static class IndexFileUnit
             {
                 var run = entries.Slice(from, Math.Min(Batch, entries.Length - from));
                 for (var at = 0; at < run.Length; at++)
-                    values[at] = column switch { 0 => run[at].Name, 1 => run[at].Schema, 2 => run[at].Owner, 3 => run[at].Definition, _ => unchecked((int)run[at].Modified) };
+                    values[at] = column switch { 0 => Id(run[at].Name), 1 => Id(run[at].Schema), 2 => run[at].Owner, 3 => Id(run[at].Definition), _ => unchecked((int)run[at].Modified) };
                 writer.Int32s(values.AsSpan(0, run.Length));
             }
         token.ThrowIfCancellationRequested();
@@ -364,8 +411,8 @@ internal static class IndexFileUnit
         writer.Int32(details?.KeyColumn.Length ?? 0);
         if (details is not null)
         {
-            writer.Int32s(details.TypeName);
-            writer.Int32s(details.TypeSchema);
+            writer.Int32s(textIds is null ? details.TypeName : [.. details.TypeName.Select(Id)]);
+            writer.Int32s(textIds is null ? details.TypeSchema : [.. details.TypeSchema.Select(Id)]);
             writer.Int32s(details.TypeId);
             writer.Bytes(details.TypeSystem);
             writer.Bytes(details.TypeFlags);
@@ -395,7 +442,7 @@ internal static class IndexFileUnit
                 writer.Int64(fact.Created);
                 writer.UInt16((ushort)((fact.Detailed ? FactDetailed : 0) | (fact.Whole ? FactWhole : 0) | (fact.ColumnsCut ? FactColumnsCut : 0) | (fact.Rows is not null ? FactRows : 0)
                     | (fact.Bytes is not null ? FactBytes : 0) | (fact.Listed is not null ? FactListed : 0) | (fact.Partitioning is not null ? FactPartitioning : 0)
-                    | (fact.Clustering is not null ? FactClustering : 0) | (fact.Signature is not null ? FactSignature : 0)));
+                    | (fact.Clustering is not null ? FactClustering : 0) | (fact.Signature is not null ? FactSignature : 0) | (fact.Stale ? FactStale : 0)));
                 if (fact.Rows is { } rows) writer.Int64(rows);
                 if (fact.Bytes is { } bytes) writer.Int64(bytes);
                 if (fact.Listed is { } listed) writer.Int64(listed);
@@ -434,7 +481,7 @@ internal static class IndexFileUnit
         foreach (var frame in packed)
         {
             token.ThrowIfCancellationRequested();
-            writer.Stored(frame.Frame);
+            writer.Frame(frame.Frame);
         }
 
         writer.Int32(extra.Length);
@@ -457,8 +504,6 @@ internal static class IndexFileUnit
     /// <summary>What a load takes of the index's memory, and how it holds a text.</summary>
     internal abstract class Account
     {
-        /// <summary>Refuses a size the load could not be charged now, before anything is allocated by it.</summary>
-        public abstract void Sane(long bytes);
         /// <summary>The copy of <paramref name="value"/> the load holds; null when a text that may be left out does not fit.</summary>
         public abstract object? Text(object value, TextUse use);
         public abstract void Records(long own, long detailChildren);
@@ -473,55 +518,55 @@ internal static class IndexFileUnit
     /// A read's load: texts are the <see cref="StringPool"/>'s, and every byte is charged as the reader that made the unit
     /// charges it (<see cref="DatabaseReader"/>, <see cref="BigQueryReader"/>): against the share of the read it replaces first,
     /// names whatever is free, definitions only above the names' reserve, and for BigQuery nothing below its floors
-    /// (<see cref="ObjectIndexLimits.BigQueryNamesFloorBytes"/> for names, the details' floor for columns and text).
+    /// (<see cref="ObjectIndexLimits.BigQueryNamesFloorBytes"/> for names, the details' floor for columns and text), with the
+    /// replaced read's share in its two parts: its names' part pays for names and the rest for details.
     /// </summary>
     internal sealed class PooledAccount(ObjectIndexLimits limits, StringPool pool, DatabaseIndex? credit, bool bigQuery, long namesFloor, long detailsFloor) : Account
     {
         private readonly IndexBudget budget = pool.Budget;
-        private long creditLeft = credit?.Bytes ?? 0;
+        // SQL Server's reads use one share; BigQuery's the names' part of it for names (nameCredit) and the rest for details.
+        private long nameCredit = bigQuery ? credit?.NameBytes ?? 0 : 0;
+        private long creditLeft = (credit?.Bytes ?? 0) - (bigQuery ? credit?.NameBytes ?? 0 : 0);
 
         public long Taken { get; private set; }
         public long Credited { get; private set; }
+        /// <summary>BigQuery: what the load charged as names (<see cref="DatabaseIndex.NameBytes"/>).</summary>
+        public long NameBytes { get; private set; }
         public DatabaseIndex? Credit => credit;
 
-        /// <summary>Charges to the credit first, the rest to the budget when that leaves <paramref name="keepFree"/> free.</summary>
-        private bool TryCharge(long bytes, long keepFree)
+        /// <summary>Charges to <paramref name="share"/> (a part of the replaced read's share) first, the rest to the budget when
+        /// that leaves <paramref name="keepFree"/> free.</summary>
+        private bool TryCharge(long bytes, long keepFree, ref long share)
         {
             if (bytes <= 0) return true;
-            var fromCredit = Math.Min(creditLeft, bytes);
-            if (bytes > fromCredit && !budget.TryTake(bytes - fromCredit, keepFree)) return false;
-            creditLeft -= fromCredit;
-            Credited += fromCredit;
-            Taken += bytes - fromCredit;
+            var fromShare = Math.Min(share, bytes);
+            if (bytes > fromShare && !budget.TryTake(bytes - fromShare, keepFree)) return false;
+            share -= fromShare;
+            Credited += fromShare;
+            Taken += bytes - fromShare;
             return true;
         }
 
-        /// <summary>A BigQuery name's share: the budget above the names floor while it has the room, else the credit, which is
-        /// kept for the details the earlier read held (<see cref="BigQueryReader"/>).</summary>
+        private bool TryCharge(long bytes, long keepFree) => TryCharge(bytes, keepFree, ref creditLeft);
+
+        /// <summary>A BigQuery name's share (a record, its facts, a text's slot): the names' part of the replaced read's share,
+        /// else the budget above the names floor (<see cref="BigQueryReader"/>).</summary>
         private bool TryChargeName(long bytes)
         {
-            if (bytes <= 0) return true;
-            if (budget.TryTake(bytes, namesFloor))
-            {
-                Taken += bytes;
-                return true;
-            }
-            return creditLeft > 0 && TryCharge(bytes, namesFloor);
+            if (!TryCharge(bytes, namesFloor, ref nameCredit)) return false;
+            NameBytes += Math.Max(0, bytes);
+            return true;
         }
 
         private bool Charge(long bytes, bool name) => !bigQuery ? TryCharge(bytes, 0) : name ? TryChargeName(bytes) : TryCharge(bytes, detailsFloor);
 
-        public override void Sane(long bytes)
-        {
-            if (bytes > Math.Max(0, budget.Free) + creditLeft) throw Budget();
-        }
-
         public override object? Text(object value, TextUse use)
         {
             var needed = (use & (TextUse.Name | TextUse.ChildName)) != 0;
-            // A string no entry names is the name of a row the read then left out (a child whose parent the login cannot
-            // see): taken as a name is, though the load does without it when it does not fit.
-            var name = (use & TextUse.Name) != 0 || use == TextUse.None && value is string;
+            // Charged as a name unless something else named it first. A string no entry names is the name of a row the read
+            // then left out (a child whose parent the login cannot see): taken as a name is, though the load does without it
+            // when it does not fit.
+            var name = (use & (TextUse.Name | TextUse.DetailFirst)) == TextUse.Name || use == TextUse.None && value is string;
             // A definition gives way to names.
             var keepFree = !bigQuery ? needed || name ? 0 : limits.NamesReserveBytes : name ? namesFloor : needed ? detailsFloor : Math.Max(detailsFloor, limits.NamesReserveBytes);
             var acquired = pool.TryAcquire(value, keepFree);
@@ -564,7 +609,7 @@ internal static class IndexFileUnit
         {
             pool.Release(held);
             budget.Release(Taken);
-            Taken = Credited = creditLeft = 0;
+            Taken = Credited = NameBytes = creditLeft = nameCredit = 0;
         }
     }
 
@@ -578,11 +623,6 @@ internal static class IndexFileUnit
         {
             total += bytes;
             if (total > most) throw Budget();
-        }
-
-        public override void Sane(long bytes)
-        {
-            if (bytes > most - total) throw Budget();
         }
 
         public override object? Text(object value, TextUse use)
@@ -640,10 +680,10 @@ internal static class IndexFileUnit
             detailShape[id] = DetailChild(shapeKind);
         }
 
-        // The texts' forms and uses: what the entries are checked against, and how each text will be charged. A load will
-        // charge each text its slot; one without children keeps a tag and a place for each of the file's texts meanwhile.
+        // The texts' forms and uses: what the entries are checked against, and how each text will be charged. Each text takes
+        // at least its tag and a length in the content to come, which bounds what is allocated by their number.
         var textCount = reader.Count(IndexFileLimits.Texts);
-        account.Sane(textCount * (children ? IndexMemory.SlotBytes : 5));
+        reader.Backed(textCount * 5L);
         var tags = new byte[textCount];
         reader.Bytes(tags);
         var packedCount = 0;
@@ -651,7 +691,9 @@ internal static class IndexFileUnit
         foreach (var tag in tags)
         {
             var (form, use) = (tag & 3, tag >> 2);
-            if (form > PackedForm || use > 15 || form == NoText && use != 0 || form == PackedForm && (use & (byte)(TextUse.Name | TextUse.ChildName)) != 0) throw Corrupt();
+            // Every id has a text, so every place in the loaded table's texts is one the load is charged for.
+            if (form is not (StringText or PackedForm) || use > 31 || (use & (byte)TextUse.DetailFirst) != 0 && (use & (byte)TextUse.Name) == 0
+                || form == PackedForm && (use & (byte)(TextUse.Name | TextUse.ChildName)) != 0) throw Corrupt();
             if (form == PackedForm) packedCount++;
         }
 
@@ -662,7 +704,8 @@ internal static class IndexFileUnit
         var detailEntries = reader.Count(count, IndexFileProblem.Corrupt);
         if (count != header.Objects) throw Corrupt();
         var ownEntries = count - detailEntries;
-        if (!children) account.Sane(count * 5L);
+        // An entry is 23 bytes of the content to come.
+        reader.Backed(count * 23L);
         account.Records(ownEntries, children ? detailEntries : 0);
         var entries = new ObjectEntry[children ? count : ownEntries];
         var moved = children ? null : new int[count];
@@ -765,7 +808,9 @@ internal static class IndexFileUnit
         var detailBytes = typeCount * IndexMemory.TypeBytes + typedCount * IndexMemory.TypedBytes + keyCount * IndexMemory.KeyBytes + keyColumnCount * IndexMemory.KeyColumnBytes;
         ObjectDetails.Parts? parts = null;
         // On disk a type is 14 bytes, a typed entry 13, a key 14 and a key column 5 (the arrays read below).
-        if (!children) reader.Skip(typeCount * 14L + typedCount * 13L + keyCount * 14L + keyColumnCount * 5L);
+        var detailContent = typeCount * 14L + typedCount * 13L + keyCount * 14L + keyColumnCount * 5L;
+        reader.Backed(detailContent);
+        if (!children) reader.Skip(detailContent);
         else if (detailBytes > 0)
         {
             account.Details(detailBytes);
@@ -798,14 +843,13 @@ internal static class IndexFileUnit
         // The uses the file states decide how each text is charged, so they must be the entries' own. Without the details
         // and the entries read past (a load without children), only the uses of what it keeps can be told.
         var uses = Uses(entries, detailShape, parts, textCount);
-        var compared = children ? (byte)15 : OwnUses;
+        var compared = children ? (byte)31 : OwnUses;
         for (var id = 0; id < textCount; id++)
             if ((tags[id] >> 2 & compared) != (uses[id] & compared)) throw Corrupt();
 
         // What the content holds whole, for the charge the file states.
         var whole = count * IndexMemory.RecordBytes + detailBytes;
-        foreach (var tag in tags)
-            if ((tag & 3) != NoText) whole += IndexMemory.SlotBytes;
+        whole += textCount * IndexMemory.SlotBytes;
 
         Dictionary<int, BigQueryObjectFacts>? objects = null;
         Dictionary<int, string>? descriptions = null;
@@ -827,7 +871,7 @@ internal static class IndexFileUnit
                 var partitioning = Stated(FactPartitioning) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var clustering = Stated(FactClustering) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var signature = Stated(FactSignature) ? reader.Text(IndexFileLimits.FactChars) : null;
-                var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed);
+                var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed, Stated(FactStale));
                 // Facts are an object's, never a column's, so a load without children keeps them all.
                 if (Moved(at) < 0 || (entries[Moved(at)].Flags & ObjectTable.ChildFlag) != 0) throw Corrupt();
                 var cost = FactBytesOf(fact);
@@ -869,15 +913,18 @@ internal static class IndexFileUnit
             }
         }
 
-        // Texts, last: names first (the strings), then long definitions. A load without children numbers the texts it keeps
-        // afresh (map: a file's id to the kept one, or -1).
-        bool Kept(byte tag) => (tag & 3) != NoText && (children || (tag >> 2 & OwnUses) != 0);
+        // Texts, last: names first (the strings), then long definitions. With children they are held by id; without, the
+        // texts kept are numbered afresh (map: a file's id to the kept one, or -1), and only the uses a load without children
+        // can tell from its entries say how each is charged.
+        bool Kept(byte tag) => children || (tag >> 2 & OwnUses) != 0;
         var map = children ? null : new int[textCount];
         if (children) SetCount(held, textCount);
         else Array.Fill(map!, -1);
+        var leftOutTexts = 0;
         void Hold(int id, object value)
         {
-            var copy = account.Text(value, (TextUse)(tags[id] >> 2));
+            var copy = account.Text(value, (TextUse)(tags[id] >> 2 & compared));
+            if (copy is null) leftOutTexts++;
             if (map is null) held[id] = copy;
             else if (copy is not null)
             {
@@ -911,19 +958,28 @@ internal static class IndexFileUnit
                 reader.Skip(frameLength);
                 continue;
             }
+            reader.Backed(frameLength);
             var frame = new byte[frameLength];
             reader.Bytes(frame);
             Hold(id, PackedText.FromFrame(frame, length, byteLength, scratch) ?? throw Corrupt());
         }
+        // A text left out for memory leaves no empty place behind: the texts held move up, so the table's text array is
+        // exactly the texts the load was charged a slot for.
+        if (map is null && leftOutTexts > 0)
+        {
+            map = new int[textCount];
+            var next = 0;
+            for (var id = 0; id < textCount; id++) map[id] = held[id] is null ? -1 : next++;
+            held.RemoveAll(text => text is null);
+        }
 
-        // Each kept entry names its texts by where they are held now. An entry whose definition was not kept loses it, as a
-        // read that could not keep a definition counts it: cut, and left out for memory.
-        int Place(int id) => map is not null ? map[id] : held[id] is null ? -1 : id;
-        for (var at = 0; at < entries.Length; at++)
+        // Each kept entry, and each type, names its texts by where they are held now. An entry whose definition was not kept
+        // loses it, as a read that could not keep a definition counts it: cut, and left out for memory.
+        for (var at = 0; map is not null && at < entries.Length; at++)
         {
             ref var entry = ref entries[at];
-            if ((entry.Name = Place(entry.Name)) < 0 || entry.Schema >= 0 && (entry.Schema = Place(entry.Schema)) < 0) throw Corrupt();
-            if (entry.Definition < 0 || (entry.Definition = Place(entry.Definition)) >= 0) continue;
+            if ((entry.Name = map[entry.Name]) < 0 || entry.Schema >= 0 && (entry.Schema = map[entry.Schema]) < 0) throw Corrupt();
+            if (entry.Definition < 0 || (entry.Definition = map[entry.Definition]) >= 0) continue;
             if ((entry.Flags & ObjectTable.CutFlag) == 0) cut++;
             entry.Flags &= unchecked((byte)~ObjectTable.CutFlag);
             modules--;
@@ -931,9 +987,17 @@ internal static class IndexFileUnit
             // An object whose text the load left out is not whole: the next build reads it again (BigQueryReader).
             if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false };
         }
+        for (var type = 0; map is not null && parts is not null && type < parts.TypeName.Length; type++)
+        {
+            if ((parts.TypeName[type] = map[parts.TypeName[type]]) < 0) throw Corrupt();
+            if (parts.TypeSchema[type] >= 0 && (parts.TypeSchema[type] = map[parts.TypeSchema[type]]) < 0) throw Corrupt();
+        }
         (modules, cut) = (Math.Max(0, modules), Math.Max(0, cut));
+        leftOut = Math.Min(leftOut, cut);
 
-        var extra = new byte[reader.Count(IndexFileLimits.ExtraBytes)];
+        var extraBytes = reader.Count(IndexFileLimits.ExtraBytes);
+        reader.Backed(extraBytes);
+        var extra = new byte[extraBytes];
         reader.Bytes(extra);
         reader.End();
 
