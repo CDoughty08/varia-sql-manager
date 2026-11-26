@@ -709,7 +709,7 @@ internal static partial class IndexFileChecks
                 later.Pool.Release(laterPinned);
                 liveWorld.Pool.Release(livePinned);
                 later.Budget.Limit = laterLimit;
-                check(later.Budget.Used == used && later.Pool.Stats == stats, "and a load that borrowed from the share gives it back");
+                check(later.Budget.Used == used && later.Pool.Stats == stats, $"and a load that borrowed from the share gives it back: {later.Budget.Used} of {used}, {later.Pool.Stats} of {stats}, lent {lent.Value?.Bytes}/{lent.Value?.Credited}");
                 liveWorld.Connection.Dispose();
             }
             if (kind == IndexUnitKind.Database && replacement.Value is { } holding)
@@ -935,18 +935,20 @@ internal static partial class IndexFileChecks
 
         // BigQuery: a dataset with its columns replacing its read without them (a share that is almost all names), with room
         // above the names' floor and none above the details'. A read charges entry by entry, so its first columns borrow the
-        // names' part and its later names go to the budget; a load charges every name first, and moves what the names' part
-        // paid to the budget when the columns need it. Whatever the read fits, the load fits.
+        // names' part and its later names go to the budget; a load charges section by section and holds the share whole, so
+        // wherever the read fits the load fits, taking no more of the budget.
         {
             var source = new World();
             var unit = Dataset(source, DatasetEntries());
             var cost = source.Budget.Used;
-            var (fitted, failures) = (0, new List<string>());
+            var (fitted, refused, failures) = (0, 0, new List<string>());
             List<BigQueryEntry> With(int extra) => DatasetEntries().Concat(Enumerable.Range(0, extra).Select(at => DatasetEntries()[1] with { Name = "share_" + at, Detail = null, Shards = null })).ToList();
             // The dataset with 200 more objects, whose records a load charges before any column.
             var many = With(200);
             var file = Save(Dataset(new World(), many), IndexUnitKind.Dataset, Sealed);
-            for (var extra = 60; extra <= 260; extra += 5)
+            // None above the details' floor, and a little.
+            foreach (var aboveDetails in new long[] { 0, 4096 })
+            for (var extra = 60; extra <= 260; extra += 2)
             {
                 // The share: the dataset read without its columns, with as many more names as make up most of what the columns cost.
                 var more = With(extra);
@@ -955,8 +957,8 @@ internal static partial class IndexFileChecks
                     var world = new World(new ObjectIndexLimits { DefinitionChars = 2000, MemoryBytes = cost * 64, NamesReserveBytes = cost * 16 });
                     // Every text the dataset names is pooled already, so only records, slots and facts are the share's or the budget's.
                     var (pin, credit) = (Dataset(world, DatasetEntries()), Dataset(world, more, children: false));
-                    var floors = (world.Limits.BigQueryNamesFloorBytes + world.Limits.BigQueryDetailsFloor(true, false)) / 2;
-                    world.Budget.Force(world.Budget.Free - floors);
+                    var free = aboveDetails == 0 ? (world.Limits.BigQueryNamesFloorBytes + world.Limits.BigQueryDetailsFloor(true, false)) / 2 : world.Limits.BigQueryDetailsFloor(true, false) + aboveDetails;
+                    world.Budget.Force(world.Budget.Free - free);
                     return (world, pin, credit);
                 }
                 var (loadWorld, loadPin, loadCredit) = Set();
@@ -968,10 +970,11 @@ internal static partial class IndexFileChecks
                 if (live is not null)
                 {
                     fitted++;
-                    if (loaded.Value is not { } back || back.Bytes != live.Bytes || back.NameBytes != live.NameBytes || loadWorld.Budget.Used - held != liveWorld.Budget.Used - liveHeld)
-                        failures.Add($"{extra}: {loaded.Problem}, {loaded.Value?.Bytes}/{loaded.Value?.NameBytes} against {live.Bytes}/{live.NameBytes}, {loadWorld.Budget.Used - held} taken against {liveWorld.Budget.Used - liveHeld}");
+                    if (loaded.Value is not { } back || back.Bytes != live.Bytes || back.NameBytes != live.NameBytes || loadWorld.Budget.Used - held > liveWorld.Budget.Used - liveHeld)
+                        failures.Add($"{extra} ({aboveDetails} above the details' floor): {loaded.Problem}, {loaded.Value?.Bytes}/{loaded.Value?.NameBytes} against {live.Bytes}/{live.NameBytes}, {loadWorld.Budget.Used - held} taken against {liveWorld.Budget.Used - liveHeld}");
                     liveWorld.Connection.Abandon(live);
                 }
+                else refused++;
                 if (loaded.Value is not null) loadWorld.Connection.Abandon(loaded.Value);
                 if (loadWorld.Budget.Used != held) failures.Add($"{extra}: {loadWorld.Budget.Used - held} bytes left");
                 foreach (var (world, pin, credit) in new[] { (loadWorld, loadPin, loadCredit), (liveWorld, livePin, liveCredit) })
@@ -980,7 +983,7 @@ internal static partial class IndexFileChecks
                     world.Connection.Abandon(pin);
                 }
             }
-            check(fitted > 0 && failures.Count == 0, $"a replacement whose share is mostly names loads wherever its read fits ({fitted} of 41 shares fit): {string.Join("; ", failures.Take(4))}");
+            check(fitted > 0 && refused > 0 && failures.Count == 0, $"a replacement whose share is mostly names loads wherever its read fits, with no room or a little above the details' floor ({fitted} of 202 shares fit, {refused} do not): {string.Join("; ", failures.Take(4))}");
             source.Connection.Abandon(unit);
         }
 

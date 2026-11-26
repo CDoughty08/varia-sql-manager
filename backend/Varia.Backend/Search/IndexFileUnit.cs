@@ -593,9 +593,9 @@ internal static class IndexFileUnit
     internal sealed class PooledAccount(ObjectIndexLimits limits, StringPool pool, DatabaseIndex? credit, bool bigQuery, long namesFloor, long detailsFloor) : Account
     {
         private readonly IndexBudget budget = pool.Budget;
-        // SQL Server's reads use one share; BigQuery's the names' part of it for names (nameCredit) and the rest for details.
-        private long nameCredit = bigQuery ? credit?.NameBytes ?? 0 : 0;
-        private long creditLeft = (credit?.Bytes ?? 0) - (bigQuery ? credit?.NameBytes ?? 0 : 0);
+        // SQL Server's reads use one share (what is left of it); BigQuery's is all of it, whatever kind each part paid for.
+        private long creditLeft = credit?.Bytes ?? 0;
+        private readonly long shareBytes = credit?.Bytes ?? 0;
 
         public long Taken { get; private set; }
         public long Credited { get; private set; }
@@ -603,45 +603,54 @@ internal static class IndexFileUnit
         public long NameBytes { get; private set; }
         public DatabaseIndex? Credit => credit;
 
-        // BigQuery: what each part of the share has paid for its own kind (names from the names' part, details from the rest).
-        private long namesPaid, detailsPaid;
+        // BigQuery: what the load has charged of each kind, and how much of each the budget holds (the share holds the rest).
+        private long namesCharged, detailsCharged, namesOnBudget, detailsOnBudget;
+        // BigQuery: what the pool charged the budget for names the load took (texts it did not hold yet).
+        private long namesPooled;
 
-        /// <summary>Charges to the part of the replaced read's share for <paramref name="name"/> first, the rest to the budget
-        /// when that leaves <paramref name="keepFree"/> free, else to what is left of both parts together: as a read lends
-        /// between them once the budget has refused, so a load no larger than what it replaces always fits. A read charges
-        /// entry by entry and a load section by section, so the other part may have paid for what the read would by then
-        /// have put on the budget: that much moves to the budget, above the other kind's floor, before the load is refused.
-        /// SQL Server's reads have one share (<paramref name="name"/> false, no other part).</summary>
+        /// <summary>Takes a text from the pool. A BigQuery replacement's detail is checked as its charges are: as if it came
+        /// before the names the budget holds for this load.</summary>
+        private object? Acquire(object value, long keepFree, bool name)
+        {
+            if (bigQuery && !name && shareBytes > 0) keepFree = Math.Max(namesFloor, keepFree - namesOnBudget - namesPooled);
+            var acquired = pool.TryAcquire(value, keepFree, out var charged);
+            if (bigQuery && name) namesPooled += charged;
+            return acquired;
+        }
+
+        /// <summary>Charges <paramref name="bytes"/> of a name or a detail. SQL Server's: to what is left of the replaced read's
+        /// share, the rest to the budget when that leaves <paramref name="keepFree"/> free, as <see cref="DatabaseReader"/> does.
+        /// BigQuery's: the share pays for as much of everything charged so far as it covers, and the budget holds only the rest,
+        /// names first, since theirs is the lower floor; the budget is checked as if its details had come before its names (the
+        /// details above their floor, the names above theirs). A read charges entry by
+        /// entry and splits the share between names and details, lending between the parts once the budget refuses; a load
+        /// charges section by section, so it does not follow the read's order but holds the share whole: it is never refused
+        /// where the read fits, and takes no more of the budget than the read.</summary>
         private bool TryCharge(long bytes, long keepFree, bool name)
         {
             if (bytes <= 0) return true;
-            ref var share = ref name ? ref nameCredit : ref creditLeft;
-            ref var paid = ref name ? ref namesPaid : ref detailsPaid;
-            var fromShare = Math.Min(share, bytes);
-            if (bytes == fromShare || budget.TryTake(bytes - fromShare, keepFree))
+            if (!bigQuery)
             {
-                share -= fromShare;
-                paid += fromShare;
+                var fromShare = Math.Min(creditLeft, bytes);
+                if (bytes > fromShare && !budget.TryTake(bytes - fromShare, keepFree)) return false;
+                creditLeft -= fromShare;
                 Credited += fromShare;
                 Taken += bytes - fromShare;
                 return true;
             }
-            if (!bigQuery) return false;
-            ref var other = ref name ? ref creditLeft : ref nameCredit;
-            ref var otherPaid = ref name ? ref detailsPaid : ref namesPaid;
-            var shortfall = bytes - share - other;
-            if (shortfall > 0)
-            {
-                if (shortfall > otherPaid || !budget.TryTake(shortfall, name ? detailsFloor : namesFloor)) return false;
-                otherPaid -= shortfall;
-                other += shortfall;
-                Credited -= shortfall;
-                Taken += shortfall;
-            }
-            other -= bytes - share;
-            paid += share;
-            share = 0;
-            Credited += bytes;
+            var (names, details) = name ? (namesCharged + bytes, detailsCharged) : (namesCharged, detailsCharged + bytes);
+            var onBudget = Math.Max(0, names + details - shareBytes);
+            var namesOn = Math.Min(names, onBudget);
+            var detailsOn = onBudget - namesOn;
+            var take = onBudget - Taken;
+            // Checked as if the details on the budget had come before every name there (in a replacement, where the order
+            // decides what the share pays for): details that grow it above their floor, with the names it holds for this load
+            // counted as after them; names above theirs. A name never puts more details there.
+            var keep = detailsOn > detailsOnBudget ? Math.Max(namesFloor, keepFree - (shareBytes > 0 ? namesOn + namesPooled : 0)) : name ? keepFree : namesFloor;
+            if (take > 0 && !budget.TryTake(take, keep)) return false;
+            (namesCharged, detailsCharged, namesOnBudget, detailsOnBudget) = (names, details, namesOn, detailsOn);
+            Taken = onBudget;
+            Credited = names + details - onBudget;
             return true;
         }
 
@@ -668,16 +677,18 @@ internal static class IndexFileUnit
             if (needed)
             {
                 if (!Charge(IndexMemory.SlotBytes, name)) throw Budget();
-                return pool.TryAcquire(value, keepFree) ?? throw Budget();
+                return Acquire(value, keepFree, name) ?? throw Budget();
             }
             // A text that may be left out is held, with its slot, while both fit where a read keeps them. Otherwise it is left
             // out, as a read leaves it; its place in the table stays, empty, since the entries name their texts by place, and
             // is charged as a name's is.
-            var acquired = pool.TryAcquire(value, keepFree);
+            var pooledBefore = namesPooled;
+            var acquired = Acquire(value, keepFree, name);
             if (acquired is not null)
             {
                 if (bigQuery && name ? TryChargeName(IndexMemory.SlotBytes) : TryCharge(IndexMemory.SlotBytes, keepFree, name: false)) return acquired;
                 pool.Release([acquired]);
+                namesPooled = pooledBefore;
             }
             if (!Charge(IndexMemory.SlotBytes, name: true)) throw Budget();
             return null;
@@ -685,7 +696,9 @@ internal static class IndexFileUnit
 
         public override void Records(long own, long detailChildren)
         {
-            if (!Charge(own * IndexMemory.RecordBytes, name: true) || !Charge(detailChildren * IndexMemory.RecordBytes, name: false)) throw Budget();
+            // Columns first: a read charges each object's columns right after its name, before the names of the objects listed
+            // after it, so the columns have first claim on the room above the details' floor and on the names' part to borrow.
+            if (!Charge(detailChildren * IndexMemory.RecordBytes, name: false) || !Charge(own * IndexMemory.RecordBytes, name: true)) throw Budget();
         }
 
         public override void Details(long bytes)
@@ -713,7 +726,7 @@ internal static class IndexFileUnit
         {
             pool.Release(held);
             budget.Release(Taken);
-            Taken = Credited = NameBytes = creditLeft = nameCredit = 0;
+            Taken = Credited = NameBytes = creditLeft = namesCharged = detailsCharged = namesOnBudget = detailsOnBudget = namesPooled = 0;
         }
     }
 
@@ -1130,7 +1143,7 @@ internal static class IndexFileUnit
             modules--;
             leftOut++;
             // An object whose text the load left out is not whole: the next build reads it again (BigQueryReader).
-            if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false, TextLeftOut = true };
+            if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false, TextLeftOut = fact.Detailed };
         }
         (modules, cut) = (Math.Max(0, modules), Math.Max(0, cut));
         // Without children the counts were checked against the entries the file has, not the ones the load keeps: hold them
