@@ -82,4 +82,34 @@ describe('Options Modified filter', () => {
     await vi.waitFor(() => expect(modified().textContent).toBe('Modified (0)'))
     expect(host.textContent).toContain('No unsaved changes.')
   })
+
+  it('reverts a row in the Modified view to its saved value, and keeps the row being edited in view', async () => {
+    const { updateSettings } = await mount()
+    const profile = () => host.querySelector<HTMLInputElement>('input[role="switch"][data-setting="queryResults.grid.columnProfile"]')
+    await vi.waitFor(() => expect(profile()?.checked).toBe(true))
+
+    // Saved True (the default is False); the edit to False matches the default, so the row has no reset to default,
+    // but the Modified view offers Revert back to the saved True.
+    await act(async () => profile()!.click())
+    await act(async () => modified().click())
+    expect(modified().textContent).toBe('Modified (1)')
+    expect(button('Reset Show the column profile panel')).toBeUndefined()
+    await act(async () => button('Revert Show the column profile panel').click())
+    expect(modified().textContent).toBe('Modified (0)')
+    expect(profile()).toBeNull()
+
+    // Toggling an edited row back while it has focus keeps it in view until focus moves on or the filter is reopened.
+    await act(async () => modified().click())
+    await act(async () => profile()!.click())
+    await act(async () => modified().click())
+    await act(async () => profile()!.focus())
+    await act(async () => profile()!.click())
+    expect(modified().textContent).toBe('Modified (0)')
+    expect(profile()?.checked).toBe(true)
+    expect(button('Revert Show the column profile panel')).toBeUndefined()
+    await act(async () => modified().click())
+    await act(async () => modified().click())
+    expect(profile()).toBeNull()
+    expect(updateSettings).not.toHaveBeenCalled()
+  })
 })
