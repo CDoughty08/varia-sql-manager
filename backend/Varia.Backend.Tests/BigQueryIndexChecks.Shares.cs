@@ -290,7 +290,7 @@ internal static partial class BigQueryIndexChecks
             var source = new FakeBudgetSource([], tablesPerDiscovered: 3, columnsPerTable: 20)
             {
                 ColumnsOfTable = (project, _) => project == "star-04" ? 30 : null,
-                ColumnPrefix = _ => "col_shared_",
+                ColumnPrefix = (_, _) => "col_shared_",
                 TablesPerDataset = new() { [("star-04", "ds")] = 1 },
             };
             using var search = new ObjectSearchService(new UnusedHost(), limits);
@@ -309,6 +309,31 @@ internal static partial class BigQueryIndexChecks
                 && BigQueryEntries.Known(held, true).Keys.Order().SequenceEqual([("bqTable", "star-03_tbl_1"), ("bqTable", "star-03_tbl_2")])
                 && grown.Status.Skipped.Count(skip => skip is { Project: "star-03", Database: "ds", Code: "TOO_LARGE", Details: true }) == 1 && grown.Status.Skipped.Count == 1,
                 $"when a table that grew does not fit, it is the one sent back to what was held, whichever object the read ran out at ({held.Table.Count} entries, {grown.Status.Skipped.Count} skip, whole {string.Join(",", BigQueryEntries.Known(held, true).Keys)})");
+        }
+
+        // Pass 2 with nothing free, past the retries: more tables than HoldRetries were created again with renamed columns (new
+        // texts there is no room for), beside one that did not change. Every object goes back to what was held; the skip counts
+        // only the tables pass 2 read, not the one it kept as it was.
+        {
+            var limits = ShareLimits();
+            var tables = ObjectSearchService.HoldRetries + 2;
+            var source = new FakeBudgetSource([], tablesPerDiscovered: tables, columnsPerTable: 2);
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var id = Guid.NewGuid().ToString();
+            List<string> starred = ["star-05"];
+            DatabaseIndex Held() => search.HeldOf(id).Single(read => read.Database == "star-05");
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred), source, CancellationToken.None);
+            var all = Held() is { Detailed: true } first && BigQueryEntries.Known(first, true).Count == tables;
+            search.Budget.Force(search.Budget.Free - limits.BigQueryNamesFloorBytes + 500);
+            var kept = "star-05_tbl_" + (tables - 1);
+            source.CreatedOfTable = (_, table) => table != kept ? 1_750_000_000_000 : null;
+            source.ColumnPrefix = (_, table) => table != kept ? "renamed_" + table + "_" : null;
+            var renamed = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred), source, CancellationToken.None);
+            var held = Held();
+            var skip = renamed.Status.Skipped.SingleOrDefault(skip => skip is { Project: "star-05", Code: "TOO_LARGE", Details: true });
+            check(all && held is { ChildrenLeftOut: false } && BigQueryEntries.Known(held, true).Keys.SequenceEqual([("bqTable", kept)])
+                && skip?.Message.StartsWith("The details of " + (tables - 1) + " objects were left out", StringComparison.Ordinal) == true,
+                $"a dataset whose every object went back to what was held counts only the objects pass 2 read as left out ({skip?.Message})");
         }
 
         // 2. SQL Server first, then BigQuery, then a SQL Server rebuild while BigQuery holds its share.

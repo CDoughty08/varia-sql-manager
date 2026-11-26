@@ -424,7 +424,8 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
      projects first, then discovered projects, swapping each dataset as it finishes. Once less than half the memory
      limit is free (discovered projects' floor, [Memory](#memory)), pass 2 stops early for the remaining discovered
      projects (recording them as names only) while keeping Wave 1 and Wave 2 intact; the billing and starred projects'
-     details go on until 7/16 is free, after which a dataset keeps its names without its columns.
+     details go on until 7/16 is free (3/8 for a dataset that already holds details), after which a dataset that holds
+     no details keeps its names without its columns and one that does keeps what it held.
   The status says "Discovering accessible BigQuery projects…", then "Indexing N of M datasets", then "Reading details of
   N of M objects"; the finished index line reports the project count when more than one project is indexed. The status
   bar names the pass the same way ("Listing BigQuery datasets N / M", "Reading BigQuery object details N / M"). While wave

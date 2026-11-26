@@ -1361,8 +1361,9 @@ internal static partial class BigQueryIndexChecks
         /// <summary>One table's creation time or column count, when not its project's.</summary>
         public Func<string, string, long?>? CreatedOfTable { get; set; }
         public Func<string, string, int?>? ColumnsOfTable { get; set; }
-        /// <summary>A project's column names' prefix, when not its own (so projects can share column texts in the pool).</summary>
-        public Func<string, string>? ColumnPrefix { get; set; }
+        /// <summary>A table's column names' prefix, when not its project's (so projects can share column texts in the pool, or a
+        /// table's columns can be renamed).</summary>
+        public Func<string, string, string?>? ColumnPrefix { get; set; }
         /// <summary>Datasets that hold one date-sharded group instead: events_20261101 to the day given, each shard created on its day.</summary>
         public Dictionary<(string Project, string Dataset), int>? ShardDays { get; set; }
         public bool Throttled(string connectionId) => ThrottledNow?.Invoke() ?? false;
@@ -1438,7 +1439,7 @@ internal static partial class BigQueryIndexChecks
             var count = ColumnsOfTable?.Invoke(project, table) ?? (project == "varia-alpha" ? 2 : ColumnsPerTable);
             var fields = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableFieldSchema
             {
-                Name = (ColumnPrefix?.Invoke(project) ?? "col_" + project + "_") + index, Type = "STRING", Mode = "NULLABLE"
+                Name = (ColumnPrefix?.Invoke(project, table) ?? "col_" + project + "_") + index, Type = "STRING", Mode = "NULLABLE"
             }).ToList();
             return new Google.Apis.Bigquery.v2.Data.Table { Type = "TABLE", Schema = new() { Fields = fields } };
         }

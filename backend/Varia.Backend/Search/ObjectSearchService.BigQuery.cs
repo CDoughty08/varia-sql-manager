@@ -437,7 +437,7 @@ internal sealed partial class ObjectSearchService
                 }, loop)).ToArray();
                 await Task.WhenAll(workers);
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, details: true);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, details: value.Read);
                 if (held is not null)
                 {
                     Skip(held);
@@ -1399,13 +1399,13 @@ internal sealed partial class ObjectSearchService
     /// <summary>Builds and holds a dataset's read. A read past BigQuery's part of the budget (its names floor, and its details floor,
     /// the higher one for a <paramref name="discovered"/> project, each a step lower for a dataset that already holds details)
     /// never swaps a dataset that holds details for one without them. In pass 1, where what does not fit is a name, the dataset
-    /// is left as it was read before (TOO_LARGE). In pass 2 (<paramref name="details"/>) objects go back to what the dataset
+    /// is left as it was read before (TOO_LARGE). In pass 2 (<paramref name="details"/>, the objects pass 2 read) objects go back to what the dataset
     /// held of them, in this order until the read fits: the new ones (to their names); those whose details grew; the one a
     /// read ran out of room at (a text the pool did not hold), a few times; then all. What was left out is reported as
     /// details missing (TOO_LARGE with Details). A dataset that holds no details is tried without columns
     /// (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
     private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
-        CancellationToken token, bool details = false)
+        CancellationToken token, IReadOnlyList<int>? details = null)
     {
         var old = state.Index.Get(project + "\u0001" + dataset);
         var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, Limits.BigQueryDetailsFloor(discovered, old is { Detailed: true }));
@@ -1417,7 +1417,7 @@ internal sealed partial class ObjectSearchService
         {
             // In pass 1 what does not fit is the names of what is new: the dataset stays as it was until there is room, rather
             // than lose its columns to list a new object.
-            if (!details)
+            if (details is null)
                 return new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project);
             // What pass 1's read of this listing holds of each object, and what of that is still the object's own: details
             // carried from an object created or changed since are, only when what pass 2 read has the same shape (and is
@@ -1470,7 +1470,8 @@ internal sealed partial class ObjectSearchService
             }
             // Not even what was held (it always fits its share, short of a fault): pass 1's read stays, its details missing.
             if (built is null) return DetailsLeftOut(project, dataset, -1);
-            detailsLeftOut = Enumerable.Range(0, attempt.Length).Count(at => !ReferenceEquals(attempt[at].Detail, entries[at].Detail));
+            // Only what pass 2 read counts: an object it did not read went back to an equal copy of what was held.
+            detailsLeftOut = details.Count(at => !ReferenceEquals(attempt[at].Detail, entries[at].Detail));
         }
         if (built is null)
         {
