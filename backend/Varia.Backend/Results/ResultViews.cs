@@ -1000,8 +1000,9 @@ internal static partial class ViewSorter
 
     /// <summary>Reads the date and time types' display text as the backend writes it, without the general parser (which
     /// is several times slower and allocates for every cell): <c>yyyy-MM-dd</c>, <c>HH:mm:ss</c> with up to seven
-    /// fraction digits, both with a space between, and a <c>+hh:mm</c> or <c>-hh:mm</c> offset after a space. False for
-    /// anything else, which the general parser then reads. <paramref name="ticks"/> is the date and time as written.</summary>
+    /// fraction digits, both with a space or <c>T</c> between, and a <c>+hh:mm</c>, <c>-hh:mm</c>, or <c>UTC</c> offset
+    /// after a space. False for anything else, which the general parser then reads. <paramref name="ticks"/> is the date
+    /// and time as written.</summary>
     internal static bool TryInstant(ReadOnlySpan<byte> text, out long ticks, out long offset, out bool dated, out bool zoned)
     {
         ticks = 0;
@@ -1027,7 +1028,7 @@ internal static partial class ViewSorter
             dated = true;
             at = 10;
             if (at == text.Length) return true;
-            if (text[at++] != (byte)' ') return false;
+            if (text[at++] is not ((byte)' ' or (byte)'T')) return false;
         }
         if (text.Length - at < 8 || text[at + 2] != (byte)':' || text[at + 5] != (byte)':') return false;
         if (!Number(text.Slice(at, 2), out var hour) || !Number(text.Slice(at + 3, 2), out var minute) || !Number(text.Slice(at + 6, 2), out var second)) return false;
@@ -1526,19 +1527,18 @@ internal static partial class ViewSorter
         public override ulong Code(int row) => (ulong)values[row];
     }
 
-    /// <summary>A date or time by its ticks, read from its fixed-width text (<see cref="TryInstant"/>): the order its bytes
-    /// give, in 8 bytes that are the whole value. <see cref="Declined"/> once a cell is written another way, or is not as
-    /// long as the first: its bytes order it then.</summary>
+    /// <summary>A date or time by its ticks, read from its text (<see cref="TryInstant"/>): 8 bytes that are the whole
+    /// value, ordering cross-dialect widths and <c>' '</c>/<c>'T'</c> separators chronologically. <see cref="Declined"/>
+    /// once a cell is written another way: its bytes order it then.</summary>
     private sealed class InstantKey(int rows, bool timeOnly) : Key(rows)
     {
         private readonly long[] values = new long[rows];
-        private int width, declined;
+        private int declined;
         public bool Declined => declined != 0;
         public override string Layout => "ticks";
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            var first = Interlocked.CompareExchange(ref width, cell.Length, 0);
-            if ((first != 0 && first != cell.Length) || !TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
+            if (!TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
             {
                 Volatile.Write(ref declined, 1);
                 return;
