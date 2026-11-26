@@ -85,7 +85,8 @@ internal static class IndexFile
         try
         {
             token.ThrowIfCancellationRequested();
-            // Everything that could refuse the unit is checked before a byte is written.
+            // Everything that could refuse the unit is checked before a byte is written, but the file's size, which only the
+            // writing finds (a caller's stream is then left part-written; a path's target is untouched).
             var plan = IndexFileUnit.Prepare(unit, options.Extra.Length);
             var header = new IndexFileHeader(IndexFileContainer.Version, options.Protection.IsEncrypted, unit.Kind, unit.Provider, unit.ReadAt, !unit.DefinitionsLeftOut,
                 !unit.ChildrenLeftOut, unit.Table.Count, plan.Charge, options.Identity.ToArray(), options.Sync.ToArray());

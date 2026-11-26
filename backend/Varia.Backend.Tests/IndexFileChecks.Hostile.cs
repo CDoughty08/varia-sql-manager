@@ -53,14 +53,19 @@ internal static partial class IndexFileChecks
     }
 
     /// <summary>A file of <paramref name="header"/> around <paramref name="payload"/>, sealed as a writer seals one: what a
-    /// writer with a fault could leave under the key, or anyone in clear text.</summary>
-    internal static byte[] Forge(IndexFileHeader header, byte[] payload, IndexFileProtection protection)
+    /// writer with a fault could leave under the key, or anyone in clear text.
+    /// Its content goes in stored blocks, as the writer puts frames, unless <paramref name="packed"/>.</summary>
+    /// With <paramref name="packedBytes"/>, the first that many are compressed where that is smaller, as the writer packs
+    /// what comes before the long definitions.
+    internal static byte[] Forge(IndexFileHeader header, byte[] payload, IndexFileProtection protection, bool packed = false, int packedBytes = 0)
     {
         using var stream = new MemoryStream();
         var (seal, _) = IndexFileContainer.WriteHeader(stream, header, protection.Key);
         using var sealing = seal;
         var writer = new IndexFileContainer.PayloadWriter(new IndexFileContainer.ChunkWriter(stream, seal, 0, default));
-        writer.Bytes(payload);
+        writer.Bytes(payload.AsSpan(0, packedBytes));
+        writer.AsIs(!packed);
+        writer.Bytes(payload.AsSpan(packedBytes));
         writer.Finish();
         return stream.ToArray();
     }
@@ -81,6 +86,8 @@ internal static partial class IndexFileChecks
         public int? OwnStrings, Strings, OwnLong, TextCount;
         /// <summary>Where <see cref="Write"/> put the text counts and the entry count.</summary>
         public int TextCountsAt, EntryCountAt;
+        /// <summary>Where <see cref="Write"/> put the first long definition: the writer's bytes from there on are stored as they are.</summary>
+        public int LongAt;
         public ObjectEntry[] Entries = [];
         public List<(int At, long Value)> Dates = [];
         public ObjectDetails.Parts? Details;
@@ -296,6 +303,8 @@ internal static partial class IndexFileChecks
                     writer.Write(Tags[id]);
                     Text(value);
                 }
+            writer.Flush();
+            LongAt = (int)stream.Position;
             for (var id = 0; id < Texts.Count; id++)
                 if (Texts[id] is PackedText frame)
                 {
@@ -486,6 +495,17 @@ internal static partial class IndexFileChecks
                     + (plain.Value is null ? "" : Difference(Dump(unit), Dump(plain.Value))));
                 if (plain.Value is not null) world.Connection.Abandon(plain.Value);
 
+                // The definition counts a file states are checked against all its entries; a load without children keeps
+                // fewer, and holds the counts to what those could account for, so a unit it keeps little of never reports
+                // millions of definitions (and sums of many such units never overflow).
+                var inflated = Raw.Of(unit);
+                inflated.Modules = inflated.Cut = inflated.LeftOut = 2 * inflated.Entries.Length + 4096;
+                var full = Try(inflated);
+                var bareInflated = Try(inflated, children: false);
+                check(full.Value is { } fullBack && fullBack.Modules == inflated.Modules && bareInflated.Value is { } bareBack && bareBack.Table.Count < inflated.Entries.Length
+                    && bareBack.Modules <= 2 * bareBack.Table.Count + 4096 && bareBack.Cut <= 2 * bareBack.Table.Count + 4096 && bareBack.LeftOut <= bareBack.Cut && world.Empty,
+                    $"a {kind} that states as many definitions as its entries allow keeps them with its children, and without them only as many as the entries it keeps allow ({mode}): {full.Problem}, {bareInflated.Problem}");
+
                 // details: the rule is the details' own, or a detail child's, which a load without children reads past and so
                 // does not hold: it then loads the unit, soundly, without them.
                 void Refused(string what, Action<Raw> change, IndexFileProblem expected = IndexFileProblem.Corrupt, Func<Raw, IndexFileHeader>? with = null, bool retag = true, bool details = false)
@@ -602,6 +622,13 @@ internal static partial class IndexFileChecks
                         Refused("a key with a negative column count", raw => raw.Details!.KeyCount[0] = -1, details: true);
                         Refused("a key with more columns than the list", raw => raw.Details!.KeyCount[0] = short.MaxValue, details: true);
                         Refused("a key with more columns than a key has", raw => { raw.Details = raw.Details! with { KeyColumn = new short[IndexFileLimits.KeyColumnsPerKey + 8], KeyOther = new short[IndexFileLimits.KeyColumnsPerKey + 8], KeyColumnFlags = new byte[IndexFileLimits.KeyColumnsPerKey + 8] }; (raw.Details.KeyFrom[0], raw.Details.KeyCount[0]) = (0, IndexFileLimits.KeyColumnsPerKey + 1); }, details: true);
+                        if (table.Details.KeyCount > 2)
+                            Refused("keys that all name one range of columns", raw =>
+                            {
+                                var parts = raw.Details!;
+                                var columns = (short)Math.Min(parts.KeyColumn.Length, IndexFileLimits.KeyColumnsPerKey);
+                                for (var key = 0; key < parts.KeyAt.Length; key++) (parts.KeyFrom[key], parts.KeyCount[key]) = (0, columns);
+                            }, details: true);
                         Refused("a foreign key to no entry", raw => raw.Details!.KeyReferenced[0] = raw.Entries.Length, details: true);
                         Refused("a foreign key below none", raw => raw.Details!.KeyReferenced[0] = -2, details: true);
                         Refused("a foreign key that is no child", raw => { var key = raw.Details!.KeyAt[0]; raw.Details.KeyReferenced[0] = top; raw.Entries[key].Flags &= unchecked((byte)~ObjectTable.ChildFlag); raw.Entries[key].Owner = -1; }, details: true);
@@ -650,7 +677,7 @@ internal static partial class IndexFileChecks
                     for (var extra = 0; extra < 1_000_000; extra++) raw.Texts.Add("");
                     raw.Retag();
                     raw.Sort();
-                    var file = Forge(header with { MemoryBytes = raw.Whole }, raw.Write(), protection);
+                    var file = Forge(header with { MemoryBytes = raw.Whole }, raw.Write(), protection, packedBytes: raw.LongAt);
                     var small = new World(new ObjectIndexLimits { DefinitionChars = 2000, MemoryBytes = 1 << 20, NamesReserveBytes = 0 });
                     var before = GC.GetAllocatedBytesForCurrentThread();
                     var refused = Load(small, file, kind, protection);
@@ -820,9 +847,17 @@ internal static partial class IndexFileChecks
             var zeros = new byte[2 << 20];
             var bomb = new byte[4096];
             ZstandardEncoder.TryCompress(zeros, bomb, out var bombSize, 3, 0);
-            check(Problem(Blocks(body => Block(body, 0, (uint)content.Length, content))) == IndexFileProblem.None && Problem(Blocks(body => Block(body, 1, (uint)content.Length, packed))) == IndexFileProblem.None
-                && Problem(Blocks(body => { Block(body, 0, 100, content[..100]); Block(body, 1, (uint)(content.Length - 100), Zstd(content[100..])); })) == IndexFileProblem.None,
-                "content loads from stored blocks, compressed blocks, or both");
+            // The long definitions' frames must come from stored blocks; what comes before them may be packed or not.
+            var rawSmall = Raw.Of(small);
+            var written = rawSmall.Write();
+            var longAt = rawSmall.LongAt;
+            check(rawSmall.Texts.Any(text => text is PackedText) && Problem(Blocks(body => Block(body, 0, (uint)content.Length, content))) == IndexFileProblem.None
+                && Problem(Blocks(body => { Block(body, 1, (uint)longAt, Zstd(written[..longAt])); Block(body, 0, (uint)(written.Length - longAt), written[longAt..]); })) == IndexFileProblem.None
+                && Problem(Blocks(body => { Block(body, 0, 100, written[..100]); Block(body, 1, (uint)(longAt - 100), Zstd(written[100..longAt])); Block(body, 0, (uint)(written.Length - longAt), written[longAt..]); })) == IndexFileProblem.None,
+                "content loads from stored blocks, compressed blocks, or both, with the long definitions stored");
+            check(Problem(Blocks(body => Block(body, 1, (uint)content.Length, packed))) == IndexFileProblem.Corrupt
+                && Problem(Blocks(body => { Block(body, 1, (uint)(longAt + 20), Zstd(written[..(longAt + 20)])); Block(body, 0, (uint)(written.Length - longAt - 20), written[(longAt + 20)..]); })) == IndexFileProblem.Corrupt,
+                "a long definition in a compressed block, or begun in one, is refused");
             check(Problem(Blocks(body => Block(body, 1, (uint)content.Length + 1, packed))) == IndexFileProblem.Corrupt && Problem(Blocks(body => Block(body, 1, (uint)content.Length - 1, packed))) == IndexFileProblem.Corrupt
                 && Problem(Blocks(body => Block(body, 2, (uint)content.Length, content))) == IndexFileProblem.Corrupt && Problem(Blocks(body => Block(body, 0, 0, []))) == IndexFileProblem.Corrupt
                 && Problem(Blocks(body => Block(body, 1, (uint)content.Length, packed, stored: 0))) == IndexFileProblem.Corrupt
@@ -851,8 +886,9 @@ internal static partial class IndexFileChecks
                 "blocks that pack better than the ratio without their padding are refused");
             check(world.Budget.Used == before, "and leave nothing charged");
 
-            // A long definition's frame is under the same rule: one that packs better than 64 to one is padded to that, so
-            // unpacking and checking definitions never costs more than 64 times the file.
+            // A long definition's frame is under the same rule: one that packs better than 64 to one is padded to that, and
+            // frames and their padding come only from stored blocks (padding that packs would let a file of a few kilobytes
+            // unpack thousands of times its size), so unpacking and checking definitions never costs more than 64 times the file.
             var flatRows = new[] { new IndexedObject("procedure", "storedProcedures", "dbo", "usp_flat", Definition: new string('a', 200_000)) };
             var flat1 = new DatabaseIndex("Flat", flatRows, IndexMemory.RecordBytes + 3 * IndexMemory.SlotBytes, 1, 0);
             var flatFile = Save(flat1, IndexUnitKind.Database, Clear);
@@ -863,8 +899,9 @@ internal static partial class IndexFileChecks
             check(frame.FrameLength < 200 && flatFile.Length > 200_000 / IndexFileContainer.MaxRatio && flatFile.Length < 200_000 / IndexFileContainer.MaxRatio + 1024
                 && flatLoaded.Value is { } flatBack && Dump(flatBack.Table) == Dump(flat1.Table)
                 && Problem(Forge(Header(flatFile, Clear), Raw.Of(flat1).Write(), Clear)) == IndexFileProblem.None
-                && Problem(Forge(Header(flatFile, Clear), unpaddedRaw.Write(), Clear)) == IndexFileProblem.Corrupt,
-                $"a definition of one repeated letter ({frame.FrameLength} bytes packed) takes a sixty-fourth of its length in the file ({flatFile.Length} bytes), and one without that padding is refused");
+                && Problem(Forge(Header(flatFile, Clear), unpaddedRaw.Write(), Clear)) == IndexFileProblem.Corrupt
+                && Problem(Forge(Header(flatFile, Clear), Raw.Of(flat1).Write(), Clear, packed: true)) == IndexFileProblem.Corrupt,
+                $"a definition of one repeated letter ({frame.FrameLength} bytes packed) takes a sixty-fourth of its length in the file ({flatFile.Length} bytes); one without that padding, or with its frame in a compressed block, is refused");
             if (flatLoaded.Value is not null) world.Connection.Abandon(flatLoaded.Value);
             world.Connection.Abandon(small);
         }

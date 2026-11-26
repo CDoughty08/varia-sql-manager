@@ -564,6 +564,16 @@ internal static class IndexFileContainer
         private byte[] block = [];
         private byte[] packed = [];
         private int at, length;
+        private bool compressed, plain;
+
+        /// <summary>Whether what follows must come from stored blocks: the bytes the unit puts in as they are (packed
+        /// definitions' frames), which are unpacked again. A frame inside a compressed block would let a file's padding pack
+        /// too, and so its frames cost far more than the ratio's share of the file to unpack.</summary>
+        public void Plain(bool on)
+        {
+            if (on && compressed && at < length) throw Refused(IndexFileProblem.Corrupt);
+            plain = on;
+        }
 
         /// <summary>Refuses a size the file cannot hold: the content still to come is at most what this block has left and
         /// <see cref="MaxRatio"/> times the file's unread bytes. An early refusal of a count no file of this size could back,
@@ -615,7 +625,8 @@ internal static class IndexFileContainer
             Span<byte> head = stackalloc byte[5];
             Fill(head);
             var raw = BinaryPrimitives.ReadUInt32LittleEndian(head[1..]);
-            if (head[0] > 1 || raw == 0 || raw > BlockBytes) throw Refused(IndexFileProblem.Corrupt);
+            if (head[0] > 1 || raw == 0 || raw > BlockBytes || plain && head[0] == 1) throw Refused(IndexFileProblem.Corrupt);
+            compressed = head[0] == 1;
             Grow(ref block, (int)raw, BlockBytes);
             if (head[0] == 0) Fill(block.AsSpan(0, (int)raw));
             else

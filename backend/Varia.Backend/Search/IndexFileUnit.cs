@@ -61,14 +61,15 @@ internal sealed record LoadedUnit(string Name, string? Dataset, ObjectTable Tabl
 /// facts:    (BigQuery) i32 n, each i32 entry | i64 created | u16 flags | its optional values; then descriptions and shard groups
 /// strings:  each, in id order: u8 use | i32 chars | UTF-16
 /// long:     each long definition, in id order: u8 use | i32 chars | i32 bytes | i32 frame bytes | the frame | padding up to
-///           a sixty-fourth of its bytes (stored blocks)
+///           a sixty-fourth of its bytes; all in stored blocks (a load refuses a compressed block here)
 /// extra:    i32 n | bytes
 /// </code>
 /// A file numbers a table's texts afresh, by what a load does with them: the strings a read without children keeps (names,
 /// and short definitions of what it keeps), the other strings, the long definitions it keeps, the others. So a text's form
 /// and whether a load without children keeps it follow from its id, and nothing is held per text before the text itself is
 /// read. The texts come last, so a load has charged everything that must fit (entries, details, facts) before the first
-/// name, and every name before the first long definition, which may be left out.
+/// name, and every name before the first long definition, which may be left out. (A short definition is a string, among the
+/// names; it is charged as the definition it is.)
 /// <para>What a load holds it charges first. Entries: the file states how many a read without children leaves out
 /// (<see cref="DetailChild"/>) and their flags and shapes come first, so the entries kept are charged before there is
 /// anywhere to put them, and a load without children never holds the others (a bit each says which they were). Details: by
@@ -136,11 +137,13 @@ internal static class IndexFileUnit
         public int Form(int id) => (uint)id >= (uint)texts.Count ? ITextForms.None : texts[id] switch { null => ITextForms.None, string => ITextForms.String, _ => ITextForms.Long };
     }
 
+    private static int CountsFor(int entries) => (int)Math.Min(int.MaxValue, 2L * entries + 4096);
+
     /// <summary>The counts a unit states of its definitions are within what its entries could account for (a read counts a
     /// definition for a row it may then leave out, so not exactly), so that sums of them never overflow.</summary>
     private static void CheckCounts(int modules, int cut, int leftOut, int entries)
     {
-        var most = 2L * entries + 4096;
+        var most = CountsFor(entries);
         if (modules < 0 || cut < 0 || leftOut < 0 || leftOut > cut || modules > most || cut > most) throw Corrupt();
     }
 
@@ -175,7 +178,7 @@ internal static class IndexFileUnit
 
     /// <summary>The details index only what the table holds, in the order <see cref="ObjectDetails"/> searches: a type's name
     /// and schema are strings, a typed entry's type exists, each entry is typed once and has one list of key columns, in entry
-    /// order, a key's columns lie within the column list, and a key that names a table is a child (its own table is its parent).</summary>
+    /// order, a key's columns lie within the column list and all keys together name it at most twice over, and a key that names a table is a child (its own table is its parent).</summary>
     public static void CheckDetails<TForms>(ObjectDetails.Parts parts, ReadOnlySpan<ObjectEntry> entries, TForms forms) where TForms : struct, ITextForms
     {
         var types = parts.TypeName.Length;
@@ -195,6 +198,7 @@ internal static class IndexFileUnit
             last = at;
         }
         last = -1;
+        long named = 0;
         for (var item = 0; item < parts.KeyAt.Length; item++)
         {
             var at = parts.KeyAt[item];
@@ -202,6 +206,9 @@ internal static class IndexFileUnit
             last = at;
             var (from, count, referenced) = (parts.KeyFrom[item], parts.KeyCount[item], parts.KeyReferenced[item]);
             if (from < 0 || count < 0 || count > IndexFileLimits.KeyColumnsPerKey || (long)from + count > parts.KeyColumn.Length) throw Corrupt();
+            // A read gives a key's columns to one other key at most (a primary or unique key's to its index), so the keys
+            // name each column at most twice: many keys over one range would make a lookup build far more than was charged.
+            if ((named += count) > 2L * parts.KeyColumn.Length) throw Corrupt();
             if (referenced == -1) continue;
             if ((uint)referenced >= (uint)entries.Length || (entries[at].Flags & ObjectTable.ChildFlag) == 0) throw Corrupt();
         }
@@ -559,8 +566,9 @@ internal static class IndexFileUnit
     /// <summary>What a load takes of the index's memory, and how it holds a text.</summary>
     internal abstract class Account
     {
-        /// <summary>Charges the text's place in the table, then answers the copy of <paramref name="value"/> the load holds: null
-        /// when a text that may be left out does not fit (its place stays, empty).</summary>
+        /// <summary>Charges the text's place in the table and answers the copy of <paramref name="value"/> the load holds (a
+        /// text that may be left out is taken first, with the room the place needs kept free): null when it does not fit (its
+        /// place stays, empty).</summary>
         public abstract object? Text(object value, TextUse use);
         public abstract void Records(long own, long detailChildren);
         public abstract void Details(long bytes);
@@ -1042,6 +1050,7 @@ internal static class IndexFileUnit
             else reader.Skip(2L * chars);
         }
         var scratch = new PackedText.Scratch();
+        reader.Plain(true);
         for (var id = strings; id < textCount; id++)
         {
             token.ThrowIfCancellationRequested();
@@ -1061,6 +1070,7 @@ internal static class IndexFileUnit
             reader.Skip(padding);
             Hold(PackedText.FromFrame(frame, length, byteLength, scratch) ?? throw Corrupt(), use);
         }
+        reader.Plain(false);
 
         // The uses the file stated decided how each text was charged, so they must be the entries' own.
         var uses = Uses(entries, detailShape, parts, held.Count);
@@ -1086,6 +1096,9 @@ internal static class IndexFileUnit
             if (objects is not null && objects.TryGetValue(at, out var fact)) objects[at] = fact with { Whole = false };
         }
         (modules, cut) = (Math.Max(0, modules), Math.Max(0, cut));
+        // Without children the counts were checked against the entries the file has, not the ones the load keeps: hold them
+        // to those, so a unit that keeps few entries never reports more than they could account for.
+        if (!children) (modules, cut) = (Math.Min(modules, CountsFor(entries.Length)), Math.Min(cut, CountsFor(entries.Length)));
         leftOut = Math.Min(leftOut, cut);
 
         var extraBytes = reader.Count(IndexFileLimits.ExtraBytes);
