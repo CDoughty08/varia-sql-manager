@@ -195,6 +195,31 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Reload and keep my changes matches steps by name: steps you did not touch take the job's version now (another session's renames,
   deletes, inserts and Start step stand), your edits land on the step you edited at its current number, and the compare's Steps row
   says what each side added, deleted, edited or reordered.
+  **Flow** (the switch at the top left of Steps, List | Flow; every document opens on List; `JobStepsFlow.tsx`, the rules in
+  `src/shared/agent/flow.ts`) draws the same draft as a graph with Pixi, as the execution plan viewer does (`FlowCanvas.ts`, sharing its
+  camera, zoom and label pool), on a dot grid that pans with the graph (theme key `charts.canvasDots`). Steps stay in step order, top to bottom; each has its number, name, type and icon, and its key field
+  (database, package, run as, retries or command). Its ✓ and ✗ ports lead to the next step (straight), to a Quit pill, to an
+  **End · job fails** node (the last step's Go to the next step; one under each port when both actions do), to a **Step N · not read** pill
+  (in a job with more steps than Varia reads, a go-to past them or the last read step's next step), or along a lane beside the column (success on the left, failure on
+  the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow (its own place on the step's side, apart from a jump back to it), a loop is tagged
+  ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs (not said in a job with more steps than Varia reads, where
+  Reached from adds "perhaps steps Varia does not read", and a Start past the steps read is named under Flow checks with no step read, in List or Flow, tagged Start step), and an action changed since the job was read is drawn in the
+  accent and tagged "changed". Beside the graph: the selected step's summary (with **Reached from**), the **Flow checks** and the key.
+  The checks are warnings that never block Save, and List tags the same steps: a step that never runs (Make Start step when its paths
+  lead to the current Start step), a loop (Agent does not count passes), a loop with no way out, and the last step going to the next
+  step (Quit reporting success). Click selects; double-click, Enter or Edit step docks List's step editor beside the graph (Close
+  editor goes back); right-click (Control+click on macOS) or Shift+F10 opens the step's menu, whose items all act on that step (Edit step, Start job at this step, Make Start step, On success ›
+  and On failure › with SSMS's four actions and every other step, Add step after ›, Move up, Move down, Delete step (Delete on the graph, also ⌘⌫ on macOS); on macOS, whose
+  native menus show no items built when they open, On success…, On failure… and Add step after… pick from the same lists). Dragging a
+  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list; released off the canvas, or without moving, it does nothing. Steps are reordered in List or with Move
+  up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
+  visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
+  readers have the whole graph; arrows move the selection, and the selection and a keyboard menu's step come into view by moving the graph, across and up or down. A pointer menu is
+  the menu of the step under the pointer; empty canvas, an edge or a pill has none. Fit goes below 25 % when a long job needs it, and takes in the chips beside the lanes. Scrolled out of view (to History, say), the
+  graph releases its canvas and GPU context, and a new one opens where it was. The step menu's edits, Enter and the drop's list need no
+  backend, so they stay with the draft when the backend is lost; Start job at this step does not. A pane too
+  narrow for the graph beside its panel (a split editor) puts the panel under the graph. History's and the copy review's Edit step links open
+  Flow's docked editor when Flow shows. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
@@ -630,7 +655,9 @@ checks nothing committed, renames it to a hostile name and back, runs the script
 deletes one, reading `sysjobsteps` back after each save. The `agent-job` smoke suite opens jobs from
 Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
 backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, reorders, parses,
-deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job.
+deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job. The `agent-flow` smoke suite
+switches Steps to Flow, fixes the End warning, sets an action from the step menu (Shift+F10, On failure ›) and by dragging a port,
+docks the editor with Enter, checks List shows the same draft and saves it.
 
 `AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
 a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror

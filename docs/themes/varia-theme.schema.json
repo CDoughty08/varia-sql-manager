@@ -1841,6 +1841,11 @@
           "description": "(VS Code) Chart grid lines and baseline. Default $border (Dark #262a31, Light #e3e6eb).",
           "markdownDescription": "(VS Code) Chart grid lines and baseline. Default `$border` (Dark `#262a31`, Light `#e3e6eb`)."
         },
+        "charts.canvasDots": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dot grid behind a graph you pan and zoom, such as the SQL Server Agent steps Flow view. Default $borderStrong (Dark #2e323a, Light #d4d8df).",
+          "markdownDescription": "(Varia) Dot grid behind a graph you pan and zoom, such as the SQL Server Agent steps Flow view. Default `$borderStrong` (Dark `#2e323a`, Light `#d4d8df`)."
+        },
         "charts.blue": {
           "$ref": "#/definitions/value",
           "description": "(VS Code) First series of a chart; series take blue, orange, green, yellow, then purple. Default $chart1 (Dark #3987e5, Light #2a78d6).",

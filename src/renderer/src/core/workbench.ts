@@ -127,6 +127,7 @@ import { JobActivityService } from '../agent/JobActivityService'
 import { LogViewerService } from '../agent/LogViewerService'
 import { AgentJobStatusService } from '../agent/AgentJobStatusService'
 import { JobDocumentService } from '../agent/JobDocumentService'
+import { stepMenuProviders } from '../agent/step-menus'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
 import { AgentOverviewService } from '../agent/AgentOverviewService'
@@ -749,7 +750,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
-  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
+  const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, dynamic: stepMenuProviders(jobDocuments), settings: () => settings.getSnapshot().values, focus, modalOpen,
     findWidgetFocused: () => !!windows.activeElement()?.closest('.monaco-editor .find-widget'),
     menubarRect: id => document.getElementById('menubar-' + id)?.getBoundingClientRect(), targets: menuTargets, editorCaret: () => editorCaret(documents, monaco),
     modalContains: element => openModal()?.contains(element) ?? false, style: api.menuStyle, api })

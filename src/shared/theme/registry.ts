@@ -333,6 +333,7 @@ const groups = {
   'Charts': {
     'charts.foreground': ['V', '$textTertiary', 'Chart labels, legends, and the crosshair.', 'css script'],
     'charts.lines': ['V', '$border', 'Chart grid lines and baseline.', 'script'],
+    'charts.canvasDots': ['X', '$borderStrong', 'Dot grid behind a graph you pan and zoom, such as the SQL Server Agent steps Flow view.', 'script'],
     'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'css script'],
     'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'css script'],
     'charts.green': ['V', '$chart3', 'Third series of a chart; also the block cache of windowed BigQuery results in the Memory panel.', 'css script'],

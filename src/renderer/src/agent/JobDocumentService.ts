@@ -35,7 +35,8 @@ import { JobHistoryService } from './JobHistoryService'
 import { CustomDocumentTargets, type CustomDocumentTargetOptions } from '../services/custom-document-targets'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
-import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, newStepDraft, newStepKey, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepDeletion } from '../../../shared/agent/steps.ts'
+import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, newStepDraft, newStepKey, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepAction, type StepDeletion } from '../../../shared/agent/steps.ts'
+import type { FlowFix } from '../../../shared/agent/flow.ts'
 import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
 import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
@@ -43,6 +44,7 @@ import { decodeKeptState, encodeKeptState, keptAgentText, sameShape } from '../.
 import type { KeptCustomDocument } from '../services/documents'
 import type { QueryDocument } from '../documents'
 import { liveConnectionOn } from './kept-documents'
+import { disposeStepModels } from './step-models'
 import {
   applyReplace, copiedScheduleKey, createFromCompare, createFromDraft, createFromLimits, createFromProblems, createFromText, jobCopySource, replaceMatches, withCopyScheduleChoice,
   type CopyCompareRow, type CopyScheduleChoice, type JobCopySource, type ReplaceMatch
@@ -100,6 +102,10 @@ export interface JobDocumentState {
   readonly rebasing?: true
   /** Steps (AG-6b): the selected step's key. */
   readonly step?: string
+  /** Steps shows the Flow view rather than List; every document opens on List and the choice is not remembered. */
+  readonly stepsView?: 'flow'
+  /** The Flow view docks the selected step's editor beside the graph (double-click, Enter or Edit step), in place of its summary. */
+  readonly stepEditor?: true
   /** The last delete, for its banner and Undo until Save or Reload. */
   readonly deletion?: StepDeletion
   /** The selected step's Parse: running, or its errors (none: it parsed). */
@@ -430,13 +436,67 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
   /** Add step: a new step of `subsystem` after the last, selected; T-SQL in master. Its key is never the pending delete's, so Undo still
    *  finds the deleted step missing and puts it back. */
-  addStepOf(id: string, subsystem = 'TSQL'): void {
+  addStepOf(id: string, subsystem = 'TSQL', index?: number): void {
     const state = this.get(id)
     if (!state?.draft || !this.canEditSteps(id) || state.draft.steps.steps.length >= agentLimits.stepsPerJob) return
     const steps = state.draft.steps.steps
     const step = { ...newStepDraft(steps, subsystem), key: newStepKey(state.deletion ? [...steps, state.deletion.deleted] : steps) }
-    this.updateDraft(id, { steps: addStep(state.draft.steps, step) })
+    this.updateDraft(id, { steps: addStep(state.draft.steps, step, index) })
     this.patch(id, { step: step.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
+  }
+  /** Add step after › (the Flow view's step menu): a new step of `subsystem` just below step `key`, selected. */
+  addStepAfter(id: string, key: string, subsystem: string): void {
+    const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
+    if (at >= 0) this.addStepOf(id, subsystem, at + 1)
+  }
+  /** Add step can add one more: the job is editable and below the steps limit. */
+  canAddStep(id: string): boolean { return this.canEditSteps(id) && (this.get(id)?.draft?.steps.steps.length ?? 0) < agentLimits.stepsPerJob }
+  /** The step types Add step offers: the server's subsystems, else the four SSMS users reach for. */
+  stepTypes(id: string): readonly string[] {
+    const subsystems = this.get(id)?.model?.subsystems
+    return subsystems?.length ? subsystems : ['TSQL', 'PowerShell', 'CmdExec', 'SSIS']
+  }
+  /** On success or On failure of step `key`: one of SSMS's four actions, and for Go to step its target's key. */
+  setStepAction(id: string, key: string, which: 'success' | 'fail', action: StepAction, target?: string): void {
+    const steps = this.get(id)?.draft?.steps.steps ?? []
+    if (action === 4 && (!target || target === key || !steps.some(step => step.key === target))) return
+    const goTo = action === 4 ? target : undefined
+    this.updateStep(id, key, which === 'success' ? { onSuccess: action, onSuccessTarget: goTo } : { onFail: action, onFailTarget: goTo })
+  }
+  /** A flow check's fix: Make Start step, or a Quit action on the last step. */
+  applyFlowFix(id: string, key: string, fix: FlowFix): void {
+    if (fix.kind === 'makeStart') this.setStartStep(id, key)
+    else this.setStepAction(id, key, fix.which, fix.success ? 1 : 2)
+  }
+  /** List or Flow; leaving Flow closes its docked editor, so Flow opens on the graph's summary next time. */
+  setStepsView(id: string, view: 'list' | 'flow'): void {
+    const state = this.get(id)
+    if (!state || (view === 'flow') === (state.stepsView === 'flow')) return
+    this.patch(id, view === 'flow' ? { stepsView: 'flow' } : { stepsView: undefined, stepEditor: undefined })
+  }
+  /** Edit step: the Flow view docks step `key`'s editor beside the graph (List always shows it). */
+  openStepEditor(id: string, key: string): void {
+    const state = this.get(id)
+    if (!state?.draft?.steps.steps.some(step => step.key === key)) return
+    this.selectStep(id, key)
+    if (!state.stepEditor) this.patch(id, { stepEditor: true })
+  }
+  /** An Edit step link from elsewhere in the document (History's failed step, the copy review): the step with its editor, which List always
+   *  shows and Flow docks beside the graph. */
+  editStep(id: string, key: string): void {
+    if (this.get(id)?.stepsView === 'flow') this.openStepEditor(id, key)
+    else this.selectStep(id, key)
+  }
+  closeStepEditor(id: string): void { if (this.get(id)?.stepEditor) this.patch(id, { stepEditor: undefined }) }
+  /** Start job at this step: once, from a saved step (sp_start_job takes its saved name), while the job is not running. */
+  canStartAtStep(id: string, key: string): boolean { return this.canStart(id) && this.savedStepName(id, key) !== undefined }
+  async startAtStep(id: string, key: string): Promise<void> {
+    const name = this.savedStepName(id, key)
+    if (name !== undefined && this.canStart(id)) await this.start(id, name)
+  }
+  private savedStepName(id: string, key: string): string | undefined {
+    const state = this.get(id), step = state?.draft?.steps.steps.find(item => item.key === key)
+    return step?.from === undefined ? undefined : state?.model?.steps.find(saved => saved.id === step.from)?.name
   }
   /** Moves a step to `index` (drag, Move up and Move down); go-to targets follow, being keys. */
   moveStepTo(id: string, key: string, index: number): void {
@@ -453,15 +513,10 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const at = this.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? -1
     if (at >= 0) this.moveStepTo(id, key, at + delta)
   }
-  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down): the selected step can move one place that way. */
-  canMoveSelectedStep(id: string, delta: -1 | 1): boolean {
-    const steps = this.get(id)?.draft?.steps.steps ?? [], selected = this.selectedStep(id)
-    const at = selected ? steps.indexOf(selected) : -1
+  /** Move Step Up and Move Step Down (AG-10, Alt+Up and Alt+Down, and a Flow step's menu): the step can move one place that way. */
+  canMoveStep(id: string, key: string, delta: -1 | 1): boolean {
+    const steps = this.get(id)?.draft?.steps.steps ?? [], at = steps.findIndex(step => step.key === key)
     return this.canEditSteps(id) && at >= 0 && at + delta >= 0 && at + delta < steps.length
-  }
-  moveSelectedStep(id: string, delta: -1 | 1): void {
-    const selected = this.selectedStep(id)
-    if (selected && this.canMoveSelectedStep(id, delta)) this.moveStepBy(id, selected.key, delta)
   }
   /** Delete acts on the draft at once: steps that went to it quit reporting failure, the banner says which, and Undo puts it back. */
   deleteStepOf(id: string, key: string): void {
@@ -472,7 +527,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const steps = result.draft.steps
     const next = steps[Math.min(result.deletion.position, steps.length - 1)]
     this.updateDraft(id, { steps: result.draft })
-    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined } })
+    // The last step gone, the docked editor has nothing to edit: it closes, rather than coming back on the next step added.
+    this.patch(id, { deletion: result.deletion, step: next?.key, parse: undefined, ...state.stepFile?.running ? {} : { stepFile: undefined }, ...steps.length ? {} : { stepEditor: undefined } })
   }
   undoDeleteStep(id: string): void {
     const state = this.get(id)
@@ -1004,6 +1060,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     this.previews.delete(id)
     this.clearPreviewTimer(id)
     this.history.closed(id)
+    disposeStepModels(id)
     this.contexts.delete(id)
     this.views.get(id)?.stop()
     this.views.delete(id)
@@ -1017,6 +1074,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     for (const timer of this.previewTimers.values()) this.timers.clearTimeout(timer)
     for (const view of this.views.values()) view.stop()
     this.views.clear()
+    // The step editors' models live for their document's life, outside the service: documents still open go with it.
+    for (const id of Object.keys(this.getSnapshot().documents)) disposeStepModels(id)
     this.history.dispose()
     this.requests.clear()
     this.previews.clear()

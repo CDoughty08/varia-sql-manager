@@ -44,6 +44,11 @@ export const svgIcons = {
   'agent-activity': { path: 'M2.5 2.5h11v8h-11ZM5.5 13.5h5M7.5 10.5v3M4.5 7.5h1.5l1-2 2 4 1-2h1.5', use: 'SQL Server Agent: Job Activity Monitor.' },
   'agent-operator': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 9.5h5v4h-5ZM9.5 9.5l2.5 2 2.5-2', use: 'SQL Server Agent: operators (a person who is sent mail).' },
   'agent-proxy': { path: 'M6.5 5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM1.5 13.5v-1a3 3 0 0 1 6 0v1M9.5 10.5h5M12.5 8.5l2 2-2 2', use: 'SQL Server Agent: proxies (an account a step runs as).' },
+  'step-tsql': { path: 'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9 3.5l-2 9', use: 'SQL Server Agent: a T-SQL job step in the Steps Flow view (code brackets).' },
+  'step-powershell': { path: 'M1.5 3.5h13v9h-13ZM4 6.5l2 1.5-2 1.5M7.5 10.5h3', use: 'SQL Server Agent: a PowerShell job step in the Steps Flow view (a prompt in a terminal).' },
+  'step-cmdexec': { path: 'M1.5 2.5h13v11h-13ZM1.5 5.5h13M4 8l1.5 1.5L4 11', use: 'SQL Server Agent: an operating system (CmdExec) job step in the Steps Flow view (a command window).' },
+  'step-analysis': { path: 'M2.5 13.5h11M4.5 11.5v-3M7.5 11.5v-6M10.5 11.5v-4', use: 'SQL Server Agent: an Analysis Services job step in the Steps Flow view (bars).' },
+  'step-other': { path: 'M3.5 2.5h9v11h-9ZM5.5 5.5h5M5.5 7.5h5M5.5 9.5h3', use: 'SQL Server Agent: a replication or other job step in the Steps Flow view (a page of lines).' },
   'agent-schedule': { path: 'M2.5 3.5h11v10h-11ZM2.5 6.5h11M5.5 2v3M10.5 2v3M4.5 9.5h2M7 9.5h2M9.5 9.5h2M4.5 11.5h2M7 11.5h2', use: 'SQL Server Agent: schedules (a calendar page).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>
 export type SvgIconId = keyof typeof svgIcons

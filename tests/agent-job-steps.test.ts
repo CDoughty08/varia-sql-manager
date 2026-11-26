@@ -189,7 +189,7 @@ describe('the steps draft', () => {
   })
   it('holds limits on what a save writes only when the steps are saved, and never saves a command the describe cut', () => {
     const long = 'x'.repeat(agentLimits.stepCommandChars + 1)
-    const read = [...described.slice(0, 3), step(4, 'Notify', { command: long.slice(0, agentLimits.stepCommandChars), commandTruncated: true })]
+    const read = [...described.slice(0, 3), step(4, 'Notify', { command: long.slice(0, agentLimits.stepCommandChars), commandTruncated: true, onSuccessAction: 2 })]
     const original = initialStepsDraft(read, 1)
     expect(original.steps[3]).toMatchObject({ truncated: true })
     // Untouched, the cut step only warns, so the job's other settings still save.
@@ -198,9 +198,10 @@ describe('the steps draft', () => {
     expect(agentStepProblems(edited, { sysadmin: true, original }).filter(problem => problem.severity === 'error').map(problem => [problem.key, problem.message]))
       .toEqual([['s4', stepText.truncatedSave]])
     // A step over stepCommandChars written in SSMS blocks only a save that sends the steps.
-    const big = initialStepsDraft([...described.slice(0, 3), step(4, 'Notify', { command: long })], 1)
+    const big = initialStepsDraft([...described.slice(0, 3), step(4, 'Notify', { command: long, onSuccessAction: 2 })], 1)
     expect(agentStepProblems(big, { sysadmin: true, original: big })).toEqual([])
-    expect(agentStepProblems({ ...big, startKey: 's2' }, { sysadmin: true, original: big }).map(problem => problem.field)).toEqual(['command'])
+    // Step 1 then never runs (a flow check); the cut command is the only error.
+    expect(agentStepProblems({ ...big, startKey: 's2' }, { sysadmin: true, original: big }).map(problem => problem.field)).toEqual(['command', 'flow'])
   })
   it('drops a proxy when a step becomes T-SQL, which msdb refuses (14517)', () => {
     const cmd = { ...newStepDraft([], 'CmdExec'), proxyId: 5 }
@@ -498,7 +499,7 @@ describe('the step problems of what msdb already holds', () => {
     expect(agentStepProblems(edited, { sysadmin: true, original: draft }).map(item => item.message)).toContain(stepText.retriesPast)
   })
   it('refuses a save with a success exit code past int32 or a NUL character', () => {
-    const draft = initialStepsDraft([step(1, 'One')], 1)
+    const draft = initialStepsDraft([step(1, 'One', { onSuccessAction: 1 })], 1)
     const past = { ...draft, steps: [{ ...draft.steps[0]!, cmdexecSuccessCode: 2_147_483_648 }] }
     expect(agentStepProblems(past, context(draft)).map(item => item.message)).toContain(stepText.exitCodePast)
     const nul = { ...draft, steps: [{ ...draft.steps[0]!, command: 'SELECT 1\u0000' }] }

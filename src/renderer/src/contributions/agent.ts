@@ -4,7 +4,9 @@ import type { LogViewerOpen } from '../agent/LogViewerService'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { windows } from '../core/windows'
-import { explorerNodeOf } from '../menus/targets'
+import { agentStepOf, explorerNodeOf } from '../menus/targets'
+import { stepTypeShort } from '../../../shared/agent/steps'
+import { stepActionChoices } from '../agent/step-menus'
 import { serverItems } from './query'
 
 /**
@@ -79,6 +81,29 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
   const onJob = (when: (id: string) => boolean, run: (id: string, args?: CommandArgs) => unknown) => ({
     when: (args?: CommandArgs) => { const id = jobOf(args); return !!id && when(id) },
     run: async (args?: CommandArgs) => { const id = jobOf(args); if (id && when(id)) await run(id, args) }
+  })
+  // A Steps › Flow step menu's step (right-click selected it), else the job document's selected step (Enter and Delete on the graph).
+  const stepOf = (args?: CommandArgs): { readonly id: string; readonly key: string } | undefined => {
+    const menu = agentStepOf(args)
+    if (menu) return jobDocuments.get(menu.tabId)?.draft?.steps.steps.some(step => step.key === menu.key) ? { id: menu.tabId, key: menu.key } : undefined
+    const id = jobOf(args), key = id ? jobDocuments.selectedStep(id)?.key : undefined
+    return id && key ? { id, key } : undefined
+  }
+  const onStep = (when: (id: string, key: string, args?: CommandArgs) => boolean, run: (id: string, key: string, args?: CommandArgs) => unknown) => ({
+    when: (args?: CommandArgs) => { const step = stepOf(args); return !!step && when(step.id, step.key, args) },
+    run: async (args?: CommandArgs) => { const step = stepOf(args); if (step && when(step.id, step.key, args)) await run(step.id, step.key, args) }
+  })
+  // macOS's pickers for On success…, On failure… and Add step after… (and a Flow port dropped on empty space): the submenus' lists.
+  const pickAction = (which: 'success' | 'fail') => onStep(id => jobDocuments.canEditSteps(id), (id, key, args) => {
+    const draft = jobDocuments.get(id)?.draft?.steps
+    if (!draft) return
+    const choices = stepActionChoices(draft, key, which), at = draft.steps.findIndex(step => step.key === key) + 1
+    const title = `Step ${at}: ${which === 'success' ? 'On success' : 'On failure'}`
+    quickInput.show({
+      ariaLabel: title, title, placeholder: 'Select what the step does next', noun: 'actions', sort: 'none', ...args?.anchor ? { anchor: args.anchor } : {},
+      items: choices.map(choice => ({ id: choice.id, label: choice.label, ...choice.checked ? { description: 'Current' } : {} })),
+      onDidAccept: item => { const choice = choices.find(entry => entry.id === item.id); if (choice) jobDocuments.setStepAction(id, key, which, choice.action, choice.target) }
+    })
   })
   // The Schedules document (AG-6c): Manage Schedules and New Schedule… on a server picked as New Job's is; its verbs on the Schedules
   // document whose toolbar runs them, else the active one.
@@ -251,8 +276,27 @@ export function agentContribution({ commands, jobActivity, logViewer, documents,
     })),
     commands.register('agentJob.stop', onJob(id => jobDocuments.canStop(id), id => jobDocuments.stop(id))),
     commands.register('agentJob.reload', onJob(id => jobDocuments.canReload(id), id => jobDocuments.reload(id))),
-    commands.register('agentJob.moveStepUp', onJob(id => jobDocuments.canMoveSelectedStep(id, -1), id => jobDocuments.moveSelectedStep(id, -1))),
-    commands.register('agentJob.moveStepDown', onJob(id => jobDocuments.canMoveSelectedStep(id, 1), id => jobDocuments.moveSelectedStep(id, 1)))
+    commands.register('agentJob.moveStepUp', onStep((id, key) => jobDocuments.canMoveStep(id, key, -1), (id, key) => jobDocuments.moveStepBy(id, key, -1))),
+    commands.register('agentJob.moveStepDown', onStep((id, key) => jobDocuments.canMoveStep(id, key, 1), (id, key) => jobDocuments.moveStepBy(id, key, 1))),
+    commands.register('agentJob.editStep', onStep(() => true, (id, key) => jobDocuments.openStepEditor(id, key))),
+    commands.register('agentJob.startAtThisStep', onStep((id, key) => jobDocuments.canStartAtStep(id, key), (id, key) => jobDocuments.startAtStep(id, key))),
+    commands.register('agentJob.makeStartStep', onStep((id, key) => jobDocuments.canEditSteps(id) && jobDocuments.get(id)?.draft?.steps.startKey !== key, (id, key) => jobDocuments.setStartStep(id, key))),
+    commands.register('agentJob.setStepAction', onStep((id, _key, args) => jobDocuments.canEditSteps(id) && !!args?.agentStep?.which && !!args.agentStep.action, (id, key, args) => {
+      const choice = args!.agentStep!
+      jobDocuments.setStepAction(id, key, choice.which!, choice.action!, choice.target)
+    })),
+    commands.register('agentJob.pickStepOnSuccess', pickAction('success')),
+    commands.register('agentJob.pickStepOnFailure', pickAction('fail')),
+    commands.register('agentJob.addStepAfter', onStep((id, _key, args) => jobDocuments.canAddStep(id) && !!args?.agentStep?.subsystem, (id, key, args) => jobDocuments.addStepAfter(id, key, args!.agentStep!.subsystem!))),
+    commands.register('agentJob.pickStepToAdd', onStep(id => jobDocuments.canAddStep(id), (id, key, args) => {
+      const at = (jobDocuments.get(id)?.draft?.steps.steps.findIndex(step => step.key === key) ?? 0) + 1
+      quickInput.show({
+        ariaLabel: `Add a step after step ${at}`, title: `Add a step after step ${at}`, placeholder: 'Select the type of the new step', noun: 'step types', sort: 'none', ...args?.anchor ? { anchor: args.anchor } : {},
+        items: jobDocuments.stepTypes(id).map(subsystem => ({ id: subsystem, label: stepTypeShort(subsystem) })),
+        onDidAccept: item => jobDocuments.addStepAfter(id, key, item.id)
+      })
+    })),
+    commands.register('agentJob.deleteStep', onStep(id => jobDocuments.canEditSteps(id), (id, key) => jobDocuments.deleteStepOf(id, key)))
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

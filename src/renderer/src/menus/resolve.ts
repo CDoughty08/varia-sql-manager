@@ -53,7 +53,8 @@ export interface ResolveOptions {
   readonly args?: CommandArgs
   readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'> & Partial<Pick<CommandService, 'titleFor'>>
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
-  readonly dynamic?: { readonly [K in DynamicSubmenu]?: () => readonly DynamicMenuItem[] }
+  /** A dynamic submenu's items; a context menu's receive its target's arguments. */
+  readonly dynamic?: { readonly [K in DynamicSubmenu]?: (args?: CommandArgs) => readonly DynamicMenuItem[] }
   /** Settings that titles follow ("Select Top 50 Rows"); the defaults without them. Applied here, not in the cached model. */
   readonly settings?: SettingsValues
   /** Each menu's entries; defaults to the catalogue's model (tests pass their own). */
@@ -124,7 +125,7 @@ export function resolveMenu(menu: MenuId, options: ResolveOptions): readonly Res
     if (entry.kind === 'separator' || entry.kind === 'role') return { kind: 'separator' }
     if (entry.kind === 'command') return command(entry.id, commandTitle(entry.id, options.settings, entry.title), { key: entry.nativeId, mnemonic: entry.mnemonic, toggle: entry.toggle })
     const provider = entry.dynamic && options.dynamic?.[entry.dynamic]
-    const provided = provider ? guarded(provider, []) : []
+    const provided = provider ? guarded(() => provider(options.args), []) : []
     // Dynamic items share the level with the catalogue's, so `finish` assigns their mnemonics together.
     const items = finish([...level(children(entry.id), depth + 1), { kind: 'separator' }, ...dynamic(provided)])
     const scriptAsTitle = entry.dynamicTitle === 'scriptAs' && keys.explorerScriptTitle ? { scriptAsTitle: keys.explorerScriptTitle } : {}

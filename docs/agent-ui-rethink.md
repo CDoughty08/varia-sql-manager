@@ -75,7 +75,7 @@ Each is a well-known pattern elsewhere. Each would cut steps or prevent a common
 | Multi-select and bulk actions | Every admin grid | Job Activity Monitor bulk bar | `rx-jam` |
 | Templates on New | Project templates, cloud quick-starts | New Job: Blank, Copy an existing job, or a template | `rx-job-new` |
 | Copy to another environment with a dependency check | dbatools Copy-DbaAgentJob | Copy to another server | `rx-copy-server` |
-| Steps as a graph with a run drawn over it | CI pipeline graphs, SSIS control flow, workflow schedulers | Steps › Flow (Later) | `rx-flow`, `rx-flow-lastrun` |
+| Steps as a graph with a run drawn over it | CI pipeline graphs, SSIS control flow, workflow schedulers | Steps › Flow (Targets built; runs Later) | `rx-flow`, `rx-flow-lastrun` |
 
 ## Create from…
 
@@ -158,7 +158,7 @@ After the first release, in docs/agent-plan.md's lanes:
 Later:
 - Copy to another server (a write on a second connection).
 - New Job templates.
-- A Flow view of step targets (mocked 2026-11-24, owner's answers 2026-11-25; see [Flow view (Later)](#flow-view-later)).
+- The Flow view's Last run and Live run overlays and History's Show in Flow (the Targets view is built; see [Flow view (Later)](#flow-view-later)).
 
 ## Every changed view has a rethink scene
 
@@ -194,7 +194,8 @@ chip.
 
 ## Flow view (Later)
 
-Status: **mocked on 2026-11-24; the owner answered its questions on 2026-11-25. It stays Later**: no lane, no release.
+Status: **the Targets view is built** (docs/sql-server-agent.md › Steps describes it). The Last run and Live run overlays and History's
+Show in Flow stay Later, with no lane or release.
 Mocks: the "Rethink · steps flow (later)" group in `docs/mockups/sql-server-agent.html` (`rx-flow`, `rx-flow-menu`,
 `rx-flow-edit`, `rx-flow-lastrun`, `rx-flow-running`, `rx-flow-end`), in Dark and Light through the page's Theme box. The
 fictional job is "Finance nightly load": seven steps of five types, with a step that never runs, a loop, a forward jump that skips a step and a

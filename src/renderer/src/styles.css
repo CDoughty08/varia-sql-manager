@@ -2947,6 +2947,67 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-step-runs { margin: var(--varia-space-2) 0 0; font-size: var(--varia-size-sm); }
 .agent-step-ssis tr[data-default] th, .agent-step-ssis tr[data-default] td { color: var(--varia-descriptionForeground); }
 .agent-step-ssis tr[data-missing] { background: var(--varia-inputValidation-warningBackground, transparent); }
+/* Steps › List | Flow (docs/sql-server-agent.md › Steps › Flow; mocks rx-flow*): the switch, the graph's toolbar, the canvas with its hidden
+   tree of steps over the nodes, and the side panel (the selected step's summary, the flow checks and the key, or the docked editor). */
+.agent-step-list-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-transform: uppercase; letter-spacing: .04em; }
+.agent-steps-view { text-transform: none; letter-spacing: 0; font-size: var(--varia-size-sm); }
+.agent-steps-view .segmented-option { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-flow { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; container: agent-flow / inline-size; }
+.agent-flow-toolbar { display: flex; align-items: center; gap: var(--varia-space-1); flex-wrap: wrap; }
+.agent-flow-sep { width: 1px; align-self: stretch; margin: var(--varia-space-0) var(--varia-space-1); background: var(--varia-panel-border); }
+.agent-flow-spacer { flex: 1; }
+.agent-flow-toolbar .agent-flow-type { width: auto; }
+.agent-flow-zoom { min-width: 5ch; text-align: center; font-variant-numeric: tabular-nums; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.agent-flow-body { display: grid; grid-template-columns: minmax(0, 1fr) 380px; height: clamp(360px, calc(100vh - 280px), 760px); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.agent-flow-body[data-wide] { grid-template-columns: minmax(0, 1fr) 560px; }
+.agent-flow-canvas { position: relative; min-width: 0; min-height: 0; background: var(--varia-panel-background); }
+.agent-flow-tree { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab; }
+.agent-flow-tree:active { cursor: grabbing; }
+.agent-flow-tree:focus-visible { outline: none; }
+.agent-flow-tree canvas { display: block; }
+/* Over its node, invisible: a keyboard-opened menu opens below the step, and screen readers find it where it is drawn. */
+.agent-flow-item { position: absolute; pointer-events: none; opacity: 0; }
+.agent-flow-drop { position: absolute; width: 1px; height: 1px; pointer-events: none; }
+.agent-flow-failed { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--varia-space-2); padding: var(--varia-space-4); text-align: center; }
+.agent-flow-side { display: flex; flex-direction: column; gap: var(--varia-space-3); min-width: 0; padding: var(--varia-space-3); overflow: auto; border-left: 1px solid var(--varia-panel-border); }
+/* A pane too narrow for the graph beside its panel (a split editor): the panel goes under the graph, which keeps a usable height. */
+@container agent-flow (max-width: 760px) {
+  .agent-flow-body, .agent-flow-body[data-wide] { grid-template-columns: minmax(0, 1fr); grid-template-rows: clamp(280px, 50vh, 520px) auto; height: auto; }
+  .agent-flow-side { border-left: 0; border-top: 1px solid var(--varia-panel-border); overflow: visible; }
+}
+@container agent-flow (min-width: 761px) and (max-width: 1040px) {
+  .agent-flow-body[data-wide] { grid-template-columns: minmax(0, 1fr); grid-template-rows: clamp(280px, 50vh, 520px) auto; height: auto; }
+  .agent-flow-body[data-wide] .agent-flow-side { border-left: 0; border-top: 1px solid var(--varia-panel-border); overflow: visible; }
+}
+.agent-flow-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-transform: uppercase; letter-spacing: .04em; }
+.agent-flow-head button { text-transform: none; letter-spacing: 0; }
+.agent-flow-sec { display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); min-width: 0; }
+.agent-flow-sec h4 { display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: normal; text-transform: uppercase; letter-spacing: .04em; }
+.agent-flow-sec-right { margin-left: auto; display: inline-flex; align-items: center; gap: var(--varia-space-1); text-transform: none; letter-spacing: 0; }
+.agent-flow-sec .field-note { margin: 0; }
+.agent-flow-name { display: flex; align-items: center; gap: var(--varia-space-2); margin: 0; font-weight: 600; }
+.agent-flow-no { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 20px; height: 20px; border: 1px solid var(--varia-panel-border); border-radius: 50%; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: normal; }
+.agent-flow-facts { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--varia-space-1) var(--varia-space-3); margin: 0; font-size: var(--varia-size-sm); }
+.agent-flow-fact { display: contents; }
+.agent-flow-facts dt { color: var(--varia-descriptionForeground); }
+.agent-flow-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.agent-flow-check { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: var(--varia-space-0) var(--varia-space-2); align-items: center; padding: var(--varia-space-2) 0; border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); }
+.agent-flow-check:last-child { border-bottom: 0; }
+.agent-flow-check > .icon { grid-row: 1 / span 2; align-self: start; color: var(--varia-warningForeground); }
+.agent-flow-check[data-tone="ok"] > .icon { color: var(--varia-successForeground); }
+.agent-flow-check > button { grid-row: 1 / span 2; grid-column: 3; }
+.agent-flow-check-title { grid-column: 2; }
+.agent-flow-check-detail { grid-column: 2; color: var(--varia-descriptionForeground); }
+.agent-flow-legend { display: grid; grid-template-columns: 1fr 1fr; gap: var(--varia-space-1) var(--varia-space-3); margin: 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.agent-flow-legend li { display: inline-flex; align-items: center; gap: var(--varia-space-1); flex-wrap: wrap; }
+.agent-flow-legend .agent-flow-legend-note { grid-column: 1 / -1; display: block; }
+.agent-flow-line { display: inline-block; width: 28px; border-top: 1.5px solid var(--varia-successForeground); }
+.agent-flow-line[data-which="fail"] { border-top: 1.5px dashed var(--varia-errorForeground); }
+.agent-flow-pill { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 18px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-pill); white-space: nowrap; }
+.agent-flow-pill[data-tone="ok"] { color: var(--varia-successForeground); border-color: var(--varia-successForeground); }
+.agent-flow-pill[data-tone="bad"] { color: var(--varia-errorForeground); border-color: var(--varia-errorForeground); }
+.agent-flow-pill[data-tone="accent"] { color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-focusBorder); background: var(--varia-list-inactiveSelectionBackground); }
+.agent-flow-pill[data-tone="warning"] { border-color: var(--varia-warningForeground); }
 @media (forced-colors: active) {
   .agent-tile[aria-pressed="true"] .tile { outline: 2px solid Highlight; outline-offset: -2px; }
 }
