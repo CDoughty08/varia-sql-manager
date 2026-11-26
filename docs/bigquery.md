@@ -397,7 +397,7 @@ type.
   be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
   REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
   (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
-  fails the query (`CONNECTION_LOST`, `PERMISSION_DENIED`, the VPC Service Controls refusal, or `BACKEND_ERROR`), as a REST page would.
+  fails the query with the error a REST page would give (for example `CONNECTION_LOST`, `AUTH_EXPIRED`, `REMOTE_EXPIRED`, `PERMISSION_DENIED`, including the VPC Service Controls refusal, or `BACKEND_ERROR`).
 - **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
   settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
 
