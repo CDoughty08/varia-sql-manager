@@ -283,7 +283,7 @@ internal sealed partial class ObjectSearchService
             var order = skip is { Project: "", Database: "" } ? SkipList.Server : Interlocked.Increment(ref skipOrder) - 1;
             lock (state.Gate) if (Current()) state.Skipped.Add(order, skip);
         }
-        ObjectIndexSkip SkipOf(Exception error, string project, string dataset, string permission)
+        ObjectIndexSkip SkipOf(Exception error, string project, string dataset, string? permission)
         {
             var mapped = source.Map(error, project, permission, stop);
             var (code, message) = mapped is RequestException request ? (request.Code, request.Message) : ("CATALOG_ERROR", "BigQuery refused the request.");
@@ -822,7 +822,8 @@ internal sealed partial class ObjectSearchService
                     }
                     catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
                     {
-                        var skip = SkipOf(error, "", "", "bigquery.projects.list");
+                        // projects.list needs no one permission: it lists the projects where the account holds any BigQuery role.
+                        var skip = SkipOf(error, "", "", null);
                         Skip(new("", skip.Code, skip.Message, Project: ""));
                     }
                 }
@@ -1033,7 +1034,9 @@ internal sealed partial class ObjectSearchService
                                     {
                                         var skip = SkipOf(error, project, "", "bigquery.datasets.get");
                                         // Noise filtering: auto-discovered projects without BigQuery enabled or dataset access are silently skipped.
-                                        if (skip.Code is "API_DISABLED" or "PERMISSION_DENIED" or "NOT_FOUND")
+                                        // A VPC Service Controls refusal is not noise: off the network the project is still the user's, so it
+                                        // is a skip that says so and keeps what an earlier build read.
+                                        if (skip.Code is "API_DISABLED" or "PERMISSION_DENIED" or "NOT_FOUND" && !skip.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal))
                                         {
                                             noiseFilteredProjects[project] = 0;
                                             DropNoiseFilteredProject(project);

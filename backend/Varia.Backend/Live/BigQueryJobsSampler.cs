@@ -363,12 +363,12 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     }
 
     /// <summary>One page; a refused All users listing (PERMISSION_DENIED) marks the view denied and answers null (an empty list),
-    /// so the renderer turns the toggle off and says why.</summary>
+    /// so the renderer turns the toggle off and says why. A VPC Service Controls refusal is no missing permission: it fails the read.</summary>
     private async Task<HistoryPage?> ListPageAsync(BigQueryConnection connection, View state, HistoryListing listing, string? pageToken, int size, int limit, CancellationToken token)
     {
         try { return await service.ListHistoryAsync(connection, listing, pageToken, size, limit, token, Throttled); }
         catch (Exception error) when (listing.AllUsers && !token.IsCancellationRequested && error is not BigQueryOverLimit
-            && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" })
+            && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" } denied && !BigQueryErrors.IsPerimeter(denied))
         {
             state.AllUsersDenied = true;
             state.Held.Clear();
@@ -481,7 +481,9 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             catch (BigQueryOverLimit) when (limit < BigQueryJobHistory.JobBytes) { return false; }
             // Larger than a job's whole limit: its own done listing, which may take what is left of the sample, reads it.
             catch (BigQueryOverLimit) { others.Add(job); }
-            catch (Exception error) when (!token.IsCancellationRequested && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: var code } && code is "PERMISSION_DENIED" or "NOT_FOUND")
+            // A VPC Service Controls refusal is no refused or missing job: it fails the sample with its own error.
+            catch (Exception error) when (!token.IsCancellationRequested && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: var code } mapped
+                && code is "PERMISSION_DENIED" or "NOT_FOUND" && !BigQueryErrors.IsPerimeter(mapped))
             {
                 if (code == "NOT_FOUND") state.Held.Remove(job.Id);
                 else if (own) throw;
@@ -593,7 +595,8 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
             // Over what was left of this sample's budget: next time. Over a job's whole limit: it is never shown.
             catch (BigQueryOverLimit) when (limit < BigQueryJobHistory.JobBytes) { return false; }
             catch (BigQueryOverLimit) { state.Missing.Add(reference.JobId); }
-            catch (Exception error) when (!token.IsCancellationRequested && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "NOT_FOUND" or "PERMISSION_DENIED" })
+            catch (Exception error) when (!token.IsCancellationRequested && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "NOT_FOUND" or "PERMISSION_DENIED" } mapped
+                && !BigQueryErrors.IsPerimeter(mapped))
             {
                 state.Missing.Add(reference.JobId);
             }
@@ -629,7 +632,7 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
                 spend(spent);
             }
             catch (Exception error) when (!token.IsCancellationRequested && error is not OperationCanceledException
-                && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" or "NOT_FOUND" })
+                && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" or "NOT_FOUND" } mapped && !BigQueryErrors.IsPerimeter(mapped))
             {
                 state.Children[id] = ([], false);
             }

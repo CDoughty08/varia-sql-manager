@@ -68,14 +68,84 @@ internal static partial class BigQueryErrors
 
     public static string Sanitize(string? text) => EntraFailures.Sanitize(GoogleToken().Replace(text ?? "", "<token>"));
 
+    // VPC Service Controls refuses with the same accessDenied and 403 as a missing role; only its message, or the
+    // ErrorInfo detail (SECURITY_POLICY_VIOLATED) in the raw response, tells the two apart. Only how the message opens
+    // counts: a refusal that quotes an object ("Table p:ds.NAME: User does not have…") can spell any marker after it.
+    [GeneratedRegex(@"^\s*(?:VPC Service Controls:|Request is prohibited by organization's policy\b)")]
+    private static partial Regex PerimeterMessage();
+
+    [GeneratedRegex(@"""reason""\s*:\s*""SECURITY_POLICY_VIOLATED""|""type""\s*:\s*""VPC_SERVICE_CONTROLS""")]
+    private static partial Regex PerimeterDetail();
+
+    // An identifier longer than Varia shows is left out, never cut: the administrator searches the audit log for it whole.
+    [GeneratedRegex(@"(?:\bvpcServiceControlsUniqueIdentifier: |""uniqueIdentifier""\s*:\s*"")(?<id>[A-Za-z\d_-]{1,128})(?![A-Za-z\d_-])")]
+    private static partial Regex PerimeterIdentifier();
+
+    // A PreconditionFailure violation of type VPC_SERVICE_CONTROLS carries the identifier as its description; its fields come in any order.
+    [GeneratedRegex(@"\{[^{}]*""type""\s*:\s*""VPC_SERVICE_CONTROLS""[^{}]*\}")]
+    private static partial Regex PerimeterViolation();
+
+    [GeneratedRegex(@"""description""\s*:\s*""(?<id>[A-Za-z\d_-]{1,128})""")]
+    private static partial Regex ViolationDescription();
+
+    /// <summary>The raw responses read for a VPC Service Controls detail at most; Google's error bodies are a few KB.</summary>
+    const int PerimeterScan = 65_536;
+
+    /// <summary>How a VPC Service Controls refusal opens (docs/bigquery.md, Errors); src/shared/bigquery/errors.ts holds the same
+    /// text for the views that add permission advice to a PERMISSION_DENIED and must not add it to this one.</summary>
+    public const string PerimeterOpening = "VPC Service Controls blocked this request";
+
+    /// <summary>Whether Google's message, or its raw error body (an RPC's status details as text), marks a VPC Service
+    /// Controls refusal, with its identifier when Google gave one Varia can show whole.</summary>
+    internal static bool IsPerimeter(string? message, string? raw, out string? identifier)
+    {
+        identifier = null;
+        message ??= "";
+        raw = raw is { Length: <= PerimeterScan } ? raw : null;
+        if (!PerimeterMessage().IsMatch(message) && (raw is null || !PerimeterDetail().IsMatch(raw))) return false;
+        var match = PerimeterIdentifier().Match(message);
+        if (!match.Success && raw is not null) match = PerimeterIdentifier().Match(raw);
+        if (!match.Success && raw is not null && PerimeterViolation().Match(raw) is { Success: true } violation) match = ViolationDescription().Match(violation.Value);
+        identifier = match.Success ? match.Groups["id"].Value : null;
+        return true;
+    }
+
+    /// <summary>What to do about a VPC Service Controls refusal, with Google's identifier for the administrator's audit log.</summary>
+    internal static string PerimeterAdvice(string? identifier) =>
+        "Connect from inside the perimeter (for example the corporate network or VPN), or ask an administrator to allow access"
+        + (identifier is null ? "" : " (VPC Service Controls identifier " + identifier + ")") + ".";
+
+    /// <summary>A VPC Service Controls refusal as PERMISSION_DENIED that says so. It names no project: the blocked resource may
+    /// be another project's table or a bucket an external table reads, not the project the request went to.</summary>
+    internal static RequestException Perimeter(string? identifier) =>
+        new("PERMISSION_DENIED", PerimeterOpening + ": the organization's service perimeter does not allow it from this network or account. " + PerimeterAdvice(identifier));
+
+    /// <summary>Whether an error value is a VPC Service Controls refusal, which no permission or role fixes.</summary>
+    internal static bool IsPerimeter(Exception? error) =>
+        error is RequestException { Code: "PERMISSION_DENIED" } request && request.Message.StartsWith(PerimeterOpening, StringComparison.Ordinal);
+
+    static RequestException? Perimeter(string google, string? raw) => IsPerimeter(google, raw, out var identifier) ? Perimeter(identifier) : null;
+
+    /// <summary>The role that grants a permission Varia names, where one role is the usual answer.</summary>
+    static string RoleFor(string permission) => permission switch
+    {
+        "bigquery.jobs.create" => " (BigQuery Job User)",
+        "bigquery.datasets.get" or "bigquery.tables.get" or "bigquery.tables.list" or "bigquery.routines.get" or "bigquery.routines.list" or "bigquery.models.list" => " (BigQuery Metadata Viewer or Data Viewer)",
+        "bigquery.tables.getData" => " (BigQuery Data Viewer)",
+        _ => ""
+    };
+
     /// <summary>
     /// The error value for a failure. <paramref name="project"/> names the project in permission and API messages;
     /// <paramref name="permission"/> is the permission the call needs (the connect probe's bigquery.jobs.create);
     /// <paramref name="kind"/> is the credential's kind, since a refused refresh means different things for a user
-    /// sign-in and a service account key. A cancellation the caller asked for passes through.
+    /// sign-in and a service account key. <paramref name="quote"/> false leaves Google's text out of a permission refusal,
+    /// for callers whose messages name no object (the Search Objects index). A cancellation the caller asked for passes through.
     /// </summary>
-    public static Exception Map(Exception error, string? project = null, string? permission = null, string? kind = null, long? cap = null, CancellationToken token = default, bool prices = true)
+    public static Exception Map(Exception error, string? project = null, string? permission = null, string? kind = null, long? cap = null, CancellationToken token = default, bool prices = true, bool quote = true)
     {
+        // Callers that know no project pass null or "": the messages then name none.
+        if (project is { Length: 0 }) project = null;
         // A Varia error raised inside the library (a subject token rule, an identity pin) is the answer, however it was wrapped.
         for (Exception? current = error; current is not null; current = current.InnerException)
             if (current is RequestException request) return request;
@@ -85,7 +155,7 @@ internal static partial class BigQueryErrors
             {
                 case OperationCanceledException when token.IsCancellationRequested: return current;
                 case TokenResponseException refused: return Refused(refused.Error?.Error, kind);
-                case GoogleApiException api: return Api(api, project, permission, cap, prices);
+                case GoogleApiException api: return Api(api, project, permission, cap, prices, quote);
                 // A source that timed out, was cancelled or could not be reached is not a bad configuration: the loops on either
         // side answer it.
                 case SubjectTokenException when !Interrupted(current.InnerException): return new RequestException("AUTH_KEY_FILE", "The federation configuration's subject token could not be read.");
@@ -120,7 +190,7 @@ internal static partial class BigQueryErrors
         return new("AUTH_KEY_FILE", "Google refused the credential" + reason + ". Check the key file or sign in again with " + SignInCommand + ".");
     }
 
-    static RequestException Api(GoogleApiException error, string? project, string? permission, long? cap, bool prices)
+    static RequestException Api(GoogleApiException error, string? project, string? permission, long? cap, bool prices, bool quote)
     {
         var reasons = error.Error?.Errors?.Select(item => item.Reason).Where(reason => reason is not null).ToArray() ?? [];
         bool Has(string reason) => reasons.Contains(reason, StringComparer.Ordinal);
@@ -132,13 +202,16 @@ internal static partial class BigQueryErrors
         if (Has("billingNotEnabled"))
             return new("BILLING_DISABLED", "Billing is not enabled for " + where + ". It can run queries in the BigQuery sandbox, which has no DML and expires tables after 60 days; enable billing to lift those limits.");
         if (Has("quotaExceeded") || Has("rateLimitExceeded") || status == HttpStatusCode.TooManyRequests)
-            return new("QUOTA", (Has("rateLimitExceeded") || status == HttpStatusCode.TooManyRequests ? "BigQuery's rate limit was reached. Wait a moment, then try again." : "A BigQuery quota was exceeded. Wait for it to reset or raise it in the Google Cloud console.")
-                + (google.Length > 0 ? " Google says: " + google : ""));
+            return new("QUOTA", EntraFailures.Sanitize((Has("rateLimitExceeded") || status == HttpStatusCode.TooManyRequests ? "BigQuery's rate limit was reached. Wait a moment, then try again." : "A BigQuery quota was exceeded. Wait for it to reset or raise it in the Google Cloud console.")
+                + (google.Length > 0 ? " Google says: " + google : "")));
         if (status == HttpStatusCode.Unauthorized || Has("authError")) return new("AUTH_EXPIRED", Expired);
         if (ByReason(Has, google, cap, prices) is { } known) return known;
+        if ((Has("accessDenied") || status == HttpStatusCode.Forbidden) && Perimeter(google, error.Error?.ErrorResponseContent) is { } perimeter) return perimeter;
+        // Google's own text stays beside Varia's guess at the permission: a policy denial or a narrower rule reads as its own.
         if (Has("accessDenied") || status == HttpStatusCode.Forbidden)
-            return new("PERMISSION_DENIED", permission is null ? "The account lacks permission for this in " + where + "." + (google.Length > 0 ? " Google says: " + google : "")
-                : "The account lacks the " + permission + " permission in " + where + ". Ask for a role that grants it (BigQuery Job User), or choose another project.");
+            return new("PERMISSION_DENIED", EntraFailures.Sanitize((permission is null ? "The account lacks permission for this" + (project is null ? "" : " in " + where) + "."
+                : "The account lacks the " + permission + " permission in " + where + ". Ask for a role that grants it" + RoleFor(permission) + ", or choose another project.")
+                + (quote && google.Length > 0 ? " Google says: " + google : "")));
         if (Has("notFound") || status == HttpStatusCode.NotFound)
             return new("NOT_FOUND", (google.Length > 0 ? google : "Not found.") + (project is null ? "" : " Check the project id and that the account can see " + where + "."));
         if (status is >= HttpStatusCode.InternalServerError || Has("backendError") || Has("internalError"))
@@ -149,7 +222,7 @@ internal static partial class BigQueryErrors
     /// <summary>The reasons a query job ends with, whether the job's own error (its <c>status.errorResult</c>) or a call's.</summary>
     static RequestException? ByReason(Func<string, bool> has, string google, long? cap, bool prices)
     {
-        string Says(string text) => google.Length > 0 ? text + " Google says: " + google : text;
+        string Says(string text) => google.Length > 0 ? EntraFailures.Sanitize(text + " Google says: " + google) : text;
         if (has("responseTooLarge"))
             return new("RESULT_TOO_LARGE", "The result is over BigQuery's 10 GB result limit. Filter or aggregate the query so it returns fewer rows or columns.");
         if (has("bytesBilledLimitExceeded"))
@@ -175,7 +248,8 @@ internal static partial class BigQueryErrors
         if (ByReason(Has, google, cap, prices) is { } known) return known;
         if (Has("billingNotEnabled"))
             return new("BILLING_DISABLED", "Billing is not enabled for " + where + ". It can run queries in the BigQuery sandbox, which has no DML and expires tables after 60 days; enable billing to lift those limits.");
-        if (Has("quotaExceeded") || Has("rateLimitExceeded")) return new("QUOTA", "A BigQuery quota was exceeded." + (google.Length > 0 ? " Google says: " + google : ""));
+        if (Has("quotaExceeded") || Has("rateLimitExceeded")) return new("QUOTA", EntraFailures.Sanitize("A BigQuery quota was exceeded." + (google.Length > 0 ? " Google says: " + google : "")));
+        if (Has("accessDenied") && Perimeter(google, null) is { } perimeter) return perimeter;
         if (Has("accessDenied")) return new("PERMISSION_DENIED", google.Length > 0 ? google : "The account lacks permission for this in " + where + ".");
         if (Has("notFound")) return new("NOT_FOUND", google.Length > 0 ? google : "Not found.");
         if (Has("backendError") || Has("internalError")) return new("BACKEND_ERROR", "BigQuery reported an internal error. Try again.");

@@ -22,7 +22,7 @@ internal interface IBigQueryIndexSource
     IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, BigQueryBulkBudget budget,
         Func<string, string, bool> wanted, CancellationToken token);
     /// <summary>A failed read as a RequestException with BigQuery's code and a sentence that names no object.</summary>
-    Exception Map(Exception error, string project, string permission, CancellationToken token);
+    Exception Map(Exception error, string project, string? permission, CancellationToken token);
 }
 
 /// <summary>The accessible projects projects.list returned, deduplicated and sorted ordinally; Cut when more than
