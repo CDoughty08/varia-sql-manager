@@ -183,9 +183,11 @@ internal static partial class BigQueryIndexChecks
             source.ColumnsPerTable = 20;
             var before = Held("disc-02");
             projects.Add("disc-zz");
+            // Bounded, so a build that never holds disc-02's names fails the check below rather than hang the suite.
+            var waited = System.Diagnostics.Stopwatch.StartNew();
             source.OnDatasetObjectsAsync = async (project, _, token) =>
             {
-                while (project == "disc-zz" && ReferenceEquals(Held("disc-02"), before)) await Task.Delay(1, token);
+                while (project == "disc-zz" && ReferenceEquals(Held("disc-02"), before) && waited.Elapsed < TimeSpan.FromSeconds(60)) await Task.Delay(1, token);
             };
             calls = source.DiscoveredDetailCalls;
             var tight = await Build();
@@ -193,6 +195,44 @@ internal static partial class BigQueryIndexChecks
             check(tight.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }) && search.HeldOf(id).All(read => read.Database != "disc-zz")
                 && Held("disc-02") is { Detailed: true, Table.Count: 22 } again && BigQueryEntries.Known(again, true).Count == 1 && source.DiscoveredDetailCalls == calls + 1,
                 $"a build whose names pass stopped for memory still reads a held dataset's changed table again ({source.DiscoveredDetailCalls - calls} detail read, {BigQueryEntries.Known(Held("disc-02"), true).Count} whole)");
+        }
+
+        // Below the details floor still: a date-sharded group whose newest shard (and so its entry's name) changes, a new table
+        // beside names the dataset already holds, and a table created again whose read fails.
+        {
+            var limits = ShareLimits();
+            var source = new FakeBudgetSource([], tablesPerDiscovered: 2, columnsPerTable: 20) { ShardDays = new() { [("star-01", "ds")] = 2 } };
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var id = Guid.NewGuid().ToString();
+            List<string> starred = ["star-01", "star-02"];
+            Task<ObjectIndexResult> Build() => search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred), source, CancellationToken.None);
+            DatabaseIndex Held(string project) => search.HeldOf(id).Single(read => read.Database == project);
+            await Build();
+            var group = Held("star-01");
+            var grouped = group is { Detailed: true, Table.Count: 22 } && group.Facts!.Shards(1) is { Prefix: "events_", Count: 2 } && Held("star-02") is { Detailed: true, Table.Count: 43 };
+            search.Budget.Force(search.Budget.Free - limits.BigQueryDetailsFloorBytes + 2_000);
+            source.ShardDays[("star-01", "ds")] = 3;
+            var calls = source.DiscoveredDetailCalls;
+            var shard = await Build();
+            check(grouped && Held("star-01") is { ChildrenLeftOut: false, Detailed: true, Table.Count: 22 } next && next.Facts!.Shards(1) is { Count: 3, Last: "20261103" }
+                && BigQueryEntries.Known(next, true).Count == 1 && source.DiscoveredDetailCalls == calls + 1 && shard.Status.Skipped.Count == 0 && search.Budget.Free < limits.BigQueryDetailsFloorBytes,
+                $"below its details floor a date-sharded group keeps its columns when a new shard renames its entry ({Held("star-01").Table.Count} entries, {shard.Status.Skipped.Count} skips)");
+            // Room above the names floor for one new table's name, not for that and the names the dataset already holds again:
+            // those are charged to the names' part of the read they replace, so the new table is listed (its columns, which do
+            // not fit, reported as details missing) rather than the dataset kept as it was.
+            search.Budget.Force(search.Budget.Free - limits.BigQueryNamesFloorBytes - 400);
+            source.TablesPerDataset = new() { [("star-02", "ds")] = 3 };
+            var named = await Build();
+            check(Held("star-02") is { ChildrenLeftOut: false, Table.Count: 44 } && named.Status.Skipped.Count(skip => skip is { Project: "star-02", Code: "TOO_LARGE", Details: true }) == 1
+                && named.Status.Skipped.Count == 1,
+                $"with room for one name above the names floor a new table is listed beside the names its dataset holds ({Held("star-02").Table.Count} entries, {named.Status.Skipped.Count} skips)");
+            // The tables are created again and cannot be read: the columns carried from their earlier generation are not kept as
+            // if they were the new tables'.
+            source.CreatedOf = project => project == "star-02" ? 1_800_000_000_000 : null;
+            source.FailTableForProject = "star-02";
+            var failed = await Build();
+            check(Held("star-02") is { Table.Count: 4, Detailed: false } && Held("star-01") is { Table.Count: 22 } && failed.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true }),
+                $"a table created again whose read fails keeps none of its earlier generation's columns ({Held("star-02").Table.Count} entries)");
         }
 
         // 2. SQL Server first, then BigQuery, then a SQL Server rebuild while BigQuery holds its share.

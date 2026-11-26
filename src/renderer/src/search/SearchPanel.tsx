@@ -174,7 +174,8 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   if (!status || status.state === 'none') return 'This connection has no index yet.'
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
   const datasets = status.skipped.filter(skip => skip.database && skip.code !== childrenLeftOut && !skip.details).length
-  const details = status.skipped.filter(skip => skip.details).length
+  // A dataset may list two reasons its details are missing (a read that failed, and memory): it counts once.
+  const details = new Set(status.skipped.filter(skip => skip.details).map(skip => `${skip.project ?? ''}\u0000${skip.database}`)).size
   const projects = status.skipped.filter(skip => !skip.database && !!skip.project).length
   const globalSkips = status.skipped.filter(skip => !skip.database && !skip.project)
   const namesOnly = status.namesOnly?.length ?? 0

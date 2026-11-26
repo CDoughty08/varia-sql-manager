@@ -35,9 +35,10 @@ export const objectSearchLimits = {
    *  than this is free (`namesReserveBytes` at the default limit). */
   namesReserveShare: 4,
   namesReserveBytes: 128 * 1024 * 1024,
-  /** What a BigQuery index's reads keep free of the limit, in sixteenths, so SQL Server's definitions always find room above
-   *  the names' reserve: its names, the billing and starred projects' details, and discovered projects' details, which give
-   *  way first (ObjectIndexLimits.BigQuery*FloorBytes). */
+  /** What a BigQuery index's reads keep free of the limit, in sixteenths, so SQL Server's definitions find room above the
+   *  names' reserve whatever BigQuery holds (at least the two sixteenths between the reserve and the names floor): its names,
+   *  the billing and starred projects' details, and discovered projects' details, which give way first
+   *  (ObjectIndexLimits.BigQuery*FloorBytes). */
   bigQueryFloors: { names: 6, details: 7, discovered: 8 },
   /** Index progress pushed to the window, at most, per second. */
   progressPerSecond: 4,

@@ -1504,7 +1504,7 @@ describe('ObjectSearchService', () => {
     expect(indexedCount(status({ indexed: 1 }))).toBe('1 database')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: 'census', project: 'varia-beta', code: 'NOT_FOUND', message: 'm' }, { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', message: 'm', details: true }] }) }))
       .toBe('1 dataset skipped, details missing')
-    expect(indexSummary(undefined, bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects because the index reached its 512 MiB memory limit.' }] })))
+    expect(indexSummary(undefined, bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })))
       .toContain('index memory limit reached')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'You have access to more than 500 projects; the index keeps the first 500.' }, { database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects because the index reached its 512 MiB memory limit.' }] }) }))
       .toBe('project list truncated, index memory limit reached')
@@ -1797,6 +1797,15 @@ describe('Search Objects\' summary', () => {
       message: 'The details of 3 objects were left out: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest does not hold them.' }] })
     expect(indexSummary(undefined, partial)).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
     expect(indexGap({ connectionId: 'bq', done: 0, total: 0, objects: 0, status: partial })).toBe('details missing')
+    // The same dataset with a failed read as well still counts once; another dataset counts too.
+    const failedToo = { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', details: true, message: 'The details of 1 object could not be read: timed out.' } as const
+    expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, failedToo] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
+    expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, { ...failedToo, project: 'varia-beta' }] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 2 datasets')
+    // A dataset left as it was read before is listed as skipped, with the note.
+    const keptAsWas = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE',
+      message: 'The dataset\'s changes did not fit, so it was kept as it was read before: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })
+    expect(indexSummary(undefined, keptAsWas)).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 dataset skipped')
+    expect(indexMemoryNote([keptAsWas])).toBe(partly)
     expect(indexMemoryNote([partial])).toBe(partly)
     expect(indexMemoryShort(starved)).toBe(true)
     for (const fine of [status(), status({ cut: 2 }), status({ definitions: false }), status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }),

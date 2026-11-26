@@ -182,16 +182,19 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   practice more, since details stop well before names do. A floor only refuses BigQuery: SQL Server's reads take
   whatever is free, which also means SQL Server's use counts against BigQuery's room: with SQL Server holding 5/8 of
   the limit or more, a BigQuery index reads nothing new, and says why.
-- **What a BigQuery dataset holds, it keeps.** A rebuild or refresh charges the share of the read it replaces; names
-  go to the budget first, so a new object's name never pushes a held column out of that share. Pass 1 goes on holding,
-  by name, the details of the objects pass 2 is about to read again (a forced read's, a table created again, one not
-  read whole), marked so that a build stopped or a read that fails in between leaves nothing a later build reuses. A
+- **What a BigQuery dataset holds, it keeps.** A rebuild or refresh charges the share of the read it replaces, names
+  to the part its names held and details to the rest, so a new object's name never pushes a held column out of that
+  share. Pass 1 goes on holding, by name (a date-sharded group by its prefix, since a new shard renames its entry), the
+  details of the objects pass 2 is about to read again (a forced read's, a table created again, one not read whole),
+  marked so that a build stopped or a read that fails in between leaves nothing a later build reuses. A
   dataset that already holds details keeps one floor less free than its project's (7/16 for a discovered project, 3/8
   for the billing and starred projects), so a column added or a table recreated a little wider still fits, and
   discovered datasets that hold details are read before the half-free line is checked, whatever the names pass found.
-  An object whose pass 2 read fails keeps the details it had, to be read again by the next build. When the details of
-  new objects do not fit even there, the dataset keeps what it held and the new objects are listed by name, reported
-  as details missing; when not even their names fit beside what it holds, the dataset is left as it was read before
+  An object whose pass 2 read fails keeps the details it had, to be read again by the next build, unless it was
+  created or changed since, whose carried details were another generation's and are dropped. When the details of new
+  objects do not fit even there, the dataset keeps what it held and the new objects are listed by name, reported as
+  details missing (then, if that is still too much, the objects created or changed since as well); when not even that
+  fits beside what it holds, or in pass 1 the names of what is new do not, the dataset is left as it was read before
   (skipped as `TOO_LARGE`, its earlier read kept, without stopping the build's names pass) until there is room. A
   read never swaps a dataset that holds details for one without them: only a dataset that holds none is kept without
   its columns (`CHILDREN_LEFT_OUT`). A read of one project or dataset (Refresh, or a project a search hit reveals)
