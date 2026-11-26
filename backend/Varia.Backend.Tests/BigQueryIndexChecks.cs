@@ -1350,6 +1350,8 @@ internal static partial class BigQueryIndexChecks
         public Func<bool>? ThrottledNow { get; set; }
         /// <summary>Runs before a discovered project's tables.get is counted.</summary>
         public Func<string, CancellationToken, Task>? OnTableAsync { get; set; }
+        /// <summary>A project's tables' creation time, when not the default: a table created again.</summary>
+        public Func<string, long?>? CreatedOf { get; set; }
         public bool Throttled(string connectionId) => ThrottledNow?.Invoke() ?? false;
 
         public string BillingProject(string connectionId) => "varia-alpha";
@@ -1401,7 +1403,7 @@ internal static partial class BigQueryIndexChecks
             var tables = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
             {
                 TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },
-                Type = "TABLE", CreationTime = 1700000000000
+                Type = "TABLE", CreationTime = CreatedOf?.Invoke(project) ?? 1700000000000
             }).ToList();
             return new BigQueryListing(tables, [], [], false);
         }

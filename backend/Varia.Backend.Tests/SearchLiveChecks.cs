@@ -267,6 +267,21 @@ internal static class SearchLiveChecks
                 && inside.Total >= 1 && beside.Budget.Free >= beside.Limits.NamesReserveBytes,
                 $"beside a BigQuery index at its floor a real server keeps its definitions ({full.Status.Modules} kept, {full.Status.LeftOut ?? 0} left out, {inside.Total} hits inside them, {beside.Budget.Free / MiB} MiB free)");
         }
+        // Memory that ran out and came back: built with less than the names' reserve free, every definition is left out, the
+        // shared system objects' too, and the status says so; once there is room, a rebuild reads them all, the system objects
+        // again as well, and the count goes.
+        using (var starved = new ObjectSearchService(service))
+        {
+            var others = starved.Limits.MemoryBytes - starved.Limits.NamesReserveBytes + 1;
+            starved.Budget.Force(others);
+            var without = await starved.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            var system = starved.IndexOf(connectionId)?.Resource?.LeftOut ?? -1;
+            starved.Budget.Release(others);
+            var with = await starved.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            check(without.Status is { LeftOut: > 0, LeftOutIn: > 0 } && system > 0 && with.Status is { LeftOut: null, LeftOutIn: null } && with.Status.Modules > without.Status.Modules
+                && starved.IndexOf(connectionId)?.Resource is { LeftOut: 0, Modules: > 0 } && starved.Resources.Held.Count == 1,
+                $"definitions left out for memory are counted ({without.Status.LeftOut} in {without.Status.LeftOutIn} databases, {system} of the system objects) and all read once a rebuild finds room ({with.Status.Modules} kept)");
+        }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing
         // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.

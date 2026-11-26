@@ -226,9 +226,21 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         return true;
     }
 
+    /// <summary>Charges a name's share (a record, its facts, a text's slot): to the budget above the names floor when it has the
+    /// room, else to the credit. The credit is kept for the details the earlier read held, so a new object's name never pushes
+    /// a held column out of it and up against the details' floor.</summary>
+    private bool TryChargeName(long bytes)
+    {
+        if (budget.TryTake(bytes, namesFloor)) { taken += bytes; return true; }
+        if (creditLeft < bytes) return false;
+        creditLeft -= bytes;
+        credited += bytes;
+        return true;
+    }
+
     private void Charge(long bytes)
     {
-        if (!TryCharge(bytes, namesFloor)) throw new TooLarge();
+        if (!TryChargeName(bytes)) throw new TooLarge();
     }
 
     /// <summary>Charges a column's share (its record, type and description) above the details' floor.</summary>
@@ -237,18 +249,18 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         if (!TryCharge(bytes, detailsFloor)) throw new TooLarge();
     }
 
-    private object? Pooled(object value, long keepFree)
+    private object? Pooled(object value, long keepFree, bool name = false)
     {
         object? found = value is string text ? (objects.TryText(text, out var held) ? held : null) : (objects.TryText((PackedText)value, out var packed) ? packed : null);
         if (found is not null) return found;
         var acquired = pool.TryAcquire(value, keepFree);
         if (acquired is null) return null;
-        if (!TryCharge(IndexMemory.SlotBytes, keepFree)) { pool.Release([acquired]); return null; }
+        if (!(name ? TryChargeName(IndexMemory.SlotBytes) : TryCharge(IndexMemory.SlotBytes, keepFree))) { pool.Release([acquired]); return null; }
         objects.Text(acquired);
         return acquired;
     }
 
-    private string Intern(string value) => (string?)Pooled(value, namesFloor) ?? throw new TooLarge();
+    private string Intern(string value) => (string?)Pooled(value, namesFloor, name: true) ?? throw new TooLarge();
     private string InternDetail(string value) => (string?)Pooled(value, detailsFloor) ?? throw new TooLarge();
 
     private void Abandon()
@@ -275,9 +287,11 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         {
             Intern(dataset);
             Add("bqDataset", "", null, null, dataset, null);
+            var detailed = false;
             foreach (var entry in entries)
             {
                 var detail = entry.Detail;
+                detailed |= detail is not null;
                 Intern(entry.Name);
                 var at = Add(entry.Kind, entry.Folder, detail?.Subtype ?? entry.Subtype, dataset, entry.Name, detail?.Modified ?? entry.Modified ?? entry.Created);
                 var signature = detail?.Signature is { } sig ? Clip(sig) : null;
@@ -326,7 +340,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
             var index = new DatabaseIndex(project, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
             {
                 Dataset = dataset, Facts = new BigQueryFacts(new(facts), new(descriptions), new(shards)), ChildrenLeftOut = !children, DefinitionsLeftOut = !definitions,
-                LeftOut = leftOut
+                LeftOut = leftOut, Detailed = detailed && children
             };
             objects.Clear();
             taken = credited = creditLeft = 0;
@@ -473,6 +487,18 @@ internal static partial class BigQueryEntries
                 fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole));
         }
         return known;
+    }
+
+    /// <summary>The objects an earlier read holds details of, by kind and name: what a read that replaces it may keep when the
+    /// details of anything new do not fit.</summary>
+    public static HashSet<(string Kind, string Name)> Detailed(DatabaseIndex? read)
+    {
+        var detailed = new HashSet<(string, string)>();
+        if (read?.Facts is not { } facts || read.ChildrenLeftOut) return detailed;
+        var table = read.Table;
+        for (var at = 0; at < table.Count; at++)
+            if (table.Parent(at) < 0 && facts.Of(at) is { Detailed: true }) detailed.Add((table.Kind(at), table.Name(at)));
+        return detailed;
     }
 
     /// <summary>A listed object with the details an earlier read knows of it, when it has the same creation time and (for routines and

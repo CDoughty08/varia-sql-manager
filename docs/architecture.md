@@ -627,7 +627,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). Definitions leave a quarter of the
   limit to names, and every BigQuery charge must leave a floor above that reserve free (`ObjectIndexLimits.BigQuery*FloorBytes`:
   discovered details, then billing and starred details, then names), so BigQuery never crowds out SQL Server's definitions in
-  either build order (a new BigQuery charge path must take a floor, and pass 1 carries a dataset's earlier details until pass 2 has read them again, so a refresh never asks above the floor for what it held). Definitions left out for memory are counted apart (`LeftOut`) and reported in the status. It reads on its own pool (" - Object Search", the explorer's prologue)
+  either build order (a new BigQuery charge path must take a floor; pass 1 carries a dataset's earlier details by name until pass 2 has read them again, and `Hold` keeps what a dataset held when new details do not fit, so a re-read never loses columns to the floor). Definitions left out for memory are counted apart (`LeftOut`) and reported in the status. It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
   `CatalogSql.Lint`), and server objects from `ObjectSearchSql.Server`. It indexes every kind Object Explorer lists but
   the SSIS Catalog's, Microsoft-shipped objects included; the resource database's are read once per build and shared by

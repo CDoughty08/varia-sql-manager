@@ -180,12 +180,18 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   lookup arrays) 3/8 (192 MiB). So BigQuery uses at most 5/8 of the limit less what SQL Server holds, and SQL Server
   always has at least an eighth of the limit (64 MiB) for names and definitions before a definition is left out, in
   practice more, since details stop well before names do. A floor only refuses BigQuery: SQL Server's reads take
-  whatever is free, as before, which also means SQL Server's use counts against BigQuery's room: with SQL Server
-  holding 5/8 of the limit or more, a BigQuery index reads nothing new, and says why. A rebuild or refresh charges the
-  share of the read it replaces first, and pass 1 goes on holding the details of the objects pass 2 is about to read
-  again, so a dataset that fitted still fits; only what is new must fit above the floor, and a dataset whose new columns
-  do not is kept without its columns. A Refresh you ask of one project or dataset reads it at the starred floor,
-  whatever the project.
+  whatever is free, which also means SQL Server's use counts against BigQuery's room: with SQL Server holding 5/8 of
+  the limit or more, a BigQuery index reads nothing new, and says why.
+- **What a BigQuery dataset holds, it keeps.** A rebuild or refresh charges the share of the read it replaces; names
+  go to the budget first, so a new object's name never pushes a held column out of that share. Pass 1 goes on holding,
+  by name, the details of the objects pass 2 is about to read again (a forced read's, a table created again, one not
+  read whole), marked so that a build stopped or a read that fails in between leaves nothing a later build reuses. A
+  dataset that already holds details keeps one floor less free than its project's (7/16 for a discovered project, 3/8
+  for the billing and starred projects), so a column added or a table recreated a little wider still fits, and
+  discovered datasets that hold details are read before the half-free line is checked. When the details of new objects
+  do not fit even there, the dataset keeps what it held and the new objects are listed by name, reported as details
+  missing; only when that fails too is it kept without its columns (`CHILDREN_LEFT_OUT`). A read of one project or
+  dataset (Refresh, or a project a search hit reveals) uses the billing and starred floors, whatever the project.
 - **When memory runs out, the index says so.** The status counts the definitions left out for memory (`leftOut`) and
   the databases or datasets they belong to (`leftOutIn`; the server's own and the system objects are in none), apart
   from definitions only cut at their length and from turning `objectExplorer.search.definitions` off. The index line

@@ -77,7 +77,52 @@ internal static partial class BigQueryIndexChecks
                 && refreshed.Status.Skipped.All(skip => skip.Project != "star-01") && afterRebuild.Count == 4 && afterRebuild.All(read => read is { ChildrenLeftOut: false, Table.Count: 302 })
                 && whole.Status.Skipped.All(skip => skip.Code != ObjectSearchService.ChildrenLeftOut),
                 $"below its details floor a BigQuery dataset read again by a Refresh or a rebuild keeps the columns it held ({afterRefresh.Table.Count} entries after the Refresh, {search.Budget.Free} bytes free)");
-            search.Budget.Release(taken);
+            DatabaseIndex Starred(string project) => search.HeldOf(bigQuery).Single(read => read.Database == project);
+            Task<ObjectIndexResult> Rebuild() => search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred), source, CancellationToken.None);
+            // A table created again with the same columns (CREATE OR REPLACE) is not reused, yet is carried by name until pass 2
+            // has read it: it costs nothing new, and is whole again afterwards.
+            var created = new Dictionary<string, long> { ["star-03"] = 1_800_000_000_000 };
+            source.CreatedOf = project => created.TryGetValue(project, out var at) ? at : null;
+            var calls = source.DiscoveredDetailCalls;
+            await Rebuild();
+            check(Starred("star-03") is { ChildrenLeftOut: false, Table.Count: 302 } replaced && BigQueryEntries.Known(replaced, true).Count == 1 && source.DiscoveredDetailCalls == calls + 1
+                && search.Budget.Free < limits.BigQueryDetailsFloorBytes,
+                $"below its details floor a table created again is read again and keeps its columns ({Starred("star-03").Table.Count} entries, {source.DiscoveredDetailCalls - calls} detail read)");
+            // What a dataset holds may grow a little, into the step between its details floor and the next one down.
+            created["star-04"] = 1_900_000_000_000;
+            source.ColumnsPerTable = 305;
+            await Rebuild();
+            check(Starred("star-04") is { ChildrenLeftOut: false, Table.Count: 307 } && search.Budget.Free >= limits.BigQueryNamesFloorBytes,
+                $"a dataset that holds columns keeps them when a table gains a few, though less than its details floor is free ({Starred("star-04").Table.Count} entries, {search.Budget.Free} bytes free)");
+            // A new table whose columns do not fit even there: the dataset keeps every column it held and the new table's name, and
+            // says the new object's details are missing. Before, its name alone pushed the held columns out of the replaced read's
+            // share, and the whole dataset fell back to names only.
+            var squeeze = search.Budget.Free - limits.BigQueryNamesFloorBytes - 5_000;
+            search.Budget.Force(squeeze);
+            source.TablesPerDataset = new() { [("star-01", "ds")] = 2 };
+            var grown = await Rebuild();
+            var afterGrowth = Starred("star-01");
+            check(afterGrowth is { ChildrenLeftOut: false, Table.Count: 303 } && grown.Status.Skipped.Count(skip => skip is { Project: "star-01", Database: "ds", Code: "TOO_LARGE", Details: true }) == 1
+                && grown.Status.Skipped.All(skip => skip.Code != ObjectSearchService.ChildrenLeftOut) && search.HeldOf(bigQuery).Where(read => read.Database is "star-02" or "star-03").All(read => read.Table.Count == 302),
+                $"a new table whose columns do not fit leaves the dataset the columns it held, its own left out as details missing ({afterGrowth.Table.Count} entries, {grown.Status.Skipped.Count} skips)");
+            search.Budget.Release(squeeze);
+            var roomy = await Rebuild();
+            // The dataset, the table held (300 columns, reused) and the new one (305).
+            check(Starred("star-01") is { ChildrenLeftOut: false, Table.Count: 1 + 301 + 306 } && roomy.Status.Skipped.All(skip => skip.Project != "star-01"),
+                $"with room the next build reads the new table's columns and the skip goes ({Starred("star-01").Table.Count} entries)");
+            // A Refresh whose detail read fails keeps nothing a later build would take for whole: the table is read again.
+            source.FailTableForProject = "star-02";
+            var failing = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred, Scope: new("star-02")), source, CancellationToken.None);
+            var afterFailure = Starred("star-02");
+            source.FailTableForProject = null;
+            // The table lost its columns with the failed read, so reading them again needs room above the floor: what was forced
+            // goes back, and more, as if another connection had closed (discovered projects then read details too).
+            search.Budget.Release(taken + 100_000);
+            calls = source.DiscoveredDetailCalls;
+            await Rebuild();
+            check(BigQueryEntries.Known(afterFailure, true).Count == 0 && afterFailure.Table.Count == 2 && failing.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true })
+                && Starred("star-02") is { ChildrenLeftOut: false, Table.Count: 307 } healed && BigQueryEntries.Known(healed, true).Count == 1 && source.DiscoveredDetailCalls > calls,
+                $"a Refresh whose detail read failed leaves nothing reusable, so the next build reads the table again ({Starred("star-02").Table.Count} entries, {source.DiscoveredDetailCalls - calls} detail reads)");
             // Its lookup arrays are BigQuery's too: at the names floor they are not built and the lookup scans; with room, they are.
             var wide = search.HeldOf(bigQuery).Single(read => read.Database == "star-01");
             var spare = search.Budget.Free - limits.BigQueryNamesFloorBytes;
@@ -133,6 +178,14 @@ internal static partial class BigQueryIndexChecks
             var sql = await new DatabaseReader("Sales", limits, pool).ReadAsync(SearchCostChecks.Procedures(20), true, CancellationToken.None, children: false);
             check(refused is null && sql is { Modules: 20, LeftOut: 0 } && pool.Budget.Used > before && pool.Budget.Free >= limits.NamesReserveBytes,
                 $"at the names floor BigQuery takes nothing more, and SQL Server still keeps its definitions ({sql?.Modules}; {pool.Budget.Free} bytes free)");
+            check(limits.BigQueryDetailsFloor(discovered: true, holds: false) == limits.BigQueryDiscoveredFloorBytes && limits.BigQueryDetailsFloor(true, true) == limits.BigQueryDetailsFloorBytes
+                && limits.BigQueryDetailsFloor(false, false) == limits.BigQueryDetailsFloorBytes && limits.BigQueryDetailsFloor(false, true) == limits.BigQueryNamesFloorBytes,
+                "a dataset that already holds details keeps one floor less free than its project's, never less than the names floor");
+            // A read given no floors (as only checks build one) still leaves the names' reserve to names when it keeps view text.
+            var view = new BigQueryDetail(null, null, "SELECT 1 AS a FROM t", []);
+            var reserved = new BigQueryReader(new ObjectIndexLimits { NamesReserveBytes = long.MaxValue / 4 }, new StringPool(new IndexBudget(limits.MemoryBytes)), null)
+                .Read("p", "v", [new("bqView", "bqViews", null, "v", 1, null, Detail: view)], true, true);
+            check(reserved is { Cut: 1, LeftOut: 1, Table.Count: 2 }, "view text is never kept below the names' reserve, whatever floor the read was given");
         }
 
         // 3. What the status says when memory did run out: the definitions left out, and where.

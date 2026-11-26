@@ -514,17 +514,19 @@ internal sealed partial class ObjectSearchService
                 }
                 var key = project + "\u0001" + dataset;
                 var force = (scope is not null && !missingOnly) || marked || stale.Contains(target);
-                var earlier = state.Index.Get(key);
-                var known = force ? [] : BigQueryEntries.Known(earlier, definitions);
+                var carried = BigQueryEntries.Known(state.Index.Get(key), definitions, carry: true);
                 var listed = BigQueryEntries.FromListing(listing);
-                // What pass 2 reads: every object with details that this build may not reuse (all of them, when the read is forced).
-                var again = listed.Select(item => BigQueryEntries.HasDetails(item) && BigQueryEntries.Reuse(known, item).Detail is null).ToArray();
-                known.Clear();
-                // Pass 1 still holds what the earlier read had of those objects until pass 2 has read them again: a dataset whose
-                // columns fitted keeps their memory between the passes, rather than give it back and ask for it again above
-                // BigQuery's floor, where it would be refused once anything else has taken memory since.
-                var carried = BigQueryEntries.Known(earlier, definitions, carry: true);
-                var entries = listed.Select(item => BigQueryEntries.Reuse(carried, item)).ToList();
+                // What pass 2 reads: every object with details that this build may not reuse: one the earlier read did not read
+                // whole, one created again or changed since, and all of them when the read is forced.
+                bool Reused(BigQueryEntry item) => !force && carried.TryGetValue((item.Kind, item.Name), out var had) && !had.Detail.Carried
+                    && had.Created == item.Created && (item.Modified is null || item.Modified == had.Modified);
+                var again = listed.Select(item => BigQueryEntries.HasDetails(item) && !Reused(item)).ToArray();
+                // Pass 1 still holds what the earlier read had of those objects, by name, until pass 2 has read them again: a
+                // dataset whose columns fitted keeps their memory between the passes, rather than give it back and ask for it
+                // again above BigQuery's floor, where it would be refused once anything else has taken memory since. They are
+                // marked carried, so a build stopped or a read that fails before pass 2 lands leaves nothing a later build reuses.
+                var entries = listed.Select((item, at) => !carried.TryGetValue((item.Kind, item.Name), out var had) ? item
+                    : item with { Detail = again[at] ? had.Detail with { Carried = true } : had.Detail }).ToList();
                 carried.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
@@ -1236,13 +1238,29 @@ internal sealed partial class ObjectSearchService
                             });
                     }
                     var wave3BudgetTight = Volatile.Read(ref wave2BudgetExhausted);
-                    if (!wave3DiscoveredPending.IsEmpty && wave3BudgetTight == 0)
+                    // Datasets that already hold details first, whatever is free: what they held is charged to the share of the
+                    // read it replaces, so reading their changed objects again costs only what has grown, and without it their
+                    // carried details would stay as the earlier build left them.
+                    var wave3Holding = wave3BudgetTight != 0 ? [] : wave3DiscoveredPending.Where(pair => state.Index.Get(pair.Key.Item1 + "\u0001" + pair.Key.Item2) is { Detailed: true })
+                        .OrderBy(pair => pair.Key.Item1, StringComparer.Ordinal).ThenBy(pair => pair.Key.Item2, StringComparer.Ordinal).ToList();
+                    if (wave3Holding.Count > 0)
+                    {
+                        await Parallel.ForEachAsync(wave3Holding, new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop },
+                            async (pair, loop) =>
+                            {
+                                var held = await DetailAsync(pair.Key, pair.Value, null, () => Interlocked.Increment(ref wave3DetailsDone), wave3Wanted, loop,
+                                    onDetailFailure: () => wave2IncompleteProjects[pair.Key.Item1] = 0);
+                                if (held is null) completedDiscovered[pair.Key] = 0;
+                            });
+                    }
+                    var wave3Fresh = wave3DiscoveredPending.Where(pair => !wave3Holding.Any(holding => holding.Key == pair.Key)).ToList();
+                    if (wave3Fresh.Count > 0 && wave3BudgetTight == 0)
                     {
                         var reserveFloor = Limits.BigQueryDiscoveredFloorBytes;
                         using var wave3DiscoveredStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
                         try
                         {
-                            await Parallel.ForEachAsync(wave3DiscoveredPending.OrderBy(pair => pair.Key.Item1, StringComparer.Ordinal).ThenBy(pair => pair.Key.Item2, StringComparer.Ordinal),
+                            await Parallel.ForEachAsync(wave3Fresh.OrderBy(pair => pair.Key.Item1, StringComparer.Ordinal).ThenBy(pair => pair.Key.Item2, StringComparer.Ordinal),
                                 new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = wave3DiscoveredStop.Token },
                                 async (pair, loop) =>
                                 {
@@ -1343,15 +1361,26 @@ internal sealed partial class ObjectSearchService
             && !state.Stale.Keys.Any(key => key.Project == project);
     }
 
-    /// <summary>Builds and holds a dataset's read; a read past BigQuery's part of the budget (its names floor, and its details floor,
-    /// the higher one for a <paramref name="discovered"/> project) is tried again without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
+    /// <summary>Builds and holds a dataset's read. A read past BigQuery's part of the budget (its names floor, and its details floor,
+    /// the higher one for a <paramref name="discovered"/> project, each a step lower for a dataset that already holds details) is
+    /// tried again with the details only of the objects the earlier read held them of (so what was held is kept, and what is new
+    /// is left out as details missing), then without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
     private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
         CancellationToken token)
     {
-        var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, discovered ? Limits.BigQueryDiscoveredFloorBytes : Limits.BigQueryDetailsFloorBytes);
         var old = state.Index.Get(project + "\u0001" + dataset);
+        var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, Limits.BigQueryDetailsFloor(discovered, old is { Detailed: true }));
         var built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, true, definitions);
         var childrenLeftOut = false;
+        var newLeftOut = 0;
+        if (built is null && old is { Detailed: true })
+        {
+            var had = BigQueryEntries.Detailed(old);
+            var kept = entries.Select(entry => entry.Detail is null || had.Contains((entry.Kind, entry.Name)) ? entry : entry with { Detail = null }).ToList();
+            newLeftOut = entries.Count(entry => entry.Detail is not null) - kept.Count(entry => entry.Detail is not null);
+            if (newLeftOut > 0) built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, kept, true, definitions);
+            if (built is null) newLeftOut = 0;
+        }
         if (built is null)
         {
             built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, false, definitions);
@@ -1375,6 +1404,8 @@ internal sealed partial class ObjectSearchService
             }
             return childrenLeftOut
                 ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project)
+                : newLeftOut > 0 ? new(dataset, "TOO_LARGE", "The details of " + (newLeftOut == 1 ? "1 new object" : newLeftOut.ToString("N0", CultureInfo.InvariantCulture) + " new objects")
+                    + " were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project, Details: true)
                 : null;
         }
         return new(dataset, "TOO_LARGE", old is not null

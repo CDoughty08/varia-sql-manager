@@ -57,6 +57,12 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
     /// <summary>Stops sharing <paramref name="set"/>, so the next <see cref="AcquireAsync"/> for its key reads the objects again: for
     /// a set whose definitions were left out for memory, once there is room. Connections that hold it keep it, charged, until
     /// each lets go (its own next build takes the newer set).</summary>
+    /// <summary>Whether <paramref name="set"/> is the one its key is shared as now (not retired for a newer read).</summary>
+    public bool Current(ResourceSet set)
+    {
+        lock (gate) return sets.TryGetValue(set.Key, out var entry) && ReferenceEquals(entry.Shared, set);
+    }
+
     public void Retire(ResourceSet set)
     {
         lock (gate)

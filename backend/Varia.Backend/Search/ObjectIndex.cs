@@ -63,6 +63,8 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public bool ChildrenLeftOut { get; set; }
     /// <summary>Read by a build without definitions: no entry has one.</summary>
     public bool DefinitionsLeftOut { get; set; }
+    /// <summary>BigQuery: the read holds some object's details (its columns): what a later read of the dataset keeps hold of.</summary>
+    public bool Detailed { get; init; }
     /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
     /// read did not reach it (a batch that failed part way).</summary>
     public bool? CaseSensitive { get; set; }
@@ -199,6 +201,12 @@ internal sealed class ObjectIndexLimits
     public long BigQueryDetailsFloorBytes => NamesReserveBytes + NamesReserveBytes / 4 * 3;
     /// <summary>Kept free by discovered projects' details, the first to give way: half the limit.</summary>
     public long BigQueryDiscoveredFloorBytes => NamesReserveBytes * 2;
+
+    /// <summary>The floor a BigQuery dataset's details keep free: its project's, or one step lower for a dataset that already
+    /// <paramref name="holds"/> details, so what it holds can grow a little (a column added, a table recreated a little wider)
+    /// without the dataset losing its columns at the very line the build stopped at.</summary>
+    public long BigQueryDetailsFloor(bool discovered, bool holds) =>
+        discovered ? holds ? BigQueryDetailsFloorBytes : BigQueryDiscoveredFloorBytes : holds ? BigQueryNamesFloorBytes : BigQueryDetailsFloorBytes;
     /// <summary>The longest part of one definition the index keeps.</summary>
     public int DefinitionChars { get; init; } = 1_000_000;
     /// <summary>Databases indexed at once across every connection, and per connection.</summary>

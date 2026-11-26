@@ -718,8 +718,9 @@ internal sealed partial class ObjectSearchService : IDisposable
             if (state.Index.Resource is { } held && held.Key == key)
             {
                 // The set this connection holds is current. One whose definitions were left out for memory is read again once
-                // there is room above the names' reserve, so raising the limit and rebuilding brings them back.
-                if (held.LeftOut == 0 || budget.Free < Limits.NamesReserveBytes) return null;
+                // there is room above the names' reserve, so raising the limit and rebuilding brings them back; one another
+                // connection has already retired is exchanged for the newer set whatever the room, since that costs nothing.
+                if (held.LeftOut == 0 || resources.Current(held) && budget.Free < Limits.NamesReserveBytes) return null;
                 resources.Retire(held);
             }
             // The shared read has its own connection and lifetime: other connections may wait for it, so stopping this build (or
