@@ -417,6 +417,28 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     }
 
     private static string Clip(string text) => text.Length <= BigQueryIndexLimits.FactChars ? text : text[..(BigQueryIndexLimits.FactChars - 1)] + "…";
+
+    /// <summary>What a detail's own records cost a read (its columns with their descriptions, its signature and layout): not its
+    /// texts, which the pool holds, nor the type and text slots a dataset's objects share. What tells a detail that grew from
+    /// one that did not.</summary>
+    internal static long Weight(BigQueryDetail detail)
+    {
+        static long Text(string? value) => value is null ? 0 : IndexMemory.StringBytes(Math.Min(value.Length, BigQueryIndexLimits.FactChars));
+        var bytes = Text(detail.Signature) + Text(detail.Partitioning) + Text(detail.Clustering);
+        foreach (var column in detail.Columns)
+            bytes += IndexMemory.RecordBytes + IndexMemory.TypedBytes + (column.Description is { Length: > 0 } text ? BigQueryFacts.DescriptionBytes + Text(text) : 0);
+        return bytes;
+    }
+
+    /// <summary>Whether <paramref name="fresh"/> has the columns <paramref name="held"/> has (paths, types, order) and weighs no
+    /// more: holding it in place of the other takes no new text and no more room.</summary>
+    internal static bool SameShape(BigQueryDetail fresh, BigQueryDetail held)
+    {
+        if (fresh.Columns.Count != held.Columns.Count || Weight(fresh) > Weight(held)) return false;
+        for (var at = 0; at < fresh.Columns.Count; at++)
+            if (fresh.Columns[at].Path != held.Columns[at].Path || fresh.Columns[at].Type != held.Columns[at].Type || fresh.Columns[at].Record != held.Columns[at].Record) return false;
+        return true;
+    }
     private static long Strings(params string?[] values) => values.Sum(value => value is null ? 0 : IndexMemory.StringBytes(value.Length));
 }
 

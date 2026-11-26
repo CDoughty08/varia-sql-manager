@@ -983,6 +983,9 @@ internal static partial class BigQueryIndexChecks
             var id = Guid.NewGuid().ToString();
             var dsGoneStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var dsDeniedStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            // disc-c's huge datasets wait until its gone dataset has been given up, so the stop they cause cannot cut that off.
+            var dsGone2Done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            search.NamesHeld = (project, dataset) => { if (project == "disc-c" && dataset == "ds_gone2") dsGone2Done.TrySetResult(); };
             var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c"], tablesPerDiscovered: 1, columnsPerTable: 0)
             {
                 CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
@@ -1008,6 +1011,7 @@ internal static partial class BigQueryIndexChecks
                     if (project == "disc-a" && dataset == "ds_gone") dsGoneStarted.TrySetResult();
                     if (project == "disc-b" && dataset == "ds_denied") dsDeniedStarted.TrySetResult();
                     if (project == "disc-a" && dataset == "ds_ok") await dsGoneStarted.Task.WaitAsync(token);
+                    if (project == "disc-c" && dataset.StartsWith("ds_huge", StringComparison.Ordinal)) await dsGone2Done.Task.WaitAsync(TimeSpan.FromSeconds(60), token);
                 },
                 OnDatasetsAsync = async (project, token) =>
                 {
@@ -1357,6 +1361,8 @@ internal static partial class BigQueryIndexChecks
         /// <summary>One table's creation time or column count, when not its project's.</summary>
         public Func<string, string, long?>? CreatedOfTable { get; set; }
         public Func<string, string, int?>? ColumnsOfTable { get; set; }
+        /// <summary>A project's column names' prefix, when not its own (so projects can share column texts in the pool).</summary>
+        public Func<string, string>? ColumnPrefix { get; set; }
         /// <summary>Datasets that hold one date-sharded group instead: events_20261101 to the day given, each shard created on its day.</summary>
         public Dictionary<(string Project, string Dataset), int>? ShardDays { get; set; }
         public bool Throttled(string connectionId) => ThrottledNow?.Invoke() ?? false;
@@ -1432,7 +1438,7 @@ internal static partial class BigQueryIndexChecks
             var count = ColumnsOfTable?.Invoke(project, table) ?? (project == "varia-alpha" ? 2 : ColumnsPerTable);
             var fields = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableFieldSchema
             {
-                Name = "col_" + project + "_" + index, Type = "STRING", Mode = "NULLABLE"
+                Name = (ColumnPrefix?.Invoke(project) ?? "col_" + project + "_") + index, Type = "STRING", Mode = "NULLABLE"
             }).ToList();
             return new Google.Apis.Bigquery.v2.Data.Table { Type = "TABLE", Schema = new() { Fields = fields } };
         }

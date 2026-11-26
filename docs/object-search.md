@@ -194,12 +194,15 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   discovered datasets that hold details are read before the half-free line is checked, whatever the names pass found.
   An object whose pass 2 read fails keeps the details it had, to be read again by the next build, unless it was
   created or changed since, whose carried details were another generation's and are dropped (a date-sharded group is
-  the same table whatever its newest shard). When pass 2's read of the dataset does not fit even there, the object it
-  ran out of room at goes back to what the dataset held of it (nothing, for a new one) and the read is tried again, up
-  to 16 times; then every object goes back to that. Either way the dataset keeps what it held, lists what is new by
+  the same table whatever its newest shard). When pass 2's read of the dataset does not fit even there, objects go back
+  to what the dataset held of them (nothing, for a new one), in this order until the read fits: the new objects; those
+  whose details grew; the one the read ran out of room at (a column renamed in place), up to 16 times; then every
+  object. An object no larger than before keeps what pass 2 read (one created again keeps it only when its columns are
+  the same). Either way the dataset keeps what it held, lists what is new by
   name, and reports details missing. In pass 1, when the names of what is new do not fit beside what it holds (a new
   name's text is always new memory), the dataset is left as it was read before (skipped as `TOO_LARGE`, its earlier
-  read kept, without stopping the build's names pass) until there is room; details carried from a build stopped
+  read kept) until there is room. A new dataset of a discovered project that does not fit stops the names pass for new
+  datasets only: datasets the index already holds are still listed and read; details carried from a build stopped
   between its passes stay until a build's pass 2 reads them again. A
   read never swaps a dataset that holds details for one without them: only a dataset that holds none is kept without
   its columns (`CHILDREN_LEFT_OUT`). A read of one project or dataset (Refresh, or a project a search hit reveals)
