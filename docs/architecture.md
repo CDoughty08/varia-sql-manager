@@ -622,8 +622,12 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   connection, dropped on disconnect. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
   `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database with its editor metadata, `ObjectDetails`, and the lookup arrays the
   editor's in-process `IndexLookup` builds on first use, names, definitions, by
-  `IndexMemory`'s estimates) is under one 512 MiB budget for all connections (`IndexBudget`), with names and definitions
-  held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). It reads on its own pool (" - Object Search", the explorer's prologue)
+  `IndexMemory`'s estimates) is under one budget for all connections (`IndexBudget`; `objectExplorer.search.memoryLimitMiB`, 512 MiB by default,
+  which each `explorer.index` carries and applies from that build on, dropping nothing held), with names and definitions
+  held once in a reference-counted `StringPool` (long definitions as zstd `PackedText` frames, equal by content). Definitions leave a quarter of the
+  limit to names, and every BigQuery charge must leave a floor above that reserve free (`ObjectIndexLimits.BigQuery*FloorBytes`:
+  discovered details, then billing and starred details, then names), so BigQuery never crowds out SQL Server's definitions in
+  either build order; a new BigQuery charge takes a floor, never `0`. Definitions left out for memory are counted apart (`LeftOut`) and reported in the status. It reads on its own pool (" - Object Search", the explorer's prologue)
   from `ObjectSearchSql`'s constant batch, run per database only through `QUOTENAME(@db).sys.sp_executesql` (linted by
   `CatalogSql.Lint`), and server objects from `ObjectSearchSql.Server`. It indexes every kind Object Explorer lists but
   the SSIS Catalog's, Microsoft-shipped objects included; the resource database's are read once per build and shared by

@@ -15,6 +15,8 @@ internal sealed record BigQueryLookupDataset(string Project, string Dataset, Loo
 internal sealed class BigQueryLookup
 {
     private readonly IndexBudget budget;
+    /// <summary>What a lookup array leaves free of the budget: BigQuery's names floor, as its reads do.</summary>
+    private readonly long keepFree;
     private readonly Action? arraysBuilt;
     private readonly Dictionary<string, Dictionary<string, DatabaseIndex>> reads = new(StringComparer.Ordinal);
     private readonly HashSet<string> namesOnly;
@@ -26,8 +28,10 @@ internal sealed class BigQueryLookup
 
     internal BigQueryLookup(string billing, IReadOnlyList<string> extras, IEnumerable<DatabaseIndex> held, IEnumerable<string>? namesOnly, IEnumerable<ObjectIndexSkip> skips,
         bool building, bool built, IndexBudget budget, Action? arraysBuilt = null, IEnumerable<string>? partialProjects = null,
-        IReadOnlyDictionary<string, ObjectIndexSkip>? projectListingSkips = null, IReadOnlyDictionary<(string Project, string Dataset), ObjectIndexSkip>? datasetSkips = null)
+        IReadOnlyDictionary<string, ObjectIndexSkip>? projectListingSkips = null, IReadOnlyDictionary<(string Project, string Dataset), ObjectIndexSkip>? datasetSkips = null,
+        long keepFree = 0)
     {
+        this.keepFree = keepFree;
         Projects = [billing, .. extras.Where(extra => extra != billing).Distinct(StringComparer.Ordinal)];
         foreach (var read in held)
         {
@@ -128,7 +132,7 @@ internal sealed class BigQueryLookup
     {
         if (dataset.Held is not { } read) return null;
         var table = read.Table;
-        var named = (read.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Named(name) : TableLookup.ScanNamed(table, name)).Where(at => table.Kind(at) != "bqDataset").ToList();
+        var named = (read.Lookup(budget, arraysBuilt, keepFree) is { } lookup ? lookup.Named(name) : TableLookup.ScanNamed(table, name)).Where(at => table.Kind(at) != "bqDataset").ToList();
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
         if (at >= 0) return new(dataset.Project, table, at, read);
@@ -183,7 +187,7 @@ internal sealed class BigQueryLookup
     public IReadOnlyList<LookupColumn> Columns(LookupObject owner)
     {
         var table = owner.Table;
-        var children = owner.Source?.Lookup(budget, arraysBuilt) is { } lookup ? lookup.Children(owner.At) : TableLookup.ScanChildren(table, owner.At);
+        var children = owner.Source?.Lookup(budget, arraysBuilt, keepFree) is { } lookup ? lookup.Children(owner.At) : TableLookup.ScanChildren(table, owner.At);
         return [.. children.Where(at => table.Kind(at) == "bqColumn")
             .Select(at => new LookupColumn(owner with { At = at }, table.Name(at), table.Typed(at)?.Ordinal ?? 0, table.Typed(at)))
             .OrderBy(column => column.Ordinal).ThenBy(column => column.Entry.At)];

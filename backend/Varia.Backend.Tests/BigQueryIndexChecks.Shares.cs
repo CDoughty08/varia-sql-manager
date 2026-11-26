@@ -1,0 +1,191 @@
+using Varia.Backend.Search;
+
+namespace Varia.Backend.Tests;
+
+/// <summary>
+/// The budget's shares (docs/object-search.md, Memory): BigQuery's reads keep floors of the budget free, so a SQL Server
+/// database still keeps its definitions however much BigQuery metadata is indexed, in either build order and across rebuilds;
+/// BigQuery gives up discovered projects' details first; and the limit a build carries applies from then on.
+/// </summary>
+internal static partial class BigQueryIndexChecks
+{
+    /// <summary>A small budget with production's proportions: a quarter is the names' reserve, and BigQuery's floors follow from it.</summary>
+    static ObjectIndexLimits ShareLimits() => new() { MemoryBytes = 400_000, NamesReserveBytes = 100_000 };
+
+    /// <summary>More BigQuery than the budget holds: four starred projects whose details fit under their floor whatever order they are
+    /// read in, leaving less room above the discovered projects' floor than one discovered project's details take.</summary>
+    static FakeBudgetSource ShareSource() => new(discoveredProjects: [.. Enumerable.Range(0, 24).Select(at => "disc-" + at.ToString("D2", System.Globalization.CultureInfo.InvariantCulture))],
+        tablesPerDiscovered: 1, columnsPerTable: 300);
+
+    static readonly List<string> ShareStarred = ["star-01", "star-02", "star-03", "star-04"];
+    static readonly ObjectIndexStatus ShareReady = new("ready", 1, 1, 0, 0, 0, [], true);
+
+    /// <summary>A SQL Server database's read under the service's budget, as a build's read charges it: its definitions come last.</summary>
+    static Task<DatabaseIndex?> SqlRead(ObjectSearchService search, string database, int procedures, DatabaseIndex? replaces = null) =>
+        new DatabaseReader(database, search.Limits, search.Pool, replaces).ReadAsync(SearchCostChecks.Procedures(procedures), true, CancellationToken.None, children: false);
+
+    static int DefinitionHits(ConnectionIndex index, ObjectSearchService search, string text) =>
+        IndexSearch.Run(index, new(text, false, false, false, false, true, null, null, 200), SearchMatcher.Create(text, false, false, false, TimeSpan.FromSeconds(2)).Matcher!,
+            search.Limits, ShareReady, CancellationToken.None).Total;
+
+    static async Task SharesAsync(Action<bool, string> check)
+    {
+        // 1. BigQuery first: it fills what it may, then a SQL Server connection is indexed.
+        {
+            var limits = ShareLimits();
+            var source = ShareSource();
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var bigQuery = Guid.NewGuid().ToString();
+            var built = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred), source, CancellationToken.None);
+            var held = search.HeldOf(bigQuery);
+            var starred = held.Where(read => read.Database.StartsWith("star-", StringComparison.Ordinal)).ToList();
+            var discovered = held.Where(read => read.Database.StartsWith("disc-", StringComparison.Ordinal)).ToList();
+            var detailed = discovered.Count(read => read.Table.Count > 2);
+            var free = search.Budget.Free;
+            check(starred.Count == 4 && starred.All(read => !read.ChildrenLeftOut && read.Table.Count == 302) && discovered.Count == 24 && detailed == 0
+                && built.Status.NamesOnly is { Count: 24 } namesOnly && namesOnly.All(project => project.StartsWith("disc-", StringComparison.Ordinal)),
+                $"BigQuery gives up discovered projects' details first: every starred project keeps its columns, {detailed} of 24 discovered projects do, and those are reported as names only ({built.Status.NamesOnly?.Count})");
+            check(free >= limits.BigQueryDetailsFloorBytes && free < limits.BigQueryDiscoveredFloorBytes + 40_000,
+                $"BigQuery fills the budget only down to its floors: {free} bytes free of {limits.MemoryBytes}, above the names' reserve of {limits.NamesReserveBytes}");
+            // The bug this guards against: with less than the names' reserve free, this read kept names only.
+            var sql = Guid.NewGuid().ToString();
+            var sales = await SqlRead(search, "Sales", 60);
+            search.Held(sql).Put(sales!);
+            check(sales is { Modules: 60, Cut: 0, LeftOut: 0 } && DefinitionHits(search.Held(sql), search, "dbo.p7 AS SELECT 7") == 1,
+                $"a SQL Server database indexed after a full BigQuery index keeps its definitions, and a search inside them finds one ({sales?.Modules} kept, {sales?.LeftOut} left out)");
+            // A BigQuery rebuild takes no more than it held, and the SQL Server rebuild after it (changed and new modules) still fits.
+            var rebuilt = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred), source, CancellationToken.None);
+            var again = await SqlRead(search, "Sales", 90, sales);
+            search.Held(sql).Put(again!);
+            var other = await SqlRead(search, "Archive", 60);
+            search.Held(sql).Put(other!);
+            check(rebuilt.Status.State == "ready" && search.Budget.Free >= limits.NamesReserveBytes && again is { Modules: 90, LeftOut: 0 } && other is { Modules: 60, LeftOut: 0 }
+                && DefinitionHits(search.Held(sql), search, "dbo.p88 AS SELECT 88") == 1,
+                $"after BigQuery rebuilds, a SQL Server rebuild with new modules and a second database keep their definitions ({again?.Modules}, {other?.Modules}; {search.Budget.Free} bytes free)");
+            // Its lookup arrays are BigQuery's too: at the names floor they are not built and the lookup scans; with room, they are.
+            var wide = search.HeldOf(bigQuery).Single(read => read.Database == "star-01");
+            var spare = search.Budget.Free - limits.BigQueryNamesFloorBytes;
+            search.Budget.Force(spare);
+            var lookup = search.LookupBigQuery(bigQuery, "varia-alpha");
+            var scanned = lookup.Object(lookup.Dataset("star-01", "ds"), "star-01_tbl_0") is not null && wide.LookupBuilds == 0;
+            search.Budget.Release(spare);
+            lookup = search.LookupBigQuery(bigQuery, "varia-alpha");
+            check(scanned && lookup.Object(lookup.Dataset("star-01", "ds"), "star-01_tbl_0") is not null && wide.LookupBuilds == 1,
+                "a BigQuery lookup array that would pass the names floor is not built (the lookup answers by scanning), and is built once there is room");
+        }
+
+        // 2. SQL Server first, then BigQuery, then a SQL Server rebuild while BigQuery holds its share.
+        {
+            var limits = ShareLimits();
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var sql = Guid.NewGuid().ToString();
+            var sales = await SqlRead(search, "Sales", 60);
+            search.Held(sql).Put(sales!);
+            var before = search.Budget.Used;
+            var bigQuery = Guid.NewGuid().ToString();
+            var built = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred), ShareSource(), CancellationToken.None);
+            var free = search.Budget.Free;
+            check(built.Status.NamesOnly is { Count: 24 } && free >= limits.BigQueryDetailsFloorBytes && search.HeldOf(bigQuery).Count == 29
+                && search.HeldOf(bigQuery).Where(read => read.Database.StartsWith("star-", StringComparison.Ordinal)).All(read => read.Table.Count == 302),
+                $"with SQL Server indexed first ({before} bytes), BigQuery still stops at its floors: {free} bytes free, every dataset's names held ({search.HeldOf(bigQuery).Count})");
+            var again = await SqlRead(search, "Sales", 90, sales);
+            search.Held(sql).Put(again!);
+            var other = await SqlRead(search, "Archive", 60);
+            search.Held(sql).Put(other!);
+            check(again is { Modules: 90, Cut: 0, LeftOut: 0 } && other is { Modules: 60, LeftOut: 0 } && DefinitionHits(search.Held(sql), search, "dbo.p7 AS SELECT 7") == 2,
+                $"a SQL Server rebuild while BigQuery holds its share keeps every definition, new modules and a second database included ({again?.Modules}, {other?.Modules})");
+        }
+
+        // The floors themselves, one read at a time: with room above the names floor only, a dataset is kept without its columns;
+        // below the names floor it is refused, and gives back what it took. A SQL Server read at the same point takes what is free.
+        {
+            var limits = ShareLimits();
+            var pool = new StringPool(new IndexBudget(limits.MemoryBytes));
+            var detail = new BigQueryDetail(null, null, null, [.. Enumerable.Range(0, 40).Select(at => new BigQueryColumn("c" + at, false, "STRING", true, null))]);
+            List<BigQueryEntry> entries = [new("bqTable", "bqTables", null, "orders", 1, null, Detail: detail)];
+            BigQueryReader Reader() => new(limits, pool, null, limits.BigQueryNamesFloorBytes, limits.BigQueryDetailsFloorBytes);
+            pool.Budget.Force(limits.MemoryBytes - limits.BigQueryDetailsFloorBytes);
+            var before = pool.Budget.Used;
+            var whole = Reader().Read("p", "d", entries, true, true);
+            var given = pool.Budget.Used == before;
+            var names = Reader().Read("p", "d", entries, false, true);
+            check(whole is null && given && names is { ChildrenLeftOut: true, Table.Count: 2 },
+                "at the details' floor a BigQuery dataset's columns are refused, giving back what the read took, and its names are kept");
+            pool.Budget.Force(pool.Budget.Free - limits.BigQueryNamesFloorBytes);
+            before = pool.Budget.Used;
+            var refused = Reader().Read("p", "e", entries, false, true);
+            var sql = await new DatabaseReader("Sales", limits, pool).ReadAsync(SearchCostChecks.Procedures(20), true, CancellationToken.None, children: false);
+            check(refused is null && sql is { Modules: 20, LeftOut: 0 } && pool.Budget.Used > before && pool.Budget.Free >= limits.NamesReserveBytes,
+                $"at the names floor BigQuery takes nothing more, and SQL Server still keeps its definitions ({sql?.Modules}; {pool.Budget.Free} bytes free)");
+        }
+
+        // 3. What the status says when memory did run out: the definitions left out, and where.
+        {
+            var limits = ShareLimits();
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var id = Guid.NewGuid().ToString();
+            search.Held(id).Put((await SqlRead(search, "Kept", 5))!);
+            search.Budget.Force(search.Budget.Free - limits.NamesReserveBytes + 1);
+            var starved = await SqlRead(search, "Starved", 7);
+            search.Held(id).Put(starved!);
+            // Held makes a SQL Server state; the BigQuery flag only spares the status the host's profile, which these checks have none of.
+            var status = search.IndexStatus(new ObjectIndexStatusArgs(id), bigQuery: true).Status;
+            var wire = System.Text.Json.JsonSerializer.SerializeToElement(status, Wire);
+            check(starved is { Modules: 0, Cut: 7, LeftOut: 7 } && status is { Modules: 5, Cut: 7, LeftOut: 7, LeftOutIn: 1 }
+                && wire.GetProperty("leftOut").GetInt32() == 7 && wire.GetProperty("leftOutIn").GetInt32() == 1,
+                $"a status counts the definitions left out for memory and the databases they belong to ({status.LeftOut} in {status.LeftOutIn})");
+            var healthy = System.Text.Json.JsonSerializer.SerializeToElement(new ObjectIndexStatus("ready", 1, 1, 5, 5, 0, [], true), Wire);
+            check(!healthy.TryGetProperty("leftOut", out _) && !healthy.TryGetProperty("leftOutIn", out _), "a status with nothing left out for memory carries neither count");
+        }
+
+        // 4. The limit a build carries: checked, applied from that build on with the reserve and floors in proportion, and never
+        // dropping what is held when it is lowered.
+        {
+            using var search = new ObjectSearchService(new UnusedHost());
+            var id = Guid.NewGuid().ToString();
+            async Task<string?> Refused(ObjectIndexArgs args, bool bigQuery)
+            {
+                try
+                {
+                    if (bigQuery) await search.IndexBigQueryAsync(args, ShareSource(), CancellationToken.None);
+                    else await search.IndexAsync(args, CancellationToken.None);
+                    return null;
+                }
+                catch (RequestException error) { return error.Code + ": " + error.Message; }
+            }
+            var low = await Refused(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), MemoryLimitMiB: ObjectIndexLimits.MinMemoryMiB - 1), bigQuery: true);
+            var high = await Refused(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), MemoryLimitMiB: ObjectIndexLimits.MaxMemoryMiB + 1), bigQuery: true);
+            // SQL Server's build refuses it before it asks the host for the connection (these checks have no host).
+            var sqlLow = await Refused(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), MemoryLimitMiB: 0), bigQuery: false);
+            var sqlHigh = await Refused(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), MemoryLimitMiB: int.MaxValue), bigQuery: false);
+            check(new[] { low, high, sqlLow, sqlHigh }.All(answer => answer == "INVALID_PARAMS: Invalid object search request: memoryLimitMiB.")
+                && search.Budget.Limit == ObjectIndexLimits.DefaultMemoryMiB * 1024L * 1024,
+                $"a memory limit outside {ObjectIndexLimits.MinMemoryMiB}..{ObjectIndexLimits.MaxMemoryMiB} MiB is refused on both engines and changes nothing: {low} / {sqlHigh}");
+            var built = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), MemoryLimitMiB: ObjectIndexLimits.MinMemoryMiB), ShareSource(), CancellationToken.None);
+            const long MiB = 1024 * 1024;
+            check(built.Status.State == "ready" && search.Budget.Limit == 64 * MiB && search.Limits is { MemoryBytes: 64 * MiB, NamesReserveBytes: 16 * MiB,
+                    BigQueryNamesFloorBytes: 24 * MiB, BigQueryDetailsFloorBytes: 28 * MiB, BigQueryDiscoveredFloorBytes: 32 * MiB },
+                $"a build's memory limit reaches the budget, with the names' reserve and BigQuery's floors in proportion ({search.Budget.Limit}, {search.Limits.NamesReserveBytes})");
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), ShareSource(), CancellationToken.None);
+            check(search.Budget.Limit == 64 * MiB, "a build that names no limit leaves it as it is");
+            var defaults = new ObjectIndexLimits();
+            check(defaults is { MemoryBytes: 512 * MiB, NamesReserveBytes: 128 * MiB, BigQueryNamesFloorBytes: 192 * MiB, BigQueryDetailsFloorBytes: 224 * MiB, BigQueryDiscoveredFloorBytes: 256 * MiB },
+                "the default limit keeps 128 MiB for names and 192, 224 and 256 MiB free of BigQuery's names, details and discovered details");
+        }
+        {
+            var limits = ShareLimits();
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var id = Guid.NewGuid().ToString();
+            var sales = await SqlRead(search, "Sales", 60);
+            search.Held(id).Put(sales!);
+            var used = search.Budget.Used;
+            // Lowered below what is held (the setting cannot go this low; the rule is the same).
+            search.Budget.Limit = used / 2;
+            var again = await SqlRead(search, "Sales", 60, sales);
+            search.Held(id).Put(again!);
+            var refused = await SqlRead(search, "Archive", 60);
+            check(search.Budget.Used == used && again is { Modules: 60, LeftOut: 0 } && refused is null && search.Held(id).Databases.Count == 1 && search.Budget.Free < 0,
+                $"a limit lowered below what the index holds drops nothing, a rebuild of what is held still fits, and nothing new is taken ({search.Budget.Used} of {search.Budget.Limit})");
+        }
+    }
+}

@@ -43,6 +43,7 @@ internal static partial class BigQueryIndexChecks
         await FailuresAsync(check, key);
         await DiscoveryAndNoiseAsync(check, key);
         await WavesAndBudgetAsync(check, key);
+        await SharesAsync(check);
         await BulkAsync(check, key);
         LookupStates(check);
         await LookupAsync(check, key);
@@ -242,9 +243,11 @@ internal static partial class BigQueryIndexChecks
         var bare = new BigQueryReader(limits, pool, null).Read("p", "d", entries, true, false)!;
         check(BigQueryEntries.Known(names, true).Count == 0 && BigQueryEntries.Known(bare, true).Count == 0 && BigQueryEntries.Known(bare, false).Count == 1,
             "a read that left columns out is never reused, nor one without definitions by a build that wants them");
-        var reserved = new ObjectIndexLimits { NamesReserveBytes = long.MaxValue / 4 };
-        var tight = new BigQueryReader(reserved, new StringPool(new IndexBudget(reserved.MemoryBytes)), null).Read("p", "d", entries, true, true)!;
-        check(tight.Cut == 1 && BigQueryEntries.Known(tight, true).Count == 0, "a view whose text the names' reserve left out is read again by the next build");
+        // The view's text changed, with no room above the details' floor: its columns fit in the share of the read it replaces,
+        // its new text does not, and is left out.
+        var tight = new BigQueryReader(limits, pool, next, detailsFloor: long.MaxValue / 4).Read("p", "d", [entries[0] with { Detail = view with { Definition = "SELECT 9 AS a, 2 AS b FROM t" } }], true, true)!;
+        check(tight is { Cut: 1, LeftOut: 1, ChildrenLeftOut: false } && read.LeftOut == 0 && BigQueryEntries.Known(tight, true).Count == 0,
+            "a view whose text the details' floor left out is counted as left out for memory (one cut at its length is not) and is read again by the next build");
         var columns = Enumerable.Range(0, BigQueryReader.MaxTypes + 1).Select(at => new BigQueryColumn("c" + at, false, "STRING(" + at + ")", true, null)).ToList();
         List<BigQueryEntry> wide = [new("bqTable", "bqTables", null, "wide", 1, null, Detail: new BigQueryDetail(null, null, null, columns))];
         var budget = new StringPool(new IndexBudget(limits.MemoryBytes));
@@ -738,14 +741,15 @@ internal static partial class BigQueryIndexChecks
         }
         {
             var source = new FakeBudgetSource(discoveredProjects: ["disc-01", "disc-02", "disc-03"], tablesPerDiscovered: 1, columnsPerTable: 5);
-            // Reserve floor (NamesReserveBytes / 2) already exceeded after Wave 1 + Wave 2 -> Wave 3 issues 0 discovered detail calls!
-            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 200_000, NamesReserveBytes = 399_000 });
+            // Discovered projects' details floor (twice the names' reserve) is already passed after Wave 1 + Wave 2, while the names
+            // floor (one and a half times) is not -> Wave 3 issues 0 discovered detail calls!
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 200_000, NamesReserveBytes = 99_900 });
             var id = Guid.NewGuid().ToString();
             var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             check(source.DiscoveredDetailCalls == 0
                 && result.Status.NamesOnly is ["disc-01", "disc-02", "disc-03"]
                 && search.HeldOf(id).Count(read => read.Database.StartsWith("disc-", StringComparison.Ordinal)) == 3,
-                $"wave 3 reserve floor stops before issuing discovered detail calls ({source.DiscoveredDetailCalls}) and marks all 3 discovered projects NamesOnly while keeping Wave 2 names");
+                $"wave 3 discovered floor stops before issuing discovered detail calls ({source.DiscoveredDetailCalls}) and marks all 3 discovered projects NamesOnly while keeping Wave 2 names");
 
             // 4. Cancelled rebuild preserves prior NamesOnly instead of eagerly wiping it at build start.
             using var cancel = new CancellationTokenSource();

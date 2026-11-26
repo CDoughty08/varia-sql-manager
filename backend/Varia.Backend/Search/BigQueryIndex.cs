@@ -198,13 +198,17 @@ internal sealed class BigQueryFacts(Dictionary<int, BigQueryObjectFacts> objects
 /// and what pass 2 or an earlier read knows: the dataset itself, its objects (Schema the dataset), and each table-like object's
 /// columns as children named by field path (address.city) with their types in the table's details. Names and definitions are the
 /// shared <see cref="StringPool"/>'s and every record is charged to the budget, from the share of the read it replaces first, as
-/// SQL Server's <see cref="DatabaseReader"/> charges; a read past the budget answers null.
+/// SQL Server's <see cref="DatabaseReader"/> charges; a read past the budget answers null. What it takes beyond that share must
+/// leave a floor of the budget free, so BigQuery never crowds out SQL Server's definitions (<see cref="ObjectIndexLimits.BigQueryNamesFloorBytes"/>):
+/// <paramref name="namesFloor"/> for the dataset, its objects and their facts, and <paramref name="detailsFloor"/>, which is
+/// higher and so gives way first, for columns (a read past it answers null, and is read again without them) and for view and
+/// routine text (left out, counted as cut).
 /// </summary>
-internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, DatabaseIndex? credit)
+internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, DatabaseIndex? credit, long namesFloor = 0, long detailsFloor = 0)
 {
     private readonly IndexBudget budget = pool.Budget;
     private long taken, credited, creditLeft = credit?.Bytes ?? 0;
-    private int modules, cut;
+    private int modules, cut, leftOut;
     private readonly ObjectTable.Builder objects = new();
     private readonly Dictionary<int, BigQueryObjectFacts> facts = [];
     private readonly Dictionary<int, string> descriptions = [];
@@ -223,7 +227,13 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
 
     private void Charge(long bytes)
     {
-        if (!TryCharge(bytes, 0)) throw new TooLarge();
+        if (!TryCharge(bytes, namesFloor)) throw new TooLarge();
+    }
+
+    /// <summary>Charges a column's share (its record, type and description) above the details' floor.</summary>
+    private void ChargeDetail(long bytes)
+    {
+        if (!TryCharge(bytes, detailsFloor)) throw new TooLarge();
     }
 
     private object? Pooled(object value, long keepFree)
@@ -237,7 +247,8 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         return acquired;
     }
 
-    private string Intern(string value) => (string?)Pooled(value, 0) ?? throw new TooLarge();
+    private string Intern(string value) => (string?)Pooled(value, namesFloor) ?? throw new TooLarge();
+    private string InternDetail(string value) => (string?)Pooled(value, detailsFloor) ?? throw new TooLarge();
 
     private void Abandon()
     {
@@ -287,31 +298,33 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                 short ordinal = 0;
                 foreach (var column in detail.Columns)
                 {
-                    Intern(column.Path);
-                    var child = Add("bqColumn", "bqColumns", column.Record ? "struct" : null, null, column.Path, null);
+                    InternDetail(column.Path);
+                    ChargeDetail(IndexMemory.RecordBytes);
+                    var child = objects.Add("bqColumn", "bqColumns", column.Record ? "struct" : null, null, column.Path, null, false);
                     objects.Attach(child, at, false);
-                    var typeName = Intern(column.Type);
+                    var typeName = InternDetail(column.Type);
                     if (!types.TryGetValue(typeName, out var type))
                     {
                         // ObjectDetails numbers types in 16 bits: a dataset with more distinct type texts keeps its names only.
                         if (types.Count >= MaxTypes) throw new TooLarge();
-                        Charge(IndexMemory.TypeBytes);
+                        ChargeDetail(IndexMemory.TypeBytes);
                         type = types[typeName] = objects.Details.AddType(objects.Id(typeName), -1, types.Count, 0, userDefined: true, tableType: false);
                     }
-                    Charge(IndexMemory.TypedBytes);
+                    ChargeDetail(IndexMemory.TypedBytes);
                     ordinal = ordinal == short.MaxValue ? ordinal : (short)(ordinal + 1);
                     objects.Details.SetTyped(child, type, 0, 0, 0, ordinal, column.Nullable ? TypedFlags.Nullable : TypedFlags.None);
                     if (column.Description is { Length: > 0 } description)
                     {
                         var kept = Clip(description);
-                        Charge(BigQueryFacts.DescriptionBytes + IndexMemory.StringBytes(kept.Length));
+                        ChargeDetail(BigQueryFacts.DescriptionBytes + IndexMemory.StringBytes(kept.Length));
                         descriptions[child] = kept;
                     }
                 }
             }
             var index = new DatabaseIndex(project, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
             {
-                Dataset = dataset, Facts = new BigQueryFacts(new(facts), new(descriptions), new(shards)), ChildrenLeftOut = !children, DefinitionsLeftOut = !definitions
+                Dataset = dataset, Facts = new BigQueryFacts(new(facts), new(descriptions), new(shards)), ChildrenLeftOut = !children, DefinitionsLeftOut = !definitions,
+                LeftOut = leftOut
             };
             objects.Clear();
             taken = credited = creditLeft = 0;
@@ -333,13 +346,14 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     /// <summary>The most distinct column type texts one dataset's read keeps (ObjectDetails' 16-bit type ids, with room to spare).</summary>
     internal const int MaxTypes = 60_000;
 
-    /// <summary>A view's or routine's text, cut at the per-definition limit, pooled while the names' reserve is free (counted as cut otherwise).</summary>
-    /// <summary><paramref name="wasCut"/>: the text is an earlier read's, already cut. False when it was left out for the reserve.</summary>
+    /// <summary>A view's or routine's text, cut at the per-definition limit, pooled while the details' floor is free (counted as cut,
+    /// and as left out for memory, otherwise).</summary>
+    /// <summary><paramref name="wasCut"/>: the text is an earlier read's, already cut. False when it was left out for the floor.</summary>
     private bool Definition(int at, string text, bool wasCut)
     {
         var longer = wasCut || text.Length > limits.DefinitionChars;
         var kept = text.Length > limits.DefinitionChars ? text[..limits.DefinitionChars] : text;
-        if (Pooled(DefinitionText.Hold(kept), limits.NamesReserveBytes) is not { } copy) { cut++; return false; }
+        if (Pooled(DefinitionText.Hold(kept), detailsFloor) is not { } copy) { cut++; leftOut++; return false; }
         objects.SetDefinition(at, copy, longer);
         modules++;
         if (longer) cut++;

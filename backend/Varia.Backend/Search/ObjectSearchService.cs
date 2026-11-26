@@ -120,12 +120,34 @@ internal sealed partial class ObjectSearchService : IDisposable
         Limits = limits ?? new ObjectIndexLimits();
         budget = new IndexBudget(Limits.MemoryBytes);
         pool = new StringPool(budget);
-        resources = new ResourceCatalog(pool, Limits.NamesReserveBytes);
+        resources = new ResourceCatalog(pool, () => Limits.NamesReserveBytes);
         total = new SemaphoreSlim(Limits.Total);
         running = new RequestRegistry(64, "object index");
     }
 
     public ObjectIndexLimits Limits { get; }
+
+    /// <summary>explorer.index's memoryLimitMiB, checked: the limit every connection's index shares from this build on, with the
+    /// names' reserve (and so BigQuery's floors) in proportion. Nothing held is dropped: a rebuild charges its predecessor's
+    /// share first, so an index over a lowered limit keeps what it has until its connection closes.</summary>
+    internal void SetMemoryLimit(int? mib)
+    {
+        if (CheckMemoryLimit(mib) is not { } checkedMiB) return;
+        var bytes = checkedMiB * 1024L * 1024;
+        lock (limitGate)
+        {
+            if (Limits.MemoryBytes == bytes && budget.Limit == bytes) return;
+            Limits.MemoryBytes = bytes;
+            Limits.NamesReserveBytes = bytes / ObjectIndexLimits.NamesReserveShare;
+            budget.Limit = bytes;
+        }
+    }
+
+    private readonly object limitGate = new();
+
+    /// <summary>Refuses a memory limit outside its bounds; a build checks it before it does anything else.</summary>
+    internal static int? CheckMemoryLimit(int? mib) =>
+        mib is < ObjectIndexLimits.MinMemoryMiB or > ObjectIndexLimits.MaxMemoryMiB ? throw Invalid("memoryLimitMiB.") : mib;
     /// <summary>The memory every connection's index holds (the checks read it).</summary>
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
@@ -218,10 +240,12 @@ internal sealed partial class ObjectSearchService : IDisposable
         var watch = Stopwatch.StartNew();
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        CheckMemoryLimit(args.MemoryLimitMiB);
         var profile = host.Profile(args.ConnectionId);
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
         var render = IndexRender(profile);
+        SetMemoryLimit(args.MemoryLimitMiB);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
@@ -399,16 +423,20 @@ internal sealed partial class ObjectSearchService : IDisposable
                 var held = databases.Count(value => value.Dataset is not null);
                 var projects = databases.Where(value => value.Dataset is not null).Select(value => value.Database).Distinct(StringComparer.Ordinal).Count();
                 var skipped = state.Skipped.ToList();
+                var (bigQueryLeftOut, bigQueryLeftOutIn) = (databases.Sum(value => value.LeftOut), databases.Count(value => value.LeftOut > 0));
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
-                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped);
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped,
+                    bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null);
             }
+            int[] parts = [.. databases.Select(value => value.LeftOut), state.Index.Resource?.LeftOut ?? 0, state.Index.Server?.LeftOut ?? 0];
+            var (leftOut, leftOutIn) = (parts.Sum(), parts.Count(value => value > 0));
             // A stopped first build that read only the server's own objects still holds an index.
             return new(state.Building ? "building" : state.Built || databases.Count > 0 || state.Index.Objects > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
                 databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
-                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped);
+                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null, LeftOutIn: leftOut > 0 ? leftOutIn : null);
         }
     }
 
@@ -760,6 +788,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private long creditLeft = credit?.Bytes ?? 0;
     private int modules;
     private int cut;
+    /// <summary>The part of <see cref="cut"/> left out whole below the names' reserve.</summary>
+    private int leftOut;
     /// <summary>The objects read so far, and the pool's copy of each distinct text the read holds a reference to (its texts).</summary>
     private readonly ObjectTable.Builder objects = new();
     /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
@@ -804,7 +834,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
         {
             // A read that failed part way (KeepPartial) says what it read as much as a whole one.
-            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI
+            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI, LeftOut = leftOut
         };
         objects.Clear();
         taken = 0;
@@ -1382,10 +1412,11 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         // Below the names' reserve with no credit for a slot, the pool refuses every definition the read does not hold yet: read
         // no more than a short one's length, which finds a repeated default or computed column expression (((0)), (getdate()))
         // the read already holds at no cost, rather than stream a long one only to throw it away.
-        if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) return Repeated(reader, ordinal);
+        if (creditLeft < IndexMemory.SlotBytes && budget.Free < limits.NamesReserveBytes) return Repeated(reader, ordinal);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
         if (text.Length == 0) return (None, false);
-        if ((PackedText.TryPack(text) is { } packed ? (object?)Pooled(packed, limits.NamesReserveBytes) : Pooled(text, limits.NamesReserveBytes)) is not { } copy) { cut++; return (None, false); }
+        var reserve = limits.NamesReserveBytes;
+        if ((PackedText.TryPack(text) is { } packed ? (object?)Pooled(packed, reserve) : Pooled(text, reserve)) is not { } copy) { cut++; leftOut++; return (None, false); }
         modules++;
         if (longer) cut++;
         return (copy, longer);
@@ -1410,6 +1441,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             return (copy, false);
         }
         cut++;
+        leftOut++;
         return (None, false);
     }
 

@@ -7,7 +7,7 @@ import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.
 import {
   anyResultGrid, closeDocumentButton, connectDialogWindow, documentFrame, documentTab, gridCell, activeDocumentName, activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, editorTextIn, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerSearchCheck, explorerSearchField, explorerSearchCurrent, explorerSearchHits, explorerSearchOptions, explorerSearchPopover, explorerSearchSplitter, explorerSearchToggle, explorerSearchTypeSummary, explorerSearchTypes, explorerServerCount, explorerDropLine, pressToClose, searchHitApproximate, explorerSublabel, explorerToolbar, explorerFilterToolbar, itemCount,
-  dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchSelected, objectSearchServer, objectSearchServerOptions, objectSearchSummary, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
+  dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchIndexLines, explorerSearchIndexLine, documentVerb, objectSearchSelected, objectSearchServer, objectSearchServerOptions, objectSearchSummary, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
 import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard } from './fixtures/ui.mjs'
@@ -1310,6 +1310,45 @@ try {
     await page.keyboard.type('table')
     const tabHits = objectSearchHits(page)
     await expect(tabHits).toHaveCount(2)
+    // The index ran short of memory: the tab's index line says how many definitions were left out and of how many databases, a
+    // note under it says what to do, and Object Explorer's band (which hides a healthy index's line) shows the line and carries
+    // the note in its details. A rebuild that fits takes both away.
+    const rebuildIndex = () => documentVerb(documentFrame(page, 'Search Objects'), 'Search Objects', 'Rebuild Search Index').click()
+    const indexLines = objectSearchIndexLines(page)
+    await expect(indexLines).toHaveCount(1)
+    await expect(indexLines).not.toContainText('left out')
+    await setStub({ indexLeftOut: { leftOut: 1204, leftOutIn: 2 } })
+    await rebuildIndex()
+    await expect(indexLines).toHaveText([/ · 1,204 definitions left out of 2 databases \(index memory full\)$/,
+      'The index’s memory is full, so a search inside definitions misses the ones left out. Raise Index memory limit in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.'])
+    await expect(tabHits).toHaveCount(2)
+    for (const mode of ['light', 'dark']) {
+      await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe(mode)
+      await page.screenshot({ path: resolve('artifacts', `explorer-search-memory-tab-${mode}.png`) })
+    }
+    const bandText = await searchBox().inputValue()
+    await searchBox().fill('ORD')
+    await expect(explorerSearchHits(page)).toHaveCount(3)
+    await expect(explorerSearchIndexLine(page)).toHaveText(/ · 1,204 definitions left out of 2 databases \(index memory full\)$/)
+    await page.locator(part.explorerSearch).getByRole('button', { name: 'Search and index details', exact: true }).click()
+    const memoryDetails = explorerSearchPopover(page, 'Search details')
+    await expect(memoryDetails).toContainText('1,204 definitions left out of 2 databases (index memory full)')
+    await expect(memoryDetails).toContainText('Raise Index memory limit in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.')
+    for (const mode of ['light', 'dark']) {
+      await page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
+      await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe(mode)
+      await page.screenshot({ path: resolve('artifacts', `explorer-search-memory-band-${mode}.png`) })
+    }
+    await page.keyboard.press('Escape')
+    await expect(memoryDetails).toHaveCount(0)
+    await setStub({ indexLeftOut: undefined })
+    await rebuildIndex()
+    await expect(indexLines).toHaveCount(1)
+    await expect(indexLines).not.toContainText('left out')
+    await expect(explorerSearchIndexLine(page)).toHaveCount(0)
+    await searchBox().fill(bandText)
+    await objectSearchBox(page).focus()
     // The tree's selection is elsewhere first, so a reveal of dbo.table1 would show.
     await selectRevealed('server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
     const revealed = (await active())?.label

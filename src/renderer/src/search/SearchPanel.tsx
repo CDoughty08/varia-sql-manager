@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref } from 'react'
 import { folderSpecs, type FolderId } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
-import { childrenLeftOut, objectSearchLimits, searchHitLabel, searchKindBadge, type DefinitionMatch, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
+import { childrenLeftOut, objectSearchLimits, searchHitLabel, searchKindBadge, type DefinitionMatch, type ObjectIndexSkip, type ObjectIndexStatus, type ObjectSearchHit } from '../../../shared/explorer/search.ts'
+import { pagePath, settingDef } from '../../../shared/settings/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
@@ -115,6 +116,32 @@ export function moreMatches(definition: DefinitionMatch): string | undefined {
   return definition.uncounted === true ? 'more not counted' : undefined
 }
 
+/** A skip the index's memory caused: a database or dataset kept without its children, or one that did not fit at all (a
+ *  BigQuery listing cut short is TOO_LARGE too, and names no memory). */
+const memorySkip = (skip: ObjectIndexSkip): boolean => skip.code === childrenLeftOut || (skip.code === 'TOO_LARGE' && /memory/i.test(skip.message))
+
+/** The definitions an index left out because its memory ran out, for its line: a search inside definitions cannot find them. */
+function leftOutText(status: ObjectIndexStatus): string {
+  if (!status.leftOut) return ''
+  const where = status.leftOutIn ? ` of ${count(status.leftOutIn, status.provider === 'bigquery' ? 'dataset' : 'database')}` : ''
+  return ` · ${count(status.leftOut, 'definition')} left out${where} (index memory full)`
+}
+
+/** Whether an index left anything out because the memory every index shares ran out: definitions, children, a whole database
+ *  or dataset, or a BigQuery project's details (which only memory leaves at names only). */
+export function indexMemoryShort(status: ObjectIndexStatus | undefined): boolean {
+  return !!status && status.state !== 'none' && (!!status.leftOut || !!status.namesOnly?.length || status.skipped.some(memorySkip))
+}
+
+/** What to do about it, below the index line and in the details: the limit is Options', and applies to the next build. */
+export function indexMemoryNote(statuses: readonly (ObjectIndexStatus | undefined)[]): string | undefined {
+  if (!statuses.some(indexMemoryShort)) return undefined
+  const definitions = statuses.some(status => !!status?.leftOut)
+  const limit = settingDef('objectExplorer.search.memoryLimitMiB')
+  return `The index’s memory is full, so ${definitions ? 'a search inside definitions misses the ones left out' : 'part of what could be indexed was left out'}. `
+    + `Raise ${limit.label} in Tools › Options › ${pagePath(limit.page).map(page => page.title).join(' › ')}, then rebuild the index.`
+}
+
 /** What the index holds, for the summary line. */
 export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
   if (status?.provider === 'bigquery' || entry?.phase) return bigQueryIndexSummary(entry, status)
@@ -127,7 +154,7 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   const server = status.skipped.some(skip => !skip.database)
   const agent = status.skipped.some(skip => skip.agent)
   const skipped = (status.stopped ? ' · build stopped' : '') + (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '') + (agent ? ' · SQL Server Agent objects skipped' : '')
-    + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '')
+    + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '') + leftOutText(status)
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
 }
@@ -157,7 +184,7 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const globalNote = (listTruncated ? ' · project list truncated' : '') + (memoryStopped ? ' · index memory limit reached' : '') + (discoveryFailed ? ' · project discovery skipped' : '')
   const skipped = (status.stopped ? ' · build stopped' : '') + globalNote + (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
-    + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '')
+    + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '') + leftOutText(status)
   // The billed bulk path: where it read, and a location whose queries failed (its datasets were read with the free calls instead).
   const bulk = status.bulk
   const billed = bulk ? (bulk.locations ? ` · details read with INFORMATION_SCHEMA in ${count(bulk.locations, 'location')}` : '')
@@ -184,6 +211,7 @@ export function unindexedServers(servers: readonly string[], indexes: Readonly<R
  *  databases skipped, or names only). A healthy index's detail is a click away. */
 export function indexIncomplete(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): boolean {
   return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions || !!status.namesOnly?.length || !!status.stopped
+    || !!status.leftOut
 }
 
 /** What a finished server index leaves out, in a few words, or undefined when it holds everything (a build still running is
@@ -214,6 +242,7 @@ export function indexGap(entry: IndexEntry): string | undefined {
     status.skipped.some(skip => skip.agent) ? 'SQL Server Agent objects skipped' : '',
     partial ? `children left out of ${count(partial, bigQuery ? 'dataset' : 'database')}` : '',
     namesOnly ? `names only in ${count(namesOnly, 'project')}` : '',
+    status.leftOut ? `${count(status.leftOut, 'definition')} left out (index memory full)` : '',
     status.definitions ? '' : 'names only'
   ].filter(Boolean)
   return gaps.length ? gaps.join(', ') : undefined
@@ -523,6 +552,8 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
   // In Object Explorer's band, progress and an incomplete index stay visible and a healthy index's detail is a click away; the
   // tab (All servers included, which is tab only) always shows the line, naming each server whose index leaves objects out.
   const indexNotice = indexIncomplete(entry, index)
+  // Builds still running say nothing yet: what they leave out is known when they end.
+  const memoryNote = indexMemoryNote(spanning ? Object.values(snapshot.indexes).map(item => item.requestId ? undefined : item.status) : entry?.requestId ? [] : [index])
   const unbuilt = unindexedServers(spanning ? workbench.connections.live().map(connection => connection.id) : workbench.connections.isLive(state.connectionId) ? [state.connectionId] : [],
     snapshot.indexes, spanning ? undefined : result?.index)
   const buildIndex = unbuilt.length ? <> <button type="button" className="object-search-build" onClick={() => { for (const id of unbuilt) objectSearch.build(id) }}>{unbuilt.length > 1 ? 'Build indexes' : 'Build index'}</button></> : null
@@ -679,11 +710,12 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} providers={providers} />
           : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} providers={providers} />}
         {(!pane || indexNotice) && <p className="object-search-index">{indexText}{buildIndex}</p>}
+        {!pane && memoryNote && <p className="object-search-index">{memoryNote}</p>}
       </>}
       {pane ? <div className="object-search-pane-status">
         <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? paneSummary : ''}</p>
         {showHits && <SearchPopover label="Search and index details" title="Search details" icon="info" compact>
-          <p className="object-search-index">{indexText}</p>{summary && <p className="object-search-index">{summary}</p>}
+          <p className="object-search-index">{indexText}</p>{memoryNote && <p className="object-search-index">{memoryNote}</p>}{summary && <p className="object-search-index">{summary}</p>}
         </SearchPopover>}
       </div> : <div className="object-search-tab-status">
         <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>

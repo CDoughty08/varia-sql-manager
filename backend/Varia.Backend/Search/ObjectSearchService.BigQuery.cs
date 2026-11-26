@@ -98,7 +98,7 @@ internal sealed partial class ObjectSearchService
             ];
             return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed,
                 [.. state.PartialProjects], new Dictionary<string, ObjectIndexSkip>(state.ProjectListingSkips, StringComparer.Ordinal),
-                new Dictionary<(string Project, string Dataset), ObjectIndexSkip>(state.DatasetSkips));
+                new Dictionary<(string Project, string Dataset), ObjectIndexSkip>(state.DatasetSkips), Limits.BigQueryNamesFloorBytes);
         }
     }
 
@@ -150,7 +150,11 @@ internal sealed partial class ObjectSearchService
             || bulk.Locations.Any(item => item is null || !bulkProjects.Contains(item.Project) || !BqNames.IsLocation(item.Location))
             || bulk.MaximumBytesBilled is < 1 or > BigQueryLimits.MaxSafeInteger || bulk.BudgetBytes is not (>= 1 and <= BigQueryLimits.MaxSafeInteger))) throw Invalid("bulk.");
         var definitions = args.Definitions ?? true;
+        SetMemoryLimit(args.MemoryLimitMiB);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
+        // Discovered projects' details keep the most free, so they give way before the billing and starred projects' do. A
+        // refresh the user asked of one project or dataset reads it as a starred one, whatever the project.
+        bool Discovered(string project) => scope is null && project != billing && !starredSet.Contains(project);
         if (missingOnly && scope is not null)
         {
             // Fast path: when the requested scope is already cleanly covered in the index (no listing/dataset skips, partial cuts, or stale marks), return immediately with 0 API calls.
@@ -427,7 +431,7 @@ internal sealed partial class ObjectSearchService
                 }, loop)).ToArray();
                 await Task.WhenAll(workers);
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, loop);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop);
                 if (held is not null)
                 {
                     Skip(held);
@@ -516,7 +520,7 @@ internal sealed partial class ObjectSearchService
                 known.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, loop);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop);
                 if (held is { Code: not ChildrenLeftOut })
                 {
                     onIncomplete?.Invoke(project);
@@ -1102,7 +1106,7 @@ internal sealed partial class ObjectSearchService
                                     {
                                         if (Interlocked.Exchange(ref wave2BudgetExhausted, 1) == 0)
                                         {
-                                            Skip(new("", "TOO_LARGE", "Indexing stopped early for auto-discovered projects because the index reached its " + Size + " memory limit.", Project: ""));
+                                            Skip(new("", "TOO_LARGE", "Indexing stopped early for auto-discovered projects: BigQuery's part of the index's " + Size + " memory limit is full.", Project: ""));
                                             wave2DiscoveredStop.Cancel();
                                         }
                                     },
@@ -1227,7 +1231,7 @@ internal sealed partial class ObjectSearchService
                     var wave3BudgetTight = Volatile.Read(ref wave2BudgetExhausted);
                     if (!wave3DiscoveredPending.IsEmpty && wave3BudgetTight == 0)
                     {
-                        var reserveFloor = Limits.NamesReserveBytes / 2;
+                        var reserveFloor = Limits.BigQueryDiscoveredFloorBytes;
                         using var wave3DiscoveredStop = CancellationTokenSource.CreateLinkedTokenSource(stop);
                         try
                         {
@@ -1236,7 +1240,7 @@ internal sealed partial class ObjectSearchService
                                 async (pair, loop) =>
                                 {
                                     if (Volatile.Read(ref wave3BudgetTight) != 0) return;
-                                    if (reserveFloor > 0 && budget.Limit - budget.Used < reserveFloor)
+                                    if (reserveFloor > 0 && budget.Free < reserveFloor)
                                     {
                                         if (Interlocked.Exchange(ref wave3BudgetTight, 1) == 0) wave3DiscoveredStop.Cancel();
                                         return;
@@ -1332,15 +1336,18 @@ internal sealed partial class ObjectSearchService
             && !state.Stale.Keys.Any(key => key.Project == project);
     }
 
-    /// <summary>Builds and holds a dataset's read; a read past the budget is tried again without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
-    private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, CancellationToken token)
+    /// <summary>Builds and holds a dataset's read; a read past BigQuery's part of the budget (its names floor, and its details floor,
+    /// the higher one for a <paramref name="discovered"/> project) is tried again without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
+    private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
+        CancellationToken token)
     {
+        var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, discovered ? Limits.BigQueryDiscoveredFloorBytes : Limits.BigQueryDetailsFloorBytes);
         var old = state.Index.Get(project + "\u0001" + dataset);
-        var built = new BigQueryReader(Limits, pool, old).Read(project, dataset, entries, true, definitions);
+        var built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, true, definitions);
         var childrenLeftOut = false;
         if (built is null)
         {
-            built = new BigQueryReader(Limits, pool, old).Read(project, dataset, entries, false, definitions);
+            built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, false, definitions);
             childrenLeftOut = built is not null;
         }
         if (built is not null)
@@ -1360,11 +1367,11 @@ internal sealed partial class ObjectSearchService
                 throw new OperationCanceledException(token);
             }
             return childrenLeftOut
-                ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: with them the index would pass its " + Size + " memory limit.", Project: project)
+                ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: with them BigQuery would pass its part of the index's " + Size + " memory limit.", Project: project)
                 : null;
         }
         return new(dataset, "TOO_LARGE", old is not null
-            ? "The dataset's updated details would take the index past its " + Size + " memory limit; earlier names were kept."
-            : "The dataset was not indexed: it would take the index past its " + Size + " memory limit.", Project: project);
+            ? "The dataset's updated details would take BigQuery past its part of the index's " + Size + " memory limit; earlier names were kept."
+            : "The dataset was not indexed: it would take BigQuery past its part of the index's " + Size + " memory limit.", Project: project);
     }
 }

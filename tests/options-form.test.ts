@@ -54,8 +54,11 @@ describe('Options search', () => {
     for (const word of ['mouse', 'gesture']) expect(searchPages(word, 'win32')!.pages, word).toEqual(['environment.shortcuts', 'textEditor.general'])
     expect(searchPages('follow active query', 'win32')!.pages).toEqual(['environment.objectExplorer'])
     // The result limits answer to the words their labels and the grid's strip use, shortened as people type them.
-    for (const words of ['max rows', 'row limit', 'rows kept', 'max result sets', 'result set limit', 'memory limit', 'discard'])
+    for (const words of ['max rows', 'row limit', 'rows kept', 'max result sets', 'result set limit', 'result memory limit', 'discard'])
       expect(searchPages(words, 'win32')!.pages, words).toEqual(['queryResults.sqlServer.grid'])
+    // Two memories have a limit: results', and the Search Objects index's.
+    expect(searchPages('memory limit', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid', 'objectExplorer.commands'])
+    expect(searchPages('index memory', 'win32')!.pages).toEqual(['objectExplorer.commands'])
     // BigQuery's window cache is part of the budget too.
     expect(searchPages('budget', 'win32')!.pages).toEqual(['queryResults.sqlServer.grid', 'queryResults.bigQuery.results'])
   })

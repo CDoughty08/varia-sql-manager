@@ -251,6 +251,17 @@ internal static class SearchLiveChecks
             check(stopped && stopping is { State: LookupState.Building, Skip.Code: "TOO_LARGE" } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
                 "a stopped real build leaves a database it did not reach skipped as before, never absent or ready: " + stopping + " then " + tight.Lookup(connectionId)?.Database(database));
         }
+        // Another connection's BigQuery index holding everything its floors allow, the most BigQuery can take of the budget:
+        // this server's definitions still fit, none is left out for memory, and a search inside them finds this run's marker.
+        using (var beside = new ObjectSearchService(service))
+        {
+            beside.Budget.Force(beside.Limits.MemoryBytes - beside.Limits.BigQueryNamesFloorBytes);
+            var full = await beside.IndexAsync(new(connectionId, Guid.NewGuid().ToString(), MemoryLimitMiB: ObjectIndexLimits.DefaultMemoryMiB), CancellationToken.None);
+            var inside = beside.Search(new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), marker, In: "definitions", Database: database), CancellationToken.None);
+            check(full.Status is { State: "ready", LeftOut: null, LeftOutIn: null, Modules: > 0 } && full.Status.Skipped.All(skip => skip.Code is not ("TOO_LARGE" or ObjectSearchService.ChildrenLeftOut))
+                && inside.Total >= 1 && beside.Budget.Free >= beside.Limits.NamesReserveBytes,
+                $"beside a BigQuery index at its floor a real server keeps its definitions ({full.Status.Modules} kept, {full.Status.LeftOut ?? 0} left out, {inside.Total} hits inside them, {beside.Budget.Free / (1024 * 1024)} MiB free)");
+        }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing
         // the reader drains every row and the statement runs, so the check bites. Neither depends on timing or load.

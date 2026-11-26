@@ -798,6 +798,14 @@ internal static class StoreChecks
             check(refused == (beforeHeld + 2, reportsHeld) && service.Search.DetailWalks == beforeHeld + 2 && reports.Count == reportsHeld + 1
                 && details[^1] == (1, 0L, StringPool.Cost("dbo.Late")) && reports[^1].Used == lateBytes + StringPool.Cost("dbo.Late"),
                 "a database held without changing the budget stops showing as reading at the first check after the interval, and a refused walk is sent at the next check: " + refused);
+        // A build that changes the limit (explorer.index's memoryLimitMiB) is reported though no byte moved, once.
+        var beforeLimit = reports.Count;
+        service.Search.SetMemoryLimit(ObjectIndexLimits.MinMemoryMiB);
+        service.ReportIndexMemory();
+        service.ReportIndexMemory();
+        lock (reports)
+            check(reports.Count == beforeLimit + 1 && reports[^1].Limit == ObjectIndexLimits.MinMemoryMiB * 1024L * 1024 && reports[^1].Used == lateBytes + StringPool.Cost("dbo.Late"),
+                "a changed index memory limit goes out with the next report, once, as the budget the Memory panel shows");
         service.Search.Forget(lateConnection);
         service.ReportIndexMemory();
         // A walk over a table of many texts grows the set; with no build running, it gives the arrays (no budget charges them) back.

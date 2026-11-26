@@ -6,7 +6,7 @@ internal sealed record ResourceKey(string Version, int Edition, long Count, Date
 
 /// <summary>The resource database's objects for one key: the sys and INFORMATION_SCHEMA views, procedures and functions that
 /// every database of every server with that key shows. Search lists them once per connection, not once per database.</summary>
-internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int modules, int cut, long bytes = 0)
+internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int modules, int cut, long bytes = 0, int leftOut = 0)
 {
     public ResourceKey Key { get; } = key;
     /// <summary>The memory its records hold, charged once whatever the connections that share it; its names and definitions are
@@ -15,6 +15,8 @@ internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int module
     public ObjectTable Table { get; } = table;
     public int Modules { get; } = modules;
     public int Cut { get; } = cut;
+    /// <summary>The part of <see cref="Cut"/> left out whole because the index's memory ran out.</summary>
+    public int LeftOut { get; } = leftOut;
 }
 
 /// <summary>
@@ -22,9 +24,10 @@ internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int module
 /// when the last connection lets go. Its names and definitions come from the <see cref="StringPool"/>, so two builds whose
 /// system modules overlap (a cumulative update changes few of them), and the databases that hold the same text, share each
 /// identical text. A set's records and names are charged whatever the budget holds (every connection needs them, and they are a
-/// few MiB); a definition is left out when less than <paramref name="keepFree"/> is free.
+/// few MiB); a definition is left out when less than <paramref name="keepFree"/> (the names' reserve, read as each set is
+/// shared, since a build may change the limit) is free.
 /// </summary>
-internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
+internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = null)
 {
     private readonly object gate = new();
     private readonly Dictionary<ResourceKey, Entry> sets = [];
@@ -149,16 +152,18 @@ internal sealed class ResourceCatalog(StringPool pool, long keepFree = 0)
         var names = table.NameTexts();
         var texts = table.Texts;
         var copies = new object?[texts.Count];
+        var reserve = keepFree?.Invoke() ?? 0;
         for (var at = 0; at < copies.Length; at++)
-            if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, keepFree);
+            if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, reserve);
         var shared = table.WithTexts(copies);
         var modules = 0;
         var cut = 0;
+        var leftOut = 0;
         for (var at = 0; at < shared.Count; at++)
         {
             if (shared.HasDefinition(at)) { modules++; if (shared.DefinitionCut(at)) cut++; }
-            else if (table.HasDefinition(at)) cut++;
+            else if (table.HasDefinition(at)) { cut++; leftOut++; }
         }
-        return new ResourceSet(key, shared, modules, cut, bytes);
+        return new ResourceSet(key, shared, modules, cut, bytes, leftOut);
     }
 }
