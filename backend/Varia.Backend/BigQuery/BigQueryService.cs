@@ -204,7 +204,7 @@ internal sealed class BigQueryConnection(string id, BigQueryConnectOptions optio
 /// be low (docs/bigquery.md, Cost): <c>script</c> (a script's dry run stops at its first DDL or control statement),
 /// <c>lowerBound</c> or <c>unknown</c> (BigQuery's own accuracy), or <c>zeroBytes</c> (tables were read but 0 bytes
 /// reported: external and row-level-security tables).</summary>
-internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false, string? Incomplete = null, string? StatementType = null);
+internal sealed record BigQueryEstimate(long BytesProcessed, bool Faked = false, string? Incomplete = null, string? StatementType = null, string? Location = null);
 
 /// <summary>
 /// The BigQuery engine (docs/bigquery.md): BigQuery connections in a registry keyed by the same handle ids as SQL Server's,
@@ -436,7 +436,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         Exception failure;
         // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: Google's text stays.
-        try { return Estimate(await DryRunAsync(connection.Client, connection.Options.Project, session?.Location ?? location ?? connection.Location, sql, dataset, token, parameters, session?.Id)); }
+        try { return Estimate(await MetadataAsync(connection, t => DryRunAsync(connection.Client, connection.Options.Project, session?.Location ?? location ?? connection.Location, sql, dataset, t, parameters, session?.Id), token)); }
         // An expired session estimates as a new one would (Execute starts one and says so), without the old temp tables.
         catch (Exception error) when (session is { } held && !token.IsCancellationRequested && SessionGone(error, held.Id))
         {
@@ -487,7 +487,8 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
             : query?.TotalBytesProcessedAccuracy switch { "LOWER_BOUND" => "lowerBound", "UNKNOWN" => "unknown", _ => null }
             // Any statement that reads tables (CREATE TABLE AS SELECT, INSERT ... SELECT, MERGE too), but not DDL that reads none.
             ?? (bytes == 0 && !ReadsNothing(statement) && query?.ReferencedTables is { Count: > 0 } ? "zeroBytes" : null);
-        return new(bytes, Incomplete: incomplete, StatementType: statement);
+        var location = answer.JobReference?.Location is { Length: > 0 and <= BigQueryLimits.Location } loc && BigQueryLimits.LocationId().IsMatch(loc) ? loc : null;
+        return new(bytes, Incomplete: incomplete, StatementType: statement, Location: location);
     }
 
     /// <summary>Statements that process no billed table data whatever they name (DDL, snapshot copies, loads, index
