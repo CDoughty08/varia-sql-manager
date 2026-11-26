@@ -647,9 +647,9 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   (what it does not charge is bounded by those limits alone), and every reference a search or a lookup follows is checked
   before a table exists (in clear text nothing else vouches for the content); a load takes texts from the `StringPool` and
   charges as the reader that made the unit charges (a new field must be charged the same way, BigQuery's under its
-  floors); the writer refuses whatever the loader would; every failure is an `IndexFileProblem` value with everything
-  taken given back;
-  a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
+  floors; a BigQuery replacement holds the replaced share whole rather than in the read's two parts, since it charges by
+  section rather than by entry, so it fits wherever the read fits); the writer refuses whatever the loader would; every
+  failure is an `IndexFileProblem` value with everything taken given back; a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
   change bumps `IndexFileContainer.Version` and commits that version's files (`Fixtures/IndexFile`, written by the test
   program's `--write-index-goldens`), which `IndexFileChecks` loads on every run.
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
