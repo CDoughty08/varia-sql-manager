@@ -195,6 +195,53 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Reload and keep my changes matches steps by name: steps you did not touch take the job's version now (another session's renames,
   deletes, inserts and Start step stand), your edits land on the step you edited at its current number, and the compare's Steps row
   says what each side added, deleted, edited or reordered.
+  **Flow** (the switch at the top left of Steps, List | Flow; every document opens on List; `JobStepsFlow.tsx`, the rules in
+  `src/shared/agent/flow.ts`) draws the same draft as a graph with Pixi, as the execution plan viewer does (`FlowCanvas.ts`, sharing its
+  camera, zoom and label pool), on a dot grid that pans with the graph (theme key `charts.canvasDots`). Steps stay in step order, top to bottom; each has its number, name, type and icon, and its key field
+  (database, package, run as, retries or command). Its ✓ and ✗ ports lead to the next step (straight), to a Quit pill, to an
+  **End · job fails** node (the last step's Go to the next step; one under each port when both actions do), to a **Step N · not read** pill
+  (in a job with more steps than Varia reads, a go-to past them or the last read step's next step), or along a lane beside the column (success on the left, failure on
+  the right; a go-to to the step just below is straight and marked "→ N"). The Start step has the entry arrow (its own place on the step's side, apart from a jump back to it), a loop is tagged
+  ("Loop · 3 ⇄ 4"), a step nothing reaches is dashed and tagged Never runs (not said in a job with more steps than Varia reads, where
+  Reached from adds "perhaps steps Varia does not read", and a Start past the steps read is named under Flow checks with no step read, in List or Flow, tagged Start step), and an action changed since the job was read is drawn in the
+  accent and tagged "changed". Beside the graph: the selected step's summary (with **Reached from**), the **Flow checks** and the key.
+  The checks are warnings that never block Save, and List tags the same steps: a step that never runs (Make Start step when its paths
+  lead to the current Start step), a loop (Agent does not count passes), a loop with no way out, and the last step going to the next
+  step (Quit reporting success). Click selects; double-click, Enter or Edit step docks List's step editor beside the graph (Close
+  editor goes back); right-click (Control+click on macOS) or Shift+F10 opens the step's menu, whose items all act on that step (Edit step, Start job at this step, Make Start step, On success ›
+  and On failure › with SSMS's four actions and every other step, Add step after ›, Move up, Move down, Delete step (Delete on the graph, also ⌘⌫ on macOS); on macOS, whose
+  native menus show no items built when they open, On success…, On failure… and Add step after… pick from the same lists). Dragging a
+  ✓ or ✗ port onto a step sets Go to step; dropping it on empty space opens that action's list; released off the canvas, or without moving, it does nothing. Steps are reordered in List or with Move
+  up and Move down, never by dragging nodes. The wheel scrolls, Ctrl+wheel zooms, and the toolbar has −, the zoom and +, and Fit. A
+  visually hidden tree of the steps, over their nodes, keeps focus and names each step with both actions, so the keyboard and screen
+  readers have the whole graph; arrows move the selection, and the selection and a keyboard menu's step come into view by moving the graph, across and up or down. A pointer menu is
+  the menu of the step under the pointer; empty canvas, an edge or a pill has none. Fit goes below 25 % when a long job needs it, and takes in the chips beside the lanes. Scrolled out of view (to History, say), the
+  graph releases its canvas and GPU context, and a new one opens where it was. The step menu's edits, Enter and the drop's list need no
+  backend, so they stay with the draft when the backend is lost; Start job at this step does not. A pane too
+  narrow for the graph beside its panel (a split editor) puts the panel under the graph. History's and the copy review's Edit step links open
+  Flow's docked editor when Flow shows. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
+  Flow's toolbar **Show** switch (Steps | Run | Live run; `FlowRunPanel.tsx`, the rules in `src/shared/agent/flow-run.ts`)
+  draws a run over the graph from History's own `agent.history` view, which runs while an overlay shows even with History closed.
+  **Run** draws the run picked in the run box beside the switch, which is History's selected run (picking one picks it in both;
+  History's run summary has **Show in Flow**, and the panel's **Open in History** goes back). The path it took is bold with the order
+  on each edge ("1 · 3" for an edge taken twice), each step says how its passes ended and how long they took (×N for a step a loop
+  ran more than once with its last two passes, and its retries; a pass is a step's rows up to its first row that is not a Retry), and
+  steps it never reached fade and say Not run. A run whose rows History cut short draws no last edge, and the steps past the rows read
+  show — rather than Not run. An edge the draft has changed since the run is left off rather than drawn wrong; a pass of a step the job
+  no longer has (deleted, even when a later step took its id) or of a step past the ones Varia reads is counted in the panel. The panel
+  numbers steps as the graph does and has the run (started, duration against the usual time, invoked by, the step that failed and
+  Agent's message), every pass in order (a pass selects its step on the graph) and the chosen pass's whole message with Copy; with
+  History's Failed on, the run box lists failed runs only and says so. **Live run** turns on by itself when the job starts and goes
+  back to the overlay before it when the run ends (the keyboard focus, if the panel had it, goes to the Show switch, and the change is
+  announced); it rings the current step (from the header's watched state; the ring pulses slowly unless motion is reduced) with how long it has run on the server's clock, its usual
+  time and a bar, lights both ways it can go next, and fades the steps to come: Waiting where the steps so far lead on success, else On
+  failure only. Finished steps come from History's rows of the in-progress run, so while Live run shows in Flow History's list follows
+  the newest run (Failed off, unpinned); in List and History alone a job starting leaves History's filter and pick as they were. Until
+  those rows are read only the current step is known, and past step 1 its time too is unknown. Its panel has the run against its usual
+  time, the current step with where it goes on success and on failure (and Longer than usual past its usual time), and Stop job. Under
+  either panel the selected step's summary keeps Edit step and Start at step; a History that cannot be read shows its error with Retry,
+  and a job not saved yet has no runs to draw. Each step's accessible name adds the overlay's state in words ("This run: ran 2 times:
+  failed in 00:00:20, then succeeded in 00:00:33"), with every pass. The usual time is per step, not per pass.
   Another owner's job below sysadmin opens read-only with the reason. Edits mark the tab dirty, Save counts them ("Save · 2
   changes"), closing asks to save, and Problems warn and only block what msdb would refuse (a missing name, owner or operator).
   **Save** sends only what changed with the version and modified date the describe read, as one batch in one transaction:
@@ -534,7 +581,7 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | An SSIS execution messages view for the job history's SSIS link (a query window today) | AG-13 |
 | Schedules timeline; schedule occurrences across midnight and for every N months; an Agent live suite for schedules | AG-14 |
 | Activity Monitor sessions that link to the job they run | AG-16 |
-| Manage Job Categories; multi-server targets (MSX/TSX); Script Action to Job; output file and table log viewers; SQL Server Logs and Database Mail in the Log File Viewer; Agent Properties' Advanced, Alert System, Job System and Connection pages and the fail-safe operator; the operator's History page; Error Logs' Configure; WMI alert editing; Copy to another server; New Job templates; Flow view; Elastic Jobs | Later |
+| Manage Job Categories; multi-server targets (MSX/TSX); Script Action to Job; output file and table log viewers; SQL Server Logs and Database Mail in the Log File Viewer; Agent Properties' Advanced, Alert System, Job System and Connection pages and the fail-safe operator; the operator's History page; Error Logs' Configure; WMI alert editing; Copy to another server; New Job templates; Elastic Jobs | Later |
 | SSMS's Start PowerShell, Reports and Policies items on Agent nodes | Not planned (Varia has none of them on any node) |
 
 AG-4's Script As output still waits for SSMS goldens from an SSMS run (the owner's); it is compared with SMO's own
@@ -630,7 +677,12 @@ checks nothing committed, renames it to a hostile name and back, runs the script
 deletes one, reading `sysjobsteps` back after each save. The `agent-job` smoke suite opens jobs from
 Job Activity Monitor (double-click and Enter), saves an edit and a removed alert, loses a save to another session's (the fake
 backend's `job-save-race` control file) and saves after Reload and keep my changes, starts the job once at a step, reorders, parses,
-deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job.
+deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job. The `agent-flow` smoke suite
+switches Steps to Flow, fixes the End warning, sets an action from the step menu (Shift+F10, On failure ›) and by dragging a port,
+docks the editor with Enter, checks List shows the same draft and saves it. The `agent-flow-run` smoke suite (the fake backend's
+`agent-flow-runs` control file: four branching steps, a failed run with a loop and a retry) draws Run, picks an older run in the run
+box, comes back through History's Show in Flow, then starts the job and follows Live run from step to step until the view returns to
+Run with the new run; `VARIA_SMOKE_RECORD=1` records it.
 
 `AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
 a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror

@@ -37,6 +37,8 @@ export interface CommandContext {
   /** State keys the menu's target stands in for the workbench's (a Search Objects result's, for the selection's): preconditions
    *  and menu `when` clauses read them over the workbench's own. */
   readonly state?: Partial<ContextKeys>
+  /** A job step menu's item (Steps › Flow): the action On success › or On failure › sets, or the type Add step after › adds. */
+  readonly agentStep?: { readonly which?: 'success' | 'fail'; readonly action?: 1 | 2 | 3 | 4; readonly target?: string; readonly subsystem?: string }
 }
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =

@@ -221,7 +221,8 @@ npm run test:smoke:wsl -- --all
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs
-  on Linux too). `scripts/packaged-smoke.mjs` and `portable-smoke.mjs` take the built app from `VARIA_PACKAGED_EXECUTABLE`
+  on Linux too). `VARIA_SMOKE_RECORD=1` makes the suites that support it (`agent-flow-run`) record the window as an animated PNG
+  in `artifacts/` (`scripts/fixtures/recording.mjs`), for reviewing live behaviour; CI never sets it. `scripts/packaged-smoke.mjs` and `portable-smoke.mjs` take the built app from `VARIA_PACKAGED_EXECUTABLE`
   (with `VARIA_PACKAGED_PROFILE`) and `VARIA_PORTABLE_EXECUTABLE`. Only in unpackaged smoke runs main also honours:
   - `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
     takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close

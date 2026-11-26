@@ -29,7 +29,7 @@ const record = (patch: Partial<AgentJobRecord> = {}): AgentJobRecord => ({
 const model = (patch: Partial<AgentJobDocumentModel> = {}): AgentJobDocumentModel => ({
   job: record(), login: 'sa', sysadmin: true, platform: 'windows', categories: [uncategorizedCategory, 'Data Collector', 'Database Maintenance'],
   operators: [operator('DBA'), operator('On-call', { pagerDays: 62, weekday: { start: 80000, end: 180000 } }), operator('Old', { enabled: false })],
-  owners: ['sa', 'CONTOSO\\dana'], steps: [{ id: 1, name: 'Extract', subsystem: 'TSQL' }, { id: 2, name: 'Load', subsystem: 'TSQL' }],
+  owners: ['sa', 'CONTOSO\\dana'], steps: [{ id: 1, name: 'Extract', subsystem: 'TSQL', onSuccessAction: 3 }, { id: 2, name: 'Load', subsystem: 'TSQL' }],
   alerts: [{ id: 11, name: 'Log full', enabled: true, severity: 0, messageId: 9002 }, { id: 12, name: 'Severity 017', enabled: true, severity: 17, messageId: 0 }], alertsEditable: true,
   mail: { checked: true, xps: true, profiles: 1, sysadmin: true, useDatabaseMail: true, agentProfile: 'Ops' }, ...patch
 })
@@ -571,6 +571,107 @@ describe("the job document's Steps page", () => {
     expect(commands.isEnabled('agentJob.moveStepDown', { tabId: id })).toBe(false)
     await commands.execute('agentJob.moveStepUp', { tabId: id }, 'keybinding')
     expect(keys(jobDocuments, id)).toEqual(['s2', 's3', 's1'])
+    // A Flow step menu's Move up and Move down act on the menu's step, as its other items do, not on the selected one.
+    const target = { kind: 'agentStep', tabId: id, key: 's2' } as const
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s3')
+    expect(commands.isEnabled('agentJob.moveStepUp', { tabId: id, target })).toBe(false)
+    expect(commands.isEnabled('agentJob.moveStepDown', { tabId: id, target })).toBe(true)
+    await commands.execute('agentJob.moveStepDown', { tabId: id, target }, 'menu')
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's2', 's1'])
+  })
+  it('sets a step\'s actions, adds after it, applies a flow check\'s fix and starts once at a saved step (Steps › Flow)', async () => {
+    const { jobDocuments, executes } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    // Every document opens on List; Flow is per document and not remembered, and leaving it closes its docked editor.
+    expect(jobDocuments.get(id)?.stepsView).toBeUndefined()
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.openStepEditor(id, 's2')
+    expect(jobDocuments.get(id)).toMatchObject({ stepsView: 'flow', stepEditor: true, step: 's2' })
+    jobDocuments.closeStepEditor(id)
+    expect(jobDocuments.get(id)?.stepEditor).toBeUndefined()
+    jobDocuments.openStepEditor(id, 's3')
+    jobDocuments.setStepsView(id, 'list')
+    expect([jobDocuments.get(id)?.stepsView, jobDocuments.get(id)?.stepEditor, jobDocuments.get(id)?.step]).toEqual([undefined, undefined, 's3'])
+    // A go-to needs another step that exists; the other actions drop the target.
+    jobDocuments.setStepAction(id, 's2', 'fail', 4, 's2')
+    jobDocuments.setStepAction(id, 's2', 'fail', 4, 'n9')
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ onFail: 2 })
+    jobDocuments.setStepAction(id, 's2', 'fail', 4, 's1')
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ onFail: 4, onFailTarget: 's1' })
+    jobDocuments.setStepAction(id, 's1', 'fail', 1)
+    expect(jobDocuments.get(id)?.draft?.steps.steps[0]).toMatchObject({ onFail: 1, onFailTarget: undefined })
+    // Add step after: just below the step, selected.
+    jobDocuments.addStepAfter(id, 's1', 'CmdExec')
+    expect(keys(jobDocuments, id)).toEqual(['s1', 'n1', 's2', 's3'])
+    expect(jobDocuments.selectedStep(id)).toMatchObject({ key: 'n1', subsystem: 'CmdExec' })
+    // Make Start step and the last step's Quit, as the Flow checks offer them.
+    jobDocuments.applyFlowFix(id, 's2', { kind: 'makeStart' })
+    expect(jobDocuments.get(id)?.draft?.steps.startKey).toBe('s2')
+    jobDocuments.applyFlowFix(id, 's3', { kind: 'quit', which: 'success', success: false })
+    expect(jobDocuments.get(id)?.draft?.steps.steps[3]).toMatchObject({ key: 's3', onSuccess: 2 })
+    // Start job at this step: a saved step by its saved name; a new one cannot be started yet.
+    expect(jobDocuments.canStartAtStep(id, 'n1')).toBe(false)
+    expect(jobDocuments.canStartAtStep(id, 's2')).toBe(true)
+    await jobDocuments.startAtStep(id, 's2')
+    expect(executes().at(-1)).toMatchObject({ action: 'startJob', stepName: 'Load' })
+  })
+  it('opens the step menu with On success, On failure and Add step after from the draft on Windows and Linux, and pickers on macOS', async () => {
+    const { jobDocuments, menus, commands, quickInput } = opened(stepped())
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const target = { kind: 'agentStep', tabId: id, key: 's2' } as const
+    const items = menus.resolve('agent.steps.context', target)
+    const titles = (list: typeof items) => list.map(item => item.kind === 'separator' ? '-' : item.title)
+    expect(titles(items)).toEqual(['Edit step', 'Start job at this step', 'Make Start step', '-', 'On success', 'On failure', '-', 'Add step after', 'Move up', 'Move down', '-', 'Delete step'])
+    const failure = items.find(item => item.kind === 'submenu' && item.title === 'On failure')
+    if (failure?.kind !== 'submenu') throw new Error('no On failure submenu')
+    expect(titles(failure.items)).toEqual(['Go to the next step (3 · Notify)', '-', 'Go to step 1: Extract', 'Go to step 3: Notify', '-', 'Quit the job reporting success', 'Quit the job reporting failure'])
+    expect(failure.items.filter(item => item.kind === 'command' && item.checked).map(item => item.kind === 'command' && item.title)).toEqual(['Quit the job reporting failure'])
+    // Picking an item sets the action on the menu's step, not the selected one.
+    const goTo = failure.items.find(item => item.kind === 'command' && item.title === 'Go to step 1: Extract')
+    if (goTo?.kind !== 'command') throw new Error('no item')
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s1')
+    await commands.execute(goTo.id, goTo.args, 'menu')
+    expect(jobDocuments.get(id)?.draft?.steps.steps[1]).toMatchObject({ key: 's2', onFail: 4, onFailTarget: 's1' })
+    const add = items.find(item => item.kind === 'submenu' && item.title === 'Add step after')
+    if (add?.kind !== 'submenu') throw new Error('no Add step after submenu')
+    expect(titles(add.items)).toEqual(['T-SQL', 'PowerShell', 'CmdExec', 'SSIS'])
+    const cmd = add.items.find(item => item.kind === 'command' && item.title === 'CmdExec')
+    if (cmd?.kind !== 'command') throw new Error('no CmdExec')
+    await commands.execute(cmd.id, cmd.args, 'menu')
+    expect(keys(jobDocuments, id)).toEqual(['s1', 's2', 'n1', 's3'])
+    // Enter and Delete on the graph act on the selected step.
+    jobDocuments.selectStep(id, 's3')
+    await commands.execute('agentJob.deleteStep', { tabId: id }, 'keybinding')
+    expect(keys(jobDocuments, id)).toEqual(['s1', 's2', 'n1'])
+    await commands.execute('agentJob.editStep', { tabId: id }, 'keybinding')
+    expect(jobDocuments.get(id)?.stepEditor).toBe(true)
+    // The last step deleted under the docked editor closes it, so a step added later does not reopen it.
+    const scratch = jobDocuments.openJob('c1', 'Nightly load 2')
+    await settled()
+    const left = () => keys(jobDocuments, scratch) ?? []
+    for (const key of left().slice(1)) jobDocuments.deleteStepOf(scratch, key)
+    jobDocuments.openStepEditor(scratch, left()[0]!)
+    jobDocuments.deleteStepOf(scratch, left()[0]!)
+    expect([left(), jobDocuments.get(scratch)?.stepEditor]).toEqual([[], undefined])
+    // The picker lists the same choices (macOS's On failure…, and a port dropped on empty space).
+    await commands.execute('agentJob.pickStepOnFailure', { tabId: id, target }, 'menu')
+    expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Step 2: On failure' })
+  })
+  it('places macOS\'s step pickers where Windows and Linux have the submenus', async () => {
+    const fixture = workbenchFixture({ platform: 'darwin' })
+    cleanups.push(() => fixture.dispose())
+    const items = fixture.menus.resolve('agent.steps.context', { kind: 'agentStep', tabId: 'none', key: 's1' })
+    expect(items.map(item => item.kind === 'separator' ? '-' : item.title)).toEqual(['Edit step', 'Start job at this step', 'Make Start step', '-', 'On success…', 'On failure…', '-', 'Add step after…', 'Move up', 'Move down', '-', 'Delete step'])
+  })
+  it('keeps the step menu\'s edits, Enter and the drop picker with the backend lost; Start job at this step needs it', () => {
+    const local = ['agentJob.editStep', 'agentJob.makeStartStep', 'agentJob.setStepAction', 'agentJob.pickStepOnSuccess', 'agentJob.pickStepOnFailure',
+      'agentJob.addStepAfter', 'agentJob.pickStepToAdd', 'agentJob.deleteStep', 'agentJob.moveStepUp', 'agentJob.moveStepDown'] as const
+    const lost = { activeDocumentIsAgentJob: true, backendReady: false }
+    for (const command of local) expect(evaluateWhen(compileWhen(commandDescriptor(command).precondition!), lost), command).toBe(true)
+    for (const command of ['agentJob.startAtThisStep', 'agentJob.start', 'agentJob.save', 'agentJob.reload'] as const)
+      expect(evaluateWhen(compileWhen(commandDescriptor(command).precondition!), lost), command).toBe(false)
   })
   it('lists the steps of a job with more than Varia reads read-only, with no problems', async () => {
     const { jobDocuments } = opened({ ...stepped(), stepsTruncated: true })
@@ -603,5 +704,117 @@ describe("the job document's Steps page", () => {
     expect(Object.keys(jobDocuments.get(id)?.ssis?.projectModels ?? {}).sort()).toEqual(['F\\P1', 'F\\P2'])
     void jobDocuments.loadSsisPackage(id, 'F', 'P1', undefined, true)
     expect(jobDocuments.get(id)?.ssis).toMatchObject({ open: 'F\\P1', projectModels: { 'F\\P2': expect.anything() } })
+  })
+})
+
+describe("the job document's Flow overlays", () => {
+  const tick = (handle: FakeLiveHandle, seq: number, status: number, step: number) =>
+    handle.deliver({ type: 'live.tick', seq, sampledAt: seq, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 2000, metrics: [status, step, 2, 0, 1, 0] }] })
+
+  it('reads History for Run with its section closed, turns Live run on when the job starts and goes back when it ends', async () => {
+    const { jobDocuments, live } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const frame = jobDocuments.get(id)!.frame
+    jobDocuments.setFrame(id, { ...frame, collapsed: [...frame.collapsed.filter(section => section !== 'history'), 'history'] })
+    // The section and Flow's run panels attach the view as they mount; whether it runs is the owner's visible().
+    jobDocuments.history.attach(id, '11111111-1111-1111-1111-111111111111')
+    const historyView = () => (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job-history:' + id && !item.disposed)
+    expect(historyView()?.owner.visible?.()).toBe(false)
+    // Run, from the toolbar: Flow's overlay keeps History's view running though its section is closed; on List it does not.
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.setFlowOverlay(id, 'last')
+    expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    expect(historyView()?.owner.visible?.()).toBe(true)
+    jobDocuments.setStepsView(id, 'list')
+    expect(historyView()?.owner.visible?.()).toBe(false)
+    jobDocuments.setStepsView(id, 'flow')
+    // Live run needs a running job; when one starts it turns on by itself, and the overlay before it comes back when the run ends.
+    jobDocuments.setFlowOverlay(id, 'live')
+    expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    const watched = (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job:' + id)!
+    tick(watched, 1, 1, 1)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('live')
+    tick(watched, 2, 4, 0)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    jobDocuments.setFlowOverlay(id, 'targets')
+    tick(watched, 3, 1, 1)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('live')
+    tick(watched, 4, 4, 0)
+    expect(jobDocuments.flowOverlayOf(id)).toBeUndefined()
+    expect(historyView()?.owner.visible?.()).toBe(false)
+  })
+  it("leaves History's Failed filter and picked run alone when the job starts, unless Live run shows in Flow", async () => {
+    const { jobDocuments, live } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const run = { job: '11111111-1111-1111-1111-111111111111', instance: 7 }
+    jobDocuments.history.attach(id, run.job)
+    jobDocuments.history.selectRun(id, run)
+    const watched = (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job:' + id)!
+    // On List (the overlay turns Live run on for Flow, but nothing draws it) the run History shows stays picked.
+    tick(watched, 1, 1, 1)
+    expect(jobDocuments.flowOverlayOf(id)).toBe('live')
+    expect(jobDocuments.history.get(id)).toMatchObject({ selected: run, pinned: true })
+  })
+  it("shows a History run in Flow: the Steps section, Flow's Run and that run selected", async () => {
+    const { jobDocuments } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const run = { job: '11111111-1111-1111-1111-111111111111', instance: 7 }
+    jobDocuments.history.attach(id, run.job)
+    jobDocuments.openStepEditor(id, 's1')
+    jobDocuments.showRunInFlow(id, run)
+    expect(jobDocuments.get(id)).toMatchObject({ stepsView: 'flow', flowOverlay: 'last' })
+    expect(jobDocuments.get(id)?.stepEditor).toBeUndefined()
+    expect(jobDocuments.get(id)!.frame).toMatchObject({ section: 'steps' })
+    expect(jobDocuments.history.get(id)?.selected).toEqual(run)
+    jobDocuments.openHistory(id)
+    expect(jobDocuments.get(id)!.frame).toMatchObject({ section: 'history' })
+  })
+})
+
+describe("the job document's step command models", () => {
+  it('keeps each step\'s model (and its undo) across the views until the document closes, and drops an older read\'s', async () => {
+    const { stepModels, pruneStepModels } = await import('../src/renderer/src/agent/step-models')
+    const { jobDocuments } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const fake = () => ({ dispose: vi.fn() }) as unknown as import('monaco-editor').editor.ITextModel
+    const kept = fake(), older = fake()
+    stepModels(id).set('read2|s1', { model: kept, documentId: 'a' })
+    stepModels(id).set('read1|s1', { model: older, documentId: 'b' })
+    // List and Flow mount and unmount the editor; the models stay with the document.
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.setStepsView(id, 'list')
+    expect(stepModels(id).get('read2|s1')?.model).toBe(kept)
+    pruneStepModels(id, 'read2')
+    expect(older.dispose).toHaveBeenCalled()
+    expect([...stepModels(id).keys()]).toEqual(['read2|s1'])
+    jobDocuments.closed(id)
+    expect(kept.dispose).toHaveBeenCalled()
+    expect(stepModels(id).size).toBe(0)
+  })
+  it('disposes the models of documents still open when the service goes (the window closing)', async () => {
+    const { stepModels } = await import('../src/renderer/src/agent/step-models')
+    const { jobDocuments } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const model = { dispose: vi.fn() } as unknown as import('monaco-editor').editor.ITextModel
+    stepModels(id).set('read1|s1', { model, documentId: 'a' })
+    jobDocuments.dispose()
+    expect(model.dispose).toHaveBeenCalled()
+    expect(stepModels(id).size).toBe(0)
+  })
+  it('opens Flow\'s docked editor for an Edit step link from History or the copy review, and selects the step on List', async () => {
+    const { jobDocuments } = opened(model({ steps: [{ id: 1, name: 'Extract', subsystem: 'TSQL' }, { id: 2, name: 'Load', subsystem: 'TSQL' }] }))
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    jobDocuments.editStep(id, 's2')
+    expect(jobDocuments.get(id)?.step).toBe('s2')
+    expect(jobDocuments.get(id)?.stepEditor).toBeUndefined()
+    jobDocuments.setStepsView(id, 'flow')
+    jobDocuments.editStep(id, 's1')
+    expect(jobDocuments.get(id)).toMatchObject({ step: 's1', stepEditor: true })
   })
 })

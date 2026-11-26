@@ -9,7 +9,7 @@ half pixels, so they are sharp at 100 % zoom where the icon's box starts on a wh
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (33)
+## Varia's icons (38)
 
 | Id | Use |
 | --- | --- |
@@ -45,6 +45,11 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `agent-activity` | SQL Server Agent: Job Activity Monitor. |
 | `agent-operator` | SQL Server Agent: operators (a person who is sent mail). |
 | `agent-proxy` | SQL Server Agent: proxies (an account a step runs as). |
+| `step-tsql` | SQL Server Agent: a T-SQL job step in the Steps Flow view (code brackets). |
+| `step-powershell` | SQL Server Agent: a PowerShell job step in the Steps Flow view (a prompt in a terminal). |
+| `step-cmdexec` | SQL Server Agent: an operating system (CmdExec) job step in the Steps Flow view (a command window). |
+| `step-analysis` | SQL Server Agent: an Analysis Services job step in the Steps Flow view (bars). |
+| `step-other` | SQL Server Agent: a replication or other job step in the Steps Flow view (a page of lines). |
 | `agent-schedule` | SQL Server Agent: schedules (a calendar page). |
 
 ## Codicons (130)

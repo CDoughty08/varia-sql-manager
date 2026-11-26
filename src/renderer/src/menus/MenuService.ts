@@ -2,7 +2,7 @@ import type { CommandId } from '../../../shared/commands/catalog'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import type { ContextKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
-import { menubarIds, menuForMnemonic, type ContextMenuId, type MenubarId, type MenuId } from '../../../shared/commands/menus'
+import { menubarIds, menuForMnemonic, type ContextMenuId, type DynamicSubmenu, type MenubarId, type MenuId } from '../../../shared/commands/menus'
 import type { RecentFile, VariaApi } from '../../../shared/contracts'
 import { recentFilesMenuModel } from '../../../shared/files/recent'
 import type { MenuStyle } from '../../../shared/menu-style'
@@ -14,7 +14,7 @@ import type { FocusAdapter } from '../core/focus'
 import type { KeyDownEvent } from '../core/keybindings'
 import { SnapshotStore } from '../core/store'
 import type { Timers } from '../core/timers'
-import type { Disposable } from '../core/types'
+import type { CommandArgs, Disposable } from '../core/types'
 import type { Anchor, Rect } from './geometry'
 import { MenuController, type CloseReason, type MenuKey } from './MenuController'
 import { MenubarAccess } from './menubar'
@@ -62,6 +62,8 @@ export interface MenuServiceOptions {
   readonly theme: { readonly state: Pick<ThemeState, 'preference' | 'themes'> }
   /** File › Recent Files' list, as main last sent it. */
   readonly recentFiles?: { getSnapshot(): readonly RecentFile[] }
+  /** Context menus' dynamic submenus that read the workbench (a job step's On success ›, On failure › and Add step after ›). */
+  readonly dynamic?: { readonly [K in DynamicSubmenu]?: (args?: CommandArgs) => readonly DynamicMenuItem[] }
   /** The settings titles follow (Select Top <n> Rows). */
   readonly settings?: () => SettingsValues
   readonly focus: FocusAdapter
@@ -169,7 +171,7 @@ export class MenuService implements Disposable {
   resolve(menu: MenuId, target?: MenuTarget): readonly ResolvedMenuItem[] {
     const { platform, commands, keybindings, theme } = this.options
     return resolveMenu(menu, {
-      platform, state: this.options.context.getState(), commands, keybindings, dynamic: { theme: () => themeMenuItems(theme.state), recentFiles: () => recentFileMenuItems(this.options.recentFiles?.getSnapshot() ?? [], platform) }, settings: this.options.settings?.(),
+      platform, state: this.options.context.getState(), commands, keybindings, dynamic: { ...this.options.dynamic, theme: () => themeMenuItems(theme.state), recentFiles: () => recentFileMenuItems(this.options.recentFiles?.getSnapshot() ?? [], platform) }, settings: this.options.settings?.(),
       ...(target ? { target: targetKeys(target), args: argsFor(target) } : {})
     })
   }

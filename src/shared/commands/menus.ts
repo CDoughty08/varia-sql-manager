@@ -13,7 +13,7 @@ export const applicationMenus = [
 ] as const
 export type MenubarId = typeof applicationMenus[number]['id']
 /** Context menus, one per kind of target: the editor, an Object Explorer node, Object Explorer's ⋯ menu, a table designer, a query tab, Query Output, a panel tab, a text field, the Integration Services Operations grid, a Search Objects hit, the results toolbar's ⋯, Peek's Properties, the execution plan's outline and Properties, and Job Activity Monitor. */
-export const contextMenuIds = ['editor.context', 'explorer.context', 'explorer.tools', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'bigquery.jobs.context', 'search.hit.context', 'output.tools', 'peek.properties.context', 'plan.outline.context', 'plan.properties.context', 'agent.jobs.context'] as const
+export const contextMenuIds = ['editor.context', 'explorer.context', 'explorer.tools', 'tableDesigner.context', 'documentTab.context', 'output.context', 'dockTab.context', 'input.context', 'ssis.operation.context', 'bigquery.jobs.context', 'search.hit.context', 'output.tools', 'peek.properties.context', 'plan.outline.context', 'plan.properties.context', 'agent.jobs.context', 'agent.steps.context'] as const
 export type ContextMenuId = typeof contextMenuIds[number]
 export const submenuIds = [
   'file.recent',
@@ -30,7 +30,10 @@ export const submenuIds = [
   'output.highlight',
   'output.filter',
   'output.transposeMenu',
-  'search.copy'
+  'search.copy',
+  'agent.steps.success',
+  'agent.steps.failure',
+  'agent.steps.add'
 ] as const
 export type SubmenuId = typeof submenuIds[number]
 export type MenuId = MenubarId | SubmenuId | ContextMenuId
@@ -80,7 +83,11 @@ export const menuIds: readonly MenuId[] = [
   'peek.properties.context',
   'plan.outline.context',
   'plan.properties.context',
-  'agent.jobs.context'
+  'agent.jobs.context',
+  'agent.steps.context',
+  'agent.steps.success',
+  'agent.steps.failure',
+  'agent.steps.add'
 ]
 export const menubarIds: readonly MenubarId[] = applicationMenus.map(menu => menu.id)
 export const isContextMenuId = (menu: MenuId): menu is ContextMenuId => (contextMenuIds as readonly MenuId[]).includes(menu)
@@ -106,8 +113,12 @@ export interface SubmenuDescriptor {
   /** The engines it is for; absent, SQL Server only. Object Explorer's menu leaves it out for a node of another engine. */
   readonly providers?: readonly ProviderId[]
 }
-/** What a dynamic submenu's own items come from: View › Theme's theme state, or File › Recent Files' list. */
-export type DynamicSubmenu = 'theme' | 'recentFiles'
+/**
+ * What a dynamic submenu's own items come from: View › Theme's theme state, File › Recent Files' list, or a job step's draft (its On
+ * success and On failure choices, and the step types Add step after offers). The step ones are context menus' only, which macOS shows
+ * natively without dynamic items, so they are placed for Windows and Linux and macOS gets a picker command in their place.
+ */
+export type DynamicSubmenu = 'theme' | 'recentFiles' | 'agentStepSuccess' | 'agentStepFailure' | 'agentStepAdd'
 /** Submenus, placed like commands. One with nothing visible in it is left out (`pruneMenu`). */
 export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // Visual Studio's File › Recent Files, before Exit; its items are the files (File › Open Recent File… runs each).
@@ -148,7 +159,11 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   // The results grid's Transpose submenu: the grid drawn with its columns as rows (a toggle), of the selected rows only, and the column that heads the drawn columns.
   'output.transposeMenu': { providers: bothProviders, title: 'Transpose', nativeId: 'output.transposeMenu', placements: [{ menu: 'output.context', group: '2_sort', order: 12, mnemonic: 'n', when: 'outputGridTransposable' }] },
   // A Search Objects hit's names, from src/shared/explorer/search.ts' `searchHitNames`.
-  'search.copy': { title: 'Copy', nativeId: 'search.copy', placements: [{ menu: 'search.hit.context', group: '5_copy', order: 1, mnemonic: 'c' }] }
+  'search.copy': { title: 'Copy', nativeId: 'search.copy', placements: [{ menu: 'search.hit.context', group: '5_copy', order: 1, mnemonic: 'c' }] },
+  // A job step's menu in the Steps section's Flow view (mock rx-flow-menu): SSMS's four actions with "Go to step N: name" for every other step.
+  'agent.steps.success': { title: 'On success', nativeId: 'agent.steps.success', dynamic: 'agentStepSuccess', placements: [{ menu: 'agent.steps.context', group: '2_actions', order: 1, mnemonic: 'o', platforms: ['win32', 'linux'] }] },
+  'agent.steps.failure': { title: 'On failure', nativeId: 'agent.steps.failure', dynamic: 'agentStepFailure', placements: [{ menu: 'agent.steps.context', group: '2_actions', order: 2, mnemonic: 'f', platforms: ['win32', 'linux'] }] },
+  'agent.steps.add': { title: 'Add step after', nativeId: 'agent.steps.add', dynamic: 'agentStepAdd', placements: [{ menu: 'agent.steps.context', group: '3_order', order: 1, mnemonic: 'a', platforms: ['win32', 'linux'] }] }
 }
 /** The deepest a submenu may nest below a menu, so at most four menu levels are ever open. */
 export const maxSubmenuDepth = 3

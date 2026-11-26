@@ -7,7 +7,7 @@ import type { VariaApi } from '../../../shared/contracts'
 import { agentLimits, runStatuses } from '../../../shared/agent/catalog.ts'
 import { agentHistoryProbe, agentHistorySource, historyRunKeyText, parseHistoryRunKey, type HistoryRunKey } from '../../../shared/agent/history.ts'
 import {
-  durationSeconds, failedStep, jobHistoryArgs, jobHistoryLimits, sameRun, type JobHistoryRun, type JobHistoryStep, type JobUsual
+  durationSeconds, failedStep, jobHistoryArgs, jobHistoryLimits, runIsInProgress, sameRun, type JobHistoryRun, type JobHistoryStep, type JobUsual
 } from '../../../shared/agent/job-history.ts'
 import { liveProbes } from '../../../shared/live/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -138,6 +138,28 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     if (sameRun(state.selected, key)) { if (!state.pinned) this.patch(id, { pinned: true }); return }
     this.patch(id, { selected: key, pinned: true, steps: [], stepsFor: undefined, stepsCut: undefined, step: undefined, message: undefined, notice: undefined })
     this.sendArgs(id)
+  }
+  /**
+   * The running run's rows, for History's running view and Flow's Live run: each step's state is known only from this run's own rows, so with
+   * another run selected (or Failed on) none are. A run not listed yet (msdb writes a row only when a step ends) has no rows to hold, under All
+   * with the newest followed; once Agent has moved past step 1, a run with no rows read is not one with no rows, so its earlier steps are
+   * unknown until History reads them.
+   */
+  running(id: string, liveStep: number | undefined): { readonly run?: JobHistoryRun; readonly rows: readonly JobHistoryStep[]; readonly known: boolean } {
+    const view = this.get(id)
+    if (!view) return { rows: [], known: false }
+    const run = view.runs.find(runIsInProgress)
+    const known = run
+      ? sameRun(view.selected, run.key) && view.stepsFor === historyRunKeyText(run.key) && !view.stepsCut
+      : !view.failedOnly && !view.pinned && (liveStep ?? 1) <= 1
+    return { ...run ? { run } : {}, rows: run && known ? view.steps : [], known }
+  }
+  /** Flow's Live run: the selection follows the newest run (the running one) again, under All, so its rows are the ones read. */
+  followNewest(id: string): void {
+    const state = this.get(id)
+    if (!state) return
+    if (state.failedOnly) { this.setFailedOnly(id, false); return }
+    if (state.pinned) { this.patch(id, { pinned: false }); this.refresh(id) }
   }
   /** Shows a row's whole message in the detail. */
   selectStep(id: string, instance: number): void {

@@ -131,6 +131,7 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
   // Edit and Start at step act on the job as it is now: the step with the name history recorded, which a reorder may have moved.
   const current = chosen ? model.steps.find(step => step.name === chosen.name) : undefined
   return <div className="agent-history-detail" role="group" aria-label={`Run of ${run.started}`}>
+    <p className="agent-history-actions"><button type="button" className="link-button" onClick={() => service.showRunInFlow(state.id, run.key)}><Icon name="type-hierarchy" />Show in Flow</button></p>
     <dl className="agent-job-facts">
       <dt>Started</dt><dd>{run.started || '—'} (server time)</dd>
       <dt>Duration</dt><dd>{run.duration || (runIsInProgress(run) ? 'In progress' : '—')}{usual !== undefined && ` · usual ${durationText(usual)}`}</dd>
@@ -160,7 +161,7 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
       <pre className="agent-history-message-text">{text}</pre>
       {view.notice && <p className="document-status" role="status">{view.notice}</p>}
       {current && <p className="agent-history-actions">
-        <button type="button" onClick={() => { service.selectStep(state.id, `s${current.id}`); document.getElementById(`agent-job-${state.id}-section-steps`)?.scrollIntoView({ block: 'start' }) }}><Icon name="edit" />Edit step {current.id}</button>
+        <button type="button" onClick={() => { service.editStep(state.id, `s${current.id}`); document.getElementById(`agent-job-${state.id}-section-steps`)?.scrollIntoView({ block: 'start' }) }}><Icon name="edit" />Edit step {current.id}</button>
         <button type="button" disabled={!service.canStart(state.id)} onClick={() => void service.start(state.id, current.name)}><Icon name="play" />Start at step {current.id}</button>
       </p>}
     </section>}
@@ -184,15 +185,8 @@ export default function JobHistory({ state, model, service }: { readonly state: 
   const ended = history.ended(state.id)
   const running = !!state.live?.running
   const selected = view?.runs.find(run => sameRun(run.key, view.selected))
-  const inProgress = view?.runs.find(runIsInProgress)
   const spanned = view ? Math.min(jobHistoryLimits.sparkRuns, view.spark.filter(run => run.seconds !== undefined && !runIsInProgress(run)).length) : 0
-  // The running view knows each step's state only from this run's own rows: with another run selected (or Failed on) it holds none. A run
-  // not listed yet (msdb writes a row only when a step ends) has no rows to hold, under All with the newest followed.
-  // Once Agent has moved past step 1 a run with no rows read is not one with no rows, so its earlier steps are unknown until History reads them.
-  const runningKnown = !!view && (inProgress
-    ? sameRun(view.selected, inProgress.key) && view.stepsFor === historyRunKeyText(inProgress.key) && !view.stepsCut
-    : !view.failedOnly && !view.pinned && (state.live?.step ?? 1) <= 1)
-  const runningRows = running && inProgress && runningKnown ? view!.steps : []
+  const { rows: runningRows, known: runningKnown } = history.running(state.id, state.live?.step)
   const openViewer = () => {
     const connectionId = tabs.get(state.id)?.connectionId
     try { if (connectionId) logViewer.open(connectionId, { jobs: [jobId] }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Log File Viewer could not open.') }

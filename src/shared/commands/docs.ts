@@ -23,7 +23,8 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   'ssis.operation.context': 'Integration Services Operations context menu', 'bigquery.jobs.context': 'BigQuery Job History context menu', 'search.hit.context': 'Search Objects result context menu', 'search.copy': 'Search Objects result context menu › Copy',
   'output.tools': 'Results toolbar › More results tools', 'explorer.tools': 'Object Explorer header › More actions', 'peek.properties.context': 'Peek Properties context menu',
   'plan.outline.context': 'Execution plan outline context menu', 'plan.properties.context': 'Execution plan Properties context menu',
-  'agent.jobs.context': 'Job Activity Monitor context menu'
+  'agent.jobs.context': 'Job Activity Monitor context menu', 'agent.steps.context': 'Job step context menu (Steps › Flow)',
+  'agent.steps.success': 'Job step context menu › On success', 'agent.steps.failure': 'Job step context menu › On failure', 'agent.steps.add': 'Job step context menu › Add step after'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
@@ -42,7 +43,8 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'plan.outline.context': 'Right-click an operator in the execution plan\x27s outline, which selects it, or press Shift+F10 or the context-menu key in the outline. Copy puts the selected operator on the clipboard as one tab-separated line: its operator, object, estimated subtree cost and rows, after a header line when Include column headers when copying the results is on.',
   'plan.properties.context': 'Right-click the execution plan\x27s Properties pane, or press Shift+F10 or the context-menu key in it. Copy puts the properties whose text is selected, else the one right-clicked, else all of them, on the clipboard as Name and Value lines separated by a tab; Copy Value puts only their values, one a line.',
   'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.',
-  'agent.jobs.context': 'Right-click a job in Job Activity Monitor\'s list (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the jobs selected there: Open, Create Job Like This and Script Job as CREATE on the one job selected, Start, Stop, Enable and Disable as the monitor\'s bar runs them, View History on the selected jobs, and Refresh.'
+  'agent.jobs.context': 'Right-click a job in Job Activity Monitor\'s list (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the jobs selected there: Open, Create Job Like This and Script Job as CREATE on the one job selected, Start, Stop, Enable and Disable as the monitor\'s bar runs them, View History on the selected jobs, and Refresh.',
+  'agent.steps.context': 'Right-click a step in a job document\'s Steps › Flow view, which selects it, or press Shift+F10 or the context-menu key with a step focused there. Items act on that step; On success, On failure and Add step after list their choices from the draft (on macOS, On success…, On failure… and Add step after… pick from the same lists).'
 }
 // The theme items need no real theme list: only their fixed labels and commands are documented.
 const themeItems = themeMenuModel({ preference: defaultThemePreference, themes: [] })
@@ -131,6 +133,15 @@ function menuTable(menu: MenuId): string[] {
       row(['theme items', themeItems.flatMap(item => item.kind === 'submenu' ? [label(item) + ' ›'] : []).join(', ') + ': one item per theme', code('preferences.setTheme'), 'Always']),
       ...themeItems.flatMap(item => item.kind === 'action' ? [row(['theme items', label(item), code(item.command), 'Always'])] : []))
   }
+  const stepDynamic = submenuIds.find(id => id === menu)
+  const step = stepDynamic ? submenus[stepDynamic].dynamic : undefined
+  if (step === 'agentStepSuccess' || step === 'agentStepFailure') {
+    lines.push(
+      row(['step actions', 'Go to the next step (N · name, or none: the job fails)', code('agentJob.setStepAction'), 'Always']),
+      row(['step actions', 'Go to step N: name, one item per other step; the current choice checked', code('agentJob.setStepAction'), 'Always']),
+      row(['step actions', 'Quit the job reporting success, Quit the job reporting failure', code('agentJob.setStepAction'), 'Always']))
+  }
+  if (step === 'agentStepAdd') lines.push(row(['step types', 'One item per step type the server offers (T-SQL, PowerShell, CmdExec, SSIS…)', code('agentJob.addStepAfter'), 'Always']))
   if (submenuIds.some(id => id === menu && submenus[id].dynamic === 'recentFiles')) {
     lines.push(
       row(['recent files', '**1** C:\\…\\orders.sql: one item per file, as many as Options › Environment › General shows; access keys 1–9, then 0', code('file.openRecent'), 'Always']),

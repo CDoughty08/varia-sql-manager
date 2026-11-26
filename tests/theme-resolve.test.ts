@@ -110,7 +110,7 @@ tile.warningBorder #e4bb6a #875800|tile.criticalBorder #f39a9a #b42229|skeleton.
 connection.red #e66767 #c42b3c|connection.orange #e09358 #b45309
 connection.yellow #d8bf5e #8f6b00|connection.green #6fbf8a #2e7d4f|connection.blue #6ea4ea #2563a8|connection.purple #ab95ea #7a4bbf
 connection.default #8d939f #6b7280|connection.favoriteForeground #d8bf5e #8f6b00
-charts.foreground #a3a9b5 #4d5461|charts.lines #262a31 #e3e6eb|charts.blue #3987e5 #2a78d6|charts.orange #d95926 #d4581f|charts.green #199e70 #12936a
+charts.foreground #a3a9b5 #4d5461|charts.lines #262a31 #e3e6eb|charts.canvasDots #2e323a #d4d8df|charts.blue #3987e5 #2a78d6|charts.orange #d95926 #d4581f|charts.green #199e70 #12936a
 charts.yellow #c98500 #a87200|charts.purple #9085e9 #6250d6|charts.red #f39a9a #b42229|charts.gray #8d939f #6b7280`
 const specSyntax = { keyword: ['#93a4ff', '#3442c2'], operator: ['#9ea6b4', '#575e6b'], predefined: ['#d4a9f2', '#8338b4'], string: ['#9fd4a9', '#2c7440'],
   number: ['#e8b97d', '#965700'], comment: ['#868e9b', '#636a76'], identifier: ['#d9dce3', '#1c1f26'], delimiter: ['#9ea6b4', '#575e6b'] }
@@ -139,10 +139,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 295 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 296 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(295)
-    expect(new Set(colorKeys).size).toBe(295)
+    expect(colorKeys).toHaveLength(296)
+    expect(new Set(colorKeys).size).toBe(296)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -157,7 +157,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(295)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(296)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -259,7 +259,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(295)
+      expect(Object.keys(theme.colors)).toHaveLength(296)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

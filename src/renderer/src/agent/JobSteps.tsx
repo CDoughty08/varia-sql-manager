@@ -2,8 +2,8 @@
 // rx-step-delete): the steps list (drag to reorder, ✓ and ✗ targets, the Start step) beside the selected step's editor, edited in place.
 // T-SQL commands are edited in the query editor with the step's database (completion, Parse, Open in query window); an SSIS step is one
 // scroll with an inline SSISDB picker; SSMS's Advanced page is the More options fold. JobDocumentService keeps every state.
-import { useEffect, useRef, useState, type DragEvent, type RefObject } from 'react'
-import type { editor } from 'monaco-editor'
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { pruneStepModels, stepModels } from './step-models'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
   serverSubsystems, stepFlagChoices, stepOutputSubsystems, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
@@ -21,7 +21,9 @@ import { withKey } from '../query-context'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import { registerSqlModel } from '../explorer/peek-editor'
 import Icon from '../Icon'
+import { segmentKey } from '../kit/Segmented'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
+import JobStepsFlow, { useForcedColors } from './JobStepsFlow'
 
 /** The step types the Type switch shows first, as SSMS users reach for them; the rest are under More. */
 const mainTypes = ['TSQL', 'PowerShell', 'CmdExec', 'SSIS'] as const
@@ -56,32 +58,33 @@ interface StepCommandHandle { replace(key: string, text: string): boolean }
 /** The command's editor: the query editor (Tools › Options, Find) on a model per step, served by the language service with the step's
  *  connection and database when it is T-SQL. */
 /** `epoch` changes each time the job is read: a save renumbers steps, so `s1` may then be another step, and a model (with its undo stack)
- *  is never carried from one read to the next. */
-function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
-  readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
+ *  is never carried from one read to the next. The models belong to the document (`step-models.ts`), so switching List and Flow or closing
+ *  Flow's docked editor keeps each step's undo. */
+function StepCommandEditor({ owner, epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
+  readonly owner: string; readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
   readonly label: string; readonly onChange: (value: string) => void; readonly handle?: RefObject<StepCommandHandle | null>
 }) {
   const workbench = useWorkbench()
   const stepKey = `${epoch}|${key}`
   const host = useRef<HTMLDivElement>(null)
   const instance = useRef<QueryEditorInstance | undefined>(undefined)
-  const models = useRef(new Map<string, { model: editor.ITextModel; documentId: string }>())
+  const models = useRef(stepModels(owner))
+  models.current = stepModels(owner)
   const changed = useRef(onChange)
   changed.current = onChange
   useEffect(() => {
     const element = host.current
     if (!element) return
     instance.current = createQueryEditor(workbench, element, { compact: true, ariaLabel: label, contextKey: stepEditorContextKey, inEditorPane: false })
-    const owned = models.current
-    return () => { instance.current?.dispose(); instance.current = undefined; for (const entry of owned.values()) entry.model.dispose(); owned.clear() }
-  // The editor lives as long as the section; each step gets its own model below.
+    return () => { instance.current?.dispose(); instance.current = undefined }
+  // The editor lives as long as the section; each step gets its own model below, which outlives it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
     const view = instance.current
     if (!view) return
     let entry = models.current.get(stepKey)
-    for (const [cached, stale] of models.current) if (!cached.startsWith(`${epoch}|`)) { stale.model.dispose(); models.current.delete(cached) }
+    pruneStepModels(owner, epoch)
     if (!entry || entry.model.isDisposed()) {
       const documentId = crypto.randomUUID()
       const model = workbench.monaco.editor.createModel(value, stepLanguage(subsystem), workbench.monaco.Uri.parse(`varia-sql://step/${documentId}`))
@@ -96,7 +99,7 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
     return () => listener.dispose()
   // `value` is applied by the effect below, so typing does not reset the model.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepKey, subsystem, connectionId, database, workbench])
+  }, [owner, stepKey, subsystem, connectionId, database, workbench])
   useEffect(() => {
     const model = models.current.get(stepKey)?.model
     if (model && !model.isDisposed() && model.getValue() !== value) model.setValue(value)
@@ -345,6 +348,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   if (decided !== `${step.key} ${step.subsystem}`) { setDecided(`${step.key} ${step.subsystem}`); setSsisText(ssisAsText()) }
   const types = model.subsystems?.length ? model.subsystems : [...mainTypes]
   const more = types.filter(type => !(mainTypes as readonly string[]).includes(type))
+  const flowNote = problemText(problems, step.key, 'flow')
   const name = problemText(problems, step.key, 'name'), command = problemText(problems, step.key, 'command'), server = problemText(problems, step.key, 'server')
   const proxy = step.proxyId ? model.proxies?.find(item => item.id === step.proxyId) : undefined
   const account = proxy ? proxy.identity ?? proxy.name : 'the SQL Server Agent service account'
@@ -368,6 +372,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
       <button type="button" disabled={!editable || state.draft!.steps.startKey === step.key} onClick={() => service.setStartStep(state.id, step.key)}><Icon name="pin" />Make Start step</button>
       <button type="button" className="danger" disabled={!editable} onClick={() => service.deleteStepOf(state.id, step.key)}><Icon name="trash" />Delete</button>
     </div>
+    <FieldMessages text={flowNote} id={`${id}-flow`} />
     <div className="agent-step-grid">
       <div className="agent-step-row">
         <label htmlFor={`${id}-name`}>Step name</label>
@@ -410,7 +415,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
           {isStepScriptSubsystem(step.subsystem) && <button type="button" disabled={!editable || state.stepFile?.running} onClick={() => void loadFile()}><Icon name="file" />{stepScriptText.load}</button>}
         </span>
       </div>
-      <StepCommandEditor epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
+      <StepCommandEditor owner={state.id} epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
         readOnly={!editable} label={`Step ${position + 1} command`} onChange={value => update({ command: value })} handle={commandEditor} />
       <FieldMessages text={command} id={`${id}-command`} />
       {stepFile?.failure && <p className="property-field-error" role="alert"><Icon name="error" />{stepFile.failure}</p>}
@@ -445,6 +450,36 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   </div>
 }
 
+/** List | Flow: the same draft as a list beside the step's editor, or as a graph (Flow, Later in docs/agent-ui-rethink.md). Every document
+ *  opens on List. Forced colours replace the graph's colours, so Flow is then unavailable and says why. */
+// List draws the switch in its header and Flow in its toolbar, so the arrow keys' switch unmounts: the document whose switch the keyboard
+// moved, for the new one to take focus as it mounts.
+let switchFocus: string | undefined
+function ViewSwitch({ state, service, forced }: { readonly state: JobDocumentState; readonly service: JobDocumentService; readonly forced: boolean }) {
+  const flow = state.stepsView === 'flow' && !forced
+  const group = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (switchFocus !== state.id) return
+    switchFocus = undefined
+    group.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus()
+  }, [state.id])
+  const keyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    if (forced || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    const next = segmentKey(event.key, 2, flow ? 1 : 0)
+    if (next === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (next === (flow ? 1 : 0)) return
+    switchFocus = state.id
+    service.setStepsView(state.id, next === 1 ? 'flow' : 'list')
+  }
+  return <span ref={group} className="segmented agent-steps-view" role="radiogroup" aria-label="Steps view" onKeyDown={keyDown}>
+    <button type="button" role="radio" className="segmented-option" aria-checked={!flow} tabIndex={flow ? -1 : 0} onClick={() => service.setStepsView(state.id, 'list')}><Icon name="list-flat" />List</button>
+    <button type="button" role="radio" className="segmented-option" aria-checked={flow} tabIndex={flow ? 0 : -1} disabled={forced} title={forced ? 'Flow draws in colours that forced colours replace; List shows the same steps.' : undefined}
+      onClick={() => service.setStepsView(state.id, 'flow')}><Icon name="type-hierarchy" />Flow</button>
+  </span>
+}
+
 /** The Steps section: the delete banner, the list and the selected step's editor. */
 export default function JobSteps(outer: StepsProps) {
   // A job with more steps than Varia reads keeps its steps as they are: they are listed, never saved.
@@ -467,6 +502,9 @@ export default function JobSteps(outer: StepsProps) {
   }
   const types = props.model.subsystems?.length ? props.model.subsystems : [...mainTypes]
   const retargeted = deletion ? deletion.retargeted.map(key => steps.findIndex(step => step.key === key) + 1).filter(at => at > 0) : []
+  const forced = useForcedColors()
+  const switcher = <ViewSwitch state={state} service={service} forced={forced} />
+  const flow = state.stepsView === 'flow' && !forced
   return <div className="agent-job-steps">
     {props.model.stepsTruncated && <p className="field-note" role="note"><Icon name="info" />{stepText.stepsTruncated}</p>}
     {deletion && <div className="agent-step-banner" role="status">
@@ -475,8 +513,9 @@ export default function JobSteps(outer: StepsProps) {
       <button type="button" disabled={!editable} onClick={() => service.undoDeleteStep(state.id)}>{stepText.undo}</button>
       <button type="button" aria-label="Dismiss" onClick={() => service.dismissDeletion(state.id)}><Icon name="close" /></button>
     </div>}
-    <div className="agent-step-body" data-agent-steps="">
+    {flow ? <JobStepsFlow {...props} switcher={switcher} editor={(step, position) => <StepEditor {...props} step={step} position={position} problems={problems} />} /> : <div className="agent-step-body" data-agent-steps="">
       <div className="agent-step-list">
+        <div className="agent-step-list-head"><span>Steps</span>{switcher}</div>
         <div role="listbox" aria-label="Steps" tabIndex={steps.length ? 0 : -1} aria-activedescendant={selected ? `agent-step-${state.id}-${selected.key}` : undefined}
           onKeyDown={event => {
             if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -522,6 +561,6 @@ export default function JobSteps(outer: StepsProps) {
         <p className="field-note">{stepText.dragHint}</p>
       </div>
       {selected ? <StepEditor {...props} step={selected} position={steps.indexOf(selected)} problems={problems} /> : <div className="agent-step-edit" />}
-    </div>
+    </div>}
   </div>
 }
