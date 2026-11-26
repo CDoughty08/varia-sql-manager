@@ -377,7 +377,7 @@ internal sealed partial class ObjectSearchService
                 // until its own read below replaces it. One whose read fails so keeps the columns it had (still marked carried,
                 // so the next build reads it again) instead of giving them back and needing room above the floor to return.
                 var reused = BigQueryEntries.Known(state.Index.Get(project + "\u0001" + dataset), definitions, carry: true);
-                var entries = value.Listed.Select(item => reused.TryGetValue((item.Kind, item.Name), out var had) ? item with { Detail = had.Detail } : item).ToArray();
+                var entries = value.Listed.Select(item => reused.TryGetValue(BigQueryEntries.Key(item), out var had) ? item with { Detail = had.Detail } : item).ToArray();
                 reused.Clear();
                 ObjectIndexSkip? failed = null;
                 var failures = 0;
@@ -418,6 +418,8 @@ internal sealed partial class ObjectSearchService
                             if (skip.Code == "NOT_FOUND") entries[index] = item with { Detail = null };
                             else
                             {
+                                // What was carried from an earlier generation of the object is not kept as if it were this one's.
+                                if (item.Detail is { Stale: true }) entries[index] = item with { Detail = null };
                                 Interlocked.Increment(ref failures);
                                 Interlocked.CompareExchange(ref failed, skip, null);
                             }
@@ -435,7 +437,7 @@ internal sealed partial class ObjectSearchService
                 }, loop)).ToArray();
                 await Task.WhenAll(workers);
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, details: true);
                 if (held is not null)
                 {
                     Skip(held);
@@ -525,15 +527,18 @@ internal sealed partial class ObjectSearchService
                 var listed = BigQueryEntries.FromListing(listing);
                 // What pass 2 reads: every object with details that this build may not reuse: one the earlier read did not read
                 // whole, one created again or changed since, and all of them when the read is forced.
-                bool Reused(BigQueryEntry item) => !force && carried.TryGetValue((item.Kind, item.Name), out var had) && !had.Detail.Carried
-                    && had.Created == item.Created && (item.Modified is null || item.Modified == had.Modified);
+                static bool Same((long Created, long? Modified, BigQueryDetail Detail) had, BigQueryEntry item) =>
+                    had.Created == item.Created && (item.Modified is null || item.Modified == had.Modified);
+                bool Reused(BigQueryEntry item) => !force && carried.TryGetValue(BigQueryEntries.Key(item), out var had) && !had.Detail.Carried && Same(had, item);
                 var again = listed.Select(item => BigQueryEntries.HasDetails(item) && !Reused(item)).ToArray();
                 // Pass 1 still holds what the earlier read had of those objects, by name, until pass 2 has read them again: a
                 // dataset whose columns fitted keeps their memory between the passes, rather than give it back and ask for it
                 // again above BigQuery's floor, where it would be refused once anything else has taken memory since. They are
-                // marked carried, so a build stopped or a read that fails before pass 2 lands leaves nothing a later build reuses.
-                var entries = listed.Select((item, at) => !carried.TryGetValue((item.Kind, item.Name), out var had) ? item
-                    : item with { Detail = again[at] ? had.Detail with { Carried = true } : had.Detail }).ToList();
+                // marked carried, so a build stopped or a read that fails before pass 2 lands leaves nothing a later build reuses,
+                // and stale when the object was created or changed since, so they are dropped rather than kept if pass 2 cannot
+                // replace them. A date-sharded group is carried by its prefix: its entry is renamed by every new shard.
+                var entries = listed.Select((item, at) => !carried.TryGetValue(BigQueryEntries.Key(item), out var had) ? item
+                    : item with { Detail = again[at] ? had.Detail with { Carried = true, Stale = had.Detail.Stale || !Same(had, item) } : had.Detail }).ToList();
                 carried.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
@@ -1258,10 +1263,11 @@ internal sealed partial class ObjectSearchService
                         await Parallel.ForEachAsync(wave3Holding, new ParallelOptions { MaxDegreeOfParallelism = BigQueryIndexLimits.Datasets, CancellationToken = stop },
                             async (pair, loop) =>
                             {
-                                var held = await DetailAsync(pair.Key, pair.Value, null, () => Interlocked.Increment(ref wave3DetailsDone), wave3Wanted, loop,
+                                // Whatever the outcome (its skip says), the dataset holds details: its project is not one read by
+                                // name only.
+                                await DetailAsync(pair.Key, pair.Value, null, () => Interlocked.Increment(ref wave3DetailsDone), wave3Wanted, loop,
                                     onDetailFailure: () => wave2IncompleteProjects[pair.Key.Item1] = 0);
-                                // Details of a few objects left out do not make the project one read by name only.
-                                if (held is null or { Details: true }) completedDiscovered[pair.Key] = 0;
+                                completedDiscovered[pair.Key] = 0;
                             });
                     }
                     var wave3Fresh = wave3DiscoveredPending.Where(pair => !wave3HoldingKeys.Contains(pair.Key)).ToList();
@@ -1374,12 +1380,13 @@ internal sealed partial class ObjectSearchService
 
     /// <summary>Builds and holds a dataset's read. A read past BigQuery's part of the budget (its names floor, and its details floor,
     /// the higher one for a <paramref name="discovered"/> project, each a step lower for a dataset that already holds details) is
-    /// tried again with the details only of the objects the earlier read held them of (so what was held is kept, and what is new
-    /// is left out as details missing). When that does not fit either, a dataset that holds details is left as it was read
-    /// before (TOO_LARGE): it is never swapped for a read without the columns it held. One that holds none is tried without
-    /// columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
+    /// tried again, in pass 2 (<paramref name="details"/>), with the details only of the objects the earlier read held them of
+    /// (so what was held is kept, and what is new is left out as details missing), then also without those of objects created
+    /// or changed since, whose carried details were another generation's. When that does not fit either, a dataset that holds
+    /// details is left as it was read before (TOO_LARGE): it is never swapped for a read without the columns it held. One that
+    /// holds none is tried without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
     private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
-        CancellationToken token)
+        CancellationToken token, bool details = false)
     {
         var old = state.Index.Get(project + "\u0001" + dataset);
         var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, Limits.BigQueryDetailsFloor(discovered, old is { Detailed: true }));
@@ -1388,11 +1395,24 @@ internal sealed partial class ObjectSearchService
         var newLeftOut = 0;
         if (built is null && old is { Detailed: true })
         {
-            var had = BigQueryEntries.Detailed(old);
-            var kept = entries.Select(entry => entry.Detail is null || had.Contains((entry.Kind, entry.Name)) ? entry : entry with { Detail = null }).ToList();
-            newLeftOut = entries.Count(entry => entry.Detail is not null) - kept.Count(entry => entry.Detail is not null);
-            if (newLeftOut > 0) built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, kept, true, definitions);
-            // Not even the names of what is new fit beside what the dataset holds: it stays as it was, listing included, until
+            if (details)
+            {
+                HashSet<(string Kind, string Name)>[] keeps = [BigQueryEntries.Detailed(old), BigQueryEntries.Detailed(old, current: true)];
+                var tried = -1;
+                foreach (var keep in keeps)
+                {
+                    var kept = entries.Select(entry => entry.Detail is null || keep.Contains(BigQueryEntries.Key(entry)) ? entry : entry with { Detail = null }).ToList();
+                    var left = entries.Count(entry => entry.Detail is not null) - kept.Count(entry => entry.Detail is not null);
+                    // Nothing more to leave out than the attempt before: the same read would be refused again.
+                    if (left == 0 || left == tried) continue;
+                    tried = left;
+                    built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, kept, true, definitions);
+                    if (built is null) continue;
+                    newLeftOut = left;
+                    break;
+                }
+            }
+            // Not even that fits beside what the dataset holds (in pass 1, the names of what is new): it stays as it was until
             // there is room, rather than lose its columns to list a new object.
             if (built is null)
                 return new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project);

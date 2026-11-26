@@ -1352,6 +1352,8 @@ internal static partial class BigQueryIndexChecks
         public Func<string, CancellationToken, Task>? OnTableAsync { get; set; }
         /// <summary>A project's tables' creation time, when not the default: a table created again.</summary>
         public Func<string, long?>? CreatedOf { get; set; }
+        /// <summary>Datasets that hold one date-sharded group instead: events_20261101 to the day given, each shard created on its day.</summary>
+        public Dictionary<(string Project, string Dataset), int>? ShardDays { get; set; }
         public bool Throttled(string connectionId) => ThrottledNow?.Invoke() ?? false;
 
         public string BillingProject(string connectionId) => "varia-alpha";
@@ -1400,11 +1402,17 @@ internal static partial class BigQueryIndexChecks
             var count = TablesPerDataset is not null && TablesPerDataset.TryGetValue((project, dataset), out var customCount)
                 ? customCount
                 : project == "varia-alpha" ? 1 : tablesPerDiscovered;
-            var tables = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
-            {
-                TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },
-                Type = "TABLE", CreationTime = CreatedOf?.Invoke(project) ?? 1700000000000
-            }).ToList();
+            var tables = ShardDays is not null && ShardDays.TryGetValue((project, dataset), out var days)
+                ? Enumerable.Range(1, days).Select(day => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
+                {
+                    TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = "events_202611" + day.ToString("D2", System.Globalization.CultureInfo.InvariantCulture) },
+                    Type = "TABLE", CreationTime = 1700000000000 + day
+                }).ToList()
+                : Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
+                {
+                    TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },
+                    Type = "TABLE", CreationTime = CreatedOf?.Invoke(project) ?? 1700000000000
+                }).ToList();
             return new BigQueryListing(tables, [], [], false);
         }
         public async Task<Google.Apis.Bigquery.v2.Data.Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token)

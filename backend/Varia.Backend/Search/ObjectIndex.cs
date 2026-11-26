@@ -65,6 +65,9 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public bool DefinitionsLeftOut { get; set; }
     /// <summary>BigQuery: the read holds some object's details (its columns): what a later read of the dataset keeps hold of.</summary>
     public bool Detailed { get; init; }
+    /// <summary>BigQuery: the part of <see cref="Bytes"/> its names hold (records, facts, text slots). A read that replaces this
+    /// one charges its names to that part and its details to the rest, so neither pushes the other out of the share.</summary>
+    public long NameBytes { get; init; }
     /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
     /// read did not reach it (a batch that failed part way).</summary>
     public bool? CaseSensitive { get; set; }
