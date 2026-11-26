@@ -122,7 +122,7 @@ export function LastRunPanel({ state, model, run, service, select }: { readonly 
       <pre className="agent-history-message-text">{text}</pre>
       {view.notice && <p className="document-status" role="status">{view.notice}</p>}
     </section>}
-    <p className="field-note">Numbers on the edges are the order the run took them; a step that ran more than once shows {'×'}N and each pass. The box above the graph and History's list share one selected run.</p>
+    <p className="field-note">Numbers on the edges are the order the run took them; a step that ran more than once shows {'×'}N and its last passes, and the table lists every pass. The box above the graph and History's list share one selected run.</p>
   </>
 }
 
