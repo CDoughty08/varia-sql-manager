@@ -140,7 +140,8 @@ internal sealed partial class BigQueryService
         try
         {
             if (rpc.GetRpcStatus() is { } status)
-                raw = string.Join(' ', status.Details.Select(detail => detail.TryUnpack<Google.Rpc.ErrorInfo>(out var info) ? Google.Protobuf.JsonFormatter.Default.Format(info) : null).Where(text => text is not null));
+                raw = string.Join(' ', status.Details.Select(detail => detail.TryUnpack<Google.Rpc.ErrorInfo>(out var info) ? Google.Protobuf.JsonFormatter.Default.Format(info)
+                    : detail.TryUnpack<Google.Rpc.PreconditionFailure>(out var failure) ? Google.Protobuf.JsonFormatter.Default.Format(failure) : null).Where(text => text is not null));
         }
         catch (Exception error) when (error is Google.Protobuf.InvalidProtocolBufferException or InvalidOperationException) { }
         return BigQueryErrors.IsPerimeter(rpc.Status.Detail, raw, out identifier);

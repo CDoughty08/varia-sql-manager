@@ -347,6 +347,15 @@ internal static class BigQueryJobHistoryChecks
             && harness.Listings().All(query => query.Contains("projection=minimal", StringComparison.Ordinal)),
             "a pinned view reads its jobs with jobs.get once each (a DONE job and a missing one are not read again) and lists only to mark the principal's");
 
+        // A pinned job VPC Service Controls refuses is no missing job: the sample fails with the perimeter's error.
+        using var fenced = new Harness();
+        await fenced.ConnectAsync(key);
+        fenced.Fake.On("GET", Jobs + "/fenced_1", BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        using var fencedView = fenced.Sampler(new("mine", Pinned: [new("fenced_1")]));
+        var blocked = await SampleAsync(fencedView);
+        check(blocked.Errors.Any(error => error.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal)),
+            "a pinned job VPC Service Controls refuses fails the sample naming the perimeter instead of vanishing: " + string.Join(" | ", blocked.Errors.Select(error => error.Code + " " + error.Message)));
+
         using var expanded = new Harness();
         await expanded.ConnectAsync(key);
         using var sampler = expanded.Sampler(new("mine", Hours: 24, Expand: [new("script_1", "US")]));

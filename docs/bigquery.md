@@ -787,7 +787,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   `bigquery.jobs.list` (BigQuery User), and without `bigquery.jobs.listAll` BigQuery leaves out other users' configuration,
   so such a row says "Details hidden by BigQuery" in place of its SQL. A refused All users listing turns the toggle back
   to My jobs, says why, and keeps it off for the connection; a VPC Service Controls refusal is no missing permission and
-  fails the listing with its own error. In All users a second, minimal listing without `allUsers`
+  fails the listing with its own error, as it fails a pinned job's or a script's children's read instead of leaving them
+  out. In All users a second, minimal listing without `allUsers`
   marks the principal's own jobs (never an email comparison).
 - **Listing and refresh.** The newest 1,000 top-level jobs in the range, newest first, in pages of 100 with `projection=full`;
   each job's SQL is cut to a one-line, 200-character preview as its page is read, and a refresh reads at most 10 MiB of

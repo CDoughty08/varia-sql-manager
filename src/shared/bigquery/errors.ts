@@ -1,7 +1,7 @@
 // BigQuery error values the renderer tells apart by more than their code (docs/bigquery.md, Errors).
 
 /** How the backend's VPC Service Controls refusal opens (BigQueryErrors.PerimeterOpening, held to this text by
- *  tests/bigquery-errors.test.ts): a PERMISSION_DENIED that no permission or role fixes. */
+ *  tests/bigquery-job-history.test.ts): a PERMISSION_DENIED that no permission or role fixes. */
 export const perimeterOpening = 'VPC Service Controls blocked this request'
 
 /** Whether an error is VPC Service Controls' refusal, to which a view adds no permission advice. */

@@ -977,7 +977,9 @@ internal sealed partial class ObjectSearchService
                                     {
                                         var skip = SkipOf(error, project, "", "bigquery.datasets.get");
                                         // Noise filtering: auto-discovered projects without BigQuery enabled or dataset access are silently skipped.
-                                        if (skip.Code is "API_DISABLED" or "PERMISSION_DENIED" or "NOT_FOUND")
+                                        // A VPC Service Controls refusal is not noise: off the network the project is still the user's, so it
+                                        // is a skip that says so and keeps what an earlier build read.
+                                        if (skip.Code is "API_DISABLED" or "PERMISSION_DENIED" or "NOT_FOUND" && !skip.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal))
                                         {
                                             noiseFilteredProjects[project] = 0;
                                             DropNoiseFilteredProject(project);

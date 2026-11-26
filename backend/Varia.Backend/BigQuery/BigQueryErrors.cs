@@ -74,7 +74,7 @@ internal static partial class BigQueryErrors
     [GeneratedRegex(@"^\s*(?:VPC Service Controls:|Request is prohibited by organization's policy\b)")]
     private static partial Regex PerimeterMessage();
 
-    [GeneratedRegex(@"""reason""\s*:\s*""SECURITY_POLICY_VIOLATED""")]
+    [GeneratedRegex(@"""reason""\s*:\s*""SECURITY_POLICY_VIOLATED""|""type""\s*:\s*""VPC_SERVICE_CONTROLS""")]
     private static partial Regex PerimeterDetail();
 
     // An identifier longer than Varia shows is left out, never cut: the administrator searches the audit log for it whole.

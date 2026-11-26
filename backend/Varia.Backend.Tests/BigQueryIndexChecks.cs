@@ -552,6 +552,17 @@ internal static partial class BigQueryIndexChecks
         // Restore discovered projects before testing failed discovery retention.
         await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
 
+        // A discovered project VPC Service Controls blocks (off the network) is no noise: a skip that names the perimeter, and
+        // what an earlier build read of it stays searchable.
+        harness.Fake.On("GET", Base + "disc-ok/datasets", BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        var fenced = await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+        check(fenced.Status.Skipped.Any(skip => skip is { Project: "disc-ok", Database: "", Code: "PERMISSION_DENIED" } && skip.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal))
+            && (await harness.Search("metrics")).Hits.Any(hit => hit.Object is { Project: "disc-ok", Name: "metrics" }),
+            "a discovered project VPC Service Controls blocks is a skip naming the perimeter, and its earlier reads are kept: "
+            + string.Join(" | ", fenced.Status.Skipped.Select(skip => skip.Project + ":" + skip.Code + " " + skip.Message)));
+        harness.Fake.On("GET", Base + "disc-ok/datasets", new BigQueryFake.Reply(200, "{\"datasets\":[{\"datasetReference\":{\"projectId\":\"disc-ok\",\"datasetId\":\"analytics\"},\"location\":\"US\"}]}"));
+        await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+
         // Invalid connectionId on bigquery.connectionProjects and bigquery.indexEstimate returns INVALID_PARAMS, never BACKEND_ERROR.
         var (badProjConn, _, _) = await harness.Call("bigquery.connectionProjects", new JsonObject());
         var (badEstConn, _, _) = await harness.Call("bigquery.indexEstimate", new JsonObject());
