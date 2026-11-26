@@ -8,7 +8,7 @@ import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Text
 import { flowEdgeKey, type FlowLayout, type FlowPoint, type FlowWhich, type StepsFlow } from '../../../shared/agent/flow'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { svgIcons, iconStroke, type SvgIconId } from '../../../shared/icons'
-import { radii, typeScale } from '../../../shared/theme/metrics'
+import { radii, reducedMotionClass, typeScale } from '../../../shared/theme/metrics'
 import type { Disposable } from '../core/types'
 import { observeIntersection, observeResize, windowOf, windows } from '../core/windows'
 import { uiFontFamily } from '../fonts'
@@ -48,7 +48,9 @@ export interface FlowCanvasModel {
   /** Edges by `${from}:${which}`: drawn in the accent (changed in the draft), bold (an overlay's path) or faded. */
   readonly accent: ReadonlySet<string>
   readonly hot: ReadonlySet<string>
-  /** Everything not hot is faded: an overlay draws its path over the rest. */
+  /** Edges at full strength without being on the path (Live run's two ways the current step can go next). */
+  readonly lit?: ReadonlySet<string>
+  /** Everything not hot or lit is faded: an overlay draws its path over the rest. */
   readonly fadeRest: boolean
   /** Chips beside an edge's lane: the loop tag, "changed"; and the order an overlay's run took each edge. */
   readonly chips: readonly { readonly edge: string; readonly text: string; readonly tone?: FlowTone }[]
@@ -82,6 +84,8 @@ const iconPaths = new Map(Object.entries(svgIcons).map(([key, icon]) => [key, ne
 const portRadius = 7.5
 const dash = 5, gap = 3
 
+/** One pulse of Live run's current step, in ms: slow enough to read as running, not as an alert. */
+const pulsePeriod = 1600
 /** The Flow view's Pixi canvas: one per Flow view, created after an asynchronous import as the plan viewer's is. */
 export class FlowCanvas {
   private readonly app = new Application()
@@ -91,6 +95,8 @@ export class FlowCanvas {
   private readonly back = new Graphics()
   private readonly edges = new Graphics()
   private readonly cards = new Graphics()
+  /** Live run's pulse around the current step, under the cards: redrawn alone each animation frame while a step runs. */
+  private readonly pulse = new Graphics()
   private readonly labels = new Container()
   private readonly front = new Graphics()
   private readonly styles = {
@@ -111,6 +117,9 @@ export class FlowCanvas {
   private disposed = false
   private visible = true
   private frame = 0
+  /** The pulse's animation frame and the current step's box it rings (none while no step runs or motion is reduced). */
+  private pulseFrame = 0
+  private pulseBox?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
   private width = 1
   private height = 1
   private hover = -1
@@ -167,7 +176,7 @@ export class FlowCanvas {
       this.app.canvas.setAttribute('aria-hidden', 'true')
       this.app.canvas.addEventListener('webglcontextlost', this.contextLost)
       this.options.root.append(this.app.canvas)
-      this.world.addChild(this.back, this.edges, this.cards, this.labels, this.front)
+      this.world.addChild(this.back, this.edges, this.pulse, this.cards, this.labels, this.front)
       this.app.stage.addChild(this.grid, this.world)
       const gl = this.gl
       if (gl) {
@@ -225,7 +234,24 @@ export class FlowCanvas {
     if (width > this.width) { const scale = Math.max(this.minScale(), (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2 - x * scale), y: 0 } }
     return { scale: 1, x: Math.round((this.width - width) / 2 - x), y: 0 }
   }
-  private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
+  private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0; this.stopPulse() }
+  /** The pulse animates only while the canvas shows and the workbench does not reduce motion (Environment › General). */
+  private get pulsing(): boolean {
+    return !!this.pulseBox && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden && !this.ownerDocument.documentElement.classList.contains(reducedMotionClass)
+  }
+  private stopPulse(): void { if (this.pulseFrame) this.owner.cancelAnimationFrame(this.pulseFrame); this.pulseFrame = 0 }
+  private startPulse(): void { if (!this.pulseFrame && this.pulsing) this.pulseFrame = this.owner.requestAnimationFrame(this.pulseTick) }
+  /** A ring that grows out from the current step and fades, once every `pulsePeriod` ms; the static ring under it stays as the steady mark. */
+  private pulseTick = (time: number) => {
+    this.pulseFrame = 0
+    this.pulse.clear()
+    const box = this.pulseBox
+    if (!box || !this.pulsing) { this.app.render(); return }
+    const phase = (time % pulsePeriod) / pulsePeriod, grow = 3 + phase * 9
+    this.pulse.roundRect(box.x - grow, box.y - grow, box.width + grow * 2, box.height + grow * 2, radii.lg.px + grow).stroke({ color: this.options.colors.accent, width: 2, alpha: 0.55 * (1 - phase) })
+    this.app.render()
+    this.startPulse()
+  }
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
@@ -459,11 +485,15 @@ export class FlowCanvas {
     const resolution = this.app.renderer.resolution * this.camera.scale
     this.world.position.set(this.camera.x, this.camera.y)
     this.world.scale.set(this.camera.scale)
-    this.back.clear(); this.edges.clear(); this.cards.clear(); this.front.clear()
+    this.back.clear(); this.edges.clear(); this.cards.clear(); this.front.clear(); this.pulse.clear()
     this.drawGrid(colors.dots)
+    const current = nodes.findIndex(node => node.current)
+    this.pulseBox = current >= 0 ? layout.nodes[current] : undefined
     this.pool.begin()
-    const label = (key: string, text: string, x: number, y: number, style: TextStyle, _fill: string, anchorX = 0) => {
+    // A sprite is reused frame to frame, so its alpha is set every time: a faded step's or pill's text fades with its box.
+    const label = (key: string, text: string, x: number, y: number, style: TextStyle, _fill: string, anchorX = 0, alpha = 1) => {
       const sprite = this.pool.get(key)
+      if (sprite.alpha !== alpha) sprite.alpha = alpha
       if (sprite.text !== text) sprite.text = text
       if (sprite.style !== style) sprite.style = style
       if (sprite.resolution !== resolution) sprite.resolution = resolution
@@ -474,7 +504,7 @@ export class FlowCanvas {
       const style = styled(this.styles.small, color)
       const width = this.measure(text, style) + 14, left = center ? cx - width / 2 : cx
       this.cards.roundRect(left, top, width, 18, 9).fill({ color: fill, alpha }).stroke({ color: stroke, width: 1, alpha })
-      label(key, text, left + 7, top + 3, style, color)
+      label(key, text, left + 7, top + 3, style, color, 0, alpha)
       return width
     }
     // Edges: each with a halo in the canvas's colour first, so the one drawn on top of a crossing shows a gap.
@@ -482,7 +512,8 @@ export class FlowCanvas {
       if (item.points.length < 2) continue
       const key = flowEdgeKey(item.edge.from, item.edge.which)
       const accent = model.accent.has(key), hot = model.hot.has(key)
-      const dim = !hot && (model.fadeRest || nodes[item.edge.from]?.never)
+      // A changed edge keeps its strength under an overlay, as its "changed" chip does: the draft's own marks stay.
+      const dim = !hot && !model.lit?.has(key) && ((model.fadeRest && !accent) || nodes[item.edge.from]?.never)
       const color = accent ? colors.accent : item.edge.which === 'success' ? colors.success : colors.error
       const width = hot || accent ? 2.25 : 1.25
       this.polyline(this.edges, item.points, false)
@@ -494,7 +525,7 @@ export class FlowCanvas {
         const text = this.markText(item.edge), style = styled(this.styles.small, colors.muted)
         const width2 = this.markWidth(item.edge), [mx, my] = item.points[0]!
         this.cards.roundRect(mx - 10 - width2, my + 5, width2, 16, 3).fill(colors.card).stroke({ color: colors.border, width: 1, alpha: dim ? 0.4 : 1 })
-        label(`mark:${key}`, text, mx - 5 - width2, my + 7, style, colors.muted)
+        label(`mark:${key}`, text, mx - 5 - width2, my + 7, style, colors.muted, 0, dim ? 0.4 : 1)
       }
     }
     // The Start step's entry arrow and pill.
@@ -515,7 +546,7 @@ export class FlowCanvas {
     // Quit pills and the End node.
     for (const quit of layout.quits) {
       const key = flowEdgeKey(quit.edge.from, quit.edge.which)
-      const alpha = model.hot.has(key) ? 1 : model.fadeRest || nodes[quit.edge.from]?.never ? 0.35 : 1
+      const alpha = model.hot.has(key) || model.lit?.has(key) ? 1 : model.fadeRest || nodes[quit.edge.from]?.never ? 0.35 : 1
       const target = quit.edge.target
       if (target.kind === 'unread') { pill(`quit:${key}`, target.stepId !== undefined ? `Step ${target.stepId} · not read` : 'Not read', quit.at[0], quit.at[1], colors.muted, colors.background, colors.muted, alpha); continue }
       if (target.kind === 'missing') { pill(`quit:${key}`, 'Step missing', quit.at[0], quit.at[1], colors.warning, colors.background, colors.warning, alpha); continue }
@@ -536,7 +567,7 @@ export class FlowCanvas {
       const item = layout.edges.find(edge => flowEdgeKey(edge.edge.from, edge.edge.which) === key)
       if (!item) continue
       const style = styled(this.styles.badge, colors.background), width = Math.max(16, this.measure(text, style) + 8)
-      this.front.roundRect(item.mid[0] - width / 2, item.mid[1] - 8, width, 16, 8).fill(colors.text)
+      this.cards.roundRect(item.mid[0] - width / 2, item.mid[1] - 8, width, 16, 8).fill(colors.text)
       label(`seq:${key}`, text, item.mid[0], item.mid[1] - 6, style, colors.background, 0.5)
     }
     // Nodes.
@@ -555,11 +586,11 @@ export class FlowCanvas {
       const textAlpha = node.fade ? 0.55 : 1
       const muted = colors.muted, strong = node.never ? colors.muted : colors.text
       this.cards.circle(box.x + 17, box.y + 14, 9).fill(colors.background).stroke({ color: colors.border, width: 1, alpha })
-      label(`no:${at}`, String(at + 1), box.x + 17, box.y + 7, styled(this.styles.small, muted), muted, 0.5)
+      label(`no:${at}`, String(at + 1), box.x + 17, box.y + 7, styled(this.styles.small, muted), muted, 0.5, textAlpha)
       const typeStyle = styled(this.styles.small, muted)
       const typeWidth = this.measure(node.type, typeStyle)
       const typeX = box.x + box.width - 10 - typeWidth
-      label(`type:${at}`, node.type, typeX, box.y + 7, typeStyle, muted)
+      label(`type:${at}`, node.type, typeX, box.y + 7, typeStyle, muted, 0, textAlpha)
       const path = iconPaths.get(node.icon)
       // One matrix, since a scale after a translate in Pixi's context scales the translation too.
       if (path) this.cards.context.save().setTransform(0.75, 0, 0, 0.75, typeX - 15, box.y + 5).path(path).stroke({ color: muted, width: iconStroke / 0.75, alpha: textAlpha }).restore()
@@ -568,22 +599,24 @@ export class FlowCanvas {
         const style = styled(this.styles.small, color), width = this.measure(text, style) + 10
         tagRight -= width
         this.cards.roundRect(tagRight, box.y + 6, width, 15, 3).fill({ color: colors.background }).stroke({ color, width: 1, alpha: 0.7 })
-        label(key, text, tagRight + 5, box.y + 7, style, color)
+        label(key, text, tagRight + 5, box.y + 7, style, color, 0, textAlpha)
         tagRight -= 6
       }
       if (node.changed) tag(`changed:${at}`, 'changed', colors.accent)
       if (node.never) tag(`never:${at}`, 'Never runs', colors.warning)
       const titleStyle = styled(this.styles.title, strong)
-      label(`name:${at}`, this.fitText(node.name || 'Unnamed step', Math.max(20, tagRight - (box.x + 32)), titleStyle), box.x + 32, box.y + 5, titleStyle, strong)
+      label(`name:${at}`, this.fitText(node.name || 'Unnamed step', Math.max(20, tagRight - (box.x + 32)), titleStyle), box.x + 32, box.y + 5, titleStyle, strong, 0, textAlpha)
       let right = box.x + box.width - 10
+      // The overlay's words, right to left; the ones that would run into the number and key field are left out (the accessible name has all).
       for (const [index, part] of [...node.right ?? []].reverse().entries()) {
         const style = styled(this.styles.small, this.tone(part.tone)), width = this.measure(part.text, style)
+        if (right - width < box.x + 32 + 48) break
         right -= width
-        label(`right:${at}:${index}`, part.text, right, box.y + 27, style, this.tone(part.tone))
+        label(`right:${at}:${index}`, part.text, right, box.y + 27, style, this.tone(part.tone), 0, textAlpha)
         right -= 8
       }
       const subStyle = styled(this.styles.small, muted)
-      label(`sub:${at}`, this.fitText(node.sub, Math.max(20, right - (box.x + 32)), subStyle), box.x + 32, box.y + 27, subStyle, muted)
+      label(`sub:${at}`, this.fitText(node.sub, Math.max(20, right - (box.x + 32)), subStyle), box.x + 32, box.y + 27, subStyle, muted, 0, textAlpha)
       // Ports: ✓ on success, ✗ on failure, each with its glyph so colour is never the only cue.
       const [ok, bad] = layout.ports[at]!
       for (const [[px, py], which] of [[ok, 'success'], [bad, 'fail']] as const) {
@@ -601,6 +634,7 @@ export class FlowCanvas {
     }
     if (this.pool.end()) TexturePool.clear(true)
     this.app.render()
+    if (this.pulsing) this.startPulse(); else this.stopPulse()
     this.pruneTextCache()
     void flow
   }
