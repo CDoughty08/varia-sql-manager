@@ -870,13 +870,22 @@ internal static partial class BigQueryIndexChecks
 
         // 11. Mid-project Wave 2 memory early-stop reports ProjectState.Partial and Dataset.Skipped in BigQueryLookup.
         {
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
             var source = new FakeBudgetSource(discoveredProjects: ["disc-mid"], tablesPerDiscovered: 40, columnsPerTable: 0)
             {
                 CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["disc-mid"] = ["ds1", "ds2", "ds3", "ds4", "ds5", "ds6"] },
-                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200, [("disc-mid", "ds4")] = 200, [("disc-mid", "ds5")] = 200, [("disc-mid", "ds6")] = 200 }
+                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200, [("disc-mid", "ds4")] = 200, [("disc-mid", "ds5")] = 200, [("disc-mid", "ds6")] = 200 },
+                // The large datasets finish listing only once ds1 is held: listings run at once, and one that took the budget
+                // first would stop the build before ds1, leaving the project with nothing held (no Partial to check).
+                OnDatasetObjectsAsync = async (project, dataset, token) =>
+                {
+                    if (project != "disc-mid" || dataset == "ds1") return;
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (!search.LookupBigQuery(id, "varia-alpha").Datasets("disc-mid").Contains("ds1") && DateTime.UtcNow < deadline)
+                        await Task.Delay(5, token);
+                }
             };
-            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
-            var id = Guid.NewGuid().ToString();
             var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             var lookup = search.LookupBigQuery(id, "varia-alpha");
             var missing = new[] { "ds2", "ds3", "ds4", "ds5", "ds6" }.FirstOrDefault(ds => !lookup.Datasets("disc-mid").Contains(ds));
@@ -888,6 +897,7 @@ internal static partial class BigQueryIndexChecks
                 $"mid-project Wave 2 memory early-stop reports Partial project state ({lookup.ProjectState("disc-mid")}) and Skipped for unheld dataset {missing} ({missingInfo?.State})");
 
             // Promoting disc-mid to starred and cleanly refreshing it clears Partial even if AccessibleProjectsAsync fails.
+            source.OnDatasetObjectsAsync = null;
             source.CustomDatasets["disc-mid"] = ["ds1", "ds2"];
             source.TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 1 };
             source.FailDiscovery = true;
