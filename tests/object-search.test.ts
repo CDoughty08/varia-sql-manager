@@ -1772,7 +1772,7 @@ describe('Search Objects\' summary', () => {
       { bq: { connectionId: 'bq', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' } })).toContain('varia-alpha still discovering projects')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
-    // Memory ran out: the line says how many definitions were left out and where, apart from the user's own names-only option
+    // Memory ran out: the line says how many definitions were left out, apart from the user's own names-only option
     // and from definitions only cut at their length (`cut` alone), and keeps the line in Object Explorer's band.
     const starved = status({ modules: 12, cut: 1206, leftOut: 1204, leftOutIn: 2 })
     expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out (not enough index memory)')

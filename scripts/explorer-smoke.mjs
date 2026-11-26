@@ -1310,7 +1310,7 @@ try {
     await page.keyboard.type('table')
     const tabHits = objectSearchHits(page)
     await expect(tabHits).toHaveCount(2)
-    // The index ran short of memory: the tab's index line says how many definitions were left out and of how many databases, a
+    // The index ran short of memory: the tab's index line says how many definitions were left out, a
     // note under it says what to do, and Object Explorer's band (which hides a healthy index's line) shows the line and carries
     // the note in its details. A rebuild that fits takes both away.
     const rebuildIndex = () => documentVerb(documentFrame(page, 'Search Objects'), 'Search Objects', 'Rebuild Search Index').click()

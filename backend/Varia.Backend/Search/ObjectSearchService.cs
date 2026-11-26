@@ -126,8 +126,11 @@ internal sealed partial class ObjectSearchService : IDisposable
     }
 
     public ObjectIndexLimits Limits { get; }
-    /// <summary>A check's hook: called when a BigQuery build's names pass has held a dataset's read (or left it as it was).</summary>
+    /// <summary>A check's hook: called when a BigQuery build's names pass has held a dataset's read (or left it as it was, or
+    /// given it up for the listing's error).</summary>
     internal Action<string, string>? NamesHeld { get; set; }
+    /// <summary>A check's hook: called when a BigQuery build's names pass stops reading new discovered datasets for memory.</summary>
+    internal Action? NamesStopped { get; set; }
 
     /// <summary>explorer.index's memoryLimitMiB, checked: the limit every connection's index shares from this build on, with the
     /// names' reserve (and so BigQuery's floors) in proportion. Nothing held is dropped: a rebuild charges its predecessor's
