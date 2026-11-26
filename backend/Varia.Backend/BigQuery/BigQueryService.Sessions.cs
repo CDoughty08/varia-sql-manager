@@ -2,9 +2,11 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Google;
 using Google.Apis.Bigquery.v2.Data;
+using Varia.Backend.MultiQuery;
 
 namespace Varia.Backend.BigQuery;
 
@@ -676,15 +678,53 @@ internal sealed partial class BigQueryService
         _ => ""
     };
 
+    private readonly record struct CommitCoreDetail(
+        MultiCommitResult Result,
+        string JobId,
+        Exception? RawError = null,
+        bool Retryable = false,
+        bool ConnectionLost = false,
+        bool Cancelled = false);
+
     /// <summary>
-    /// COMMIT TRANSACTION in the session (docs/bigquery.md, Sessions). Answers null when the commit succeeded and the
-    /// session is to be ended; a result when the close is answered here (commitNotApplied, outcomeUnknown); throws to keep
-    /// the session (a refused commit on a checked session, a retryable refusal, abortOnRefusedCommit false) or with
-    /// SESSION_LOST for an expired one. The insert and every lookup by the COMMIT's client job id share
-    /// <see cref="CommitLimit"/>; a 409, a 5xx, a transport failure after sending or the limit itself is an unknown
-    /// outcome until a lookup proves it, and a 404 from a lookup is inconclusive.
+    /// Shared commit core returning a structured <see cref="MultiCommitResult"/> (Committed, Refused, CancelledBeforeSend,
+    /// or InDoubt). <see cref="MultiCommitOutcome.InDoubt"/> guarantees <see cref="Unknown"/>/<see cref="PendingAbort"/>
+    /// has already started. Sets <c>maySent = true</c> immediately before <c>Jobs.Insert</c> (resetting only on
+    /// <see cref="NotSent"/> before retry) so mid-insert cancellation always transitions to InDoubt.
     /// </summary>
-    async Task<SessionCloseResult?> CommitAsync(BigQueryTabSession session, bool abortOnRefusedCommit, CancellationToken token)
+    internal async Task<MultiCommitResult> CommitCoreAsync(BigQueryTabSession session, CancellationToken token) =>
+        (await CommitCoreDetailedAsync(session, token)).Result;
+
+    /// <summary>
+    /// Commits an ephemeral multi-query session and ensures the session never leaks for 24h: calls <see cref="AbortAsync"/>
+    /// (with a fresh bounded token, remembering failed aborts) on Committed, Refused, or CancelledBeforeSend; on InDoubt
+    /// returns InDoubt without calling <see cref="AbortAsync"/> or double-calling <see cref="PendingAbort"/>.
+    /// </summary>
+    internal async Task<MultiCommitResult> CommitEphemeralSessionAsync(BigQueryTabSession session, CancellationToken token)
+    {
+        if (session.Id is not { } sessionId) return new MultiCommitResult(MultiCommitOutcome.Committed);
+        var detail = await CommitCoreDetailedAsync(session, token);
+        if (detail.Result.Outcome == MultiCommitOutcome.InDoubt) return detail.Result;
+        await AbortEphemeralSessionAsync(session.Connection, sessionId, session.Location);
+        return detail.Result;
+    }
+
+    /// <summary>Ends an ephemeral multi-query session using a fresh bounded token, remembering failed aborts for retry.</summary>
+    internal async Task<bool> AbortEphemeralSessionAsync(BigQueryConnection connection, string sessionId, string? location)
+    {
+        try
+        {
+            var (ended, _, _) = await AbortAsync(connection, sessionId, location, stopping.Token);
+            if (!ended) RememberFailedAbort(connection, sessionId, location);
+            return ended;
+        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    async Task<CommitCoreDetail> CommitCoreDetailedAsync(BigQueryTabSession session, CancellationToken token)
     {
         var connection = session.Connection;
         var project = connection.Options.Project;
@@ -699,25 +739,27 @@ internal sealed partial class BigQueryService
         {
             for (var attempt = 1; done is null && !maySent; attempt++)
             {
+                token.ThrowIfCancellationRequested();
+                maySent = true;
                 try
                 {
                     var inserted = await CallAsync(t => connection.Client.Service.Jobs.Insert(job, project).ExecuteAsync(t), limit.Token);
                     location = inserted.JobReference?.Location ?? location;
                     done = inserted.Status?.State == "DONE" ? inserted : null;
-                    maySent = true;
                 }
                 catch (GoogleApiException error) when ((int)error.HttpStatusCode is >= 400 and < 500 && error.HttpStatusCode is not HttpStatusCode.Conflict and not HttpStatusCode.RequestTimeout)
                 {
-                    throw Refused(session, error, Retryable(error), abortOnRefusedCommit, project);
+                    return new(new(MultiCommitOutcome.Refused, MapCommitRefusal(session, error, project)), jobId, RawError: error, Retryable: Retryable(error));
                 }
                 catch (Exception error) when (NotSent(error) && !token.IsCancellationRequested)
                 {
-                    // Nothing reached BigQuery: try again within the budget, then refuse so the user can retry.
+                    // Nothing reached BigQuery: reset maySent before retry or connection-lost refusal.
+                    maySent = false;
                     if (attempt >= InsertAttempts || limit.IsCancellationRequested)
-                        throw new RequestException("CONNECTION_LOST", "The transaction was not committed, and the query stays open: " + BigQueryErrors.Unreachable);
+                        return new(new(MultiCommitOutcome.Refused, new MultiTargetError("CONNECTION_LOST", "The transaction was not committed: " + BigQueryErrors.Unreachable)), jobId, ConnectionLost: true);
                     await Task.Delay(Backoff(attempt), limit.Token);
                 }
-                catch (Exception) when (!token.IsCancellationRequested) { maySent = true; }
+                catch (Exception) when (!token.IsCancellationRequested) { }
             }
             // The COMMIT may exist: look it up by its id until it is DONE.
             while (done is null)
@@ -736,22 +778,69 @@ internal sealed partial class BigQueryService
         catch (Exception) when (!token.IsCancellationRequested && limit.IsCancellationRequested)
         {
             // The budget ran out while only retrying an insert that never left: nothing was submitted.
-            if (!maySent) throw new RequestException("CONNECTION_LOST", "The transaction was not committed, and the query stays open: " + BigQueryErrors.Unreachable);
-            return Unknown(session, jobId, location);
+            if (!maySent)
+                return new(new(MultiCommitOutcome.Refused, new MultiTargetError("CONNECTION_LOST", "The transaction was not committed: " + BigQueryErrors.Unreachable)), jobId, ConnectionLost: true);
+            Unknown(session, jobId, location);
+            return new(new(MultiCommitOutcome.InDoubt, new MultiTargetError("TIMEOUT", "BigQuery did not confirm the transaction commit in time (job " + jobId + ").")), jobId, Cancelled: false);
         }
-        catch (Exception) when (token.IsCancellationRequested)
+        catch (Exception error) when (token.IsCancellationRequested)
         {
-            // Main's deadline won: the COMMIT may still run, so the session is aborted only once it is DONE.
-            if (maySent) Unknown(session, jobId, location);
-            throw;
+            if (!maySent)
+                return new(new(MultiCommitOutcome.CancelledBeforeSend, new MultiTargetError("CANCELLED", "The transaction commit was cancelled before it was sent to BigQuery.")), jobId, RawError: error, Cancelled: true);
+            // Main's deadline or caller cancellation won after send may have started: the COMMIT may still run, so the session is aborted only once it is DONE.
+            Unknown(session, jobId, location);
+            return new(new(MultiCommitOutcome.InDoubt, new MultiTargetError("CANCELLED", "The transaction commit was cancelled after submission started; outcome is unknown (job " + jobId + ").")), jobId, RawError: error, Cancelled: true);
         }
         if (BigQueryJobException.Of(done) is not { } failed)
         {
             session.Transaction = BigQueryTransaction.None;
-            return null;
+            return new(new(MultiCommitOutcome.Committed), jobId);
         }
         var retryable = failed.Errors.Append(failed.Result).Any(item => item.Reason is "backendError" or "internalError" or "jobBackendError" or "jobInternalError" or "rateLimitExceeded");
-        throw Refused(session, failed, retryable, abortOnRefusedCommit, project);
+        return new(new(MultiCommitOutcome.Refused, MapCommitRefusal(session, failed, project)), jobId, RawError: failed, Retryable: retryable);
+    }
+
+    static MultiTargetError MapCommitRefusal(BigQueryTabSession session, Exception error, string project)
+    {
+        if (SessionGone(error, session.Id)) return new("SESSION_LOST", ExpiredCommit);
+        var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, null) : BigQueryErrors.Map(error, project) as RequestException
+            ?? new RequestException("SQL_ERROR", "BigQuery refused the commit.");
+        var code = mapped.Code is "TIMEOUT" or "CANCELLED" ? "SQL_ERROR" : mapped.Code;
+        return new(code, mapped.Message);
+    }
+
+    /// <summary>
+    /// COMMIT TRANSACTION in the session (docs/bigquery.md, Sessions). Answers null when the commit succeeded and the
+    /// session is to be ended; a result when the close is answered here (commitNotApplied, outcomeUnknown); throws to keep
+    /// the session (a refused commit on a checked session, a retryable refusal, abortOnRefusedCommit false) or with
+    /// SESSION_LOST for an expired one. The insert and every lookup by the COMMIT's client job id share
+    /// <see cref="CommitLimit"/>; a 409, a 5xx, a transport failure after sending or the limit itself is an unknown
+    /// outcome until a lookup proves it, and a 404 from a lookup is inconclusive.
+    /// </summary>
+    async Task<SessionCloseResult?> CommitAsync(BigQueryTabSession session, bool abortOnRefusedCommit, CancellationToken token)
+    {
+        var detail = await CommitCoreDetailedAsync(session, token);
+        switch (detail.Result.Outcome)
+        {
+            case MultiCommitOutcome.Committed:
+                return null;
+            case MultiCommitOutcome.Refused:
+                if (detail.ConnectionLost)
+                    throw new RequestException("CONNECTION_LOST", "The transaction was not committed, and the query stays open: " + BigQueryErrors.Unreachable);
+                throw Refused(session, detail.RawError!, detail.Retryable, abortOnRefusedCommit, session.Connection.Options.Project);
+            case MultiCommitOutcome.CancelledBeforeSend:
+                ExceptionDispatchInfo.Capture(detail.RawError ?? new OperationCanceledException(token)).Throw();
+                return null;
+            case MultiCommitOutcome.InDoubt:
+                if (detail.Cancelled)
+                {
+                    ExceptionDispatchInfo.Capture(detail.RawError ?? new OperationCanceledException(token)).Throw();
+                    return null;
+                }
+                return new SessionCloseResult(true, Note("outcomeUnknown", jobId: detail.JobId));
+            default:
+                throw new InvalidOperationException("Unexpected commit outcome.");
+        }
     }
 
     static bool Retryable(GoogleApiException error) =>
