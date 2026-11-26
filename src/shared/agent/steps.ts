@@ -100,11 +100,14 @@ export function stepDraftOf(step: AgentJobStepRecord): AgentStepDraft {
     ...step.commandTruncated ? { truncated: true } : {}
   }
 }
-/** The described steps as the draft opens with them; the Start step is the job's start_step_id when it names a step, else the first. */
-export function initialStepsDraft(steps: readonly AgentJobStepRecord[], startStepId: number | undefined): AgentStepsDraft {
+/**
+ * The described steps as the draft opens with them; the Start step is the job's start_step_id when it names a step, else the first. A job
+ * with more steps than Varia reads (`truncated`) keeps a start past them: no step read is its Start, in List and Flow alike.
+ */
+export function initialStepsDraft(steps: readonly AgentJobStepRecord[], startStepId: number | undefined, truncated = false): AgentStepsDraft {
   const drafted = [...steps].sort((a, b) => a.id - b.id).map(stepDraftOf)
-  const start = drafted.find(step => step.from === startStepId) ?? drafted[0]
-  return { steps: drafted, ...start ? { startKey: start.key } : {} }
+  const start = drafted.find(step => step.from === startStepId)?.key ?? (truncated && startStepId !== undefined ? keyOf(startStepId) : drafted[0]?.key)
+  return { steps: drafted, ...start ? { startKey: start } : {} }
 }
 
 // --- Operations on the draft --------------------------------------------------------------------------------------------

@@ -140,7 +140,7 @@ export interface AgentJobDraft {
 }
 
 /** The draft a describe opens with: the job as read, or New Job's blank (owner the login, SSMS's defaults). */
-export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 'login'> & Partial<Pick<AgentJobDocumentModel, 'steps' | 'schedules'>>): AgentJobDraft {
+export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 'login'> & Partial<Pick<AgentJobDocumentModel, 'steps' | 'schedules' | 'stepsTruncated'>>): AgentJobDraft {
   const job = model.job
   if (!job) return {
     name: '', owner: model.login, category: uncategorizedCategory, description: '', enabled: true,
@@ -150,7 +150,7 @@ export function initialAgentJobDraft(model: Pick<AgentJobDocumentModel, 'job' | 
     name: job.name, owner: job.owner, category: job.category, description: job.description, enabled: job.enabled,
     emailLevel: job.emailLevel, emailOperator: job.emailOperator, pageLevel: job.pageLevel, pageOperator: job.pageOperator,
     netSendLevel: job.netSendLevel, netSendOperator: job.netSendOperator, eventLogLevel: job.eventLogLevel, deleteLevel: job.deleteLevel, removeAlerts: [],
-    steps: initialStepsDraft(model.steps ?? [], job.startStepId), schedules: initialJobSchedules(model.schedules)
+    steps: initialStepsDraft(model.steps ?? [], job.startStepId, model.stepsTruncated), schedules: initialJobSchedules(model.schedules)
   }
 }
 
@@ -514,7 +514,7 @@ export interface AgentJobCommandEntry {
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
-  readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
+  readonly keybindings?: readonly { readonly key?: string; readonly win?: string; readonly linux?: string; readonly mac?: string; readonly when: string }[]
   readonly menus?: readonly { readonly menu: 'explorer.context' | 'agent.jobs.context' | 'agent.steps.context'; readonly title?: string; readonly group: string; readonly order: number; readonly mnemonic?: string; readonly when?: string; readonly platforms?: readonly ('darwin' | 'win32' | 'linux')[] }[]
 }
 const inJob = 'backendReady && activeDocumentIsAgentJob'
@@ -627,7 +627,7 @@ export function agentJobCommandEntries(): { readonly [K in AgentJobCommandId]: A
     'agentJob.deleteStep': {
       title: 'Delete Step', category: 'SQL Server Agent', icon: 'trash', palette: false, keywords: ['agent', 'job', 'step', 'delete', 'remove'],
       precondition: inDraft, unavailableHint: changeStep,
-      keybindings: [{ key: 'delete', when: flowKeys }],
+      keybindings: [{ win: 'delete', linux: 'delete', mac: 'mod+backspace', when: flowKeys }, { mac: 'delete', when: flowKeys }],
       menus: [{ menu: 'agent.steps.context', group: '4_delete', order: 1, title: 'Delete step', mnemonic: 'd' }]
     }
   }

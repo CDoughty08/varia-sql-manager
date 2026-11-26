@@ -6,11 +6,13 @@
 import 'pixi.js/unsafe-eval'
 import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Text, TextStyle, TexturePool } from 'pixi.js'
 import { flowEdgeKey, type FlowLayout, type FlowPoint, type FlowWhich, type StepsFlow } from '../../../shared/agent/flow'
+import type { Platform } from '../../../shared/commands/keybindings'
 import { svgIcons, iconStroke, type SvgIconId } from '../../../shared/icons'
 import { radii, typeScale } from '../../../shared/theme/metrics'
 import type { Disposable } from '../core/types'
 import { observeIntersection, observeResize, windowOf, windows } from '../core/windows'
 import { uiFontFamily } from '../fonts'
+import { pressButton } from '../grid/selection'
 import { fit, zoomAt, type Camera } from '../plans/geometry'
 import { LabelPool } from '../plans/labels'
 
@@ -59,6 +61,8 @@ export interface FlowCanvasOptions {
   selected: number
   focused: boolean
   editable: boolean
+  /** macOS's Control+click is a right-click (it opens the step's menu), as in the results grid. */
+  readonly platform?: Platform
   /** Where the camera was when this view's last canvas was released (Steps scrolled out of view): the new one opens there. */
   readonly camera?: Camera
   /** Bring the selected step into view on the first placement: a selection made before the canvas existed, or while it was released. */
@@ -113,7 +117,8 @@ export class FlowCanvas {
   private drag?: { readonly id: number; x: number; y: number; moved: boolean }
   /** The node under the last press (-1 for none): a pointer menu is the menu of the step it opened on, never the selected one. */
   private pressed = -1
-  private connecting?: { readonly from: number; readonly which: FlowWhich; readonly id: number; x: number; y: number; over: number }
+  /** A port's connect drag: where the press was on screen (a press that has not moved is a click, at any zoom), and the pointer in the graph. */
+  private connecting?: { readonly from: number; readonly which: FlowWhich; readonly id: number; readonly startX: number; readonly startY: number; x: number; y: number; over: number }
   private owner: Window
   private ownerDocument: Document
   private pixelRatioQuery?: MediaQueryList
@@ -261,6 +266,8 @@ export class FlowCanvas {
   recenter(): void { this.owner.requestAnimationFrame(() => { if (!this.disposed && this.ready) { this.resize(); this.rehome() } }) }
   /** For a new width: x and the scale as placed first, the scroll kept, and the selected step (the one being edited) still in view. */
   private rehome(): void {
+    // A hidden view (its tab in the background) has no width to place by: home() would zoom right out.
+    if (this.width <= 1) return
     this.moveCamera({ ...this.home(), y: this.camera.y })
     if (this.options.selected >= 0) this.reveal(this.options.selected)
   }
@@ -317,13 +324,14 @@ export class FlowCanvas {
     if (this.drag || this.connecting) return
     const point = this.world2(event)
     this.pressed = this.nodeAt(point)
-    if (event.button === 2) { const node = this.nodeAt(point); if (node >= 0) this.options.select(node); return }
-    if (event.button !== 0 && event.button !== 1) return
+    const press = pressButton(event, this.options.platform ?? 'win32')
+    if (press === 'secondary') { if (this.pressed >= 0) this.options.select(this.pressed); return }
+    if (press !== 'primary' && event.button !== 1) return
     const port = event.button === 0 && this.options.editable ? this.portAt(point) : undefined
     event.preventDefault()
     this.options.root.focus({ preventScroll: true })
     this.options.root.setPointerCapture(event.pointerId)
-    if (port) { this.connecting = { ...port, id: event.pointerId, x: point[0], y: point[1], over: -1 }; this.invalidate(); return }
+    if (port) { this.connecting = { ...port, id: event.pointerId, startX: event.clientX, startY: event.clientY, x: point[0], y: point[1], over: -1 }; this.invalidate(); return }
     this.drag = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false }
   }
   private move = (event: PointerEvent) => {
@@ -354,11 +362,12 @@ export class FlowCanvas {
     if (connecting?.id === event.pointerId) {
       this.connecting = undefined
       this.invalidate()
-      const [px, py] = this.options.model.layout.ports[connecting.from]![connecting.which === 'success' ? 0 : 1]
-      // A press without a drag is a click on the port, and a release off the canvas is no drop (the step there may be scrolled away).
-      if (Math.hypot(connecting.x - px, connecting.y - py) < 6 || !this.inside(event)) return
-      if (connecting.over >= 0) this.options.connect(connecting.from, connecting.which, connecting.over)
-      else if (this.nodeAt([connecting.x, connecting.y]) !== connecting.from) this.options.dropped(connecting.from, connecting.which, event.clientX, event.clientY)
+      // A press that has not moved (on screen, whatever the zoom) is a click on the port, and a release off the canvas is no drop (the step there
+      // may be scrolled away). Where it lands is read from the release itself.
+      if (Math.hypot(event.clientX - connecting.startX, event.clientY - connecting.startY) < 6 || !this.inside(event)) return
+      const over = this.nodeAt(this.world2(event))
+      if (over >= 0 && over !== connecting.from) this.options.connect(connecting.from, connecting.which, over)
+      else if (over < 0) this.options.dropped(connecting.from, connecting.which, event.clientX, event.clientY)
       return
     }
     const drag = this.drag
@@ -429,10 +438,10 @@ export class FlowCanvas {
       }
     }
   }
-  private arrow(graphics: Graphics, points: readonly FlowPoint[], color: string): void {
+  private arrow(graphics: Graphics, points: readonly FlowPoint[], color: string, alpha = 1): void {
     const [x, y] = points[points.length - 1]!, [px, py] = points[points.length - 2]!
     const angle = Math.atan2(y - py, x - px), dx = Math.cos(angle), dy = Math.sin(angle)
-    graphics.moveTo(x, y).lineTo(x - dx * 7 - dy * 4, y - dy * 7 + dx * 4).lineTo(x - dx * 7 + dy * 4, y - dy * 7 - dx * 4).closePath().fill(color)
+    graphics.moveTo(x, y).lineTo(x - dx * 7 - dy * 4, y - dy * 7 + dx * 4).lineTo(x - dx * 7 + dy * 4, y - dy * 7 - dx * 4).closePath().fill({ color, alpha })
   }
   /** Only the dots the view shows, one fill; zoomed out, every other dot is left out so the grid never turns into a texture. */
   private drawGrid(color: string): void {
@@ -480,11 +489,10 @@ export class FlowCanvas {
       this.edges.stroke({ color: colors.background, width: width + 4 })
       this.polyline(this.edges, item.points, item.edge.which === 'fail')
       this.edges.stroke({ color, width, alpha: dim ? 0.3 : 1, cap: 'butt' })
-      this.arrow(this.edges, item.points, color)
+      this.arrow(this.edges, item.points, color, dim ? 0.3 : 1)
       if (item.edge.marked) {
-        const target = item.edge.target.kind === 'step' ? item.edge.target.index + 1 : 0
-        const text = `→ ${target}`, style = styled(this.styles.small, colors.muted)
-        const width2 = this.measure(text, style) + 10, [mx, my] = item.points[0]!
+        const text = this.markText(item.edge), style = styled(this.styles.small, colors.muted)
+        const width2 = this.markWidth(item.edge), [mx, my] = item.points[0]!
         this.cards.roundRect(mx - 10 - width2, my + 5, width2, 16, 3).fill(colors.card).stroke({ color: colors.border, width: 1, alpha: dim ? 0.4 : 1 })
         label(`mark:${key}`, text, mx - 5 - width2, my + 7, style, colors.muted)
       }
@@ -597,23 +605,32 @@ export class FlowCanvas {
     void flow
   }
   private readonly toned = new Map<string, TextStyle>()
-  /** Each chip's box: past the lanes on its edge's side, one after another; a straight edge's or a Quit's beside its port, clear of the pill. */
+  /**
+   * Each chip's box: past the lanes on its edge's side, one after another; a straight edge's or a Quit's beside its port, clear of the pill
+   * and of a Go to step's → N badge. A left chip on the Start arrow's row moves below it, clear of the Start pill.
+   */
   private chipBoxes(): ChipBox[] {
     const { layout, chips } = this.options.model
     const used = new Map<string, number>(), boxes: ChipBox[] = []
+    const sy = layout.start?.from[1]
     for (const chip of chips) {
       const item = layout.edges.find(edge => flowEdgeKey(edge.edge.from, edge.edge.which) === chip.edge)
       if (!item) continue
       const right = item.edge.which === 'fail', color = this.tone(chip.tone ?? 'muted')
       const style = this.styled(this.styles.small, color), width = this.measure(chip.text, style) + 12
-      const before = used.get(chip.edge) ?? 0
+      const before = used.get(chip.edge) ?? (item.edge.marked && item.lane === undefined ? this.markWidth(item.edge) + 4 : 0)
       used.set(chip.edge, before + width + 4)
       const pilled = item.points.length === 0, gap = item.lane !== undefined ? 8 : pilled ? 44 : 10
       const anchor = item.lane !== undefined ? (right ? layout.chipRight : layout.chipLeft) : item.mid[0] - (pilled ? 0 : 13)
-      boxes.push({ chip, x: right ? anchor + gap + before : anchor - gap - before - width, y: item.mid[1] + (pilled ? 10 : 0) - 8, width, style, color })
+      let y = item.mid[1] + (pilled ? 10 : 0) - 8
+      if (!right && item.lane !== undefined && sy !== undefined && y < sy + 11 && y + 16 > sy - 11) y = sy + 12
+      boxes.push({ chip, x: right ? anchor + gap + before : anchor - gap - before - width, y, width, style, color })
     }
     return boxes
   }
+  /** A Go to step to the next step is marked "→ N" left of its arrow (drawn in draw(), measured here for the chips beside it). */
+  private markText(edge: FlowLayout['edges'][number]['edge']): string { return `→ ${edge.target.kind === 'step' ? edge.target.index + 1 : 0}` }
+  private markWidth(edge: FlowLayout['edges'][number]['edge']): number { return this.measure(this.markText(edge), this.styled(this.styles.small, this.options.colors.muted)) + 10 }
   // Every text style is shared by its sprites, so a sprite's fill is set on a style of its own: one per tone.
   private styled(base: TextStyle, fill: string): TextStyle {
     const key = `${base.fontSize}:${base.fontWeight}:${fill}`

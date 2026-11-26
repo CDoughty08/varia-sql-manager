@@ -174,7 +174,7 @@ it('ends a connect drag when the steps change, and names the step under a pointe
   } finally { canvas.dispose(); frames.mockRestore() }
 })
 
-type Moving = Placed & { moveCamera(camera: { x: number; y: number; scale: number }): void; chipBoxes(): { x: number; width: number }[] }
+type Moving = Placed & { moveCamera(camera: { x: number; y: number; scale: number }): void; chipBoxes(): { x: number; y: number; width: number }[] }
 const captured = (root: HTMLElement) => Object.assign(root, { setPointerCapture() {}, releasePointerCapture() {}, hasPointerCapture: () => false })
 
 it('drops a port dragged off the canvas on nothing, though a step lies under the pointer past the canvas edge', async () => {
@@ -247,5 +247,86 @@ it("fits the loop and changed chips beside the lanes as well as the graph, in a 
       expect(placed.camera.x + box.x * placed.camera.scale).toBeGreaterThanOrEqual(0)
       expect(placed.camera.x + (box.x + box.width) * placed.camera.scale).toBeLessThanOrEqual(320)
     }
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+type Pressing = Moving & { drag?: unknown; width: number; rehome(): void }
+
+it("treats macOS's Control+click as a right-click: it selects the step under it and starts no drag or connect", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const select = vi.fn(), root = captured(sized(900, 600)), shown = model()
+  const canvas = create(root, undefined, shown, 0, { select, platform: 'darwin' }), placed = canvas as unknown as Pressing
+  try {
+    await Promise.resolve()
+    const { x, y, scale } = placed.camera, screen = ([px, py]: readonly [number, number]) => ({ clientX: x + px * scale, clientY: y + py * scale })
+    const node = shown.layout.nodes[1]!
+    root.dispatchEvent(new MouseEvent('pointerdown', { button: 0, ctrlKey: true, ...screen([node.x + 20, node.y + 10]) }))
+    expect(select).toHaveBeenCalledWith(1)
+    expect([placed.drag, placed.connecting]).toEqual([undefined, undefined])
+    // On a port too: the menu opens, no edge follows the pointer.
+    root.dispatchEvent(new MouseEvent('pointerdown', { button: 0, ctrlKey: true, ...screen(shown.layout.ports[1]![1]) }))
+    expect(placed.connecting).toBeUndefined()
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it('takes a port press that has not moved on screen as a click, at any zoom, and drops where the pointer is released', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const connect = vi.fn(), dropped = vi.fn(), root = captured(sized(900, 600)), shown = model()
+  const canvas = create(root, undefined, shown, 0, { connect, dropped }), placed = canvas as unknown as Pressing
+  const screen = ([px, py]: readonly [number, number]) => ({ clientX: placed.camera.x + px * placed.camera.scale, clientY: placed.camera.y + py * placed.camera.scale })
+  const press = (from: { clientX: number; clientY: number }, ...moves: { clientX: number; clientY: number }[]) => {
+    root.dispatchEvent(new MouseEvent('pointerdown', { button: 0, ...from }))
+    for (const to of moves) root.dispatchEvent(new MouseEvent('pointermove', to))
+    root.dispatchEvent(new MouseEvent('pointerup', moves.at(-1) ?? from))
+  }
+  try {
+    await Promise.resolve()
+    const [px, py] = shown.layout.ports[0]![0]
+    // The port's lower rim, below the step's own box: a click there opens no picker.
+    press(screen([px, py + 8.5]))
+    // Zoomed out to 25 %, a 4 px nudge is still a click, though it spans 16 graph units.
+    placed.moveCamera({ ...placed.camera, scale: 0.25 })
+    const at = screen([px, py])
+    press(at, { clientX: at.clientX, clientY: at.clientY + 4 })
+    expect(dropped).not.toHaveBeenCalled()
+    // Moved over step 3 and released in the gap past the last step: the release decides, so it drops on empty space.
+    placed.moveCamera({ ...placed.camera, scale: 1 })
+    const third = shown.layout.nodes[2]!
+    press(screen([px, py]), screen([third.x + 20, third.y + 10]), screen([third.x + 20, third.y + third.height + 30]))
+    expect(connect).not.toHaveBeenCalled()
+    expect(dropped).toHaveBeenCalledTimes(1)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it("keeps a chip beside a Go to step's → N badge, and a left chip off the Start arrow's row", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const base = model()
+  // Step 1 goes to step 2 by Go to step (marked "→ 2"), and step 3 back to step 1 on success: a loop in a left lane.
+  const steps = [0, 1, 2].map(at => ({ ...newStepDraft([]), key: `s${at + 1}`, from: at + 1, name: `Step ${at + 1}`, onSuccess: at === 1 ? 3 as const : 4 as const, onFail: 2 as const,
+    onSuccessTarget: at === 0 ? 's2' : 's1' }))
+  const flow = stepsFlow({ startKey: 's1', steps }), layout = flowLayout(flow, flowMetrics)
+  const shown: FlowCanvasModel = { ...base, flow, layout, chips: [{ edge: '0:success', text: 'changed', tone: 'accent' }, { edge: '2:success', text: 'Loop · 1, 2, 3' }] }
+  const canvas = create(sized(900, 600), undefined, shown), placed = canvas as unknown as Moving
+  try {
+    await Promise.resolve()
+    // Step 1 goes to step 2 by Go to step: "→ 2" sits left of its arrow (31 px wide here), and "changed" sits left of that.
+    const [changed] = placed.chipBoxes(), [px] = layout.ports[0]![0]
+    expect(changed!.x + changed!.width).toBeLessThanOrEqual(px - 10 - 31 - 4)
+    // The loop's chip moved onto the Start arrow's row: it goes below the arrow and pill instead.
+    const loop = placed.chipBoxes()[1]!, sy = loop.y + 8
+    canvas.update({ ...shown, layout: { ...layout, start: { from: [layout.start!.from[0], sy], to: [layout.start!.to[0], sy] } } }, 0, false, true)
+    expect(placed.chipBoxes()[1]!.y).toBe(sy + 12)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it('keeps its place while its view has no width (a background tab) rather than zooming right out', async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const canvas = create(sized(900, 600)), placed = canvas as unknown as Pressing
+  try {
+    await Promise.resolve()
+    const before = { ...placed.camera }
+    placed.width = 1
+    placed.rehome()
+    expect(placed.camera).toEqual(before)
   } finally { canvas.dispose(); frames.mockRestore() }
 })

@@ -93,8 +93,8 @@ export function stepsFlow(draft: AgentStepsDraft, more = false, startId?: number
   })
   return { count, start, edges, reachable, loops, partial: more, ...cutStart && start < 0 ? { startUnread: startId } : {} }
 }
-/** Never runs: nothing reaches it. Not said of a partial flow, where a step not read may go to it. */
-export const flowNeverRuns = (flow: StepsFlow, at: number): boolean => !flow.reachable[at] && !flow.partial
+/** Never runs: nothing reaches it. Not said of a partial flow, where a step not read may go to it, nor of one with no Start step to reach from. */
+export const flowNeverRuns = (flow: StepsFlow, at: number): boolean => !flow.reachable[at] && !flow.partial && flow.start >= 0
 /** What goes to a step, in words ("The job's start, Step 3 on failure"); in a partial flow, qualified, since a step not read may too. */
 export function flowReachedFrom(flow: StepsFlow, at: number): string {
   const from = flow.edges.filter(edge => edge.target.kind === 'step' && edge.target.index === at).map(edge => `Step ${edge.from + 1} on ${edge.which === 'success' ? 'success' : 'failure'}`)
@@ -172,7 +172,8 @@ const fieldOf = (which: FlowWhich): 'onSuccess' | 'onFail' => which === 'success
 function exitText(edge: FlowEdge): string {
   const verb = `step ${edge.from + 1} ${edge.which === 'success' ? 'succeeds' : 'fails'}`
   const target = edge.target
-  const where = target.kind === 'step' ? `to step ${target.index + 1}` : target.kind === 'quit' ? `quits reporting ${target.success ? 'success' : 'failure'}` : target.kind === 'end' ? 'the job fails' : 'to a step that no longer exists'
+  const where = target.kind === 'step' ? `to step ${target.index + 1}` : target.kind === 'quit' ? `quits reporting ${target.success ? 'success' : 'failure'}` : target.kind === 'end' ? 'the job fails'
+    : target.kind === 'unread' ? (target.stepId !== undefined ? `to step ${target.stepId}, which Varia does not read` : 'to a step Varia does not read') : 'to a step that no longer exists'
   return `${verb} (${where})`
 }
 const maxExitsListed = 3

@@ -478,7 +478,7 @@ keys it uses are listed below.
 | On Failure… (not in the palette) | `agentJob.pickStepOnFailure` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On failure… (macOS only) |
 | Add Step After (not in the palette) | `agentJob.addStepAfter` | — | — | — | `activeDocumentIsAgentJob` | — |
 | Add Step After… (not in the palette) | `agentJob.pickStepToAdd` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Add step after… (macOS only) |
-| Delete Step (not in the palette) | `agentJob.deleteStep` | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | ⌦ (`activeDocumentIsAgentJob && agentFlowFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Delete step |
+| Delete Step (not in the palette) | `agentJob.deleteStep` | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | ⌘⌫ (`activeDocumentIsAgentJob && agentFlowFocus`), ⌦ (`activeDocumentIsAgentJob && agentFlowFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Delete step |
 | New Alert… | `agent.newAlert` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Alert… |
 | Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
 | Open Alert… | `agent.openAlert` | — | — | — | `backendReady && hasConnection` | — |

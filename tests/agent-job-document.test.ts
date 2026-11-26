@@ -571,6 +571,13 @@ describe("the job document's Steps page", () => {
     expect(commands.isEnabled('agentJob.moveStepDown', { tabId: id })).toBe(false)
     await commands.execute('agentJob.moveStepUp', { tabId: id }, 'keybinding')
     expect(keys(jobDocuments, id)).toEqual(['s2', 's3', 's1'])
+    // A Flow step menu's Move up and Move down act on the menu's step, as its other items do, not on the selected one.
+    const target = { kind: 'agentStep', tabId: id, key: 's2' } as const
+    expect(jobDocuments.selectedStep(id)?.key).toBe('s3')
+    expect(commands.isEnabled('agentJob.moveStepUp', { tabId: id, target })).toBe(false)
+    expect(commands.isEnabled('agentJob.moveStepDown', { tabId: id, target })).toBe(true)
+    await commands.execute('agentJob.moveStepDown', { tabId: id, target }, 'menu')
+    expect(keys(jobDocuments, id)).toEqual(['s3', 's2', 's1'])
   })
   it('sets a step\'s actions, adds after it, applies a flow check\'s fix and starts once at a saved step (Steps › Flow)', async () => {
     const { jobDocuments, executes } = opened(stepped())
@@ -640,6 +647,14 @@ describe("the job document's Steps page", () => {
     expect(keys(jobDocuments, id)).toEqual(['s1', 's2', 'n1'])
     await commands.execute('agentJob.editStep', { tabId: id }, 'keybinding')
     expect(jobDocuments.get(id)?.stepEditor).toBe(true)
+    // The last step deleted under the docked editor closes it, so a step added later does not reopen it.
+    const scratch = jobDocuments.openJob('c1', 'Nightly load 2')
+    await settled()
+    const left = () => keys(jobDocuments, scratch) ?? []
+    for (const key of left().slice(1)) jobDocuments.deleteStepOf(scratch, key)
+    jobDocuments.openStepEditor(scratch, left()[0]!)
+    jobDocuments.deleteStepOf(scratch, left()[0]!)
+    expect([left(), jobDocuments.get(scratch)?.stepEditor]).toEqual([[], undefined])
     // The picker lists the same choices (macOS's On failure…, and a port dropped on empty space).
     await commands.execute('agentJob.pickStepOnFailure', { tabId: id, target }, 'menu')
     expect(quickInput.getSnapshot()).toMatchObject({ visible: true, ariaLabel: 'Step 2: On failure' })
@@ -711,6 +726,17 @@ describe("the job document's step command models", () => {
     expect([...stepModels(id).keys()]).toEqual(['read2|s1'])
     jobDocuments.closed(id)
     expect(kept.dispose).toHaveBeenCalled()
+    expect(stepModels(id).size).toBe(0)
+  })
+  it('disposes the models of documents still open when the service goes (the window closing)', async () => {
+    const { stepModels } = await import('../src/renderer/src/agent/step-models')
+    const { jobDocuments } = opened()
+    const id = jobDocuments.openJob('c1', 'Nightly load')
+    await settled()
+    const model = { dispose: vi.fn() } as unknown as import('monaco-editor').editor.ITextModel
+    stepModels(id).set('read1|s1', { model, documentId: 'a' })
+    jobDocuments.dispose()
+    expect(model.dispose).toHaveBeenCalled()
     expect(stepModels(id).size).toBe(0)
   })
   it('opens Flow\'s docked editor for an Edit step link from History or the copy review, and selects the step on List', async () => {
