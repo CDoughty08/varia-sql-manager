@@ -23,7 +23,8 @@ const numbers = new Intl.NumberFormat('en-US')
 /** Row actions the tree carries out: selection, the chevron, and a lost server's buttons. */
 /** A row's click, for Open Peek as Tab's gesture: not on the twistie, and not a double-click's second click (Ctrl+double-click opens one tab). */
 export function rowClick(actions: Pick<RowActions, 'click'>, rowId: number, event: GestureEvent & { readonly detail: number; readonly target: EventTarget | null }): void {
-  if (event.detail <= 1 && !(event.target as Element | null)?.closest?.('.oe-twistie')) actions.click(rowId, event)
+  const target = event.target as Element | null
+  if (event.detail <= 1 && !target?.closest?.('.oe-twistie') && !target?.closest?.('.oe-star-button')) actions.click(rowId, event)
 }
 
 /** Recovery buttons expose the synthetic row's Enter action while the tree keeps its single keyboard stop. */
@@ -38,6 +39,8 @@ export interface RowActions {
   activate(rowId: number): void
   reconnect(rowId: number): void
   remove(rowId: number): void
+  /** Toggles starred state on a non-billing BigQuery project row without disrupting expansion. */
+  toggleProjectStar?(rowId: number): void
   /** Fills a drag's data with the row's insert text, or starts moving a server row; false cancels the drag. */
   dragStart(rowId: number, transfer: DataTransfer): boolean
   /**
@@ -125,7 +128,8 @@ function tooltipFacts(node: TreeNode, note?: string): string[] {
   const error = node.error ?? node.connectionError, count = itemCount(node)
   const listed = listedChips(node)
   const status = serverConnectionStatus(node)?.sentence ?? (listed.length ? listed.map(chip => chip.title).join('\n') : node.status && statusSentences[node.status])
-  return [kind, node.lost && node.sublabel && displayText(node.sublabel), node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
+  const role = node.kind === 'bqProject' && node.bigQueryProjectRole === 'starred' ? 'Starred project' : undefined
+  return [kind, role, node.lost && node.sublabel && displayText(node.sublabel), node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
     error && `Could not load: ${displayText(error.message)}`, node.note && displayText(node.note.sentence)].filter((line): line is string => !!line)
 }
 /** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), any error, and another
@@ -348,7 +352,7 @@ function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, d
 function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery, drop }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = level > 1 ? <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} aria-hidden="true" /> : null
-  const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
+  const select = (event: MouseEvent) => { const target = event.target as Element; if (!target.closest('.oe-twistie') && !target.closest('.oe-star-button')) actions.select(rowId) }
   const half = (event: DragEvent): 'before' | 'after' => { const box = event.currentTarget.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 ? 'before' : 'after' }
   if (kind !== RowKind.Node || !listed) {
     // Loading rows do nothing; the capped row's Enter opens Filter Settings, so it is not announced as unavailable.
@@ -400,6 +404,17 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const primaryKey = isPrimaryKeyColumn(node)
   const shown = column ? columnDisplaySublabel(sublabel, primaryKey) : sublabel
   const systemFolder = folder && !!node.folder && systemFolders.has(node.folder)
+  const starRole = node.kind === 'bqProject' && !node.lost && (node.bigQueryProjectRole === 'starred' || node.bigQueryProjectRole === 'session') ? node.bigQueryProjectRole : undefined
+  const starAction = starRole ? <span className="oe-actions">
+    <button type="button" tabIndex={-1} className={`oe-star-button${starRole === 'starred' ? ' starred' : ''}`}
+      aria-label={`Star ${node.label}`}
+      aria-pressed={starRole === 'starred'}
+      title={starRole === 'starred' ? 'Unstar project' : 'Star project to keep in Object Explorer'}
+      onMouseDown={event => { event.preventDefault(); event.stopPropagation() }} onDoubleClick={stop}
+      onClick={event => { event.stopPropagation(); actions.toggleProjectStar?.(rowId) }}>
+      <Icon name={starRole === 'starred' ? 'star-full' : 'star-empty'} />
+    </button>
+  </span> : undefined
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${systemFolder ? ' system-folder' : ''}${column ? ' column' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
@@ -421,7 +436,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     {shown && !live && <span className="oe-sublabel">{displayText(shown)}</span>}
     {agent && status?.sublabel && <span className="oe-sublabel">{displayText(status.sublabel)}</span>}
     {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
-    <RowEnd count={itemCount(node)} active={active}>
+    <RowEnd count={itemCount(node)} active={active} actions={starAction}>
       {chips && chips.length > 0 && <StatusChips chips={chips} />}
     </RowEnd>
   </div>

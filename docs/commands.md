@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (453)
+## Commands (457)
 
 ### File
 
@@ -344,6 +344,9 @@ keys it uses are listed below.
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
 | Preview Rows | `explorer.previewRows` | — | — | — | `backendReady && explorerSelectionKind == 'bqTable' && !documentBusy` | Object Explorer context menu › Preview Rows; Search Objects result context menu › Preview Rows |
 | BigQuery Properties | `explorer.bigQueryProperties` | — | — | — | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Properties |
+| Star Project | `bigquery.starProject` | — | — | — | `hasConnection` | Object Explorer context menu › Star Project |
+| Unstar Project | `bigquery.unstarProject` | — | — | — | `hasConnection` | Object Explorer context menu › Unstar Project |
+| Remove Project from Explorer | `bigquery.removeSessionProject` | — | — | — | `hasConnection` | Object Explorer context menu › Remove from Explorer |
 | Copy Name | `explorer.copyName` | — | — | — | `hasConnection` | Object Explorer context menu › Copy Name |
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
@@ -519,6 +522,7 @@ keys it uses are listed below.
 | Job Details | `bigquery.jobDetails` | Enter (`activeDocumentIsJobHistory && !activeDocumentIsJobActivity && liveGridFocus`) | Enter (`activeDocumentIsJobHistory && !activeDocumentIsJobActivity && liveGridFocus`) | ↩ (`activeDocumentIsJobHistory && !activeDocumentIsJobActivity && liveGridFocus`) | `activeDocumentIsJobHistory && jobHistoryJobSelected` | BigQuery Job History context menu › Details |
 | Refresh Job History | `bigquery.refreshJobs` | F5 (`activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | F5 (`activeDocumentIsJobHistory && !activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus && !peekFocus && !peekTabFocus`) | `backendReady && activeDocumentIsJobHistory && jobHistoryRefreshable` | BigQuery Job History context menu › Refresh |
 | Pause Job History | `bigquery.pauseJobs` | — | — | — | `activeDocumentIsJobHistory && jobHistoryPausable`; checked when `jobHistoryPaused` | BigQuery Job History context menu › Pause |
+| Star a Project… | `bigquery.starProjectPrompt` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Star a Project… |
 
 ### Preferences
 
@@ -839,8 +843,12 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
 | `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
-| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
+| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `((explorerNode == 'server' \|\| explorerNode == 'bqProject' \|\| explorerNode == 'bqDataset') && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
+| `1_query` | Star a **P**roject… | `bigquery.starProjectPrompt` | `explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost` |
+| `1_query` | **S**tar Project | `bigquery.starProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
+| `1_query` | **U**nstar Project | `bigquery.unstarProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'starred' && !explorerServerLost` |
+| `1_query` | Remove from **E**xplorer | `bigquery.removeSessionProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
 | `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background'` |
 | `2_job` | Stop **J**ob | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
@@ -1297,7 +1305,7 @@ Right-click a job in Job Activity Monitor's list (a right-click outside the sele
 | `5_history` | View **H**istory | `agent.viewHistory` | Always |
 | `9_view` | Re**f**resh | `agent.refreshJobs` | Always |
 
-## Context keys (210)
+## Context keys (211)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1493,6 +1501,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
 | `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `explorerProvider` | `''`, `'sqlserver'`, `'bigquery'` | target | The engine of the server the Object Explorer node the menu is for is on: 'sqlserver' or 'bigquery', or '' for the empty area. Items whose `providers` lack it are left out. |
+| `explorerBigQueryProjectRole` | `''`, `'billing'`, `'starred'`, `'session'` | target | The role of the BigQuery project node the menu is for: 'billing', 'starred', or 'session' (shown for this session only), or '' for any other node. |
 | `agentRole` | `''`, `'sysadmin'`, `'operator'`, `'reader'`, `'user'`, `'none'`, `'unknown'`, `'profileFailed'` | target | The login's SQL Server Agent role on the server of the Object Explorer node the menu is for, when that node is an Agent node: 'sysadmin', 'operator', 'reader', 'user', 'none', 'unknown' (not read yet) or 'profileFailed'; '' for any other node. |
 | `outputView` | `'grid'`, `'messages'`, `'live'`, `''` | target | The Query Output view the menu is for: a results grid, the messages, or a grid with its own source: a live view's (an Activity Monitor pane) or a local table's (a Peek list). |
 | `outputGridTransposable` | boolean | target | The menu is for a results grid that can be drawn transposed: a query's rows or a pivot, not a comparison or a plan set. |

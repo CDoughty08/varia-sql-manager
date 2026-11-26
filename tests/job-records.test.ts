@@ -261,9 +261,9 @@ describe('BigQuery job records (WorkbenchSession/jobs.json)', () => {
     // Records unread decide nothing (a Keep would come back with the file); no running orphan reads no recovery copy.
     expect(source).toMatch(/if \(!\(await jobRecords\.load\(\)\.then\(\(\) => true, \(\) => false\)\)\) return null\n[^\n]*\n    if \(!jobRecords\.withoutTab\(keys\)\.some\([^\n]*\) return null\n[^\n]*\n    const kept = await recovery\.jobKeys\(\)/)
     // Profiles that cannot be read list every job as not cancelled, with why, instead of failing the answer silently.
-    expect(source).toMatch(/profiles = bigQueryStore \? \(await bigQueryStore\.load\(\)\)\.library\.profiles : \[\]\n  \} catch \(error\) \{[\s\S]{0,300}return \{ jobs: records\.map\(record => \(\{ jobId: record\.jobId, cancelled: false, error: message \}\)\), uncancellable: \[\] \}/)
+    expect(source).toMatch(/profiles = bigQueryStore \? \(await bigQueryStore\.peek\(\)\)\.library\.profiles : \[\]\n  \} catch \(error\) \{[\s\S]{0,300}return \{ jobs: records\.map\(record => \(\{ jobId: record\.jobId, cancelled: false, error: message \}\)\), uncancellable: \[\] \}/)
     // A SQL Server delete never fails with BigQuery's file.
-    expect(source).toContain('(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)')
+    expect(source).toContain('(await bigQueryStore.peek().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)')
     // The review runs only after a restore that worked.
     const workbench = await readFile(join(__dirname, '..', 'src', 'renderer', 'src', 'core', 'workbench.ts'), 'utf8')
     expect(workbench).toContain('if (restored) void queries.reviewJobsWithoutTab(api, showJobsWithoutTab, () => jobHistory.liveProjects())')

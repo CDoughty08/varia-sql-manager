@@ -53,7 +53,7 @@ import { migrateProfile, profileFiles } from './profile-migration'
 import { JobRecordStore, noteJobConnection, profileDeleteJobs } from './job-records'
 import { cancelJobsResultSchema, jobKeySchema, jobLimits, jobsByProject, jobsWithoutTabRequestSchema, restoredJobs, type JobRecord, type RecordedJobsCancel } from '../shared/bigquery/jobs'
 import { connectionKey } from '../shared/connections'
-import { encodeReloadSession, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
+import { encodeReloadSession, legacyBigQueryExtraProjects, SessionStore, sessionWriteSchema, type SessionInput, type SessionRecord, type SessionRecordDocument } from './session-store'
 import { sessionLimits, type ReloadPins, type RestoredDocument, type RestoredSession, type SessionWrite } from '../shared/files/session'
 import { remapEditorGroups } from '../shared/editor-groups'
 import { lossDetails } from '../shared/files/recovery'
@@ -100,7 +100,7 @@ import { onWayland, placeWindow, WindowStateStore, WindowStateTracker, type Wind
 import { BigQueryCredentials, BigQueryKeyFiles, federationSource, readCredentialFile } from './bigquery-credentials'
 import { BigQueryConnectionStore } from './bigquery-connection-store'
 import { connectionHistory } from './connection-history'
-import { confirmSourceParamsSchema, pickKeyFileParamsSchema } from '../shared/bigquery-connections'
+import { bigQueryStarProjectInputSchema, bigQueryStarredProjectsInputSchema, confirmSourceParamsSchema, pickKeyFileParamsSchema } from '../shared/bigquery-connections'
 import { remoteResultIds, type RemoteDryRun } from '../shared/bigquery/remote-view'
 import { bigQueryEmulatorEndpoint } from './backend/spawn-spec'
 
@@ -171,7 +171,7 @@ const bigQueryCredentials = new BigQueryCredentials(bigQueryKeyFiles, {
     await store.confirmSource(keyPath, source)
     return true
   },
-  restoreKeyFiles: async () => { await bigQueryStore?.load() }
+  restoreKeyFiles: async () => { await bigQueryStore?.peek() }
 })
 /** BigQuery's options as the backend takes them: main adds the credential material the renderer never holds. */
 const withBigQueryCredential = async (params: unknown): Promise<unknown> => isBigQueryOptions(params as { provider?: string })
@@ -265,7 +265,7 @@ async function rememberConnectionProfile(connectionId: string, options: Provider
   if (options.provider !== 'bigquery' || !bigQueryStore) return
   // The entry Connect chose wins over another saved with the same settings (the library allows twins).
   const selected = z.object({ selectedProfileId: z.uuid() }).safeParse(context).data?.selectedProfileId
-  const key = connectionKey(options), matching = (await bigQueryStore.load()).library.profiles.filter(item => connectionKey(item.options) === key)
+  const key = connectionKey(options), matching = (await bigQueryStore.peek()).library.profiles.filter(item => connectionKey(item.options) === key)
   // A handle Connect handed back again (same settings) keeps the profile it was first opened from while that still exists.
   const kept = connectionProfiles.get(connectionId)
   if (kept !== undefined && matching.some(item => item.id === kept)) return
@@ -290,7 +290,7 @@ async function cancelRecordedJobs(records: readonly JobRecord[]): Promise<Record
   const jobs: RecordedJobsCancel['jobs'][number][] = [], uncancellable: string[] = []
   let profiles: Awaited<ReturnType<NonNullable<typeof bigQueryStore>['load']>>['library']['profiles']
   try {
-    profiles = bigQueryStore ? (await bigQueryStore.load()).library.profiles : []
+    profiles = bigQueryStore ? (await bigQueryStore.peek()).library.profiles : []
   } catch (error) {
     // Profiles unread: every job is listed as not cancelled, with why, rather than the answer failing without a word.
     const message = error instanceof Error ? error.message.slice(0, 1000) : 'The saved BigQuery connections could not be read.'
@@ -1159,7 +1159,7 @@ app.whenReady().then(async () => {
   handle('varia:connections-remove', async value => {
     const id = z.uuid().parse(value)
     // Only a BigQuery profile has job records: a SQL Server delete reads none and never fails with BigQuery's files.
-    const bigQuery = !!bigQueryStore && !!(await bigQueryStore.load().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)
+    const bigQuery = !!bigQueryStore && !!(await bigQueryStore.peek().catch(() => undefined))?.library.profiles.some(profile => profile.id === id)
     const unread = bigQuery && await jobRecords.load().then(() => false, () => true)
     // Records that cannot be read now may name this connection's jobs: it asks before it goes.
     if (unread) {
@@ -1206,6 +1206,26 @@ app.whenReady().then(async () => {
   })
   handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:bigquery-cost-prompt', value => library.setBigQueryCostPrompt(value))
+  handle('varia:bigquery-starred-projects', async value => {
+    const input = bigQueryStarredProjectsInputSchema.parse(value)
+    if (!connectionOpen) return { byPrincipal: Object.create(null) }
+    if (input?.connectionId) {
+      const bq = connectionOpen.bigQueryHandle(input.connectionId)
+      if (!bq || bq.principal.startsWith('bigquery:anonymous:')) return { byPrincipal: Object.create(null) }
+      return bigQueryStore!.loadStarredProjects(new Set([bq.principal]))
+    }
+    const live = new Set([...connectionOpen.liveBigQueryPrincipals()].filter(principal => !principal.startsWith('bigquery:anonymous:')))
+    if (!live.size) return { byPrincipal: Object.create(null) }
+    return bigQueryStore!.loadStarredProjects(live)
+  })
+  handle('varia:bigquery-star-project', async value => {
+    const input = bigQueryStarProjectInputSchema.parse(value)
+    const bq = connectionOpen?.bigQueryHandle(input.connectionId)
+    if (!bq || bq.principal.startsWith('bigquery:anonymous:')) throw new Error('Connect to BigQuery with a verified account to star projects.')
+    if (input.project === bq.billingProject) throw new Error('The billing project is always shown in Object Explorer.')
+    const live = new Set([...connectionOpen!.liveBigQueryPrincipals()].filter(principal => !principal.startsWith('bigquery:anonymous:')))
+    return bigQueryStore!.setProjectStarForPrincipal(bq.principal, input.project, input.starred, live)
+  })
   // connections.pickKeyFile (docs/bigquery.md, Connect dialog): main's open dialog; the renderer gets a reference and the file's
   // name, never its path, and for a federation configuration the token file it reads, for the user to confirm.
   handle('varia:connections-pick-key-file', async value => {
@@ -1360,6 +1380,32 @@ app.whenReady().then(async () => {
       try {
       // Only main creates the compressed wire form; the renderer cannot supply compressed data or an encoding.
       if (method === 'plans.parse') prepared.params = await preparePlan((validated as { xml: string }).xml)
+      // Enforce persisted stars from main for BigQuery indexing and bulk estimates so unstarred projects never receive billed queries.
+      if ((method === 'bigquery.indexEstimate' || method === 'explorer.index') && bigQueryStore) {
+        const connectionId = (validated as { connectionId: string }).connectionId
+        const bq = connectionOpen?.bigQueryHandle(connectionId)
+        if (bq) {
+          const persisted = (await bigQueryStore.starredProjectsFor(bq.principal)).filter(project => project !== bq.billingProject)
+          const params = { ...(prepared.params as Record<string, unknown>) }
+          if (method === 'explorer.index') {
+            params.starredProjects = persisted
+            if (params.bulk) {
+              const bulk = params.bulk as NonNullable<RpcMethods['explorer.index']['params']['bulk']>
+              const allowed = new Set([bq.billingProject, ...persisted])
+              const locations = bulk.locations.filter(item => allowed.has(item.project))
+              if (locations.length) params.bulk = { ...bulk, locations }
+              else delete params.bulk
+            }
+          } else {
+            if (persisted.length) params.starredProjects = persisted
+            else delete params.starredProjects
+          }
+          prepared.params = params
+        } else if (method === 'explorer.index' && (prepared.params as { bulk?: unknown }).bulk) {
+          const { bulk: _bulk, ...rest } = prepared.params as Record<string, unknown>
+          prepared.params = rest
+        }
+      }
       // A script's events reach the results worker; its results become readable by this renderer.
       // A remote query (Load into memory, a sort or filter, a value list) is a query over a result: its events and summary go the
       // same way, and only results this renderer owns in the current generation may be named, the source and every value list
@@ -1537,10 +1583,34 @@ app.whenReady().then(async () => {
     connectionOpen?.retainTargets(record?.workspace?.targets.map(target => target.id) ?? [])
     if (record?.workspace) {
       // A disk file is pinned only as far as its seal proves main wrote it; an unsealed silent target waits for Reconnect.
+      const originalTargets = record.workspace.targets
       let workspace = record.workspace
       if (checkpoint.kind === 'disk') {
-        workspace = workspaceSealer ? await workspaceSealer.trusted(workspace, record.seal) : workspace
+        const legacyExtra = legacyBigQueryExtraProjects(record)
+        workspace = workspaceSealer ? await workspaceSealer.trusted(workspace, record.seal, legacyExtra) : workspace
         if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
+        if (legacyExtra?.size && bigQueryStore) {
+          const originalById = new Map(originalTargets.map(target => [target.id, target]))
+          for (const target of workspace.targets) {
+            const extra = legacyExtra.get(target.id)
+            if (!extra?.length) continue
+            const billing = target.options.provider === 'bigquery' ? target.options.project : ''
+            const projects = extra.filter((project, index) => project !== billing && extra.indexOf(project) === index)
+            if (!projects.length) continue
+            const hadPrincipal = originalById.get(target.id)?.expectedPrincipal !== undefined
+            const principal = target.expectedPrincipal?.provider === 'bigquery' ? target.expectedPrincipal.principal : undefined
+            if (principal) {
+              // Emulator anonymous principals never star projects and must not leak into unclaimed migrated targets.
+              if (!principal.startsWith('bigquery:anonymous:')) {
+                await bigQueryStore.migrateTargetStarredProjects(principal, target.id, projects).catch(() => {})
+              }
+            } else if (!hadPrincipal) {
+              // Only migrate per originating targetId when the target genuinely had no principal — never when seal verification stripped it.
+              await bigQueryStore.addMigratedTargetProjects(target.id, projects).catch(() => {})
+            }
+          }
+          if (generation !== rendererGeneration || generation !== pageGeneration) return { documents: [], activeIndex: -1, problems: [] }
+        }
         connectionAuthentication.restore(workspace)
       }
       record = { ...record, workspace: checkpoint.kind === 'disk' ? unprovenWithoutAccount(workspace, connectionAuthentication.project(workspace)) : connectionAuthentication.project(workspace) }
@@ -1610,7 +1680,7 @@ app.whenReady().then(async () => {
     const one = running.length === 1
     // Show in Job History opens a project the page is connected to, or connects the saved connection that started its jobs;
     // with neither for any project it is not offered, and the box says why.
-    const profiles = await (bigQueryStore ? bigQueryStore.load().then(store => new Map(store.library.profiles.map(profile => [profile.id, profile.options.project] as const))) : Promise.resolve(new Map<string, string>())).catch(() => null)
+    const profiles = await (bigQueryStore ? bigQueryStore.peek().then(store => new Map(store.library.profiles.map(profile => [profile.id, profile.options.project] as const))) : Promise.resolve(new Map<string, string>())).catch(() => null)
     const show = jobsByProject(running, profiles, new Set(liveProjects))
     const showable = show.some(item => !item.unavailable)
     const keepText = `Keep leaves ${one ? 'it' : 'them'} running; Job History lists ${one ? 'it' : 'them'}, and a kept job's session, with its temporary tables billed as storage, ends 24 hours after the job finishes.`

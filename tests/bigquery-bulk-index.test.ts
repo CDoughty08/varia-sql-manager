@@ -5,7 +5,7 @@ import type { BigQueryDryRunResult } from '../src/shared/bigquery/dry-run'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { requestSchemas, resultSchemas } from '../src/main/validation'
 import { defaultSettings } from '../src/shared/settings/catalog'
-import { bigQueryBulkLocations, objectIndexParamsSchema, type BigQueryIndexEstimateResult, type ObjectIndexResult, type ObjectIndexStatus } from '../src/shared/explorer/search'
+import { bigQueryBulkLocations, bigQueryIndexEstimateRequestSchema, objectIndexParamsSchema, type BigQueryIndexEstimateResult, type ObjectIndexResult, type ObjectIndexStatus } from '../src/shared/explorer/search'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { ObjectSearchService, type ObjectSearchOptions } from '../src/renderer/src/search/ObjectSearchService'
@@ -21,7 +21,7 @@ const status = (overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStatus =
 const estimate: BigQueryIndexEstimateResult = { locations: [{ project: 'varia-alpha', location: 'US' }], estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3 }
 const settle = () => new Promise(resolve => setImmediate(resolve))
 
-function harness(options: { bulk?: boolean; extraProjects?: boolean; estimate?: ApiResult<BigQueryIndexEstimateResult> | 'throw'; gate?: false } = {}) {
+function harness(options: { bulk?: boolean; allProjects?: boolean; starredProjects?: readonly string[] | (() => readonly string[]); estimate?: ApiResult<BigQueryIndexEstimateResult> | 'throw'; gate?: false } = {}) {
   const index: Parameters<VariaApi['explorerIndex']>[0][] = []
   const pending: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const estimates: Parameters<VariaApi['bigQueryIndexEstimate']>[0][] = []
@@ -40,12 +40,13 @@ function harness(options: { bulk?: boolean; extraProjects?: boolean; estimate?: 
   const documents = { openCustom: vi.fn(), registerProvider: vi.fn(() => ({ dispose: () => {} })), get: vi.fn(), activate: vi.fn(), getSnapshot: vi.fn() } as unknown as ObjectSearchOptions['documents']
   const connections = new Connections([])
   const values: Record<string, unknown> = {
-    'objectExplorer.search.indexOnConnect': true, 'objectExplorer.search.definitions': true, 'objectExplorer.search.bigQueryExtraProjects': options.extraProjects ?? false,
+    'objectExplorer.search.indexOnConnect': true, 'objectExplorer.search.definitions': true, 'objectExplorer.search.bigQueryAccessibleProjects': options.allProjects ?? true,
     'textEditor.googleSql.bulkIndex': options.bulk ?? defaultSettings['textEditor.googleSql.bulkIndex']
   }
   let ids = 0
   const service = new ObjectSearchService({
     api, documents, connections, settings: { get: (key => values[key]) as ObjectSearchOptions['settings']['get'] }, newId: () => 'req' + ++ids,
+    ...options.starredProjects ? { starredProjects: typeof options.starredProjects === 'function' ? options.starredProjects : () => options.starredProjects as readonly string[] } : {},
     ...options.gate === false ? {} : { billedGate: (connectionId, value, signal) => new Promise((answer, fail) => { gates.push({ connectionId, estimate: value, signal, answer, fail }) }) }
   })
   return { service, api, index, pending, estimates, gates, connections }
@@ -59,23 +60,23 @@ describe('BigQuery bulk index path (renderer)', () => {
     await settle()
     expect(estimates).toEqual([])
     expect(gates).toEqual([])
-    expect(index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
+    expect(index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: true }])
   })
 
   it('estimates first, asks through the cost prompts, and only then builds with the estimated locations and the cap', async () => {
-    const { service, index, estimates, gates, connections, pending } = harness({ bulk: true, extraProjects: true })
+    const { service, index, estimates, gates, connections, pending } = harness({ bulk: true, allProjects: false, starredProjects: ['varia-beta'] })
     connections.set([bigQuery('bq')])
     expect(service.getSnapshot().indexes.bq).toMatchObject({ requestId: 'req1', phase: 'estimate' })
     expect(bigQueryIndexSummary(service.getSnapshot().indexes.bq, undefined)).toMatch(/^Estimating the billed INFORMATION_SCHEMA read/)
     await settle()
-    expect(estimates).toEqual([{ connectionId: 'bq', definitions: true, extraDetails: true }])
+    expect(estimates).toEqual([{ connectionId: 'bq', definitions: true, starredProjects: ['varia-beta'] }])
     // Nothing is sent before the prompt's answer.
     expect(index).toEqual([])
     expect(gates).toHaveLength(1)
     expect(gates[0]).toMatchObject({ connectionId: 'bq', estimate: estimate.estimate })
     gates[0].answer({ run: true, maximumBytesBilled: 2 ** 30 })
     await settle()
-    expect(index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: true, bulk: { locations: estimate.locations, budgetBytes: estimate.estimate.bytesProcessed, maximumBytesBilled: 2 ** 30 } }])
+    expect(index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: false, starredProjects: ['varia-beta'], bulk: { locations: estimate.locations, budgetBytes: estimate.estimate.bytesProcessed, maximumBytesBilled: 2 ** 30 } }])
     expect(service.getSnapshot().indexes.bq.phase).toBeUndefined()
     pending[0]({ ok: true, value: { status: status({ bulk: { locations: 1, failed: 0 } }), elapsedMs: 9 } })
     await settle()
@@ -88,13 +89,13 @@ describe('BigQuery bulk index path (renderer)', () => {
     await settle()
     declined.gates[0].answer({ run: false })
     await settle()
-    expect(declined.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
+    expect(declined.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: true }])
     for (const failure of [{ ok: false as const, error: 'Timed out.', code: 'TIMEOUT' as const }, { ok: true as const, value: { ...estimate, locations: [] } }, { ok: true as const, value: { ...estimate, estimate: { ...estimate.estimate, bytesProcessed: 0 } } }, 'throw' as const]) {
       const failed = harness({ bulk: true, estimate: failure })
       failed.connections.set([bigQuery('bq')])
       await settle()
       expect(failed.gates).toEqual([])
-      expect(failed.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
+      expect(failed.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: true }])
     }
     // A prompt that fails (its service gone, an IPC failure) is no consent, and the index does not stay at Estimating.
     const broken = harness({ bulk: true })
@@ -102,7 +103,7 @@ describe('BigQuery bulk index path (renderer)', () => {
     await settle()
     broken.gates[0].fail(new Error('prompt lost'))
     await settle()
-    expect(broken.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, extraDetails: false }])
+    expect(broken.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: true }])
     expect(broken.service.getSnapshot().indexes.bq.phase).toBeUndefined()
   })
 
@@ -183,6 +184,41 @@ describe('BigQuery bulk index path (renderer)', () => {
     expect(ungated.index).toHaveLength(1)
   })
 
+  it('drops locations for projects unstarred while the estimate or cost prompt is open', async () => {
+    let starred: readonly string[] = ['varia-beta']
+    const twoLocations: BigQueryIndexEstimateResult = {
+      locations: [{ project: 'varia-alpha', location: 'US' }, { project: 'varia-beta', location: 'EU' }],
+      estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3
+    }
+    const { index, gates, connections } = harness({ bulk: true, allProjects: false, starredProjects: () => starred, estimate: { ok: true, value: twoLocations } })
+    connections.set([bigQuery('bq')])
+    await settle()
+    expect(gates).toHaveLength(1)
+    // User unstars varia-beta before answering the cost prompt.
+    starred = []
+    gates[0].answer({ run: true })
+    await settle()
+    // Only the billing project location remains; varia-beta is dropped from both starredProjects and bulk.locations.
+    expect(index).toEqual([{
+      connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: false,
+      bulk: { locations: [{ project: 'varia-alpha', location: 'US' }], budgetBytes: twoLocations.estimate.bytesProcessed }
+    }])
+
+    // If the only estimated location belonged to the unstarred project, bulk is omitted altogether.
+    starred = ['varia-beta']
+    const onlyStarred: BigQueryIndexEstimateResult = {
+      locations: [{ project: 'varia-beta', location: 'EU' }],
+      estimate: { bytesProcessed: 50 * 2 ** 20, statementType: 'SELECT' }, cut: false, elapsedMs: 3
+    }
+    const second = harness({ bulk: true, allProjects: false, starredProjects: () => starred, estimate: { ok: true, value: onlyStarred } })
+    second.connections.set([bigQuery('bq')])
+    await settle()
+    starred = []
+    second.gates[0].answer({ run: true })
+    await settle()
+    expect(second.index).toEqual([{ connectionId: 'bq', requestId: 'req1', definitions: true, allProjects: false }])
+  })
+
   it('says when a location\'s billed read failed and its datasets were read with free calls', () => {
     const text = bigQueryIndexSummary({ connectionId: 'bq', done: 2, total: 2, objects: 40 }, status({ bulk: { locations: 1, failed: 1, code: 'COST_CAP', message: 'The cap was reached.' } }))
     expect(text).toContain('details read with INFORMATION_SCHEMA in 1 location')
@@ -217,5 +253,8 @@ describe('BigQuery bulk index contracts', () => {
     const result = resultSchemas['bigquery.indexEstimate']!
     expect(result.safeParse(estimate).success).toBe(true)
     expect(result.safeParse({ ...estimate, locations: [{ project: 'varia-alpha', location: 'US', extra: 1 }] }).success).toBe(false)
+    expect(bigQueryIndexEstimateRequestSchema.safeParse({ connectionId: base.connectionId, definitions: true, starredProjects: ['varia-alpha', 'varia-beta'] }).success).toBe(true)
+    expect(bigQueryIndexEstimateRequestSchema.safeParse({ connectionId: base.connectionId, extraDetails: true }).success).toBe(false)
+    expect(bigQueryIndexEstimateRequestSchema.safeParse({ connectionId: base.connectionId, starredProjects: ['Bad Project'] }).success).toBe(false)
   })
 })

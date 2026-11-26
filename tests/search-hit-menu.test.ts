@@ -134,6 +134,19 @@ describe('a Search Objects result\'s context menu', () => {
     expect(await commands.execute('explorer.searchObjects', argsFor({ kind: 'explorer', node: database }), 'menu')).toBe(true)
     expect(opened()).toMatchObject({ connectionId: 'server-b', database: ' Sales ] ' })
     expect(opened()?.allServers).toBeUndefined()
+    // BigQuery project and dataset nodes scope Search Objects to their project or project + dataset.
+    connections.add({ id: 'bq-a', generation: 1, server: 'varia-alpha', database: '', serverVersion: 'BigQuery', providerId: 'bigquery' } as never, { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as never)
+    const bqProject = { ...explorer.objectNode('bq-a', { kind: 'bqProject', name: 'varia-beta' }, 'varia-beta'), id: 3 }
+    expect(await commands.execute('explorer.searchObjects', argsFor({ kind: 'explorer', node: bqProject }), 'menu')).toBe(true)
+    expect(opened()).toMatchObject({ connectionId: 'bq-a', project: 'varia-beta' })
+    expect(opened()?.dataset).toBeUndefined()
+    expect(opened()?.database).toBeUndefined()
+    expect(opened()?.allServers).toBeUndefined()
+    const bqDataset = { ...explorer.objectNode('bq-a', { kind: 'bqDataset', project: 'varia-beta', name: 'sales' }, 'sales'), id: 4 }
+    expect(await commands.execute('explorer.searchObjects', argsFor({ kind: 'explorer', node: bqDataset }), 'menu')).toBe(true)
+    expect(opened()).toMatchObject({ connectionId: 'bq-a', project: 'varia-beta', dataset: 'sales' })
+    expect(opened()?.database).toBeUndefined()
+    expect(opened()?.allServers).toBeUndefined()
   })
 
   it.each([1, 2])('does not redirect a retained database menu after its server disconnects with %i other live servers', async remaining => {

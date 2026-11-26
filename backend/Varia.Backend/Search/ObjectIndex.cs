@@ -312,6 +312,9 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         if (drop is not null) resources?.Release(drop);
     }
 
+    /// <summary>Releases a freshly built read that was never placed in the index (e.g. superseded build), returning only the net bytes it took.</summary>
+    public void Abandon(DatabaseIndex value) => Drop(value, value.Bytes - value.Credited);
+
     public void Put(DatabaseIndex value)
     {
         lock (gate)

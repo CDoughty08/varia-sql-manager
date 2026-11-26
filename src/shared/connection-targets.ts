@@ -37,7 +37,7 @@ const bigQueryShape = bigQueryConnectionOptionsSchema.shape
 /** BigQuery's branch: what the connection is, without its labels. `keyFile` stays an opaque reference here too. */
 export const bigQueryTargetOptionsSchema = z.object({
   provider: bigQueryShape.provider, project: bigQueryShape.project, location: bigQueryShape.location, dataset: bigQueryShape.dataset,
-  extraProjects: z.array(bigQueryShape.project).max(bigQueryLimits.extraProjects).readonly().optional(), authentication: bigQueryShape.authentication,
+  authentication: bigQueryShape.authentication,
   keyFile: bigQueryShape.keyFile, impersonateServiceAccount: bigQueryShape.impersonateServiceAccount, maximumBytesBilled: bigQueryShape.maximumBytesBilled
 }).strict().readonly()
 /** The target's settings, discriminated on `provider`. A union has no `.shape`: schemas that need fields use a branch. */

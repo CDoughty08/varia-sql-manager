@@ -24,7 +24,7 @@ internal static class Providers
     /// bigquery.projects, and results.remoteQuery, which names a windowed result) are BigQuery's by declaration, with
     /// nothing to resolve; bigquery.dryRun and language.lookup name their handle, and a SQL Server handle is refused (language.lookup's
     /// SQL Server reader comes with Varia's own completion there).</summary>
-    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "results.remoteQuery", "query.attach",
+    internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.connectionProjects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "results.remoteQuery", "query.attach",
         "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel", "language.lookup"];
     private static readonly string[] BigQueryOnly = [BigQuery];
 

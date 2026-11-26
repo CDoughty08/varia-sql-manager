@@ -253,14 +253,14 @@ internal static class BigQueryCredentialChecks
             try { BigQueryLimits.Check(options, emulator); return "ok"; }
             catch (RequestException error) { return error.Code; }
         }
-        check(Options(valid) == "ok" && Options(valid with { Project = "example.com:varia-alpha", Dataset = "sales_2026", Location = "us-east1", ExtraProjects = ["bigquery-public-data"], MaximumBytesBilled = 1L << 30, CostThreshold = 50, ImpersonateServiceAccount = Target }) == "ok"
+        check(Options(valid) == "ok" && Options(valid with { Project = "example.com:varia-alpha", Dataset = "sales_2026", Location = "us-east1", MaximumBytesBilled = 1L << 30, CostThreshold = 50, ImpersonateServiceAccount = Target }) == "ok"
             && Options(valid with { CostThreshold = 0 }) == "ok" && Options(valid with { CostThreshold = BigQueryLimits.CostThresholdGiB }) == "ok",
             "valid BigQuery options pass the backend's checks, domain-scoped projects included");
         (BigQueryConnectOptions Options, string Name)[] invalid =
         [
             (valid with { Project = "Varia-Alpha" }, "an upper-case project"), (valid with { Project = "abc" }, "a short project"), (valid with { Project = new string('a', 129) }, "a 129-character project"),
             (valid with { Dataset = "sales-2026" }, "a dataset with a dash"), (valid with { Dataset = "sälj" }, "a dataset with a non-ASCII letter"), (valid with { Dataset = new string('d', 1025) }, "a 1,025-character dataset"),
-            (valid with { Location = "us east" }, "a location with a space"), (valid with { ExtraProjects = [.. Enumerable.Range(0, 17).Select(index => "varia-extra-" + index)] }, "17 extra projects"),
+            (valid with { Location = "us east" }, "a location with a space"),
             (valid with { MaximumBytesBilled = 0 }, "a zero byte cap"), (valid with { CostThreshold = -1 }, "a negative cost threshold"),
             (valid with { CostThreshold = BigQueryLimits.CostThresholdGiB + 1 }, "a cost threshold over 1,048,576 GiB"), (valid with { ImpersonateServiceAccount = "not an email" }, "an impersonation target that is not an email"),
             (valid with { Authentication = "windows" }, "SQL Server's authentication"), (valid with { KeyFile = Guid.NewGuid().ToString() }, "gcloud with a key file"),

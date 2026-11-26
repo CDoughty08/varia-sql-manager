@@ -51,7 +51,7 @@ export interface ResolveOptions {
   readonly target?: Partial<TargetKeys>
   /** Passed to every command item: enablement, and the handler when the item runs. */
   readonly args?: CommandArgs
-  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'>
+  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled'> & Partial<Pick<CommandService, 'titleFor'>>
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
   readonly dynamic?: { readonly [K in DynamicSubmenu]?: () => readonly DynamicMenuItem[] }
   /** Settings that titles follow ("Select Top 50 Rows"); the defaults without them. Applied here, not in the cached model. */

@@ -13,7 +13,7 @@ import { readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`
 const principal = { provider: 'bigquery' as const, project: 'varia-alpha', principal: 'bigquery:user:ada@example.com' }
-const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta'], authentication: 'gcloud' },
+const target = (): PersistedConnectionTarget => ({ id: id(1), options: { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' },
   details: { autoReconnect: 'inherit', environment: 'Production' }, inExplorer: true, resumeWanted: true, expectedPrincipal: principal })
 
 describe('BigQuery connections in the workbench', () => {
@@ -73,7 +73,7 @@ describe('BigQuery connections in the workbench', () => {
         await binding.scheduler.whenIdle()
         expect(value.api.connect).toHaveBeenCalledTimes(1)
         const [options, context] = value.api.connect.mock.calls[0]!
-        expect(options).toEqual({ provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta'], authentication: 'gcloud', environment: 'Production' })
+        expect(options).toEqual({ provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud', environment: 'Production' })
         expect(context).toMatchObject({ mode: 'background', targetId: id(1), expectedPrincipal: principal })
         expect(value.connections.get(id(1))).toMatchObject({ id: id(50), server: 'varia-alpha', login: 'ada@example.com' })
         expect(value.connections.isLive(id(50))).toBe(true)
@@ -87,7 +87,7 @@ describe('BigQuery connections in the workbench', () => {
     try {
       value.connectionTargets.restore({ version: 1, targets: [target()] })
       value.api.push(readyBackend(1))
-      const profile = { id: id(300), favorite: false, autoReconnect: 'on' as const, options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta'], authentication: 'gcloud' as const, environment: 'Production' } }
+      const profile = { id: id(300), favorite: false, autoReconnect: 'on' as const, options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' as const, environment: 'Production' } }
       const loadConnectionLibrary = vi.fn<VariaApi['loadConnectionLibrary']>(async () => ({ ok: true, value: { bigQuery: { profiles: [profile] } } }) as unknown as Awaited<ReturnType<VariaApi['loadConnectionLibrary']>>)
       const api = Object.assign(value.api, { loadConnectionLibrary }) as typeof value.api & Pick<VariaApi, 'loadConnectionLibrary'>
       value.api.connect.mockImplementation(async (_options, context) => ({ ok: true, value: { id: id(50), targetId: context!.targetId, generation: 1, server: 'varia-alpha', database: 'sales', serverVersion: 'BigQuery', login: 'ada@example.com', providerId: 'bigquery', authentication: { principal } } }))

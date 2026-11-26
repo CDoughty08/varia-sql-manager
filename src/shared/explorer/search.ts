@@ -41,8 +41,9 @@ export const objectSearchLimits = {
   /** The longest word Fuzzy Match compares, in UTF-16 code units; a search with a longer one matches exactly only. */
   fuzzyWordChars: 64,
   /** BigQuery's index (BigQueryIndexLimits): pages one listing reads (1,000 items each), datasets listed at once, details read at
-   *  once, columns kept per table, and the longest column description or routine signature kept. */
-  bigQuery: { listPages: 500, datasets: 4, details: 8, columns: 10_000, factChars: 1024 }
+   *  once, columns kept per table, the longest column description or routine signature kept, default and maximum discovered projects,
+   *  projects whose datasets are listed at once, and max starred projects passed per build. */
+  bigQuery: { listPages: 500, datasets: 4, details: 8, columns: 10_000, factChars: 1024, maxProjects: 500, maxProjectsCap: 5000, projects: 4, starredProjects: 200 }
 } as const
 
 /** The kinds the index holds, as Object Explorer names them: every kind it lists but the server, return values and the SSIS
@@ -174,22 +175,27 @@ export interface BigQueryIndexLocation { readonly project: string; readonly loca
  *  let run, the cap every job carries (a connection's own wins), and the estimate shown, which the build's jobs together never bill more than. */
 export interface BigQueryBulkIndex { readonly locations: readonly BigQueryIndexLocation[]; readonly maximumBytesBilled?: number; readonly budgetBytes: number }
 /** bigquery.indexEstimate: what a full build's bulk path would bill, for the cost prompts. */
-export interface BigQueryIndexEstimateRequest { readonly connectionId: string; readonly definitions?: boolean; readonly extraDetails?: boolean }
+export interface BigQueryIndexEstimateRequest { readonly connectionId: string; readonly definitions?: boolean; readonly starredProjects?: readonly string[] }
 /** The locations to read (at most 64; `cut` when there were more) and their queries' estimate, each query at least 10 MiB per view. */
 export interface BigQueryIndexEstimateResult { readonly locations: readonly BigQueryIndexLocation[]; readonly estimate: BigQueryDryRunResult; readonly cut: boolean; readonly elapsedMs: number }
 /** The last full build's bulk path: the locations read billed, and the first failure of those that fell back to free calls. */
 export interface BigQueryBulkStatus { readonly locations: number; readonly failed: number; readonly code?: string; readonly message?: string }
 /** The most locations one estimate or build covers (BigQueryBulkSql.MaxLocations). */
 export const bigQueryBulkLocations = 64
-/** BigQuery only (SQL Server refuses them): `extraDetails` reads the extra projects' schemas too
- *  (`objectExplorer.search.bigQueryExtraProjects`), `scope` re-reads one project or dataset whole (Object Explorer's Refresh), and
- *  `stale` re-reads only the datasets DDL run from a tab marked. */
+/** BigQuery only (SQL Server refuses them): `starredProjects` names the user's starred projects (indexed with details even if
+ *  projects.list does not return them, e.g. public or dataset-ACL projects), `allProjects` discovers every accessible project via
+ *  projects.list (default true), `maxProjects` caps discovered projects (1..5000, default 500), `scope` re-reads one project or
+ *  dataset whole (Object Explorer's Refresh), and `stale` re-reads only the datasets DDL run from a tab marked. */
 export interface ObjectIndexParams {
   readonly connectionId: string
   readonly requestId: string
   readonly definitions?: boolean
-  readonly extraDetails?: boolean
+  readonly starredProjects?: readonly string[]
+  readonly allProjects?: boolean
+  readonly maxProjects?: number
   readonly scope?: BigQueryIndexScope
+  /** With `scope`: skip all BigQuery API calls when the requested project/dataset is already cleanly covered in the index, and reuse held details instead of forcing re-reads. */
+  readonly missingOnly?: true
   readonly stale?: true
   /** A full build only: pass 2 reads these locations with the billed bulk queries. */
   readonly bulk?: BigQueryBulkIndex
@@ -213,12 +219,14 @@ export interface ObjectIndexStatus {
   readonly builtAt?: string
   /** A BigQuery connection's index: `databases` and `indexed` count datasets. */
   readonly provider?: 'bigquery'
-  /** BigQuery, while building: names (pass 1) or details (pass 2: schemas, view and routine text). */
-  readonly phase?: 'names' | 'details'
-  /** BigQuery: the projects indexed by name only (extra projects, unless their details were asked for). */
+  /** BigQuery, while building: projects (discovering accessible projects), names (pass 1) or details (pass 2: schemas, view and routine text). */
+  readonly phase?: 'projects' | 'names' | 'details'
+  /** BigQuery: the projects indexed by name only (when memory budget stopped pass 2 early). */
   readonly namesOnly?: readonly string[]
   /** BigQuery: the last full build's billed bulk path, when it ran. */
   readonly bulk?: BigQueryBulkStatus
+  /** BigQuery: how many distinct projects the index holds reads for. */
+  readonly projects?: number
   /** BigQuery: the newest DDL stale mark no stale-only build has spent yet (absent when none is left). */
   readonly staleMark?: number
 }
@@ -339,11 +347,11 @@ export interface ObjectSearchResult {
 /** A build's progress EVENT, as the backend sends it. */
 export const objectIndexProgressEventSchema = z.object({
   type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0),
-  phase: z.enum(['names', 'details']).optional()
+  phase: z.enum(['projects', 'names', 'details']).optional()
 }).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
 export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
 /** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
-export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'names' | 'details' }
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details' }
 
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -351,16 +359,21 @@ const bigQueryName = (kind: 'project' | 'dataset') => z.string().refine(value =>
 // BigQuery's location ids (BigQueryLimits.LocationId).
 const bigQueryLocation = z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/)
 const bigQueryIndexLocationSchema = z.object({ project: bigQueryName('project'), location: bigQueryLocation }).strict()
+const starredProjectsSchema = z.array(bigQueryName('project')).max(objectSearchLimits.bigQuery.starredProjects)
 export const objectIndexParamsSchema = z.object({
-  connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(), extraDetails: z.boolean().optional(),
-  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(), stale: z.literal(true).optional(),
+  connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(),
+  starredProjects: starredProjectsSchema.optional(), allProjects: z.boolean().optional(),
+  maxProjects: z.number().int().min(1).max(objectSearchLimits.bigQuery.maxProjectsCap).optional(),
+  scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(),
+  missingOnly: z.literal(true).optional(), stale: z.literal(true).optional(),
   bulk: z.object({
     locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     budgetBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
   }).strict().optional()
 }).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.')
+  .refine(value => !value.missingOnly || value.scope !== undefined, 'missingOnly requires a scope.')
   .refine(value => !(value.bulk && (value.scope || value.stale)), 'The bulk path reads a full build only.') satisfies z.ZodType<ObjectIndexParams>
-export const bigQueryIndexEstimateRequestSchema = z.object({ connectionId: z.uuid(), definitions: z.boolean().optional(), extraDetails: z.boolean().optional() }).strict() satisfies z.ZodType<BigQueryIndexEstimateRequest>
+export const bigQueryIndexEstimateRequestSchema = z.object({ connectionId: z.uuid(), definitions: z.boolean().optional(), starredProjects: starredProjectsSchema.optional() }).strict() satisfies z.ZodType<BigQueryIndexEstimateRequest>
 export const bigQueryIndexEstimateResultSchema = z.object({
   locations: z.array(bigQueryIndexLocationSchema).max(bigQueryBulkLocations), estimate: bigQueryDryRunResultSchema, cut: z.boolean(), elapsedMs: z.number().int().min(0)
 }).strict() satisfies z.ZodType<BigQueryIndexEstimateResult>

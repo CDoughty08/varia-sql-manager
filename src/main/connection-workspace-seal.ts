@@ -39,6 +39,28 @@ const mac = (key: Buffer, workspace: ConnectionWorkspace) => createHmac('sha256'
  */
 const legacyMac = (key: Buffer, workspace: ConnectionWorkspace) => createHmac('sha256', key).update(message(workspace.targets.map(target =>
   target.expectedPrincipal?.provider === 'sqlserver' ? { ...target, expectedPrincipal: { ...target.expectedPrincipal, provider: 'sqlServer' } } as unknown as PersistedConnectionTarget : target))).digest('hex')
+/**
+ * Re-attaches legacy BigQuery `extraProjects` in its pre-upgrade schema field order (after `dataset`, before `authentication`)
+ * so seals written before `extraProjects` migrated to Starred Projects verify without stripping `expectedPrincipal`.
+ */
+function withLegacyExtraProjects(target: PersistedConnectionTarget, extra: readonly string[] | undefined, sqlServerLegacySpelling: boolean): PersistedConnectionTarget {
+  const nextPrincipal = sqlServerLegacySpelling && target.expectedPrincipal?.provider === 'sqlserver'
+    ? { ...target.expectedPrincipal, provider: 'sqlServer' } as unknown as PersistedConnectionTarget['expectedPrincipal']
+    : target.expectedPrincipal
+  if (!extra || target.options.provider !== 'bigquery') return nextPrincipal === target.expectedPrincipal ? target : { ...target, expectedPrincipal: nextPrincipal }
+  const opts = target.options
+  const legacyOptions: Record<string, unknown> = { provider: opts.provider, project: opts.project }
+  if (opts.location !== undefined) legacyOptions.location = opts.location
+  if (opts.dataset !== undefined) legacyOptions.dataset = opts.dataset
+  legacyOptions.extraProjects = [...extra]
+  for (const [field, value] of Object.entries(opts)) {
+    if (field === 'provider' || field === 'project' || field === 'location' || field === 'dataset') continue
+    legacyOptions[field] = value
+  }
+  return { ...target, options: legacyOptions as unknown as PersistedConnectionTarget['options'], ...nextPrincipal ? { expectedPrincipal: nextPrincipal } : {} }
+}
+const legacyExtraMac = (key: Buffer, workspace: ConnectionWorkspace, extraByTarget: ReadonlyMap<string, readonly string[]>, sqlServerLegacySpelling: boolean) =>
+  createHmac('sha256', key).update(message(workspace.targets.map(target => withLegacyExtraProjects(target, extraByTarget.get(target.id), sqlServerLegacySpelling)))).digest('hex')
 const within = <T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> => new Promise(resolve => {
   const timer = setTimeout(() => resolve(fallback), ms)
   promise.then(value => { clearTimeout(timer); resolve(value) }, () => { clearTimeout(timer); resolve(fallback) })
@@ -76,14 +98,14 @@ export class ConnectionWorkspaceSealer {
   }
 
   /** The workspace main may pin: unchanged when sealed (or nothing could seal it), else without silent accounts. */
-  async trusted(workspace: ConnectionWorkspace, seal: WorkspaceSeal | undefined): Promise<ConnectionWorkspace> {
+  async trusted(workspace: ConnectionWorkspace, seal: WorkspaceSeal | undefined, legacyExtraByTarget?: ReadonlyMap<string, readonly string[]>): Promise<ConnectionWorkspace> {
     if (!workspace.targets.some(silent)) return workspace
     if (!seal && (this.options.trustUnsealed || await within(this.cipher.state().then(structurallyUnprotected), this.timeoutMs, false))) return workspace
-    if (seal && await within(this.verify(workspace, seal), this.timeoutMs, false)) return workspace
+    if (seal && await within(this.verify(workspace, seal, legacyExtraByTarget), this.timeoutMs, false)) return workspace
     return { ...workspace, targets: workspace.targets.map(target => silent(target) ? unproven(target) : target) }
   }
 
-  private async verify(workspace: ConnectionWorkspace, seal: WorkspaceSeal): Promise<boolean> {
+  private async verify(workspace: ConnectionWorkspace, seal: WorkspaceSeal, legacyExtraByTarget?: ReadonlyMap<string, readonly string[]>): Promise<boolean> {
     try {
       const { text, reEncrypt } = await this.cipher.decrypt(Buffer.from(seal.key, 'base64'))
       // A key the OS would re-encrypt is not one this OS key wrote (Linux accepts a public fallback key that way).
@@ -92,6 +114,13 @@ export class ConnectionWorkspaceSealer {
       if (key.length !== keyBytes) return false
       const actual = Buffer.from(seal.mac)
       const matches = (expected: Buffer) => expected.length === actual.length && timingSafeEqual(expected, actual)
+      // If any silent target had legacy extraProjects stripped on read, the seal MUST cover those extraProjects —
+      // never fall back to matching the post-upgrade MAC without them, or an external writer could inject extraProjects.
+      const hasSilentLegacyExtra = !!legacyExtraByTarget?.size && workspace.targets.some(target => silent(target) && legacyExtraByTarget.has(target.id))
+      if (hasSilentLegacyExtra) {
+        return matches(Buffer.from(legacyExtraMac(key, workspace, legacyExtraByTarget!, false)))
+          || matches(Buffer.from(legacyExtraMac(key, workspace, legacyExtraByTarget!, true)))
+      }
       return matches(Buffer.from(mac(key, workspace))) || matches(Buffer.from(legacyMac(key, workspace)))
     } catch { return false }
   }

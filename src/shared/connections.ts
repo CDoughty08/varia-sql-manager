@@ -60,13 +60,12 @@ export const connectionOptionsSchema = z.object({
  * (domain-scoped `example.com:proj` included) up to 128 characters, datasets of letters, digits and underscores up to 1,024.
  * SQL Server's 128-character names stay on its own branch.
  */
-export const bigQueryLimits = { project: 128, dataset: 1024, location: 64, extraProjects: 16, serviceAccount: 254, costThresholdGiB: 1_048_576 } as const
+export const bigQueryLimits = { project: 128, dataset: 1024, location: 64, starredProjects: 200, serviceAccount: 254, costThresholdGiB: 1_048_576 } as const
 export const bigQueryProjectSchema = z.string().max(bigQueryLimits.project).regex(/^(?:[a-z\d][a-z\d.-]{0,61}[a-z\d]:)?[a-z][a-z\d-]{4,28}[a-z\d]$/, 'Enter a Google Cloud project id.')
 export const bigQueryDatasetSchema = z.string().min(1).max(bigQueryLimits.dataset).regex(/^\w+$/, 'A dataset name has only letters, numbers and underscores.')
 export const bigQueryConnectionOptionsSchema = z.object({
   provider: z.literal('bigquery'), project: bigQueryProjectSchema,
   location: z.string().min(1).max(bigQueryLimits.location).regex(/^[A-Za-z\d-]+$/).optional(), dataset: bigQueryDatasetSchema.optional(),
-  extraProjects: z.array(bigQueryProjectSchema).max(bigQueryLimits.extraProjects).optional(),
   authentication: z.enum(bigQueryAuthenticationModes),
   // An opaque reference (the token main's picker returned, which a saved entry keeps), never a path: only main knows where the file is.
   keyFile: z.uuid().optional(),
@@ -92,6 +91,8 @@ export const bigQueryCredentialParamsSchema = z.object(bigQueryCredentialShape).
   .refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), keyFileRule)
 export const bigQueryProjectsParamsSchema = z.object({ ...bigQueryCredentialShape, pageToken: bigQueryPageToken.optional() }).strict()
   .refine(value => usesKeyFile(value.authentication) === (value.keyFile !== undefined), keyFileRule)
+/** bigquery.connectionProjects: lists one page of projects accessible on a live BigQuery handle (for Star a Project…). */
+export const bigQueryConnectionProjectsParamsSchema = z.object({ connectionId: z.uuid(), pageToken: bigQueryPageToken.optional() }).strict()
 // One visible line, as BigQueryIdentity.Account writes it.
 const bigQueryLine = (max: number) => z.string().min(1).max(max).regex(/^[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u)
 /** The pre-connect answers, checked in main before the renderer sees them (BigQueryContracts.cs bounds them the same). */

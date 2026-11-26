@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { BigQueryConnectionOptions } from './contracts'
-import { bigQueryConnectionOptionsSchema, connectionAutoReconnectSchema } from './connections'
+import { bigQueryConnectionOptionsSchema, bigQueryLimits, bigQueryProjectSchema, connectionAutoReconnectSchema } from './connections'
 import type { BigQueryAuthenticationMode } from './auth'
 import { environmentSchema } from './environments'
 
@@ -10,28 +10,70 @@ import { environmentSchema } from './environments'
  * configuration file by; the path behind it (`keyPath`) is main's only and never reaches the renderer, which sees the
  * file's name, so a compromised page learns no paths.
  */
-export const bigQueryLibraryLimits = { profiles: 200, recent: 30, path: 4096, confirmedSources: 64, keptKeyFiles: 48 } as const
+export const bigQueryLibraryLimits = { profiles: 200, recent: 30, path: 4096, confirmedSources: 64, keptKeyFiles: 48, starredPrincipals: 64, starredPerPrincipal: bigQueryLimits.starredProjects, principalChars: 256, migratedTargets: 64, legacyExtraProjects: 16 } as const
 // Absolute on any platform main writes it from (a drive or UNC path on Windows, a rooted path elsewhere): a file with a
 // relative path is invalid, so it is quarantined like any other rather than failing every later read.
 const absolutePath = z.string().min(1).max(bigQueryLibraryLimits.path).refine(value => !/[\u0000-\u001f]/.test(value), 'A path cannot contain control characters.')
   .refine(value => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(value), 'A path must be absolute.')
 const savedOptionsSchema = bigQueryConnectionOptionsSchema
+const legacyMigratedProjectsSchema = z.array(bigQueryProjectSchema).min(1).max(bigQueryLibraryLimits.legacyExtraProjects)
+  .refine(projects => new Set(projects).size === projects.length, 'Duplicate migrated projects.')
 export const bigQueryStoredProfileSchema = z.object({
   id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), saved: z.boolean().optional(), lastConnected: z.iso.datetime().optional(),
-  autoReconnect: connectionAutoReconnectSchema.optional(), keyPath: absolutePath.optional()
+  autoReconnect: connectionAutoReconnectSchema.optional(), keyPath: absolutePath.optional(),
+  /** Legacy extraProjects stripped from this profile on upgrade; claimed only when a connection matching `migratedKey` authenticates. */
+  migratedProjects: legacyMigratedProjectsSchema.optional(),
+  /** Connection identity (`connectionKey`) of the profile when `migratedProjects` was stripped, so editing the profile to another account never transfers pending projects across accounts. */
+  migratedKey: z.string().min(1).max(2048).optional()
 }).strict().refine(value => (value.options.keyFile !== undefined) === (value.keyPath !== undefined), 'A saved key file reference needs its path.')
   .refine(value => value.options.costThreshold !== 0, 'A saved cost threshold is at least 1 GiB.')
+  .refine(value => value.migratedKey === undefined || value.migratedProjects !== undefined, 'Migrated key requires migrated projects.')
+/** Legacy extraProjects stripped from an unpinned pre-upgrade session target; claimed only when that target authenticates. */
+export const bigQueryMigratedTargetSchema = z.object({
+  targetId: z.uuid(),
+  projects: legacyMigratedProjectsSchema
+}).strict()
 /** A federation configuration's `credential_source.file` the user confirmed in the Connect dialog, by the
  *  configuration's path: a changed source path asks again. */
 export const confirmedSourceSchema = z.object({ keyPath: absolutePath, source: absolutePath }).strict()
+/** BigQuery's verified principal pin grammar (matches src/main/connection-principal.ts). */
+export const bigQueryPrincipalIdPattern = /^bigquery:(?:serviceAccount|user|computeEngine|external|aws|externalUser|impersonated|anonymous):[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+$/u
+/** Verified BigQuery principal pin (`bigquery:user:…`, `bigquery:serviceAccount:…`), used to scope Starred Projects. */
+export const bigQueryStarredPrincipalSchema = z.string().min(1).max(bigQueryLibraryLimits.principalChars)
+  .regex(bigQueryPrincipalIdPattern, 'Invalid BigQuery principal id.')
+/** Starred projects persisted per verified BigQuery principal (mirrors BigQuery Studio's explorer starring UX without
+ *  altering connection identity). */
+export const bigQueryStarredEntrySchema = z.object({
+  principal: bigQueryStarredPrincipalSchema,
+  projects: z.array(bigQueryProjectSchema).min(1).max(bigQueryLibraryLimits.starredPerPrincipal)
+    .refine(projects => new Set(projects).size === projects.length, 'Duplicate starred projects.')
+}).strict()
+export const bigQueryStarredProjectsInputSchema = z.object({
+  connectionId: z.uuid().optional()
+}).strict().optional()
+export type BigQueryStarredProjectsInput = z.infer<typeof bigQueryStarredProjectsInputSchema>
+export const bigQueryStarProjectInputSchema = z.object({
+  connectionId: z.uuid(),
+  project: bigQueryProjectSchema,
+  starred: z.boolean()
+}).strict()
+export type BigQueryStarProjectInput = z.infer<typeof bigQueryStarProjectInputSchema>
+export interface BigQueryStarredProjectsView {
+  readonly byPrincipal: Readonly<Record<string, readonly string[]>>
+}
 /** The key file of a history entry pruned past the 30 most recent, by its reference: a connection still open or restored
  *  from it (Object Explorer, a tab) finds its file again after a restart instead of asking for it. */
 export const keptKeyFileSchema = z.object({ reference: z.uuid(), keyPath: absolutePath }).strict()
 export const bigQueryLibraryFileSchema = z.object({
   version: z.literal(1), profiles: z.array(bigQueryStoredProfileSchema).max(bigQueryLibraryLimits.profiles),
   confirmedSources: z.array(confirmedSourceSchema).max(bigQueryLibraryLimits.confirmedSources).optional(),
-  keptKeyFiles: z.array(keptKeyFileSchema).max(bigQueryLibraryLimits.keptKeyFiles).optional()
+  keptKeyFiles: z.array(keptKeyFileSchema).max(bigQueryLibraryLimits.keptKeyFiles).optional(),
+  starredProjects: z.array(bigQueryStarredEntrySchema).max(bigQueryLibraryLimits.starredPrincipals).optional(),
+  /** Legacy extraProjects stripped from unpinned pre-upgrade session targets, keyed by targetId so only the originating target claims them. */
+  migratedTargets: z.array(bigQueryMigratedTargetSchema).max(bigQueryLibraryLimits.migratedTargets)
+    .refine(entries => new Set(entries.map(entry => entry.targetId)).size === entries.length, 'Duplicate migrated target IDs.').optional()
 }).strict().refine(value => new Set(value.profiles.map(profile => profile.id)).size === value.profiles.length, 'Duplicate connection IDs.')
+  .refine(value => !value.starredProjects || new Set(value.starredProjects.map(entry => entry.principal)).size === value.starredProjects.length, 'Duplicate starred project principals.')
 export type BigQueryStoredProfile = z.infer<typeof bigQueryStoredProfileSchema>
 export type BigQueryLibraryFile = z.infer<typeof bigQueryLibraryFileSchema>
 

@@ -81,6 +81,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // BigQuery before connecting (the dialog's account line and project picker): main injects the credential material.
   'bigquery.account': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
   'bigquery.projects': { ...control, deadlineMs: 30_000, sensitive: true, providers: ['bigquery'] },
+  // Connected handle project listing (projects.list, free) for Object Explorer's Star a Project… picker.
+  'bigquery.connectionProjects': { ...metadata, deadlineMs: 30_000, providers: ['bigquery'] },
   // Before every backend stop main makes: idle sessions' ABORT_SESSION jobs in parallel, bounded so a stop never waits long.
   'bigquery.endIdleSessions': { ...control, deadlineMs: 10_000, providers: ['bigquery'] },
   // A saved profile's jobs without a handle: sign in, then cancel, wait for DONE and end each job's session in parallel.

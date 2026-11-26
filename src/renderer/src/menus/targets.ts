@@ -205,6 +205,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
     explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     explorerProvider: target?.kind === 'explorer' ? explorerNodeProvider(target.node) : '',
+    explorerBigQueryProjectRole: target?.kind === 'explorer' && target.node?.kind === 'bqProject' ? target.node.bigQueryProjectRole ?? '' : '',
     // No Agent node is served before AG-1 (docs/agent-plan.md › Object Explorer).
     agentRole: '',
     outputView: target?.kind === 'output' ? target.view : '',
