@@ -4,13 +4,26 @@ import type { IndexEntry } from './ObjectSearchService'
 
 const numbers = new Intl.NumberFormat('en-US')
 
-/** Status bar label for running object index builds, handling BigQuery project discovery before dataset counts arrive. */
+/** What a build's done / total counts: SQL Server's databases (and BigQuery's other phases) read as "objects", a BigQuery names
+ *  pass counts datasets listed, its details pass objects read. */
+const counted = (entry: IndexEntry) => entry.phase === 'names' ? 'Listing BigQuery datasets' : entry.phase === 'details' ? 'Reading BigQuery object details' : 'Indexing objects'
+
+/** Status bar label for running object index builds: what the numbers count (BigQuery's names and details passes say which), a
+ *  "~" total while BigQuery projects still being listed may add to it, and "(rate limited)" while BigQuery refuses calls. Builds
+ *  counting different things are not summed. */
 export function indexStatusText(running: readonly IndexEntry[]): string {
   const done = running.reduce((sum, entry) => sum + entry.done, 0), total = running.reduce((sum, entry) => sum + entry.total, 0)
   const servers = running.length > 1 ? ` on ${running.length} servers` : ''
-  if (total) return `Indexing objects ${numbers.format(done)} / ${numbers.format(total)}${servers}`
-  if (running.some(entry => entry.phase === 'projects')) return `Discovering BigQuery projects${servers}…`
-  return `Indexing objects${servers}…`
+  const limited = running.some(entry => entry.throttled) ? ' (rate limited)' : ''
+  // Summed only when every build counts the same thing: SQL Server's databases, or one BigQuery phase (so a BigQuery build
+  // still finding projects is not added to a SQL Server build's databases).
+  const kinds = new Set(running.map(entry => entry.phase ?? ''))
+  if (total && kinds.size === 1) {
+    const approx = running.some(entry => entry.growing) ? '~' : ''
+    return `${counted(running[0]!)} ${numbers.format(done)} / ${approx}${numbers.format(total)}${servers}${limited}`
+  }
+  if (!total && running.some(entry => entry.phase === 'projects')) return `Discovering BigQuery projects${servers}…${limited}`
+  return `Indexing objects${servers}…${limited}`
 }
 
 /** The status bar's "Indexing objects 3 / 12": the object index builds running, with Stop; hidden while none runs. */

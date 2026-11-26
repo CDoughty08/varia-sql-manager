@@ -26,6 +26,10 @@ export interface IndexEntry {
   readonly objects: number
   /** A BigQuery build's pass: projects (discovering accessible projects), names, then details; `estimate` while the billed bulk path's estimate and cost prompts come first. */
   readonly phase?: 'estimate' | 'projects' | 'names' | 'details'
+  /** BigQuery names pass: the total can still grow while projects are being listed. */
+  readonly growing?: true
+  /** BigQuery: its rate limit is refusing calls, which retry. */
+  readonly throttled?: true
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -1140,7 +1144,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private progress(progress: ObjectIndexProgress): void {
     const entry = Object.values(this.getSnapshot().indexes).find(value => value.requestId === progress.requestId)
     if (!entry) return
-    this.putIndex({ ...entry, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {} })
+    const { growing: _growing, throttled: _throttled, ...rest } = entry
+    this.putIndex({ ...rest, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}, ...progress.growing ? { growing: true } : {}, ...progress.throttled ? { throttled: true } : {} })
   }
 
   private putIndex(entry: IndexEntry): void {

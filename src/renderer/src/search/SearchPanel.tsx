@@ -136,10 +136,12 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
  *  many projects it covers, and the projects read by name only. */
 export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
   if (entry?.requestId && entry.phase === 'estimate') return 'Estimating the billed INFORMATION_SCHEMA read of the index’s details…'
-  if (entry?.requestId && entry.phase === 'projects') return 'Discovering accessible BigQuery projects…'
-  if (entry?.requestId) return entry.phase === 'details'
+  // While BigQuery refuses calls for its rate they wait and retry, so the build slows rather than fails.
+  const limited = entry?.throttled ? ' BigQuery is rate limiting the calls, which retry.' : ''
+  if (entry?.requestId && entry.phase === 'projects') return 'Discovering accessible BigQuery projects…' + limited
+  if (entry?.requestId) return (entry.phase === 'details'
     ? `Reading details of ${numbers.format(entry.done)} of ${count(entry.total, 'object')}…`
-    : `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`
+    : `Indexing ${numbers.format(entry.done)} of ${entry.growing ? 'about ' : ''}${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`) + limited
   if (entry?.error) return `The index could not be built: ${entry.error}`
   if (!status || status.state === 'none') return 'This connection has no index yet.'
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length

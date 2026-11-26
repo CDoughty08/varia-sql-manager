@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -408,17 +409,17 @@ internal static class BigQueryExplorerChecks
     static async Task LimiterAsync(Action<bool, string> check)
     {
         var limiter = new BigQueryRateLimiter(2);
-        var first = await limiter.EnterAsync("ada", CancellationToken.None);
-        var second = await limiter.EnterAsync("ada", CancellationToken.None);
-        var other = await limiter.EnterAsync("grace", CancellationToken.None);
-        var third = limiter.EnterAsync("ada", CancellationToken.None);
+        var first = await limiter.EnterAsync("ada", BqMethod.TablesGet, CancellationToken.None);
+        var second = await limiter.EnterAsync("ada", BqMethod.TablesList, CancellationToken.None);
+        var other = await limiter.EnterAsync("grace", BqMethod.TablesGet, CancellationToken.None);
+        var third = limiter.EnterAsync("ada", BqMethod.RoutinesGet, CancellationToken.None);
         var waited = !third.IsCompleted && limiter.InUse("ada") == 2 && limiter.InUse("grace") == 1;
         first.Dispose();
         first.Dispose();
         var entered = await third.WaitAsync(TimeSpan.FromSeconds(30));
-        check(waited && limiter.InUse("ada") == 2, "a principal's calls wait for one of its slots, another principal's do not, and a slot is returned once");
+        check(waited && limiter.InUse("ada") == 2, "a principal's calls of any method wait for one of its in-flight slots, another principal's do not, and a slot is returned once");
         using var cancel = new CancellationTokenSource();
-        var fourth = limiter.EnterAsync("ada", cancel.Token);
+        var fourth = limiter.EnterAsync("ada", BqMethod.TablesGet, cancel.Token);
         cancel.Cancel();
         var refused = false;
         try { await fourth; } catch (OperationCanceledException) { refused = true; }
@@ -426,6 +427,136 @@ internal static class BigQueryExplorerChecks
         entered.Dispose();
         other.Dispose();
         check(refused && limiter.InUse("ada") == 0 && limiter.InUse("grace") == 0, "a call waiting for a slot ends with its deadline and takes none");
+        var defaults = new BigQueryRateLimiter();
+        // Five methods at 50 calls each, entered together: each method's turns are 10 ms apart, so this takes about half a second.
+        var held = (await Task.WhenAll(new[] { BqMethod.TablesGet, BqMethod.TablesList, BqMethod.RoutinesGet, BqMethod.RoutinesList, BqMethod.DatasetsList }
+            .SelectMany(method => Enumerable.Range(0, 50).Select(_ => defaults.EnterAsync("ada", method, CancellationToken.None)))).WaitAsync(TimeSpan.FromSeconds(30))).ToList();
+        var over = defaults.EnterAsync("ada", BqMethod.ModelsList, CancellationToken.None);
+        var capped = !over.IsCompleted && defaults.InUse("ada") == BigQueryRateLimiter.InFlight;
+        held[0].Dispose();
+        (await over.WaitAsync(TimeSpan.FromSeconds(30))).Dispose();
+        foreach (var slot in held) slot.Dispose();
+        check(capped && BigQueryRateLimiter.InFlight == 250 && defaults.InUse("ada") == 0 && BigQueryRateLimiter.RateOf(BqMethod.ProjectsList) == 10 && BigQueryRateLimiter.RateOf(BqMethod.TablesGet) == 100,
+            "the limits follow BigQuery's API (core) system limits: 100 requests a second per user per method (projects.list 10), 250 of its 300 in flight");
+
+        // Pacing, on a clock the checks move (Stopwatch ticks).
+        long now = 1_000 * Stopwatch.Frequency;
+        var paced = new BigQueryRateLimiter(clock: () => now);
+        var turns = Enumerable.Range(0, 101).Select(_ => paced.Reserve("ada", BqMethod.TablesGet, now).TotalMilliseconds).ToList();
+        check(turns[0] == 0 && Enumerable.Range(1, 100).All(at => Math.Abs(turns[at] - turns[at - 1] - 10) < 0.01) && turns[100] >= 999.99,
+            $"a method's turns are 10 ms apart from the first, so no one-second window holds more than 100 ({turns[1]} ms, {turns[100]} ms)");
+        check(paced.Reserve("ada", BqMethod.RoutinesGet, now) == TimeSpan.Zero && paced.Reserve("grace", BqMethod.TablesGet, now) == TimeSpan.Zero,
+            "each method and each principal has its own pace");
+        var listed = Enumerable.Range(0, 3).Select(_ => paced.Reserve("ada", BqMethod.ProjectsList, now).TotalMilliseconds).ToList();
+        check(listed[0] == 0 && Math.Abs(listed[1] - 100) < 0.01 && Math.Abs(listed[2] - 200) < 0.01, "projects.list goes ten a second");
+        now += 5 * Stopwatch.Frequency;
+        check(paced.Reserve("ada", BqMethod.TablesGet, now) == TimeSpan.Zero, "an idle method's next call goes at once, with no backlog kept");
+
+        // Refusals halve the method's rate once per window, down to a floor; it climbs back; the principal shows as throttled meanwhile.
+        check(!paced.IsThrottled("ada"), "a principal BigQuery has not refused is not throttled");
+        for (var i = 0; i < 64; i++) paced.Throttled("ada", BqMethod.TablesGet);
+        var halved = paced.RateFor("ada", BqMethod.TablesGet);
+        check(Math.Abs(halved - 50) < 0.01 && paced.RateFor("ada", BqMethod.RoutinesGet) == 100 && paced.IsThrottled("ada") && !paced.IsThrottled("grace"),
+            $"64 refusals at once (a burst of calls already in flight) halve that method's rate once ({halved}) and mark the principal throttled");
+        var slowed = new List<double>();
+        for (var i = 0; i < 10; i++)
+        {
+            now += (long)(BigQueryRateLimiter.ThrottleWindow.TotalSeconds * Stopwatch.Frequency);
+            paced.Throttled("ada", BqMethod.TablesGet);
+            slowed.Add(paced.RateFor("ada", BqMethod.TablesGet));
+        }
+        check(slowed.All(rate => rate >= 100 * BigQueryRateLimiter.MinimumFraction - 0.01) && slowed[^1] < 11 && slowed.Zip(slowed.Skip(1)).All(pair => pair.Second <= pair.First),
+            $"refusals a window apart keep halving it (less what it climbed meanwhile), never below a tenth of the full rate: {string.Join(", ", slowed.Select(rate => rate.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)))}");
+        var floorTurn = paced.Reserve("ada", BqMethod.TablesGet, now);
+        var floorNext = paced.Reserve("ada", BqMethod.TablesGet, now);
+        check((floorNext - floorTurn).TotalMilliseconds is > 90 and < 100.01, $"near the floor a method's turns are about 100 ms apart, so 64 queued calls wait under 7 s ({(floorNext - floorTurn).TotalMilliseconds} ms)");
+        now += (long)(BigQueryRateLimiter.Shown.TotalSeconds * Stopwatch.Frequency) + 1;
+        check(!paced.IsThrottled("ada"), "the principal stops showing as throttled once BigQuery has not refused it for a while");
+        now += (long)(BigQueryRateLimiter.Recovery.TotalSeconds * Stopwatch.Frequency);
+        check(paced.RateFor("ada", BqMethod.TablesGet) == 100, "a throttled method climbs back to its full rate");
+
+        // A call whose deadline ends while it waits for its turn, or for a slot, gives the turn back: a stopped build leaves no backlog.
+        long frozen = 5_000 * Stopwatch.Frequency;
+        var refunds = new BigQueryRateLimiter(inFlight: 1, clock: () => frozen);
+        for (var i = 0; i < 1_000; i++) refunds.Reserve("ada", BqMethod.TablesGet, frozen);
+        using (var stopped = new CancellationTokenSource())
+        {
+            var waiting = Enumerable.Range(0, 50).Select(_ => refunds.EnterAsync("ada", BqMethod.TablesGet, stopped.Token)).ToList();
+            var queued = waiting.All(task => !task.IsCompleted);
+            stopped.Cancel();
+            var cancelled = 0;
+            foreach (var task in waiting) try { await task; } catch (OperationCanceledException) { cancelled++; }
+            var resumed = refunds.Reserve("ada", BqMethod.TablesGet, frozen);
+            check(queued && cancelled == 50 && Math.Abs(resumed.TotalSeconds - 10) < 0.0001 && refunds.InUse("ada") == 0,
+                $"calls stopped while waiting for their turn give the turns back ({cancelled} cancelled, next waits {resumed.TotalSeconds} s)");
+        }
+        // A turn given back from the middle of the queue moves nothing until the turns after it are given back too, in any order, so
+        // no later call is paced alongside one already scheduled.
+        long still = 9_000 * Stopwatch.Frequency;
+        var queue = new BigQueryRateLimiter(clock: () => still);
+        var reserved = Enumerable.Range(0, 5).Select(_ => queue.ReserveRefundable("ada", BqMethod.TablesGet, still)).ToList();
+        reserved[2].Refund(still);
+        var afterMiddle = queue.Reserve("ada", BqMethod.TablesGet, still);
+        reserved[3].Refund(still);
+        reserved[1].Refund(still);
+        var afterOutOfOrder = queue.Reserve("ada", BqMethod.TablesGet, still);
+        check(Math.Abs(afterMiddle.TotalMilliseconds - 50) < 0.01 && Math.Abs(afterOutOfOrder.TotalMilliseconds - 60) < 0.01,
+            $"a turn given back mid-queue is not reused alongside scheduled ones ({afterMiddle.TotalMilliseconds} ms, then {afterOutOfOrder.TotalMilliseconds} ms)");
+        var tail = Enumerable.Range(0, 3).Select(_ => queue.ReserveRefundable("ada", BqMethod.RoutinesGet, still)).ToList();
+        tail[0].Refund(still);
+        tail[1].Refund(still);
+        tail[2].Refund(still);
+        check(queue.Reserve("ada", BqMethod.RoutinesGet, still) == TimeSpan.Zero, "turns given back from the end, gaps included, are all reused");
+
+        // A method that never goes idle drops a gap once its turn has passed, and a turn already past when given back (its caller
+        // waited for a slot) is not kept: gaps stay bounded however long a build keeps the method busy.
+        var busy = Enumerable.Range(0, 5).Select(_ => queue.ReserveRefundable("ada", BqMethod.ModelsList, still)).ToList();
+        busy[1].Refund(still);
+        var kept = queue.Gaps("ada", BqMethod.ModelsList);
+        var later = still + Stopwatch.Frequency * 3 / 100;
+        busy[0].Refund(later);
+        queue.Reserve("ada", BqMethod.ModelsList, later);
+        check(kept == 1 && queue.Gaps("ada", BqMethod.ModelsList) == 0 && queue.Reserve("ada", BqMethod.ModelsList, later) > TimeSpan.Zero,
+            $"a busy method drops gaps whose turns have passed and keeps no past turn ({kept}, then {queue.Gaps("ada", BqMethod.ModelsList)})");
+
+        // A call whose deadline has already ended takes no turn and no slot.
+        using (var ended = new CancellationTokenSource())
+        {
+            ended.Cancel();
+            var refusedAtOnce = false;
+            try { await queue.EnterAsync("ada", BqMethod.JobsGet, ended.Token); } catch (OperationCanceledException) { refusedAtOnce = true; }
+            check(refusedAtOnce && queue.Reserve("ada", BqMethod.JobsGet, still) == TimeSpan.Zero && queue.InUse("ada") == 0,
+                "a call already stopped takes no turn and no slot");
+        }
+
+        // A refusal of a call paced before the method last slowed down (queued or in flight at the old rate) does not slow it again.
+        long clock = 20_000 * Stopwatch.Frequency;
+        var late = new BigQueryRateLimiter(inFlight: 8, clock: () => clock);
+        var early = await late.EnterAsync("ada", BqMethod.TablesGet, CancellationToken.None);
+        clock += Stopwatch.Frequency / 10;
+        late.Throttled("ada", BqMethod.TablesGet);
+        clock += 2 * Stopwatch.Frequency;
+        late.Throttled("ada", BqMethod.TablesGet, early);
+        early.Dispose();
+        var once = late.RateFor("ada", BqMethod.TablesGet);
+        var fresh = await late.EnterAsync("ada", BqMethod.TablesGet, CancellationToken.None);
+        late.Throttled("ada", BqMethod.TablesGet, fresh);
+        fresh.Dispose();
+        check(Math.Abs(once - 70) < 0.01 && Math.Abs(late.RateFor("ada", BqMethod.TablesGet) - 35) < 0.01,
+            $"a refusal of a call paced before the last halving is ignored ({once}); one paced after it halves again ({late.RateFor("ada", BqMethod.TablesGet)})");
+
+        var holding = await refunds.EnterAsync("ada", BqMethod.ModelsList, CancellationToken.None);
+        using (var stopped = new CancellationTokenSource())
+        {
+            var blocked = refunds.EnterAsync("ada", BqMethod.RoutinesList, stopped.Token);
+            var waitedForSlot = !blocked.IsCompleted;
+            stopped.Cancel();
+            var cancelled = false;
+            try { await blocked; } catch (OperationCanceledException) { cancelled = true; }
+            check(waitedForSlot && cancelled && refunds.Reserve("ada", BqMethod.RoutinesList, frozen) == TimeSpan.Zero,
+                "a call stopped while waiting for an in-flight slot gives its turn back too");
+        }
+        holding.Dispose();
         var rate = Api(429, "rateLimitExceeded");
         var forbidden = Api(403, "rateLimitExceeded");
         var denied = Api(403, "accessDenied");
@@ -597,6 +728,10 @@ internal static class BigQueryExplorerChecks
         check(limited == 3 && Labels(retried) == "churn (logistic regression)" && denied is { Nodes.Count: 0, Error: { Code: "PERMISSION_DENIED", Retryable: false } }
             && harness.Fake.To(Sales + "/routines").Count() == before + 1 && harness.Service.BigQuery.Limiter.InUse(harness.Service.BigQuery.Find(harness.ConnectionId)!.Principal.PrincipalId) == 0,
             $"a rate-limited listing retries until it lists; a denial is the row's error after one request, and the slots are returned: {limited} {denied?.Error?.Code} {denied?.Error?.Message}");
+        var principal = harness.Service.BigQuery.Find(harness.ConnectionId)!.Principal.PrincipalId;
+        check(harness.Service.BigQuery.Limiter.IsThrottled(principal) && harness.Service.BigQuery.Limiter.RateFor(principal, BqMethod.ModelsList) < BigQueryRateLimiter.PerSecond
+            && harness.Service.BigQuery.Limiter.RateFor(principal, BqMethod.RoutinesList) == BigQueryRateLimiter.PerSecond,
+            "the refusals slowed models.list alone and show the principal as throttled");
         check(harness.Fake.Unmatched.IsEmpty, "every listing request was answered by a fixture: " + string.Join(", ", harness.Fake.Unmatched.Select(request => request.Method + " " + request.Url)));
     }
 

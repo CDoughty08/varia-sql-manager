@@ -337,7 +337,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         budget.CancelAfter(PreConnectLimit);
         try
         {
-            var page = await MetadataAsync(connection, t =>
+            var page = await MetadataAsync(connection, BqMethod.ProjectsList, t =>
             {
                 var request = connection.Client.Service.Projects.List();
                 request.MaxResults = BigQueryLimits.ProjectsPerPage;

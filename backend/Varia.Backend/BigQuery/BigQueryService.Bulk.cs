@@ -65,7 +65,7 @@ internal sealed partial class BigQueryService
                     foreach (var (sql, views) in BigQueryBulkSql.Queries(item.Project, item.Location, definitions))
                     {
                         var dryRun = environment.Emulator ? new BigQueryEstimate(0, Faked: true)
-                            : Estimate(await MetadataAsync(connection, t => DryRunAsync(connection.Client, billing, item.Location, sql, null, t), budget.Token));
+                            : Estimate(await MetadataAsync(connection, BqMethod.JobsInsert, t => DryRunAsync(connection.Client, billing, item.Location, sql, null, t), budget.Token));
                         // INFORMATION_SCHEMA reports no bytes for a view it bills at its floor: the floor is the figure, not an incomplete one.
                         if (dryRun.Incomplete is { } reason and not "zeroBytes") incomplete ??= reason;
                         bytes += BigQueryBulkSql.Billed(dryRun.BytesProcessed, views);

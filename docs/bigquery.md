@@ -649,10 +649,19 @@ listers; nothing in it runs a job.
 - **Paging and limits.** Lists page with BigQuery's own page tokens (carried in the cursor as base64url), Columns by offset;
   each listing has a 30 s budget, and a failure is the row's error, as SQL Server's are. Names a kind's rule refuses are
   dropped, so they never reach a menu or a script.
-- **Rate limiter.** Every metadata read (listers, Preview Rows, Properties, Script As' `tables.get` and `routines.get`) goes
-  through one limiter per principal: at most 16 calls in flight across all of the principal's connections, since BigQuery's
-  per-user API limits count the principal. A rate-limit refusal (429, or 403 `rateLimitExceeded`) retries with jittered
-  backoff until the call's deadline; other transient failures retry a few times; anything else answers at once.
+- **Rate limiter.** Every metadata read (listers, the Search Objects index, Preview Rows, Properties, Script As, Job History,
+  dry runs for cost estimates) goes through one limiter per principal (`BigQueryRateLimiter`), set to BigQuery's API (core)
+  system limits, which count the user across all connections and clients. Each REST method goes at most 100 requests a
+  second (`projects.list` 10), evenly spaced with no burst on top, so no one-second window holds more while slots are free. At most 250 calls
+  are in flight across all methods, leaving the rest of BigQuery's 300 for queries. A call waits for its method's turn
+  first, then a slot, so a method running at its rate never holds slots another method needs. A call whose deadline ends
+  while it waits for either gives its turn back. A rate-limit refusal (429, or 403 `rateLimitExceeded`) halves that
+  method's rate, at most once a second (a burst of refusals from calls already in flight counts once), but never below
+  a tenth of the full rate. The rate then climbs back by a tenth of the full rate each second. The call retries with
+  jittered backoff until its deadline, holding no slot while it waits. For 5 s after any refusal the principal counts as
+  rate limited, whichever method was refused, and the index's status says so. Other transient failures retry a few
+  times; anything else answers at once. Query execution, result reads and Storage Read have their own
+  backoff and do not go through this limiter.
 - **Names in SQL.** BigQuery has no `QUOTENAME` and takes no identifier as a parameter, so a name reaches SQL text only through
   `BqNames` (C#): its kind's rule (the same as `src/shared/bigquery/names.ts`), then backticks with backslashes and backticks
   escaped. A name the rule refuses throws `INVALID_PARAMS` before any text is built. Values are always query parameters.
