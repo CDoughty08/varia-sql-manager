@@ -1,0 +1,3441 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density="compact">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Varia SQL Manager — Multi-Server Query Execution Mockup</title>
+<style>
+/* ============================================================================
+   VARIA SQL MANAGER — CALM PRO DESIGN TOKENS
+   Exact parity with src/shared/theme/palette.ts & src/shared/theme/metrics.ts
+   ============================================================================ */
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+
+  /* Compact density (default) */
+  --h-header: 40px;
+  --h-bar: 36px;
+  --h-doc-tab: 40px;
+  --h-control: 26px;
+  --h-row: 22px;
+  --h-status: 24px;
+  --grid-row: 20px;
+  --grid-head: 22px;
+  --rad-sm: 4px;
+  --rad-lg: 8px;
+  --rad-pill: 999px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Varia Dark */
+  --canvas: #16181d;
+  --panel: #16181d;
+  --sidebar: #111317;
+  --chrome: #111317;
+  --raised: #1c1f25;
+  --overlay: #1d2026;
+  --input: #101216;
+  --hover: #262a32;
+  --active: #30343e;
+  --selection: #21273b;
+  --selection-strong: #29314f;
+  --accent-surface: #232842;
+  --text-selection: #2f3b66;
+
+  --text: #d9dce3;
+  --text-strong: #f5f6f8;
+  --text-secondary: #bcc1cb;
+  --text-tertiary: #a3a9b5;
+  --text-muted: #9298a4;
+  --text-accent: #bcc5ff;
+
+  --border: #262a31;
+  --border-subtle: #1f2228;
+  --border-strong: #2e323a;
+  --separator: #30343c;
+  --control-border: #3a404d;
+  --control-border-hover: #525a6c;
+  --input-border: #3a404d;
+  --tonal-fill: rgba(255, 255, 255, 0.045);
+  --tonal-fill-hover: rgba(255, 255, 255, 0.08);
+  --tree-guide: #232730;
+
+  --accent: #8f9cff;
+  --accent-hover: #a8b2ff;
+  --on-accent: #0e1230;
+  --focus: #8f9cff;
+
+  --error: #f39a9a;
+  --error-surface: #3a1d22;
+  --error-surface-text: #f6bcc1;
+  --warning: #e4bb6a;
+  --warning-surface: #33291a;
+  --warning-surface-text: #f0d49e;
+  --success: #74d19c;
+  --success-surface: rgba(116, 209, 156, 0.14);
+  --success-text: #a6e8bf;
+
+  --icon: #a3a9b5;
+  --icon-muted: #7f8694;
+  --icon-folder: #bfa878;
+
+  --red: #e66767;
+  --orange: #e09358;
+  --yellow: #d8bf5e;
+  --green: #6fbf8a;
+  --blue: #6ea4ea;
+  --purple: #ab95ea;
+  --chg: #5b9cf0;
+
+  --red-pill-bg: rgba(230, 103, 103, 0.16);
+  --red-pill-border: rgba(230, 103, 103, 0.38);
+  --red-pill-text: #f6b2b2;
+  --blue-pill-bg: rgba(110, 164, 234, 0.16);
+  --blue-pill-border: rgba(110, 164, 234, 0.36);
+  --blue-pill-text: #b7d3fa;
+  --green-pill-bg: rgba(111, 191, 138, 0.14);
+  --green-pill-border: rgba(111, 191, 138, 0.36);
+  --green-pill-text: #a6e8bf;
+  --purple-pill-bg: rgba(171, 149, 234, 0.16);
+  --purple-pill-border: rgba(171, 149, 234, 0.36);
+  --purple-pill-text: #d4c5fa;
+
+  --syn-kw: #93a4ff;
+  --syn-str: #9fd4a9;
+  --syn-cmt: #868e9b;
+  --syn-num: #e8b97d;
+  --syn-fn: #d4a9f2;
+  --syn-op: #9ea6b4;
+
+  --grid-alt: rgba(217, 220, 227, 0.02);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.52);
+  --shadow-menu: 0 4px 14px rgba(0, 0, 0, 0.48);
+  --backdrop: rgba(10, 12, 16, 0.7);
+
+  --lab-bg: #0b0d11;
+  --lab-surface: #12151c;
+  --lab-card: #161922;
+  --lab-border: #232836;
+}
+
+[data-theme="light"] {
+  --canvas: #ffffff;
+  --panel: #ffffff;
+  --sidebar: #f7f8fa;
+  --chrome: #f7f8fa;
+  --raised: #f1f3f6;
+  --overlay: #ffffff;
+  --input: #ffffff;
+  --hover: #dfe2e7;
+  --active: #d6dae0;
+  --selection: #e7ebfc;
+  --selection-strong: #d9e0fb;
+  --accent-surface: #dde1f9;
+  --text-selection: #c8d2fa;
+
+  --text: #1c1f26;
+  --text-strong: #0a0c10;
+  --text-secondary: #3a404b;
+  --text-tertiary: #4d5461;
+  --text-muted: #5c6370;
+  --text-accent: #3240b0;
+
+  --border: #e3e6eb;
+  --border-subtle: #eceef2;
+  --border-strong: #d4d8df;
+  --separator: #dcdfe5;
+  --control-border: #c2c8d4;
+  --control-border-hover: #9aa3b4;
+  --input-border: #c2c8d4;
+  --tonal-fill: rgba(15, 23, 42, 0.04);
+  --tonal-fill-hover: rgba(15, 23, 42, 0.075);
+  --tree-guide: #e2e5ec;
+
+  --accent: #4453d0;
+  --accent-hover: #3744b8;
+  --on-accent: #ffffff;
+  --focus: #4453d0;
+
+  --error: #b42229;
+  --error-surface: #fdecec;
+  --error-surface-text: #8f1d24;
+  --warning: #875800;
+  --warning-surface: #fff5dc;
+  --warning-surface-text: #6b4400;
+  --success: #146f3b;
+  --success-surface: rgba(20, 111, 59, 0.11);
+  --success-text: #0f5a2f;
+
+  --icon: #4d5461;
+  --icon-muted: #6b7280;
+  --icon-folder: #8a6d33;
+
+  --red: #c42b3c;
+  --orange: #b45309;
+  --yellow: #8f6b00;
+  --green: #2e7d4f;
+  --blue: #2563a8;
+  --purple: #7a4bbf;
+  --chg: #2a78d6;
+
+  --red-pill-bg: rgba(196, 43, 60, 0.1);
+  --red-pill-border: rgba(196, 43, 60, 0.34);
+  --red-pill-text: #a11c2b;
+  --blue-pill-bg: rgba(37, 99, 168, 0.1);
+  --blue-pill-border: rgba(37, 99, 168, 0.32);
+  --blue-pill-text: #1c4e8a;
+  --green-pill-bg: rgba(46, 125, 79, 0.1);
+  --green-pill-border: rgba(46, 125, 79, 0.32);
+  --green-pill-text: #146f3b;
+  --purple-pill-bg: rgba(122, 75, 191, 0.1);
+  --purple-pill-border: rgba(122, 75, 191, 0.32);
+  --purple-pill-text: #6234a8;
+
+  --syn-kw: #3442c2;
+  --syn-str: #2c7440;
+  --syn-cmt: #636a76;
+  --syn-num: #965700;
+  --syn-fn: #8338b4;
+  --syn-op: #575e6b;
+
+  --grid-alt: rgba(28, 31, 38, 0.022);
+  --shadow-popover: 0 8px 24px rgba(16, 24, 40, 0.16);
+  --shadow-menu: 0 4px 12px rgba(16, 24, 40, 0.14);
+  --backdrop: rgba(28, 31, 38, 0.32);
+
+  --lab-bg: #eef1f6;
+  --lab-surface: #f8f9fc;
+  --lab-card: #ffffff;
+  --lab-border: #d8dde6;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+  background: var(--lab-bg);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font-family: inherit; color: inherit; }
+button { cursor: pointer; background: transparent; border: 0; padding: 0; }
+button:disabled { cursor: default; opacity: 0.42; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 1.5px solid var(--focus); outline-offset: -1px; }
+svg.ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+svg.ic.sm { width: 13px; height: 13px; }
+svg.ic.xs { width: 11px; height: 11px; }
+.tabular { font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--font-mono); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ============================================================================
+   LAB CONTROL SHELL (NOT PART OF VARIA CHROME)
+   ============================================================================ */
+.lab-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.lab-topbar {
+  position: sticky; top: 0; z-index: 900;
+  background: var(--lab-surface);
+  border-bottom: 1px solid var(--lab-border);
+  padding: 7px 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+}
+.lab-brand { display: flex; align-items: center; gap: 8px; margin-right: 4px; }
+.lab-brand-mark {
+  width: 24px; height: 24px; border-radius: 6px;
+  background: var(--accent-surface); color: var(--accent);
+  display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.lab-brand-title { font-weight: 600; font-size: 13px; color: var(--text-strong); letter-spacing: -0.01em; }
+.lab-brand-sub { font-size: 11px; color: var(--text-muted); padding: 1px 6px; border-radius: 99px; background: var(--tonal-fill); border: 1px solid var(--lab-border); }
+.lab-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px; border-radius: 6px;
+  background: var(--lab-bg); border: 1px solid var(--lab-border);
+}
+.lab-seg button {
+  height: 24px; padding: 0 9px; border-radius: 4px;
+  font-size: 11.5px; font-weight: 500; color: var(--text-muted); white-space: nowrap;
+  transition: background 90ms var(--ease), color 90ms var(--ease);
+}
+.lab-seg button:hover { color: var(--text-strong); }
+.lab-seg button.is-active { background: var(--selection-strong); color: var(--text-accent); font-weight: 600; }
+.lab-spacer { flex: 1; }
+.lab-subbar {
+  background: color-mix(in srgb, var(--lab-surface) 75%, var(--lab-bg));
+  border-bottom: 1px solid var(--lab-border);
+  padding: 5px 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+  font-size: 11.5px; color: var(--text-muted);
+}
+.lab-subbar b { color: var(--text-secondary); font-weight: 600; }
+.lab-hint-kbd {
+  display: inline-flex; align-items: center; padding: 0 5px; height: 17px;
+  border-radius: 3px; font-size: 10.5px; font-family: var(--font-mono);
+  background: var(--lab-card); border: 1px solid var(--lab-border); color: var(--text-secondary);
+}
+
+.wb-viewport {
+  flex: 1; display: flex; justify-content: center;
+  padding: 12px 14px 18px; overflow-x: auto;
+}
+.wb-window {
+  position: relative;
+  width: 100%; max-width: 1440px; min-width: 980px;
+  height: calc(100vh - 108px); min-height: 680px; max-height: 860px;
+  background: var(--canvas); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.38);
+}
+
+/* ============================================================================
+   1. TITLE BAR
+   ============================================================================ */
+.wb-titlebar {
+  height: var(--h-header); flex-shrink: 0;
+  background: var(--chrome); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 0 0 10px; gap: 8px; user-select: none;
+}
+.wb-tb-left { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.wb-brand-icon { width: 24px; height: 24px; display: grid; place-items: center; color: var(--accent); margin-right: 2px; }
+.wb-menus { display: flex; align-items: center; gap: 1px; }
+.wb-menus button { height: 26px; padding: 0 7px; border-radius: var(--rad-sm); font-size: 12px; color: var(--text-secondary); }
+.wb-menus button:hover { background: var(--hover); color: var(--text-strong); }
+.wb-tb-center { flex: 1; display: flex; justify-content: center; min-width: 160px; }
+.wb-cmd-centre {
+  width: min(400px, 100%); height: var(--h-control); padding: 0 8px 0 10px;
+  border-radius: var(--rad-sm); background: var(--input); border: 1px solid var(--input-border);
+  color: var(--text-muted); display: flex; align-items: center; gap: 7px; font-size: 12px;
+}
+.wb-cmd-centre:hover { border-color: var(--control-border-hover); color: var(--text-secondary); }
+.wb-cmd-centre span { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 18px; padding: 0 5px; border-radius: 3px;
+  font-size: 10.5px; font-weight: 500; color: var(--text-muted);
+  background: var(--tonal-fill); border: 1px solid var(--separator);
+}
+.wb-tb-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; padding-right: 4px; }
+.wb-tb-sep { width: 1px; height: 15px; background: var(--separator); margin: 0 4px; }
+.wb-icon-btn {
+  position: relative; width: 26px; height: 26px; border-radius: var(--rad-sm);
+  display: inline-grid; place-items: center; color: var(--icon);
+}
+.wb-icon-btn:hover:not(:disabled) { background: var(--hover); color: var(--text-strong); }
+.wb-icon-btn.is-active { background: var(--selection); color: var(--text-accent); }
+.wb-win-controls { display: flex; align-items: stretch; height: 100%; margin-left: 6px; }
+.wb-win-controls span { width: 40px; display: grid; place-items: center; color: var(--text-muted); font-size: 11px; }
+.wb-win-controls span:hover { background: var(--hover); color: var(--text-strong); }
+.wb-win-controls span.win-close:hover { background: #c42b1c; color: #fff; }
+
+/* ============================================================================
+   2. MAIN SPLIT (OBJECT EXPLORER + WORKSPACE)
+   ============================================================================ */
+.wb-main-split { flex: 1; min-height: 0; display: flex; position: relative; }
+
+/* OBJECT EXPLORER */
+.wb-oe {
+  width: 274px; min-width: 220px; max-width: 420px; flex-shrink: 0;
+  background: var(--sidebar); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; min-height: 0; position: relative;
+}
+.wb-oe-header {
+  height: var(--h-doc-tab); flex-shrink: 0;
+  display: flex; align-items: center; gap: 2px; padding: 0 6px 0 11px;
+  border-bottom: 1px solid var(--border);
+}
+.wb-oe-title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-tertiary); }
+.wb-oe-tools { display: flex; align-items: center; gap: 1px; }
+.wb-oe-search-row {
+  height: var(--h-bar); flex-shrink: 0; padding: 0 8px;
+  border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 6px;
+}
+.wb-oe-search-box {
+  flex: 1; min-width: 0; height: var(--h-control);
+  display: flex; align-items: center; gap: 6px; padding: 0 6px 0 8px;
+  border-radius: var(--rad-sm); background: var(--input); border: 1px solid var(--input-border);
+  color: var(--text-muted);
+}
+.wb-oe-search-box input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 12px; color: var(--text); }
+.wb-oe-search-box input::placeholder { color: var(--text-muted); }
+
+/* Multi-select active banner inside Explorer (appears when 2+ top-level servers are Ctrl+clicked) */
+.oe-multi-bar {
+  display: none; align-items: center; gap: 6px;
+  padding: 5px 8px; font-size: 11.5px;
+  background: var(--accent-surface);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--text-accent);
+}
+.oe-multi-bar.is-visible { display: flex; }
+.oe-multi-bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.oe-multi-bar button {
+  height: 20px; padding: 0 7px; border-radius: 3px; font-size: 11px; font-weight: 600;
+}
+.oe-multi-bar .btn-go { background: var(--accent); color: var(--on-accent); }
+.oe-multi-bar .btn-go:hover { background: var(--accent-hover); }
+.oe-multi-bar .btn-clear { color: var(--text-secondary); }
+.oe-multi-bar .btn-clear:hover { background: var(--hover); color: var(--text-strong); }
+
+.wb-oe-tree { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; user-select: none; }
+
+/* 44px Server Cards (exact match to workbench-polish.html) */
+.oe-server-card {
+  position: relative; height: 44px; padding: 4px 8px 4px 7px;
+  border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--raised) 52%, var(--sidebar));
+  display: flex; flex-direction: column; justify-content: center;
+  cursor: pointer; transition: background 80ms var(--ease), opacity 100ms var(--ease);
+}
+.oe-server-card:hover { background: var(--hover); }
+.oe-server-card.has-card-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 9%, transparent) 0%, transparent 72%), color-mix(in srgb, var(--raised) 48%, var(--sidebar));
+  border-top-color: color-mix(in srgb, var(--card-accent) 34%, var(--border));
+  border-bottom-color: color-mix(in srgb, var(--card-accent) 24%, var(--border));
+}
+.oe-server-card.has-card-tint:hover {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 14%, transparent) 0%, transparent 76%), var(--hover);
+}
+.oe-server-card.is-selected {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, transparent) 0%, transparent 80%), var(--selection) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.oe-server-card.is-primary-selected {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 22%, transparent) 0%, transparent 82%), var(--selection-strong) !important;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.oe-server-card.is-locked {
+  opacity: 0.44;
+  cursor: not-allowed;
+}
+.oe-server-top { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.oe-server-check {
+  width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0;
+  border: 1px solid var(--control-border); display: none; place-items: center;
+  background: var(--input); color: var(--on-accent); font-size: 10px; font-weight: 700;
+}
+.wb-oe.has-multi .oe-server-check { display: grid; }
+.oe-server-card.is-selected .oe-server-check { background: var(--accent); border-color: var(--accent); }
+.oe-server-card.is-locked .oe-server-check { opacity: 0.45; }
+.oe-server-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oe-server-sub { display: flex; align-items: center; gap: 5px; margin-top: 2px; padding-left: 20px; font-size: 11px; color: var(--text-muted); min-width: 0; }
+.oe-server-host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oe-lock-tag {
+  font-size: 10px; padding: 0 4px; height: 15px; line-height: 14px; border-radius: 3px;
+  background: var(--tonal-fill); border: 1px solid var(--border-strong); color: var(--text-muted);
+  display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;
+}
+.oe-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--success); }
+
+/* Tree children */
+.oe-row {
+  height: var(--h-row); display: flex; align-items: center; gap: 4px; padding-right: 8px;
+  font-size: 12.5px; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.oe-row:hover { background: var(--hover); }
+.oe-indent { position: relative; display: inline-block; width: 14px; height: 100%; flex-shrink: 0; }
+.oe-indent::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--tree-guide); }
+.oe-chev { width: 14px; height: 14px; display: grid; place-items: center; color: var(--icon-muted); flex-shrink: 0; }
+.oe-ic { width: 15px; height: 15px; display: grid; place-items: center; color: var(--icon); flex-shrink: 0; }
+.oe-folder-ic { color: var(--icon-folder); }
+.oe-lbl { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.oe-count { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.wb-oe-footer {
+  height: 26px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 10px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted);
+  background: var(--chrome);
+}
+
+/* ENVIRONMENT PILLS */
+.env-pill {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 16px; padding: 0 5px; border-radius: 3px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  white-space: nowrap; flex-shrink: 0;
+}
+.env-pill.prod { background: var(--red-pill-bg); color: var(--red-pill-text); border: 1px solid var(--red-pill-border); }
+.env-pill.stage { background: var(--blue-pill-bg); color: var(--blue-pill-text); border: 1px solid var(--blue-pill-border); }
+.env-pill.dev { background: var(--green-pill-bg); color: var(--green-pill-text); border: 1px solid var(--green-pill-border); }
+.env-pill.mixed { background: var(--purple-pill-bg); color: var(--purple-pill-text); border: 1px solid var(--purple-pill-border); }
+
+/* SPLITTERS */
+.wb-splitter-v { width: 4px; flex-shrink: 0; cursor: col-resize; background: transparent; margin: 0 -2px; z-index: 5; }
+.wb-splitter-v:hover, .wb-splitter-v.is-dragging { background: var(--focus); opacity: 0.65; }
+.wb-splitter-h { height: 5px; flex-shrink: 0; cursor: row-resize; background: var(--border); z-index: 5; }
+.wb-splitter-h:hover, .wb-splitter-h.is-dragging { background: var(--focus); }
+
+/* ============================================================================
+   3. RIGHT WORKSPACE (TABS + QUERY BAR + EDITOR + OUTPUT PANE)
+   ============================================================================ */
+.wb-right { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+/* DOCUMENT TABS */
+.wb-tab-shelf {
+  height: var(--h-doc-tab); background: var(--chrome); border-bottom: 1px solid var(--border);
+  display: flex; align-items: stretch; flex-shrink: 0; overflow-x: auto; scrollbar-width: none;
+}
+.wb-tab-shelf::-webkit-scrollbar { display: none; }
+.wb-doc-tab {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  padding: 0 8px 0 10px; min-width: 160px; max-width: 240px;
+  border-right: 1px solid var(--border); border-top: 2px solid transparent;
+  color: var(--text-muted); background: transparent; cursor: pointer; flex-shrink: 0; user-select: none;
+}
+.wb-doc-tab:hover { background: var(--hover); color: var(--text); }
+.wb-doc-tab.is-active { background: var(--canvas); color: var(--text-strong); border-top-color: var(--accent); }
+.wb-doc-tab.has-prod.is-active { border-top-color: var(--red); }
+.wb-doc-tab.has-mixed.is-active { border-top-color: var(--purple); }
+.wb-tab-body { display: flex; flex-direction: column; justify-content: center; min-width: 0; flex: 1; gap: 1px; }
+.wb-tab-title-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.wb-tab-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-doc-tab.is-active .wb-tab-name { font-weight: 600; }
+.wb-tab-meta-row { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wb-tab-close { width: 18px; height: 18px; border-radius: 3px; display: grid; place-items: center; color: var(--text-muted); flex-shrink: 0; }
+.wb-tab-close:hover { background: var(--active); color: var(--text-strong); }
+
+/* QUERY BAR */
+.wb-querybar {
+  position: relative; height: var(--h-bar); flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px; padding: 0 8px;
+  background: var(--canvas); border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.wb-querybar.has-prod-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--red) 7%, transparent) 0%, transparent 45%), var(--canvas);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--red) 35%, transparent);
+}
+.wb-querybar.has-mixed-tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--purple) 9%, transparent) 0%, transparent 50%), var(--canvas);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--purple) 40%, transparent);
+}
+.wb-exec-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--h-control); padding: 0 10px; border-radius: var(--rad-sm);
+  background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600;
+}
+.wb-exec-btn:hover { background: var(--accent-hover); }
+.wb-exec-btn.is-running {
+  background: var(--error-surface); color: var(--error-surface-text);
+  border: 1px solid color-mix(in srgb, var(--error) 45%, transparent);
+}
+.wb-exec-btn .exec-kbd {
+  font-size: 10px; font-weight: 600; padding: 0 4px; height: 15px; line-height: 14px;
+  border-radius: 3px; border: 1px solid color-mix(in srgb, currentColor 42%, transparent);
+}
+.wb-qb-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: var(--h-control); padding: 0 8px; border-radius: var(--rad-sm);
+  font-size: 12px; color: var(--text-secondary); border: 1px solid transparent; white-space: nowrap;
+}
+.wb-qb-btn:hover:not(:disabled) { background: var(--hover); color: var(--text-strong); }
+.wb-qb-btn.is-tonal { background: var(--tonal-fill); border-color: var(--border); }
+.wb-qb-btn.is-tonal:hover:not(:disabled) { background: var(--tonal-fill-hover); border-color: var(--control-border); }
+.wb-qb-btn.is-active { background: var(--selection); color: var(--text-accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 500; }
+.wb-qb-sep { width: 1px; height: 16px; background: var(--separator); margin: 0 2px; }
+.wb-bq-cost-chip {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+  border-radius: var(--rad-pill); background: var(--tonal-fill); border: 1px solid var(--border);
+  font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+.wb-bq-cost-chip b { color: var(--text-strong); font-weight: 600; }
+
+/* Multi-Server Target Pill in Query Bar */
+.wb-target-pill {
+  margin-left: auto; position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: var(--h-control); padding: 0 8px; border-radius: var(--rad-sm);
+  background: var(--input); border: 1px solid var(--input-border);
+  font-size: 12px; color: var(--text); white-space: nowrap;
+}
+.wb-target-pill:hover { border-color: var(--control-border-hover); background: var(--raised); }
+.wb-target-pill.is-open { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.swatch-stack { display: inline-flex; align-items: center; }
+.swatch-stack span {
+  width: 8px; height: 8px; border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--input);
+}
+.swatch-stack span + span { margin-left: -2px; }
+
+/* EDITOR AREA */
+.wb-editor-section {
+  height: 205px; min-height: 110px; max-height: 440px; flex-shrink: 0;
+  display: flex; flex-direction: column; background: var(--canvas); position: relative;
+}
+.wb-dual-editors { flex: 1; min-height: 0; display: flex; }
+.wb-editor-col { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; position: relative; transition: box-shadow 90ms var(--ease); }
+.wb-editor-col + .wb-editor-col { border-left: 1px solid var(--border-strong); }
+.wb-editor-col.is-drop-ok { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--canvas)); }
+.wb-editor-col.is-drop-bad { box-shadow: inset 0 0 0 2px var(--error); }
+.wb-editor-subhead {
+  min-height: 28px; flex-shrink: 0; padding: 3px 8px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  background: var(--chrome); border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px; color: var(--text-muted);
+}
+.wb-editor-subhead strong { color: var(--text-secondary); font-weight: 600; }
+.wb-editor-subhead .lang-tag {
+  margin-left: auto; padding: 0 5px; height: 16px; line-height: 15px; border-radius: 3px;
+  background: var(--tonal-fill); border: 1px solid var(--border); font-family: var(--font-mono); font-size: 10px;
+}
+.ed-target-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px 0 6px;
+  border-radius: var(--rad-sm); background: var(--panel); border: 1px solid var(--border-strong);
+  color: var(--text-strong); font-size: 11px; font-weight: 500;
+}
+.ed-target-chip .chip-db { color: var(--text-muted); font-weight: 400; }
+.ed-target-chip button {
+  width: 14px; height: 14px; border-radius: 2px; display: grid; place-items: center; color: var(--text-muted);
+}
+.ed-target-chip button:hover { background: var(--hover); color: var(--text-strong); }
+.ed-add-btn {
+  display: inline-flex; align-items: center; gap: 3px; height: 20px; padding: 0 7px;
+  border-radius: var(--rad-sm); border: 1px dashed var(--control-border);
+  background: transparent; color: var(--text-accent); font-size: 11px; font-weight: 500;
+}
+.ed-add-btn:hover { background: var(--selection); border-style: solid; border-color: var(--accent); }
+.ed-add-btn.is-empty {
+  background: var(--warning-surface); border-style: solid; border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  color: var(--warning-surface-text); font-weight: 600;
+}
+.vpop-sec-head {
+  display: flex; align-items: center; gap: 6px; padding: 4px 2px 2px;
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+}
+.trow.is-unchecked { opacity: 0.72; background: var(--chrome); }
+.trow.is-unchecked:hover { opacity: 1; background: var(--raised); }
+.wb-monaco {
+  flex: 1; min-height: 0; overflow: auto;
+  display: flex; padding: 8px 0;
+  font-family: var(--font-mono); font-size: 12.5px; line-height: 19px;
+  background: var(--canvas);
+}
+.wb-gutter {
+  width: 44px; flex-shrink: 0; text-align: right; padding-right: 12px;
+  color: var(--text-muted); opacity: 0.6; user-select: none; font-variant-numeric: tabular-nums;
+}
+.wb-code { flex: 1; min-width: 0; padding-right: 14px; white-space: pre; color: var(--text); }
+.wb-code .line { min-height: 19px; padding: 0 4px; border-radius: 2px; }
+.wb-code .line.is-active { background: color-mix(in srgb, var(--text) 3.5%, transparent); }
+.wb-code .line.is-err { background: color-mix(in srgb, var(--error) 14%, transparent); }
+.squiggly-err {
+  text-decoration: underline wavy var(--error);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
+  cursor: help;
+}
+.ed-guard-strip {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  padding: 4px 9px; font-size: 11px; line-height: 15px;
+  background: var(--error-surface); color: var(--error-surface-text);
+  border-bottom: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+}
+.ed-guard-strip button {
+  margin-left: auto; padding: 1px 7px; height: 19px; border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--error) 45%, transparent);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error-surface-text); font-size: 11px; font-weight: 600; white-space: nowrap;
+}
+.ed-guard-strip button:hover { background: color-mix(in srgb, var(--error) 22%, transparent); }
+.env-pill.err { background: var(--error-surface); color: var(--error-surface-text); border: 1px solid color-mix(in srgb, var(--error) 45%, transparent); }
+.kw { color: var(--syn-kw); font-weight: 500; }
+.str { color: var(--syn-str); }
+.cmt { color: var(--syn-cmt); font-style: italic; }
+.num { color: var(--syn-num); }
+.fn { color: var(--syn-fn); }
+.op { color: var(--syn-op); }
+
+/* ============================================================================
+   4. OUTPUT / RESULTS PANE (exact parity with grouped-results-tabs.html)
+   ============================================================================ */
+.wb-output {
+  flex: 1; min-height: 180px; display: flex; flex-direction: column;
+  background: var(--panel); position: relative;
+}
+.otb {
+  display: flex; flex: none; align-items: center; gap: 6px;
+  min-height: var(--h-bar); padding: 0 8px;
+  border-bottom: 1px solid var(--border); background: var(--panel);
+}
+.oviews { display: inline-flex; flex: none; gap: 1px; padding: 1px; border: 1px solid var(--border); border-radius: var(--rad-sm); background: var(--chrome); }
+.oviews button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 9px; border-radius: 3px; color: var(--text-muted); font-size: 12px; }
+.oviews button:hover { background: var(--hover); color: var(--text); }
+.oviews button[aria-selected="true"] { background: var(--selection); color: var(--text-strong); font-weight: 600; }
+.badge { min-width: 16px; padding: 0 5px; border-radius: var(--rad-pill); background: var(--active); color: var(--text-secondary); font-size: 10.5px; font-weight: 600; line-height: 15px; text-align: center; font-variant-numeric: tabular-nums; }
+.rtb { display: flex; align-items: center; gap: 3px; padding-left: 6px; border-left: 1px solid var(--border); }
+.rbtn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 7px; border-radius: var(--rad-sm);
+  font-size: 12px; color: var(--text-secondary); border: 1px solid transparent; white-space: nowrap;
+}
+.rbtn:hover:not(:disabled) { background: var(--hover); color: var(--text-strong); }
+.rbtn[aria-pressed="true"], .rbtn.is-active { background: var(--selection); color: var(--text-accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); font-weight: 500; }
+.rsearch {
+  display: inline-flex; align-items: center; gap: 4px; width: 150px; height: 24px; padding: 0 6px;
+  border: 1px solid var(--input-border); border-radius: var(--rad-sm); background: var(--input); color: var(--text-muted);
+}
+.rsearch input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 11.5px; color: var(--text); }
+.ostatus {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.ostatus strong { color: var(--text); font-weight: 600; }
+.ostatus[data-tone="success"] .os-ic { color: var(--success); }
+.ostatus[data-tone="error"] .os-ic { color: var(--error); }
+.ostatus[data-tone="warning"] .os-ic { color: var(--warning); }
+.ostatus[data-tone="running"] .os-ic { color: var(--accent); animation: spin 1.1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Server Group Tabs (.gtabs) + Statement/View Sub-bar (.vbar) */
+.gtabs {
+  display: flex; flex: none; align-items: stretch; gap: 2px;
+  min-height: 30px; padding: 3px 6px 0; overflow-x: auto; scrollbar-width: none;
+  background: var(--chrome); border-bottom: 1px solid var(--border);
+}
+.gtabs::-webkit-scrollbar { display: none; }
+.gt {
+  display: flex; flex: none; align-items: center; gap: 5px; height: 26px; padding: 0 9px;
+  border: 1px solid transparent; border-bottom: 0; border-radius: 4px 4px 0 0;
+  color: var(--text-muted); font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.gt:hover { color: var(--text); background: var(--hover); }
+.gt[data-on="true"] {
+  background: var(--panel); border-color: var(--border); color: var(--text-strong);
+  box-shadow: inset 0 2px var(--tab-accent, var(--accent)); font-weight: 600;
+}
+.gt .sdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.gt .st-ok { color: var(--success); }
+.gt .st-err { color: var(--error); }
+.gt .st-rb { color: var(--warning); }
+.gt .gt-cnt { font-size: 10.5px; color: var(--text-muted); padding: 0 5px; border-radius: 99px; background: var(--tonal-fill); font-weight: 600; }
+.gt-sep { width: 1px; height: 14px; background: var(--separator); align-self: center; margin: 0 3px; flex-shrink: 0; }
+
+.vbar {
+  display: flex; flex: none; align-items: center; gap: 8px;
+  min-height: 29px; padding: 2px 8px;
+  border-bottom: 1px solid var(--border); background: var(--panel); font-size: 11.5px;
+}
+.vtabs { display: flex; align-items: center; gap: 3px; }
+.vt {
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px;
+  border-radius: var(--rad-sm); color: var(--text-muted); font-size: 11.5px;
+}
+.vt:hover { background: var(--hover); color: var(--text); }
+.vt[data-on="true"] { background: var(--selection); color: var(--text-accent); font-weight: 600; }
+.vfacts { margin-left: auto; color: var(--text-muted); font-size: 11.5px; display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.vfacts strong { color: var(--text-secondary); font-weight: 600; }
+
+/* Grid + Profile Side Panel Layout */
+.results-main { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
+.grid-wrap { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.grid-scroll { flex: 1; min-height: 0; overflow: auto; background: var(--panel); }
+
+/* Real Varia Grid (.vgrid) */
+table.vgrid {
+  border-collapse: collapse; width: max-content; min-width: 100%;
+  font-family: var(--font-mono); font-size: 12px; line-height: 19px; color: var(--text);
+}
+table.vgrid th, table.vgrid td {
+  height: var(--grid-row); padding: 0 8px;
+  border-right: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap; text-align: left;
+}
+table.vgrid th {
+  position: sticky; top: 0; z-index: 2; height: var(--grid-head);
+  background: var(--chrome); color: var(--text-tertiary);
+  font-family: var(--font-ui); font-size: 12px; font-weight: 500;
+  border-bottom: 1px solid var(--border); user-select: none; cursor: pointer;
+}
+table.vgrid th:hover { background: var(--hover); color: var(--text-strong); }
+table.vgrid th.is-sorted { color: var(--text-accent); }
+table.vgrid th.chgcol { box-shadow: inset 0 -2px var(--chg); }
+table.vgrid th .th-in { display: inline-flex; align-items: center; gap: 5px; width: 100%; }
+table.vgrid th .th-sort { margin-left: auto; font-size: 10px; color: var(--accent); }
+table.vgrid th .pip { width: 5px; height: 5px; border-radius: 50%; background: var(--chg); }
+table.vgrid tbody tr:nth-child(even) td { background: var(--grid-alt); }
+table.vgrid tbody tr:hover td { background: color-mix(in srgb, var(--selection) 65%, transparent); }
+table.vgrid td.rn, table.vgrid th.rn {
+  position: sticky; left: 0; z-index: 1; width: 42px; text-align: right; padding-right: 7px;
+  background: var(--chrome); color: var(--text-muted); font-family: var(--font-ui); font-size: 11px;
+  border-right: 1px solid var(--border);
+}
+table.vgrid th.rn { z-index: 3; }
+table.vgrid td.num, table.vgrid th.num { text-align: right; }
+table.vgrid td.is-null { color: var(--text-muted); font-style: italic; }
+table.vgrid td.src-cell { font-family: var(--font-ui); font-weight: 500; }
+table.vgrid td.src-cell .sdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+/* Diff Grid Styling (exact parity with compare-next-ux.html) */
+table.vgrid td.dgut {
+  position: sticky; left: 0; z-index: 1; padding: 0 7px 0 0; background: var(--chrome);
+  font-family: var(--font-ui); font-size: 11px; color: var(--text-muted); border-right: 1px solid var(--border);
+}
+table.vgrid td.dgut .dg-in { display: flex; align-items: center; height: var(--grid-row); }
+table.vgrid td.dgut .bar3 { width: 3px; align-self: stretch; margin-right: 5px; background: var(--k, transparent); }
+table.vgrid td.dgut .mk { width: 11px; text-align: center; font-weight: 700; color: var(--k, var(--text-muted)); }
+table.vgrid td.d-chg { background: color-mix(in srgb, var(--chg) 11%, transparent) !important; }
+table.vgrid td.d-dim { color: var(--text-muted); }
+table.vgrid tr.d-add td:not(.dgut) { background: color-mix(in srgb, var(--success) 11%, transparent) !important; }
+table.vgrid tr.d-rem td:not(.dgut) { background: color-mix(in srgb, var(--error) 11%, transparent) !important; }
+table.vgrid del { color: color-mix(in srgb, var(--error) 88%, var(--text-muted)); text-decoration-thickness: 1px; }
+table.vgrid ins { text-decoration: none; font-weight: 700; color: var(--text-strong); }
+table.vgrid .darrow { color: var(--text-muted); margin: 0 4px; font-family: var(--font-ui); }
+
+/* Diff Toolbar */
+.diff-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 4px 8px; background: var(--chrome); border-bottom: 1px solid var(--border); font-size: 11.5px;
+}
+.diff-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px;
+  border-radius: 99px; font-size: 11px; font-variant-numeric: tabular-nums;
+  border: 1px solid color-mix(in srgb, var(--c) 50%, var(--border));
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+}
+.diff-chip b { color: var(--c); font-weight: 700; }
+
+/* Stacked Layout */
+.stack-wrap { flex: 1; min-height: 0; overflow-y: auto; }
+.stack-grp { border-bottom: 1px solid var(--border-strong); }
+.stack-cap {
+  height: 24px; padding: 0 8px; background: var(--chrome); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted);
+}
+.stack-cap strong { color: var(--text-strong); font-weight: 600; }
+
+/* Column Profile Side Panel */
+.side-panel {
+  width: 268px; flex-shrink: 0; border-left: 1px solid var(--border);
+  background: var(--chrome); display: none; flex-direction: column; min-height: 0; font-size: 11.5px;
+}
+.side-panel.is-open { display: flex; }
+.side-head {
+  height: 28px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.side-head strong { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); }
+.side-body { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 7px; }
+.prof-card {
+  padding: 7px 8px; border-radius: var(--rad-sm); border: 1px solid var(--border); background: var(--panel);
+}
+.prof-card header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.prof-card header b { font-weight: 600; color: var(--text-strong); }
+.prof-card header span { color: var(--text-muted); font-size: 10.5px; font-family: var(--font-mono); }
+.prof-card dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: 11px; }
+.prof-card dt { color: var(--text-muted); }
+.prof-card dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.prof-bars { display: flex; gap: 2px; height: 14px; align-items: flex-end; margin-top: 6px; }
+.prof-bars i { flex: 1; background: var(--accent); opacity: 0.72; border-radius: 1px 1px 0 0; }
+
+/* Barrier / Rollback / Dry-Run Summary Surface */
+.barrier-view { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; background: var(--canvas); display: flex; flex-direction: column; gap: 10px; }
+.vbanner {
+  display: flex; align-items: flex-start; gap: 9px; padding: 9px 12px;
+  border-radius: var(--rad-sm); border: 1px solid var(--border); font-size: 12px; line-height: 17px;
+}
+.vbanner.err { background: var(--error-surface); border-color: color-mix(in srgb, var(--error) 45%, transparent); color: var(--error-surface-text); }
+.vbanner.warn { background: var(--warning-surface); border-color: color-mix(in srgb, var(--warning) 45%, transparent); color: var(--warning-surface-text); }
+.vbanner.ok { background: var(--success-surface); border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success-text); }
+.vbanner.info { background: var(--accent-surface); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--text-accent); }
+.barrier-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.bcard {
+  padding: 9px 11px;
+  border-radius: var(--rad-sm); border: 1px solid var(--border); background: var(--raised);
+  display: flex; flex-direction: column; gap: 5px; font-size: 12px;
+}
+.bcard.is-err { border-color: color-mix(in srgb, var(--error) 55%, var(--border)); }
+.bcard-top { display: flex; align-items: center; gap: 6px; }
+.bcard-top .bdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.bcard-top strong { color: var(--text-strong); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bcard-state { font-size: 11px; font-weight: 600; }
+.bcard-detail { font-size: 11.5px; color: var(--text-muted); line-height: 16px; }
+.bcard-detail code { font-family: var(--font-mono); color: var(--text-secondary); }
+.bcard-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 2px; font-size: 11px; color: var(--text-secondary); }
+.bcard-link { color: var(--text-accent); font-size: 11px; font-weight: 500; text-decoration: underline; margin-left: auto; }
+.bprog { height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; margin-top: 2px; }
+.bprog i { display: block; height: 100%; border-radius: 2px; transition: width 260ms var(--ease); }
+.grid-notice {
+  display: flex; align-items: center; gap: 7px; flex: none; padding: 5px 10px;
+  border-bottom: 1px solid var(--border); font-size: 11.5px; line-height: 16px;
+}
+.grid-notice.warn { background: var(--warning-surface); color: var(--warning-surface-text); }
+.grid-notice.info { background: var(--accent-surface); color: var(--text-accent); }
+.stmt-detect {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 9px;
+  border-radius: var(--rad-sm); background: var(--panel); border: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-secondary);
+}
+.stmt-tag {
+  padding: 0 6px; height: 18px; line-height: 17px; border-radius: 3px; font-size: 10.5px; font-weight: 600;
+  background: var(--tonal-fill); border: 1px solid var(--border-strong); color: var(--text-strong);
+}
+
+/* Collapsible Messages Strip */
+.msg-strip { flex: none; border-top: 1px solid var(--border); background: var(--chrome); display: flex; flex-direction: column; }
+.msg-strip-head {
+  height: 25px; padding: 0 8px; display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--text-muted); border-bottom: 1px solid var(--border-subtle);
+}
+.msg-pill {
+  height: 18px; padding: 0 7px; border-radius: var(--rad-pill); font-size: 11px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text-muted);
+}
+.msg-pill:hover { color: var(--text); border-color: var(--control-border); }
+.msg-pill.is-on { background: var(--selection); border-color: var(--accent); color: var(--text-accent); font-weight: 600; }
+.msg-body {
+  max-height: 86px; overflow-y: auto; padding: 5px 10px;
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 17px; background: var(--panel);
+}
+.msg-strip.is-collapsed .msg-body { display: none; }
+.msg-line { display: flex; gap: 8px; padding: 1px 0; }
+.msg-line .msrc { flex: none; min-width: 112px; color: var(--text-muted); }
+.msg-line.is-err { color: var(--error); cursor: pointer; }
+.msg-line.is-err:hover { text-decoration: underline; }
+.msg-line.is-coord { color: var(--text-accent); }
+
+/* ============================================================================
+   5. STATUS BAR
+   ============================================================================ */
+.wb-statusbar {
+  height: var(--h-status); flex-shrink: 0;
+  background: var(--chrome); border-top: 1px solid var(--border);
+  padding: 0 10px; display: flex; align-items: center; gap: 12px;
+  font-size: 11px; color: var(--text-muted); user-select: none; font-variant-numeric: tabular-nums;
+}
+.wb-statusbar.is-running { background: var(--accent-surface); color: var(--text-accent); }
+.wb-statusbar .sb-sep { width: 1px; height: 12px; background: var(--separator); }
+.wb-statusbar .sb-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.wb-statusbar .sb-item { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ============================================================================
+   6. OVERLAYS: CONTEXT MENU, POPOVERS, RUN MODE DIALOG, TOAST
+   ============================================================================ */
+.vmenu {
+  position: absolute; z-index: 80; min-width: 235px; padding: 4px 0;
+  background: var(--overlay); color: var(--text);
+  border: 1px solid var(--separator); border-radius: var(--rad-sm);
+  box-shadow: var(--shadow-menu); font-size: 12px; user-select: none; display: none;
+}
+.vmenu.is-open { display: block; }
+.vmenu button {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 12px 0 9px;
+  text-align: left; color: var(--text);
+}
+.vmenu button:hover:not(:disabled) { background: var(--selection-strong); color: var(--text-strong); }
+.vmenu button.is-primary-item { font-weight: 600; color: var(--text-strong); }
+.vmenu button small { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.vmenu hr { margin: 4px 0; border: 0; border-top: 1px solid var(--separator); }
+.vmenu .mh { padding: 3px 10px 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+
+/* Target Picker Popover & Compare Popover */
+.vpopover {
+  position: absolute; z-index: 70; width: 360px;
+  background: var(--overlay); border: 1px solid var(--control-border);
+  border-radius: 6px; box-shadow: var(--shadow-popover); display: none;
+  font-size: 12px; overflow: hidden;
+}
+.vpopover.is-open { display: block; }
+.vpop-head {
+  padding: 8px 10px; background: var(--chrome); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.vpop-head strong { font-size: 12px; color: var(--text-strong); }
+.vpop-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 7px; max-height: 290px; overflow-y: auto; }
+.vpop-foot {
+  padding: 7px 10px; background: var(--chrome); border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+}
+.trow {
+  display: flex; align-items: center; gap: 7px; padding: 4px 6px;
+  border-radius: var(--rad-sm); border: 1px solid var(--border); background: var(--panel);
+}
+.trow select {
+  margin-left: auto; height: 22px; padding: 0 6px; border-radius: 3px;
+  background: var(--input); border: 1px solid var(--input-border); font-size: 11.5px; color: var(--text);
+}
+
+/* Modal Dialog (Run Mode Prompt) */
+.modal-scrim {
+  position: absolute; inset: 0; z-index: 90; background: var(--backdrop);
+  display: none; place-items: center; padding: 16px;
+}
+.modal-scrim.is-open { display: grid; }
+.vdialog {
+  width: min(560px, 100%); max-height: calc(100% - 20px);
+  background: var(--overlay); border: 1px solid var(--control-border);
+  border-radius: var(--rad-lg); box-shadow: 0 20px 56px rgba(0, 0, 0, 0.62);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.vdialog-head {
+  height: 38px; padding: 0 10px 0 14px; background: var(--chrome); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.vdialog-head h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-strong); flex: 1; }
+.vdialog-body { padding: 14px; overflow-y: auto; display: flex; flex-direction: column; gap: 11px; }
+.vdialog-foot {
+  padding: 10px 14px; background: var(--chrome); border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.mode-card {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+  border-radius: 6px; border: 1px solid var(--border-strong); background: var(--panel);
+  cursor: pointer; transition: border-color 90ms var(--ease), background 90ms var(--ease);
+}
+.mode-card:hover:not(.is-disabled) { border-color: var(--control-border-hover); background: var(--raised); }
+.mode-card.is-picked {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--selection) 72%, var(--panel));
+}
+.mode-card.is-disabled { opacity: 0.52; cursor: not-allowed; background: var(--chrome); }
+.mode-card input[type="radio"] { margin: 2px 0 0; accent-color: var(--accent); }
+.mode-card-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mode-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mode-card-head strong { font-size: 12.5px; color: var(--text-strong); }
+.mode-pill {
+  font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
+  border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--tonal-fill);
+}
+.mode-pill.ok { border-color: color-mix(in srgb, var(--success) 45%, transparent); color: var(--success-text); background: var(--success-surface); }
+.mode-pill.warn { border-color: color-mix(in srgb, var(--warning) 45%, transparent); color: var(--warning-surface-text); background: var(--warning-surface); }
+.mode-desc { font-size: 12px; color: var(--text-secondary); line-height: 17px; }
+.mode-caveat { font-size: 11px; color: var(--text-muted); line-height: 15px; }
+.dialog-checks { display: flex; flex-direction: column; gap: 6px; padding-top: 2px; font-size: 12px; color: var(--text-secondary); }
+.dialog-checks label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.dialog-checks input { accent-color: var(--accent); margin: 0; }
+.btn-v {
+  height: var(--h-control); padding: 0 11px; border-radius: var(--rad-sm); font-size: 12px; font-weight: 500;
+  border: 1px solid var(--control-border); background: var(--raised); color: var(--text);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.btn-v:hover:not(:disabled) { background: var(--hover); border-color: var(--control-border-hover); color: var(--text-strong); }
+.btn-v.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn-v.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* Toast inside workbench */
+.vtoast {
+  position: absolute; right: 14px; bottom: 34px; z-index: 95;
+  max-width: 380px; padding: 8px 12px; border-radius: 6px;
+  background: var(--overlay); border: 1px solid var(--control-border);
+  box-shadow: var(--shadow-popover); font-size: 12px; color: var(--text);
+  display: none; align-items: center; gap: 8px;
+}
+.vtoast.is-open { display: flex; }
+</style>
+</head>
+<body>
+<div class="lab-shell">
+  <!-- Lab Control Bar -->
+  <div class="lab-topbar">
+    <div class="lab-brand">
+      <div class="lab-brand-mark">
+        <svg class="ic" viewBox="0 0 16 16"><path d="M13.5 4c0 .97-2.46 1.75-5.5 1.75S2.5 4.97 2.5 4 4.96 2.25 8 2.25s5.5.78 5.5 1.75ZM2.5 4v8c0 .97 2.46 1.75 5.5 1.75s5.5-.78 5.5-1.75V4M5.5 7.5 8 11.5l2.5-4"/></svg>
+      </div>
+      <span class="lab-brand-title">Varia · Multi-Server Query Execution</span>
+      <span class="lab-brand-sub">Interactive Mock</span>
+    </div>
+
+    <div class="lab-seg" role="group" aria-label="Quick Scenarios">
+      <button type="button" data-preset="mssql-select" class="is-active">SQL · SELECT + Compare</button>
+      <button type="button" data-preset="mssql-mixed">SQL · Mixed DDL+DML+SELECT</button>
+      <button type="button" data-preset="mssql-ddl-rb">SQL · DDL Rollback</button>
+      <button type="button" data-preset="bq-dml">BQ · DML Tx</button>
+      <button type="button" data-preset="bq-ddl">BQ · Mixed/DDL Guard</button>
+      <button type="button" data-preset="cross-engine">SQL + BigQuery</button>
+    </div>
+
+    <div class="lab-spacer"></div>
+
+    <div class="lab-seg" role="group" aria-label="Theme">
+      <button type="button" data-theme-btn="dark" class="is-active">Varia Dark</button>
+      <button type="button" data-theme-btn="light">Varia Light</button>
+    </div>
+  </div>
+
+  <div class="lab-subbar">
+    <span><b>Try it live:</b></span>
+    <span><span class="lab-hint-kbd">Ctrl+Click</span> top-level servers in Object Explorer</span>
+    <span>· <span class="lab-hint-kbd">Right-Click</span> a selected server for the multi-server menu</span>
+    <span>· Click <b>Execute (F5)</b> to test the Run Mode dialog &amp; live execution</span>
+    <span>· Click <b>Compare…</b> or column headers in <b>Combined</b> to sort/profile</span>
+  </div>
+
+  <!-- ======================================================================
+       VARIA SQL MANAGER WORKBENCH WINDOW
+       ====================================================================== -->
+  <div class="wb-viewport">
+    <div class="wb-window" id="wbWindow">
+      <!-- 1. TITLE BAR -->
+      <header class="wb-titlebar">
+        <div class="wb-tb-left">
+          <div class="wb-brand-icon" title="Varia SQL Manager">
+            <svg class="ic" viewBox="0 0 16 16"><path d="M13.5 4c0 .97-2.46 1.75-5.5 1.75S2.5 4.97 2.5 4 4.96 2.25 8 2.25s5.5.78 5.5 1.75ZM2.5 4v8c0 .97 2.46 1.75 5.5 1.75s5.5-.78 5.5-1.75V4M5.5 7.5 8 11.5l2.5-4"/></svg>
+          </div>
+          <nav class="wb-menus">
+            <button type="button">File</button>
+            <button type="button">Edit</button>
+            <button type="button">View</button>
+            <button type="button">Query</button>
+            <button type="button">Tools</button>
+            <button type="button">Window</button>
+            <button type="button">Help</button>
+          </nav>
+        </div>
+        <div class="wb-tb-center">
+          <button type="button" class="wb-cmd-centre" title="Command Palette">
+            <svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            <span>Varia SQL Manager — Search commands, servers, objects…</span>
+            <span class="wb-kbd">Ctrl+K</span>
+          </button>
+        </div>
+        <div class="wb-tb-actions">
+          <button type="button" class="wb-icon-btn" title="Connect…">
+            <svg class="ic" viewBox="0 0 16 16"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2a3.5 3.5 0 0 1-7 0v-2ZM8 11v2.5"/></svg>
+          </button>
+          <button type="button" class="wb-icon-btn" title="New Query (Ctrl+N)">
+            <svg class="ic" viewBox="0 0 16 16"><path d="M4.5 2h5l3 3v9h-8V2ZM9.5 2v3h3M8 7.5v4M6 9.5h4"/></svg>
+          </button>
+          <span class="wb-tb-sep"></span>
+          <button type="button" class="wb-icon-btn" title="Settings">
+            <svg class="ic" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.3M8 12.5v1.3M2.2 8h1.3M12.5 8h1.3M3.9 3.9l.9.9M11.2 11.2l.9.9M12.1 3.9l-.9.9M4.8 11.2l-.9.9"/></svg>
+          </button>
+        </div>
+        <div class="wb-win-controls" aria-hidden="true">
+          <span>&#x2014;</span><span>&#x25A1;</span><span class="win-close">&#x2715;</span>
+        </div>
+      </header>
+
+      <!-- 2. MAIN WORKBENCH SPLIT -->
+      <div class="wb-main-split">
+        <!-- OBJECT EXPLORER -->
+        <aside class="wb-oe" id="oePane">
+          <div class="wb-oe-header">
+            <span class="wb-oe-title">Object Explorer</span>
+            <div class="wb-oe-tools">
+              <button type="button" class="wb-icon-btn" title="Connect…">
+                <svg class="ic sm" viewBox="0 0 16 16"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2a3.5 3.5 0 0 1-7 0v-2ZM8 11v2.5"/></svg>
+              </button>
+              <button type="button" class="wb-icon-btn" id="oeRefreshBtn" title="Refresh">
+                <svg class="ic sm" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.4-3.5M13 2.5v3h-3"/></svg>
+              </button>
+              <button type="button" class="wb-icon-btn" id="oeClearMultiBtn" title="Clear Multi-Selection">
+                <svg class="ic sm" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="wb-oe-search-row">
+            <div class="wb-oe-search-box">
+              <svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13.5 13.5"/></svg>
+              <input id="oeFilterInput" type="text" placeholder="Filter connections…" />
+            </div>
+          </div>
+          <div class="oe-multi-bar" id="oeMultiBar">
+            <span class="grow" id="oeMultiLabel">3 SQL Servers selected</span>
+            <button type="button" class="btn-go" id="oeOpenMultiBtn">New Query</button>
+            <button type="button" class="btn-clear" id="oeBarClearBtn" title="Clear selection">✕</button>
+          </div>
+          <div class="wb-oe-tree" id="oeTree"></div>
+          <div class="wb-oe-footer">
+            <span id="oeFooterLeft">5 connections · Ctrl+Click to multi-select</span>
+            <span id="oeFooterRight">Top-level</span>
+          </div>
+        </aside>
+
+        <div class="wb-splitter-v" id="vSplitter"></div>
+
+        <!-- RIGHT WORKSPACE -->
+        <main class="wb-right">
+          <!-- DOCUMENT TAB STRIP -->
+          <div class="wb-tab-shelf" id="docTabShelf" role="tablist"></div>
+
+          <!-- QUERY BAR -->
+          <div class="wb-querybar" id="queryBar"></div>
+
+          <!-- EDITOR SECTION -->
+          <section class="wb-editor-section" id="editorSection"></section>
+
+          <div class="wb-splitter-h" id="hSplitter"></div>
+
+          <!-- OUTPUT / RESULTS PANE -->
+          <section class="wb-output" id="outputPane">
+            <div class="otb" id="outputToolbar"></div>
+            <div class="results-main" id="resultsMain"></div>
+            <div class="msg-strip" id="msgStrip"></div>
+            <!-- Compare Popover (anchored to Compare button inside Output Pane) -->
+            <div class="vpopover" id="comparePopover" style="top: 38px; left: 170px;"></div>
+          </section>
+        </main>
+
+        <!-- Target & Database Picker Popover (anchored under Query Bar Target Pill) -->
+        <div class="vpopover" id="targetPopover" style="top: 78px; right: 10px;"></div>
+      </div>
+
+      <!-- 3. STATUS BAR -->
+      <footer class="wb-statusbar" id="statusBar"></footer>
+
+      <!-- CONTEXT MENU (Object Explorer Right-Click) -->
+      <div class="vmenu" id="ctxMenu" role="menu"></div>
+
+      <!-- RUN MODE MODAL DIALOG -->
+      <div class="modal-scrim" id="runModalScrim">
+        <div class="vdialog" role="dialog" aria-modal="true" id="runModal"></div>
+      </div>
+
+      <!-- TOAST -->
+      <div class="vtoast" id="vToast"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =============================================================================
+// SVG ICON LIBRARY (exact paths from src/shared/icons.ts)
+// =============================================================================
+const IC = {
+  server: `<svg class="ic" viewBox="0 0 16 16"><path d="M3.5 2.5h9a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1ZM3.5 9.5h9a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1ZM4.5 4.5h1M4.5 11.5h1"/></svg>`,
+  bigquery: `<svg class="ic" viewBox="0 0 16 16"><path d="M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0ZM10.2 10.2l3.3 3.3M5.5 8.5v-1M7.5 8.5v-3M9.5 8.5v-2"/></svg>`,
+  database: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M13.5 4c0 .97-2.46 1.75-5.5 1.75S2.5 4.97 2.5 4 4.96 2.25 8 2.25s5.5.78 5.5 1.75ZM2.5 4v8c0 .97 2.46 1.75 5.5 1.75s5.5-.78 5.5-1.75V4M2.5 8c0 .97 2.46 1.75 5.5 1.75s5.5-.78 5.5-1.75"/></svg>`,
+  folder: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M2 3.5h4.2l1.3 1.5H14v8H2v-9.5Z"/></svg>`,
+  table: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM2.5 6.5h11M2.5 10.5h11M6.5 6.5v7"/></svg>`,
+  play: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M4.5 3.2 12.5 8l-8 4.8V3.2Z" fill="currentColor" stroke="none"/></svg>`,
+  stop: `<svg class="ic sm" viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" stroke="none"/></svg>`,
+  compare: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M3 4.5h6.5M7 2.5l2.5 2-2.5 2M13 11.5H6.5M9 9.5l-2.5 2 2.5 2"/></svg>`,
+  pivot: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M3.5 2.5h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM2.5 6.5h11M6.5 2.5v11M8.5 10.5h3M10 9l1.5 1.5-1.5 1.5"/></svg>`,
+  profile: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M3 13V7M6.5 13V4M10 13V8.5M13.5 13V5.5"/></svg>`,
+  layers: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M8 2.2 14 5.5 8 8.8 2 5.5 8 2.2ZM2 8.5l6 3.3 6-3.3M2 11.3l6 3.2 6-3.2"/></svg>`,
+  check: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M3.2 8.4 6.5 11.7 13 4.6"/></svg>`,
+  err: `<svg class="ic sm" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4"/></svg>`,
+  warn: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2L8 2.5ZM8 6.5v3M8 11.2v.4"/></svg>`,
+  rollback: `<svg class="ic sm" viewBox="0 0 16 16"><path d="M3.5 6.5H10a3.2 3.2 0 1 1 0 6.4H6.5M6 4 3.5 6.5 6 9"/></svg>`,
+  chevR: `<svg class="ic xs" viewBox="0 0 16 16"><path d="M6 3.5 10.5 8 6 12.5"/></svg>`,
+  chevD: `<svg class="ic xs" viewBox="0 0 16 16"><path d="M3.5 6 8 10.5 12.5 6"/></svg>`,
+  lock: `<svg class="ic xs" viewBox="0 0 16 16"><rect x="3.5" y="7" width="9" height="6.5" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>`,
+  spin: `<svg class="ic sm os-ic" viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-2.5-4.3"/></svg>`,
+  close: `<svg class="ic xs" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>`,
+  search: `<svg class="ic sm" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2"/><path d="M10.2 10.2 13.5 13.5"/></svg>`,
+  key: `<svg class="ic xs" viewBox="0 0 16 16"><path d="M7 7.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM7 7.5h6.5M11.5 7.5v2M13.5 7.5v1.5"/></svg>`,
+  split: `<svg class="ic sm" viewBox="0 0 16 16"><rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M8 2.5v11"/></svg>`
+}
+
+// =============================================================================
+// CONNECTIONS MODEL (Top-level only for Ctrl+Click)
+// =============================================================================
+const CONNECTIONS = [
+  {
+    id: 'sql-prod', name: 'prod-sql-01', provider: 'sqlserver', env: 'prod', envLabel: 'PROD',
+    color: 'var(--red)', host: 'prod-sql-01.corp.local · SQL 2022', defaultDb: 'SalesDB',
+    dbs: ['SalesDB', 'Reporting', 'master'], expanded: true,
+    children: ['SalesDB', 'Reporting']
+  },
+  {
+    id: 'sql-stage', name: 'stage-sql-01', provider: 'sqlserver', env: 'stage', envLabel: 'STAGE',
+    color: 'var(--blue)', host: 'stage-sql-01.corp.local · SQL 2022', defaultDb: 'SalesDB',
+    dbs: ['SalesDB', 'Reporting', 'master'], expanded: false,
+    children: ['SalesDB', 'Reporting']
+  },
+  {
+    id: 'sql-dev', name: 'dev-sql-01', provider: 'sqlserver', env: 'dev', envLabel: 'DEV',
+    color: 'var(--green)', host: 'dev-sql-01.corp.local · SQL 2022', defaultDb: 'SalesDB',
+    dbs: ['SalesDB', 'Sandbox', 'master'], expanded: false,
+    children: ['SalesDB', 'Sandbox']
+  },
+  {
+    id: 'bq-prod', name: 'analytics-prod', provider: 'bigquery', env: 'prod', envLabel: 'PROD',
+    color: 'var(--orange)', host: 'BigQuery · US · adc@corp.io', defaultDb: 'sales_dw',
+    dbs: ['sales_dw', 'finance_mart', '<no default dataset>'], expanded: false,
+    children: ['sales_dw', 'finance_mart']
+  },
+  {
+    id: 'bq-stage', name: 'analytics-stage', provider: 'bigquery', env: 'stage', envLabel: 'STAGE',
+    color: 'var(--purple)', host: 'BigQuery · US · adc@corp.io', defaultDb: 'sales_dw',
+    dbs: ['sales_dw', 'qa_scratch', '<no default dataset>'], expanded: false,
+    children: ['sales_dw', 'qa_scratch']
+  }
+]
+const connById = id => CONNECTIONS.find(c => c.id === id)
+
+// =============================================================================
+// WORKBENCH TABS (Pre-populated realistic multi-server & cross-engine tabs)
+// =============================================================================
+const TABS = [
+  {
+    id: 'tab-mssql-select',
+    name: 'SchemaAudit.sql',
+    mode: 'same-sqlserver',
+    targets: [
+      { id: 'sql-prod', db: 'SalesDB', enabled: true },
+      { id: 'sql-stage', db: 'SalesDB', enabled: true },
+      { id: 'sql-dev', db: 'SalesDB', enabled: true }
+    ],
+    scriptKind: 'select',
+    sql: [
+      `<span class="cmt">-- #Name="Schema Versions"</span>`,
+      `<span class="kw">SELECT</span> s.name <span class="kw">AS</span> SchemaName, <span class="fn">COUNT</span>(t.object_id) <span class="kw">AS</span> TableCount,`,
+      `       m.MigrationId, <span class="fn">SUM</span>(p.rows) <span class="kw">AS</span> RowEstimate`,
+      `<span class="kw">FROM</span> sys.schemas s <span class="kw">JOIN</span> sys.tables t <span class="kw">ON</span> t.schema_id = s.schema_id`,
+      `     <span class="kw">JOIN</span> sys.partitions p <span class="kw">ON</span> p.object_id = t.object_id <span class="kw">AND</span> p.index_id <span class="op">&lt;=</span> <span class="num">1</span>`,
+      `     <span class="kw">LEFT JOIN</span> dbo.SchemaMigrations m <span class="kw">ON</span> m.SchemaName = s.name`,
+      `<span class="kw">GROUP BY</span> s.name, m.MigrationId;`,
+      ``,
+      `<span class="cmt">-- #Name="Feature Flags"</span>`,
+      `<span class="kw">SELECT</span> FlagKey, IsEnabled, UpdatedBy <span class="kw">FROM</span> dbo.AppFlags <span class="kw">ORDER BY</span> FlagKey;`
+    ],
+    runState: 'done-ok',
+    execMode: 'faf',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'combined',
+    activeStmt: 0,
+    profileOpen: false,
+    diffLayout: 'oneRow',
+    diffChangesOnly: false,
+    diffPair: ['sql-prod', 'sql-stage'],
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    results: {
+      statements: ['Schema Versions', 'Feature Flags'],
+      perServer: {
+        'sql-prod': {
+          status: 'ok', ms: 142,
+          sets: [
+            {
+              cols: [{ name: 'SchemaName', num: false }, { name: 'TableCount', num: true }, { name: 'MigrationId', num: false }, { name: 'RowEstimate', num: true }],
+              rows: [
+                ['dbo', 42, '20261124_AddOrderIdx', 1482910],
+                ['billing', 14, '20261120_InvoiceTax', 312004],
+                ['audit', 6, '20261101_Baseline', 9820441]
+              ]
+            },
+            {
+              cols: [{ name: 'FlagKey', num: false }, { name: 'IsEnabled', num: true }, { name: 'UpdatedBy', num: false }],
+              rows: [
+                ['EnableFastPath', 1, 'deploy_svc'],
+                ['StrictTaxMode', 1, 'deploy_svc']
+              ]
+            }
+          ]
+        },
+        'sql-stage': {
+          status: 'ok', ms: 189,
+          sets: [
+            {
+              cols: [{ name: 'SchemaName', num: false }, { name: 'TableCount', num: true }, { name: 'MigrationId', num: false }, { name: 'RowEstimate', num: true }],
+              rows: [
+                ['dbo', 42, '20261124_AddOrderIdx', 412300],
+                ['billing', 15, '20261125_CreditMemo', 88120],
+                ['audit', 6, '20261101_Baseline', 1205110]
+              ]
+            },
+            {
+              cols: [{ name: 'FlagKey', num: false }, { name: 'IsEnabled', num: true }, { name: 'UpdatedBy', num: false }],
+              rows: [
+                ['EnableFastPath', 1, 'deploy_svc'],
+                ['StrictTaxMode', 0, 'qa_lead']
+              ]
+            }
+          ]
+        },
+        'sql-dev': {
+          status: 'ok', ms: 108,
+          sets: [
+            {
+              cols: [{ name: 'SchemaName', num: false }, { name: 'TableCount', num: true }, { name: 'MigrationId', num: false }, { name: 'RowEstimate', num: true }],
+              rows: [
+                ['dbo', 43, '20261125_DraftOrders', 14220],
+                ['billing', 15, '20261125_CreditMemo', 4102],
+                ['audit', 6, '20261101_Baseline', 22900]
+              ]
+            },
+            {
+              cols: [{ name: 'FlagKey', num: false }, { name: 'IsEnabled', num: true }, { name: 'UpdatedBy', num: false }],
+              rows: [
+                ['EnableFastPath', 0, 'dev_alex'],
+                ['StrictTaxMode', 0, 'dev_alex']
+              ]
+            }
+          ]
+        }
+      },
+      messages: [
+        { src: 'coord', text: 'Fire and Forget completed across 3 SQL Servers in 0.19 s. Combined view built automatically (schemas match).' },
+        { src: 'sql-prod', text: '(3 rows affected) · (2 rows affected) · 0.14 s · SalesDB' },
+        { src: 'sql-stage', text: '(3 rows affected) · (2 rows affected) · 0.19 s · SalesDB' },
+        { src: 'sql-dev', text: '(3 rows affected) · (2 rows affected) · 0.11 s · SalesDB' }
+      ]
+    }
+  },
+  {
+    id: 'tab-mssql-mixed',
+    name: 'Mixed_Migration.sql',
+    mode: 'same-sqlserver',
+    targets: [
+      { id: 'sql-prod', db: 'SalesDB', enabled: true },
+      { id: 'sql-stage', db: 'SalesDB', enabled: true },
+      { id: 'sql-dev', db: 'SalesDB', enabled: true }
+    ],
+    scriptKind: 'mixed-mssql',
+    detectedStatements: ['3 batches', '1 DDL (ALTER TABLE)', '1 DML (UPDATE)', '2 SELECTs (1 conditional)'],
+    sql: [
+      `<span class="cmt">-- Batch 1 (DDL): Add PriorityTier column if missing</span>`,
+      `<span class="kw">IF</span> <span class="fn">COL_LENGTH</span>(<span class="str">'dbo.Orders'</span>, <span class="str">'PriorityTier'</span>) <span class="kw">IS NULL</span>`,
+      `    <span class="kw">ALTER TABLE</span> dbo.Orders <span class="kw">ADD</span> PriorityTier <span class="kw">tinyint NULL</span>;`,
+      `<span class="kw">GO</span>`,
+      `<span class="cmt">-- Batch 2 (DML): Backfill high-value orders</span>`,
+      `<span class="kw">UPDATE</span> dbo.Orders <span class="kw">SET</span> PriorityTier = <span class="num">1</span> <span class="kw">WHERE</span> NetAmount <span class="op">&gt;=</span> <span class="num">5000</span>;`,
+      `<span class="kw">GO</span>`,
+      `<span class="cmt">-- Batch 3 (Multi-Statement Verification SELECTs)</span>`,
+      `<span class="cmt">-- #Name="Tier Breakdown"</span>`,
+      `<span class="kw">SELECT</span> PriorityTier, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> Orders, <span class="fn">SUM</span>(NetAmount) <span class="kw">AS</span> TotalAmount <span class="kw">FROM</span> dbo.Orders <span class="kw">GROUP BY</span> PriorityTier;`,
+      `<span class="cmt">-- #Name="Audit Warnings" (conditional IF branch; dev-sql-01 also has LegacyNote column)</span>`,
+      `<span class="kw">IF EXISTS</span> (<span class="kw">SELECT</span> <span class="num">1</span> <span class="kw">FROM</span> dbo.OrderFlags <span class="kw">WHERE</span> IsLegacy = <span class="num">1</span>) <span class="kw">SELECT</span> * <span class="kw">FROM</span> dbo.OrderFlags <span class="kw">WHERE</span> IsLegacy = <span class="num">1</span>;`
+    ],
+    runState: 'done-ok',
+    execMode: 'tx',
+    rolledBackPreview: false,
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'summary',
+    activeStmt: 0,
+    profileOpen: false,
+    diffLayout: 'oneRow',
+    diffChangesOnly: false,
+    diffPair: ['sql-prod', 'sql-stage'],
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    barrier: {
+      tone: 'ok',
+      headline: 'Coordinated Transaction committed across 3 of 3 SQL Servers — DDL, DML & 5 result sets completed',
+      detail: 'All 3 batches (ALTER TABLE, UPDATE, and verification SELECTs) ran inside one coordinated transaction per server. Click any server or Combined tab to inspect the SELECT results.',
+      cards: [
+        { id: 'sql-prod', state: 'Committed', tone: 'ok', pct: 100, detail: 'Batch 1: Column existed · Batch 2: 412 rows updated · Batch 3: 1 result set (Audit Warnings branch skipped).', meta: '3/3 batches · 1 set · 0.31 s', sets: 1 },
+        { id: 'sql-stage', state: 'Committed', tone: 'ok', pct: 100, detail: 'Batch 1: ALTER TABLE OK · Batch 2: 96 rows updated · Batch 3: 2 result sets (3 cols on Audit Warnings).', meta: '3/3 batches · 2 sets · 0.38 s', sets: 2 },
+        { id: 'sql-dev', state: 'Committed', tone: 'ok', pct: 100, detail: 'Batch 1: ALTER TABLE OK · Batch 2: 14 rows updated · Batch 3: 2 result sets (4 cols on Audit Warnings — extra LegacyNote).', meta: '3/3 batches · 2 sets · 0.22 s', sets: 2 }
+      ]
+    },
+    results: {
+      statements: ['Tier Breakdown', 'Audit Warnings'],
+      perServer: {
+        'sql-prod': {
+          status: 'ok', ms: 310,
+          sets: [
+            {
+              cols: [{ name: 'PriorityTier', num: true }, { name: 'Orders', num: true }, { name: 'TotalAmount', num: true }],
+              rows: [
+                [1, 412, 3190440.00],
+                [null, 14408, 1912550.25]
+              ]
+            },
+            null // Conditional IF EXISTS branch did not fire on prod-sql-01!
+          ]
+        },
+        'sql-stage': {
+          status: 'ok', ms: 380,
+          sets: [
+            {
+              cols: [{ name: 'PriorityTier', num: true }, { name: 'Orders', num: true }, { name: 'TotalAmount', num: true }],
+              rows: [
+                [1, 96, 742100.00],
+                [null, 4120, 512004.50]
+              ]
+            },
+            {
+              cols: [{ name: 'OrderId', num: true }, { name: 'FlagCode', num: false }, { name: 'DetectedAt', num: false }],
+              rows: [
+                [88412, 'LEGACY_TAX', '2026-11-24 19:10:00'],
+                [88419, 'MANUAL_HOLD', '2026-11-25 08:22:14']
+              ]
+            }
+          ]
+        },
+        'sql-dev': {
+          status: 'ok', ms: 220,
+          sets: [
+            {
+              cols: [{ name: 'PriorityTier', num: true }, { name: 'Orders', num: true }, { name: 'TotalAmount', num: true }],
+              rows: [
+                [1, 14, 108400.00],
+                [null, 408, 49200.00]
+              ]
+            },
+            {
+              cols: [{ name: 'OrderId', num: true }, { name: 'FlagCode', num: false }, { name: 'DetectedAt', num: false }, { name: 'LegacyNote', num: false }],
+              rows: [
+                [1021, 'LEGACY_TAX', '2026-11-25 10:04:00', 'Seeded by QA fixture'],
+                [1024, 'MISSING_SKU', '2026-11-25 11:15:32', 'Pending backfill']
+              ]
+            }
+          ]
+        }
+      },
+      messages: [
+        { src: 'coord', text: 'Started Coordinated Transaction across 3 SQL Servers (3 batches: 1 DDL, 1 DML, 2 SELECTs).' },
+        { src: 'sql-prod', text: 'Batch 1 OK · Batch 2: (412 rows affected) · Batch 3: Tier Breakdown (2 rows); Audit Warnings branch skipped.' },
+        { src: 'sql-stage', text: 'Batch 1: ALTER TABLE OK · Batch 2: (96 rows affected) · Batch 3: Tier Breakdown (2 rows), Audit Warnings (2 rows).' },
+        { src: 'sql-dev', text: 'Batch 1: ALTER TABLE OK · Batch 2: (14 rows affected) · Batch 3: Tier Breakdown (2 rows), Audit Warnings (2 rows, +LegacyNote).' },
+        { src: 'coord', text: 'All 3 servers reached commit barrier. COMMIT TRANSACTION confirmed on 3/3 servers (0.38 s).' }
+      ]
+    }
+  },
+  {
+    id: 'tab-mssql-ddl',
+    name: 'Deploy_IX_Orders.sql',
+    mode: 'same-sqlserver',
+    targets: [
+      { id: 'sql-prod', db: 'SalesDB', enabled: true },
+      { id: 'sql-stage', db: 'SalesDB', enabled: true },
+      { id: 'sql-dev', db: 'SalesDB', enabled: true }
+    ],
+    scriptKind: 'ddl',
+    sql: [
+      `<span class="cmt">-- Roll out composite covering index across all SalesDB environments</span>`,
+      `<span class="kw">CREATE NONCLUSTERED INDEX</span> IX_Orders_StatusDate`,
+      `<span class="kw">ON</span> dbo.Orders (OrderStatus, OrderDate <span class="kw">DESC</span>)`,
+      `<span class="kw">INCLUDE</span> (CustomerId, NetAmount);`
+    ],
+    errLine: 2,
+    runState: 'done-rollback',
+    execMode: 'tx',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'barrier',
+    activeStmt: 0,
+    profileOpen: false,
+    diffLayout: 'oneRow',
+    diffChangesOnly: false,
+    diffPair: ['sql-prod', 'sql-stage'],
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    barrier: {
+      tone: 'err',
+      headline: 'Coordinated Transaction rolled back — 0 of 3 SQL Servers committed',
+      detail: `Phase 1 failed on dev-sql-01 (Msg 1913: Index 'IX_Orders_StatusDate' already exists on 'dbo.Orders'). Automatic ROLLBACK TRANSACTION confirmed on prod-sql-01 and stage-sql-01.`,
+      cards: [
+        { id: 'sql-prod', state: 'Rolled Back', tone: 'warn', pct: 100, detail: 'Phase 1 succeeded (210 ms) → held at commit barrier → ROLLBACK confirmed (@@TRANCOUNT = 0).' },
+        { id: 'sql-stage', state: 'Rolled Back', tone: 'warn', pct: 100, detail: 'Phase 1 succeeded (184 ms) → held at commit barrier → ROLLBACK confirmed (@@TRANCOUNT = 0).' },
+        { id: 'sql-dev', state: 'Failed (Phase 1)', tone: 'err', pct: 100, detail: `Msg 1913, Level 16, Line 2: Index 'IX_Orders_StatusDate' already exists on table 'dbo.Orders'.` }
+      ]
+    },
+    results: {
+      statements: [],
+      perServer: {},
+      messages: [
+        { src: 'coord', text: 'Started Coordinated Transaction across 3 SQL Servers (SET XACT_ABORT ON; BEGIN TRANSACTION).' },
+        { src: 'sql-prod', text: 'Phase 1 completed (0.21 s) — waiting at commit barrier…' },
+        { src: 'sql-stage', text: 'Phase 1 completed (0.18 s) — waiting at commit barrier…' },
+        { src: 'sql-dev', err: true, line: 2, text: `Msg 1913, Level 16, State 1, Line 2: The operation failed because an index or statistics with name 'IX_Orders_StatusDate' already exists on table 'dbo.Orders'.` },
+        { src: 'coord', text: 'Aborting commit barrier due to error on dev-sql-01. Sending ROLLBACK TRANSACTION to peers…' },
+        { src: 'sql-prod', text: 'ROLLBACK TRANSACTION confirmed (0.01 s). @@TRANCOUNT = 0.' },
+        { src: 'sql-stage', text: 'ROLLBACK TRANSACTION confirmed (0.01 s). @@TRANCOUNT = 0.' }
+      ]
+    }
+  },
+  {
+    id: 'tab-bq-dml',
+    name: 'BQ_TierBackfill.sql',
+    mode: 'same-bigquery',
+    targets: [
+      { id: 'bq-prod', db: 'sales_dw', enabled: true },
+      { id: 'bq-stage', db: 'sales_dw', enabled: true }
+    ],
+    scriptKind: 'dml',
+    bqCost: '118.4 MiB · < $0.01',
+    sql: [
+      `<span class="cmt">-- Multi-project BigQuery DML (eligible for Coordinated Session Transaction)</span>`,
+      `<span class="kw">UPDATE</span> sales_dw.customer_tiers`,
+      `<span class="kw">SET</span> tier = <span class="str">'GOLD'</span>, updated_at = <span class="fn">CURRENT_TIMESTAMP</span>()`,
+      `<span class="kw">WHERE</span> lifetime_spend <span class="op">&gt;=</span> <span class="num">10000</span> <span class="kw">AND</span> tier <span class="op">&lt;&gt;</span> <span class="str">'GOLD'</span>;`
+    ],
+    runState: 'done-barrier-ok',
+    execMode: 'tx',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'barrier',
+    activeStmt: 0,
+    profileOpen: false,
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    barrier: {
+      tone: 'ok',
+      headline: 'Coordinated Session Transaction committed on 2 of 2 BigQuery projects',
+      detail: 'Free pre-flight dry run passed on both projects before opening sessions. Total billed: 118.4 MiB (< $0.01).',
+      cards: [
+        { id: 'bq-prod', state: 'Committed', tone: 'ok', pct: 100, detail: 'Dry run: 84.2 MiB · 412 rows updated · COMMIT TRANSACTION confirmed (1.42 s).' },
+        { id: 'bq-stage', state: 'Committed', tone: 'ok', pct: 100, detail: 'Dry run: 34.2 MiB · 96 rows updated · COMMIT TRANSACTION confirmed (1.18 s).' }
+      ]
+    },
+    results: {
+      statements: [],
+      perServer: {},
+      messages: [
+        { src: 'coord', text: 'Pre-flight Dry Run passed across 2 BigQuery projects (0 bytes billed · Est. 118.4 MiB).' },
+        { src: 'bq-prod', text: 'Session started (US) · BEGIN TRANSACTION · (412 rows affected) · 84.2 MiB processed.' },
+        { src: 'bq-stage', text: 'Session started (US) · BEGIN TRANSACTION · (96 rows affected) · 34.2 MiB processed.' },
+        { src: 'coord', text: 'All targets reached barrier. COMMIT TRANSACTION confirmed on 2/2 projects.' }
+      ]
+    }
+  },
+  {
+    id: 'tab-bq-ddl',
+    name: 'BQ_MixedDeploy.sql',
+    mode: 'same-bigquery',
+    targets: [
+      { id: 'bq-prod', db: 'sales_dw', enabled: true },
+      { id: 'bq-stage', db: 'sales_dw', enabled: true }
+    ],
+    scriptKind: 'bq-ddl',
+    detectedStatements: ['1 permanent DDL (Line 2: CREATE VIEW)', '1 DML (Line 6: UPDATE)', '1 SELECT (Line 9)'],
+    bqCost: 'Dry Run · Free',
+    sql: [
+      `<span class="cmt">-- Mixed BigQuery script: permanent DDL + DML + verification SELECT</span>`,
+      `<span class="kw">CREATE OR REPLACE VIEW</span> sales_dw.v_active_orders <span class="kw">AS</span>`,
+      `<span class="kw">SELECT</span> order_id, customer_id, net_amount, order_date`,
+      `<span class="kw">FROM</span> sales_dw.fact_orders <span class="kw">WHERE</span> status = <span class="str">'ACTIVE'</span>;`,
+      ``,
+      `<span class="kw">UPDATE</span> sales_dw.deploy_log <span class="kw">SET</span> last_view_sync = <span class="fn">CURRENT_TIMESTAMP</span>() <span class="kw">WHERE</span> view_name = <span class="str">'v_active_orders'</span>;`,
+      ``,
+      `<span class="cmt">-- #Name="Active Order Totals"</span>`,
+      `<span class="kw">SELECT</span> <span class="fn">COUNT</span>(*) <span class="kw">AS</span> active_orders, <span class="fn">SUM</span>(net_amount) <span class="kw">AS</span> total_net <span class="kw">FROM</span> sales_dw.v_active_orders;`
+    ],
+    runState: 'done-dryrun-stop',
+    execMode: 'seq-dryrun',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'barrier',
+    activeStmt: 0,
+    profileOpen: false,
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    barrier: {
+      tone: 'warn',
+      headline: 'Pre-flight Dry Run caught an error before touching any project (0 mutations, $0.00 billed)',
+      detail: `Permanent DDL cannot run in a BigQuery transaction, so Varia validated every target with a free Dry Run first. analytics-stage is missing column 'status' — analytics-prod was NOT modified.`,
+      cards: [
+        { id: 'bq-prod', state: 'Dry Run Passed (Skipped)', tone: 'ok', pct: 100, detail: 'Dry run succeeded (0 B billed). Execution skipped because peer pre-flight failed.' },
+        { id: 'bq-stage', state: 'Dry Run Failed', tone: 'err', pct: 100, detail: `Unrecognized name: status at [5:7] in table sales_dw.fact_orders.` }
+      ]
+    },
+    results: {
+      statements: [],
+      perServer: {},
+      messages: [
+        { src: 'coord', text: 'Detected permanent BigQuery DDL (CREATE VIEW). Running free Pre-flight Dry Run on 2 projects before execution…' },
+        { src: 'bq-prod', text: 'Dry run OK (0 bytes billed).' },
+        { src: 'bq-stage', err: true, line: 5, text: 'Dry run failed [5:7]: Unrecognized name: status.' },
+        { src: 'coord', text: 'Stopped before executing any DDL. No project was modified.' }
+      ]
+    }
+  },
+  {
+    id: 'tab-cross',
+    name: 'Reconcile_Orders.sql',
+    mode: 'cross-engine',
+    crossEditorStyle: 'split', // 'split' or 'markers'
+    targets: [
+      { id: 'sql-prod', db: 'SalesDB', enabled: true },
+      { id: 'bq-prod', db: 'sales_dw', enabled: true }
+    ],
+    scriptKind: 'select',
+    bqCost: '42.8 MiB · < $0.01',
+    sqlMssql: [
+      `<span class="cmt">-- Transact-SQL · prod-sql-01 (SalesDB)</span>`,
+      `<span class="kw">SELECT</span>`,
+      `  RegionCode,`,
+      `  <span class="fn">COUNT</span>(*) <span class="kw">AS</span> OrderCount,`,
+      `  <span class="fn">SUM</span>(NetAmount) <span class="kw">AS</span> TotalRevenue,`,
+      `  <span class="fn">MAX</span>(UpdatedUtc) <span class="kw">AS</span> LastUpdated`,
+      `<span class="kw">FROM</span> dbo.FactOrders`,
+      `<span class="kw">WHERE</span> OrderDate <span class="op">&gt;=</span> <span class="str">'2026-11-01'</span>`,
+      `<span class="kw">GROUP BY</span> RegionCode;`
+    ],
+    sqlBq: [
+      `<span class="cmt">-- GoogleSQL · analytics-prod (sales_dw)</span>`,
+      `<span class="kw">SELECT</span>`,
+      `  region_code <span class="kw">AS</span> RegionCode,`,
+      `  <span class="fn">COUNT</span>(*) <span class="kw">AS</span> OrderCount,`,
+      `  <span class="fn">SUM</span>(net_amount) <span class="kw">AS</span> TotalRevenue,`,
+      `  <span class="fn">MAX</span>(updated_at) <span class="kw">AS</span> LastUpdated`,
+      `<span class="kw">FROM</span> <span class="str">\`analytics-prod.sales_dw.fact_orders\`</span>`,
+      `<span class="kw">WHERE</span> order_date <span class="op">&gt;=</span> <span class="kw">DATE</span> <span class="str">'2026-11-01'</span>`,
+      `<span class="kw">GROUP BY</span> region_code;`
+    ],
+    runState: 'done-ok',
+    execMode: 'readonly',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'diff',
+    activeStmt: 0,
+    profileOpen: false,
+    diffLayout: 'oneRow',
+    diffChangesOnly: false,
+    diffPair: ['sql-prod', 'bq-prod'],
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    results: {
+      statements: ['Region Reconciliation'],
+      perServer: {
+        'sql-prod': {
+          status: 'ok', ms: 164,
+          sets: [{
+            cols: [{ name: 'RegionCode', num: false }, { name: 'OrderCount', num: true }, { name: 'TotalRevenue', num: true }, { name: 'LastUpdated', num: false }],
+            rows: [
+              ['NA', 14820, 2418920.50, '2026-11-25 13:30:00'],
+              ['EU', 9412, 1602110.00, '2026-11-25 13:30:00'],
+              ['APAC', 6105, 984500.25, '2026-11-25 13:30:00'],
+              ['LATAM', 2310, 310440.00, '2026-11-25 13:28:12']
+            ]
+          }]
+        },
+        'bq-prod': {
+          status: 'ok', ms: 1120,
+          sets: [{
+            cols: [{ name: 'RegionCode', num: false }, { name: 'OrderCount', num: true }, { name: 'TotalRevenue', num: true }, { name: 'LastUpdated', num: false }],
+            rows: [
+              ['NA', 14820, 2418920.50, '2026-11-25 13:30:00'],
+              ['EU', 9408, 1601450.00, '2026-11-25 13:25:00'],
+              ['APAC', 6105, 984500.25, '2026-11-25 13:30:00'],
+              ['LATAM', 2310, 310440.00, '2026-11-25 13:28:12']
+            ]
+          }]
+        }
+      },
+      messages: [
+        { src: 'coord', text: 'Cross-Engine Read-Only SELECT finished (SQL Server + BigQuery). Decoded into shared ResultStore via engine-neutral SortKind.' },
+        { src: 'sql-prod', text: '(4 rows affected) · 0.16 s · SalesDB' },
+        { src: 'bq-prod', text: '(4 rows affected) · 1.12 s · 42.8 MiB processed (< $0.01) · sales_dw' }
+      ]
+    }
+  }
+]
+
+// =============================================================================
+// LIVE WORKBENCH STATE
+// =============================================================================
+const state = {
+  activeTabId: 'tab-mssql-select',
+  oeSelected: ['sql-prod', 'sql-stage', 'sql-dev'],
+  oeFilter: '',
+  targetPopoverOpen: false,
+  comparePopoverOpen: false,
+  modalOpen: false,
+  modalPickedMode: 'tx',
+  modalSimOutcome: 'ok',
+  modalDryRun: true,
+  modalSequential: false
+}
+
+const activeTab = () => TABS.find(t => t.id === state.activeTabId) || TABS[0]
+
+// =============================================================================
+// TOAST HELPER
+// =============================================================================
+let toastTimer = null
+function showToast(msg, tone = 'info') {
+  const el = document.getElementById('vToast')
+  const icon = tone === 'warn' ? IC.warn : tone === 'err' ? IC.err : IC.check
+  el.innerHTML = `<span style="color:var(--${tone === 'warn' ? 'warning' : tone === 'err' ? 'error' : 'accent'})">${icon}</span><span>${msg}</span>`
+  el.classList.add('is-open')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => el.classList.remove('is-open'), 3400)
+}
+
+// =============================================================================
+// 1. RENDER OBJECT EXPLORER (Top-level Ctrl+Click + Engine Lock + Context Menu)
+// =============================================================================
+function oePrimaryProvider() {
+  if (!state.oeSelected.length) return null
+  return connById(state.oeSelected[0])?.provider ?? null
+}
+
+function renderExplorer() {
+  const pane = document.getElementById('oePane')
+  const tree = document.getElementById('oeTree')
+  const bar = document.getElementById('oeMultiBar')
+  const multi = state.oeSelected.length >= 2
+  pane.classList.toggle('has-multi', multi)
+  bar.classList.toggle('is-visible', multi)
+
+  const lockProv = state.oeSelected.length ? oePrimaryProvider() : null
+  if (multi) {
+    const provLabel = lockProv === 'sqlserver' ? 'SQL Servers' : 'BigQuery projects'
+    document.getElementById('oeMultiLabel').textContent = `${state.oeSelected.length} ${provLabel} selected`
+  }
+
+  const q = state.oeFilter.trim().toLowerCase()
+  const filtered = CONNECTIONS.filter(c => !q || c.name.toLowerCase().includes(q) || c.host.toLowerCase().includes(q))
+
+  tree.innerHTML = filtered.map(c => {
+    const isSel = state.oeSelected.includes(c.id)
+    const isPrimary = state.oeSelected[0] === c.id
+    // Engine lock applies whenever >= 1 connection is selected and user intends Ctrl+Click multi-select
+    const isLocked = state.oeSelected.length >= 1 && c.provider !== lockProv
+    const icon = c.provider === 'sqlserver' ? IC.server : IC.bigquery
+    const childrenHtml = c.expanded ? `
+      <div class="oe-row"><span class="oe-indent"></span><span class="oe-chev">${IC.chevD}</span><span class="oe-ic oe-folder-ic">${IC.folder}</span><span class="oe-lbl">${c.provider === 'sqlserver' ? 'Databases' : 'Datasets'}</span><span class="oe-count">${c.children.length}</span></div>
+      ${c.children.map(db => `
+        <div class="oe-row"><span class="oe-indent"></span><span class="oe-indent"></span><span class="oe-chev">${IC.chevR}</span><span class="oe-ic">${IC.database}</span><span class="oe-lbl">${db}</span></div>
+      `).join('')}
+    ` : ''
+    return `
+      <div class="oe-server-card has-card-tint ${isSel ? 'is-selected' : ''} ${isPrimary ? 'is-primary-selected' : ''} ${isLocked ? 'is-locked' : ''}"
+           data-conn="${c.id}" draggable="true" style="--card-accent:${c.color}"
+           title="${isLocked ? `Locked to ${lockProv === 'sqlserver' ? 'SQL Server' : 'BigQuery'} during Ctrl+Click multi-select (click normally to switch, or drag into a Cross-Engine editor pane)` : 'Click to select · Ctrl+Click to multi-select · Drag onto editor to add · Right-click for actions'}">
+        <div class="oe-server-top">
+          <span class="oe-chev" data-toggle="${c.id}">${c.expanded ? IC.chevD : IC.chevR}</span>
+          <span class="oe-server-check">${isSel ? '✓' : ''}</span>
+          <span class="oe-ic" style="color:${c.provider === 'bigquery' ? 'var(--accent)' : 'var(--icon)'}">${icon}</span>
+          <span class="oe-server-name">${c.name}</span>
+          <span class="env-pill ${c.env}">${c.envLabel}</span>
+          <span class="oe-dot" title="Connected"></span>
+        </div>
+        <div class="oe-server-sub">
+          <span class="oe-server-host">${c.host}</span>
+          ${isLocked ? `<span class="oe-lock-tag">${IC.lock} ${lockProv === 'sqlserver' ? 'SQL only' : 'BQ only'}</span>` : ''}
+        </div>
+      </div>
+      ${childrenHtml}
+    `
+  }).join('')
+
+  tree.querySelectorAll('[data-toggle]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation()
+      const c = connById(el.dataset.toggle)
+      if (c) { c.expanded = !c.expanded; renderExplorer() }
+    })
+  })
+
+  tree.querySelectorAll('.oe-server-card').forEach(card => {
+    card.addEventListener('click', e => {
+      const id = card.dataset.conn
+      const c = connById(id)
+      const lock = oePrimaryProvider()
+      if (e.ctrlKey || e.metaKey) {
+        if (state.oeSelected.includes(id)) {
+          state.oeSelected = state.oeSelected.filter(x => x !== id)
+        } else if (lock && c.provider !== lock) {
+          showToast(`Selection is locked to ${lock === 'sqlserver' ? 'SQL Server' : 'BigQuery'}. Clear selection to pick ${c.provider === 'sqlserver' ? 'SQL Server' : 'BigQuery'}, or right-click → Cross-Engine SELECT.`, 'warn')
+          return
+        } else {
+          state.oeSelected = [...state.oeSelected, id]
+        }
+      } else {
+        state.oeSelected = [id]
+      }
+      renderExplorer()
+    })
+
+    card.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', card.dataset.conn)
+      e.dataTransfer.effectAllowed = 'copy'
+      state.draggingConnId = card.dataset.conn
+    })
+    card.addEventListener('dragend', () => { state.draggingConnId = null })
+
+    card.addEventListener('contextmenu', e => {
+      e.preventDefault()
+      const id = card.dataset.conn
+      const c = connById(id)
+      if (!state.oeSelected.includes(id)) {
+        state.oeSelected = [id]
+        renderExplorer()
+      }
+      openContextMenu(e.clientX, e.clientY, c)
+    })
+  })
+
+  document.getElementById('oeFooterLeft').textContent = state.oeSelected.length >= 2
+    ? `${state.oeSelected.length} selected · Right-click for Multi-Server Query`
+    : `${CONNECTIONS.length} connections · Ctrl+Click top-level rows`
+}
+
+// =============================================================================
+// CONTEXT MENU (Object Explorer)
+// =============================================================================
+function openContextMenu(clientX, clientY, clickedConn) {
+  const menu = document.getElementById('ctxMenu')
+  const wb = document.getElementById('wbWindow').getBoundingClientRect()
+  const count = state.oeSelected.length
+  const prov = oePrimaryProvider()
+  const label = prov === 'sqlserver' ? 'SQL Servers' : 'BigQuery Projects'
+  const otherLabel = prov === 'sqlserver' ? 'BigQuery' : 'SQL Server'
+
+  if (count >= 2) {
+    menu.innerHTML = `
+      <div class="mh">${count} ${label} Selected</div>
+      <button type="button" class="is-primary-item" data-act="new-multi">${IC.play}<span>New Multi-Server Query (${count} ${label})</span></button>
+      <button type="button" data-act="new-cross">${IC.split}<span>New Cross-Engine SELECT (+ ${otherLabel})…</span></button>
+      <hr />
+      <button type="button" data-act="refresh">${IC.spin.replace('os-ic', '')}<span>Refresh Selected (${count})</span></button>
+      <button type="button" data-act="clear">${IC.close}<span>Clear Selection</span><small>Esc</small></button>
+      <hr />
+      <button type="button" data-act="disconnect"><span>Disconnect Selected (${count})</span></button>
+    `
+  } else {
+    menu.innerHTML = `
+      <div class="mh">${clickedConn.name}</div>
+      <button type="button" class="is-primary-item" data-act="new-single">${IC.play}<span>New Query</span><small>Ctrl+N</small></button>
+      <button type="button" data-act="new-cross">${IC.split}<span>New Cross-Engine SELECT (+ ${otherLabel})…</span></button>
+      <hr />
+      <button type="button" data-act="select-same">${IC.layers}<span>Select All ${label}</span></button>
+      <button type="button" data-act="refresh"><span>Refresh</span><small>F5</small></button>
+      <button type="button" data-act="props"><span>Properties</span></button>
+    `
+  }
+
+  menu.style.left = Math.min(clientX - wb.left, wb.width - 260) + 'px'
+  menu.style.top = Math.min(clientY - wb.top, wb.height - 200) + 'px'
+  menu.classList.add('is-open')
+
+  menu.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation()
+      const act = btn.dataset.act
+      menu.classList.remove('is-open')
+      if (act === 'new-multi') openNewMultiTabFromSelection()
+      else if (act === 'new-cross') openNewCrossTabFromSelection()
+      else if (act === 'select-same') { state.oeSelected = CONNECTIONS.filter(c => c.provider === clickedConn.provider).map(c => c.id); renderExplorer(); showToast(`Selected all ${state.oeSelected.length} ${label}. Right-click to open a Multi-Server Query.`) }
+      else if (act === 'clear') { state.oeSelected = []; renderExplorer() }
+      else if (act === 'new-single') showToast(`Opened single-server query on ${clickedConn.name}.`)
+      else showToast(`Action: ${btn.textContent.trim()}`)
+    })
+  })
+}
+
+function openNewMultiTabFromSelection() {
+  const prov = oePrimaryProvider()
+  const targets = state.oeSelected.map(id => {
+    const c = connById(id)
+    return { id: c.id, db: c.defaultDb, enabled: true }
+  })
+  const id = 'tab-custom-' + Date.now()
+  const num = TABS.length + 1
+  const isBq = prov === 'bigquery'
+  const newTab = {
+    id,
+    name: `MultiQuery${num}.sql`,
+    mode: isBq ? 'same-bigquery' : 'same-sqlserver',
+    targets,
+    scriptKind: 'select',
+    bqCost: isBq ? 'Est. 12.4 MiB · < $0.01' : undefined,
+    sql: isBq
+      ? [
+          `<span class="cmt">-- Running across ${targets.length} BigQuery projects</span>`,
+          `<span class="kw">SELECT</span> table_name, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> col_count`,
+          `<span class="kw">FROM</span> sales_dw.INFORMATION_SCHEMA.COLUMNS`,
+          `<span class="kw">GROUP BY</span> table_name <span class="kw">ORDER BY</span> table_name;`
+        ]
+      : [
+          `<span class="cmt">-- Running across ${targets.length} SQL Servers</span>`,
+          `<span class="kw">SELECT</span> <span class="fn">@@SERVERNAME</span> <span class="kw">AS</span> ServerName, <span class="fn">DB_NAME</span>() <span class="kw">AS</span> CurrentDb,`,
+          `       <span class="fn">COUNT</span>(*) <span class="kw">AS</span> UserTables`,
+          `<span class="kw">FROM</span> sys.tables <span class="kw">WHERE</span> is_ms_shipped = <span class="num">0</span>;`
+        ],
+    runState: 'idle',
+    execMode: 'faf',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'combined',
+    activeStmt: 0,
+    profileOpen: false,
+    diffLayout: 'oneRow',
+    diffChangesOnly: false,
+    diffPair: [targets[0].id, targets[1]?.id || targets[0].id],
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    results: { statements: [], perServer: {}, messages: [{ src: 'coord', text: `Ready to execute across ${targets.length} ${isBq ? 'BigQuery projects' : 'SQL Servers'}. Press Execute (F5) to choose Transaction or Fire & Forget.` }] }
+  }
+  TABS.push(newTab)
+  state.activeTabId = id
+  renderAll()
+  showToast(`Opened ${newTab.name} targeting ${targets.length} ${isBq ? 'BigQuery projects' : 'SQL Servers'}. Click Execute (F5)!`)
+}
+
+function openNewCrossTabFromSelection() {
+  const picked = state.oeSelected.length ? state.oeSelected : ['sql-prod']
+  const pickedProv = connById(picked[0])?.provider || 'sqlserver'
+  const otherProv = pickedProv === 'sqlserver' ? 'bigquery' : 'sqlserver'
+  const targets = picked.map(id => {
+    const c = connById(id)
+    return { id: c.id, db: c.defaultDb, enabled: true }
+  })
+  const id = 'tab-cross-' + Date.now()
+  const num = TABS.length + 1
+  const newTab = {
+    id,
+    name: `CrossCompare${num}.sql`,
+    mode: 'cross-engine',
+    crossEditorStyle: 'split',
+    targets,
+    scriptKind: 'select',
+    bqCost: 'Dry Run · Pending',
+    sqlMssql: [
+      `<span class="cmt">-- Transact-SQL</span>`,
+      `<span class="kw">SELECT</span> RegionCode, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> OrderCount, <span class="fn">SUM</span>(NetAmount) <span class="kw">AS</span> TotalRevenue`,
+      `<span class="kw">FROM</span> dbo.FactOrders`,
+      `<span class="kw">WHERE</span> OrderDate <span class="op">&gt;=</span> <span class="str">'2026-11-01'</span>`,
+      `<span class="kw">GROUP BY</span> RegionCode;`
+    ],
+    sqlBq: [
+      `<span class="cmt">-- GoogleSQL</span>`,
+      `<span class="kw">SELECT</span> region_code <span class="kw">AS</span> RegionCode, <span class="fn">COUNT</span>(*) <span class="kw">AS</span> OrderCount, <span class="fn">SUM</span>(net_amount) <span class="kw">AS</span> TotalRevenue`,
+      `<span class="kw">FROM</span> <span class="str">\`sales_dw.fact_orders\`</span>`,
+      `<span class="kw">WHERE</span> order_date <span class="op">&gt;=</span> <span class="kw">DATE</span> <span class="str">'2026-11-01'</span>`,
+      `<span class="kw">GROUP BY</span> region_code;`
+    ],
+    runState: 'idle',
+    execMode: 'readonly',
+    layout: 'tabs',
+    activeOutputView: 'results',
+    activeGroupTab: 'diff',
+    activeStmt: 0,
+    profileOpen: false,
+    diffLayout: 'oneRow',
+    diffChangesOnly: false,
+    diffPair: [targets[0].id, CONNECTIONS.find(c => c.provider === otherProv)?.id || targets[0].id],
+    sort: { col: null, dir: 0 },
+    searchQuery: '',
+    msgFilter: 'all',
+    msgCollapsed: false,
+    results: {
+      statements: [],
+      perServer: {},
+      messages: [{ src: 'coord', text: `Cross-Engine SELECT opened with ${picked.map(x => connById(x).name).join(', ')}. Pick at least one ${otherProv === 'bigquery' ? 'BigQuery project' : 'SQL Server'} in the Target Picker (or drag from Object Explorer).` }]
+    }
+  }
+  TABS.push(newTab)
+  state.activeTabId = id
+  state.targetPopoverOpen = true
+  state.comparePopoverOpen = false
+  syncPresetHighlight('cross-engine')
+  renderAll()
+  showToast(`Pick one or more ${otherProv === 'bigquery' ? 'BigQuery projects' : 'SQL Servers'} to pair with your selection.`)
+}
+
+function addTargetToTab(t, connId) {
+  const existing = t.targets.find(x => x.id === connId)
+  if (existing) {
+    existing.enabled = true
+  } else {
+    const c = connById(connId)
+    if (!c) return
+    t.targets.push({ id: c.id, db: c.defaultDb, enabled: true })
+  }
+}
+
+function removeTargetFromTab(t, connId) {
+  const existing = t.targets.find(x => x.id === connId)
+  if (existing) existing.enabled = false
+}
+
+// =============================================================================
+// 2. RENDER DOCUMENT TABS & QUERY BAR
+// =============================================================================
+function renderDocTabs() {
+  const shelf = document.getElementById('docTabShelf')
+  shelf.innerHTML = TABS.map(t => {
+    const active = t.id === state.activeTabId
+    const enabledTargets = t.targets.filter(x => x.enabled)
+    const hasProd = enabledTargets.some(x => connById(x.id)?.env === 'prod')
+    const isMixed = t.mode === 'cross-engine'
+    const icon = isMixed ? IC.split : t.mode === 'same-bigquery' ? IC.bigquery : IC.server
+    const sub = isMixed
+      ? `SQL Server + BigQuery · Read-Only`
+      : `${enabledTargets.length} ${t.mode === 'same-bigquery' ? 'BigQuery' : 'SQL Servers'}${hasProd ? ' · PROD' : ''}`
+    return `
+      <div class="wb-doc-tab ${active ? 'is-active' : ''} ${isMixed ? 'has-mixed' : hasProd ? 'has-prod' : ''}" data-tab="${t.id}" role="tab" aria-selected="${active}">
+        <span class="oe-ic" style="color:${isMixed ? 'var(--purple)' : active ? 'var(--accent)' : 'var(--icon)'}">${icon}</span>
+        <div class="wb-tab-body">
+          <div class="wb-tab-title-row">
+            <span class="wb-tab-name">${t.name}</span>
+          </div>
+          <div class="wb-tab-meta-row">
+            <span class="swatch-stack">${enabledTargets.map(x => `<span style="background:${connById(x.id).color}"></span>`).join('')}</span>
+            <span>${sub}</span>
+          </div>
+        </div>
+      </div>
+    `
+  }).join('')
+
+  shelf.querySelectorAll('[data-tab]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.activeTabId = el.dataset.tab
+      state.targetPopoverOpen = false
+      state.comparePopoverOpen = false
+      renderAll()
+    })
+  })
+}
+
+function renderQueryBar() {
+  const t = activeTab()
+  const bar = document.getElementById('queryBar')
+  const enabled = t.targets.filter(x => x.enabled)
+  const hasProd = enabled.some(x => connById(x.id)?.env === 'prod')
+  const isMixed = t.mode === 'cross-engine'
+  const isRunning = t.runState === 'running'
+
+  const sqlTargets = enabled.filter(x => connById(x.id)?.provider === 'sqlserver')
+  const bqTargets = enabled.filter(x => connById(x.id)?.provider === 'bigquery')
+  const canExecuteCross = !isMixed || (sqlTargets.length > 0 && bqTargets.length > 0)
+
+  const hasGuardViolation = isMixed && !!t.crossGuardViolation
+  bar.className = 'wb-querybar ' + (isMixed ? 'has-mixed-tint' : hasProd ? 'has-prod-tint' : '')
+  const targetSummary = isMixed
+    ? `${sqlTargets.length} SQL Server${sqlTargets.length === 1 ? '' : 's'} + ${bqTargets.length} BigQuery`
+    : `${enabled.length} ${t.mode === 'same-bigquery' ? 'BigQuery Projects' : 'SQL Servers'}`
+
+  bar.innerHTML = `
+    <button type="button" class="wb-exec-btn ${isRunning ? 'is-running' : ''}" id="qbExecuteBtn" ${!canExecuteCross ? 'disabled title="Select at least 1 SQL Server and 1 BigQuery target first"' : hasGuardViolation ? 'title="Execution will be blocked: remove DDL/DML statements first"' : ''}>
+      ${isRunning ? IC.stop : hasGuardViolation ? IC.warn : IC.play}
+      <span>${isRunning ? 'Cancel All' : isMixed ? `Execute (${enabled.length})` : `Execute (${enabled.length})`}</span>
+      <span class="exec-kbd">${isRunning ? 'Alt+Break' : 'F5'}</span>
+    </button>
+    <span class="wb-qb-sep"></span>
+    ${isMixed ? `
+      <button type="button" class="wb-qb-btn ${t.crossEditorStyle === 'split' ? 'is-active' : 'is-tonal'}" id="qbSplitBtn">${IC.split}<span>Dual-Dialect Split</span></button>
+      <button type="button" class="wb-qb-btn ${t.crossEditorStyle === 'markers' ? 'is-active' : 'is-tonal'}" id="qbMarkersBtn"><span>-- #Dialect File</span></button>
+      <span class="env-pill ${hasGuardViolation ? 'err' : 'mixed'}">${hasGuardViolation ? '1 blocked (DML)' : 'SELECT-only guard'}</span>
+      <button type="button" class="wb-qb-btn ${hasGuardViolation ? 'is-active' : 'is-tonal'}" id="qbTestGuardBtn" title="Toggle a simulated UPDATE statement to see the real-time read-only guard">${hasGuardViolation ? 'Clear DML Test' : 'Test DDL/DML Guard'}</button>
+    ` : `
+      <span class="wb-qb-btn is-tonal" style="cursor:default">Scope: <strong>All</strong></span>
+      ${t.mode === 'same-sqlserver' ? `<button type="button" class="wb-qb-btn" disabled title="Execution plans are single-server only">Plan ▾</button>` : ''}
+    `}
+    ${t.bqCost ? `<span class="wb-bq-cost-chip">${IC.bigquery}<span>Est. <b>${t.bqCost}</b></span></span>` : ''}
+
+    <button type="button" class="wb-target-pill ${state.targetPopoverOpen ? 'is-open' : ''}" id="qbTargetPill" title="Configure target servers and default databases/datasets">
+      <span class="swatch-stack">${enabled.map(x => `<span style="background:${connById(x.id).color}"></span>`).join('')}</span>
+      <strong>${targetSummary}</strong>
+      ${hasProd ? `<span class="env-pill prod">PROD</span>` : ''}
+      ${IC.chevD}
+    </button>
+  `
+
+  document.getElementById('qbExecuteBtn').addEventListener('click', () => {
+    if (t.runState === 'running') return
+    if (isMixed) {
+      if (t.crossGuardViolation) {
+        triggerCrossGuardRefusal(t)
+        return
+      }
+      simulateRun(t, 'readonly', 'ok')
+    } else {
+      openRunModal(t)
+    }
+  })
+
+  document.getElementById('qbTestGuardBtn')?.addEventListener('click', () => {
+    t.crossGuardViolation = !t.crossGuardViolation
+    if (!t.crossGuardViolation && t.runState === 'done-guard-blocked') {
+      t.runState = 'done-ok'
+      delete t.barrier
+      t.activeGroupTab = 'diff'
+    }
+    renderAll()
+  })
+
+  document.getElementById('qbTargetPill').addEventListener('click', e => {
+    e.stopPropagation()
+    state.targetPopoverOpen = !state.targetPopoverOpen
+    state.comparePopoverOpen = false
+    renderTargetPopover()
+    renderQueryBar()
+  })
+
+  document.getElementById('qbSplitBtn')?.addEventListener('click', () => { t.crossEditorStyle = 'split'; renderQueryBar(); renderEditor() })
+  document.getElementById('qbMarkersBtn')?.addEventListener('click', () => { t.crossEditorStyle = 'markers'; renderQueryBar(); renderEditor() })
+}
+
+function renderTargetPopover() {
+  const pop = document.getElementById('targetPopover')
+  if (!state.targetPopoverOpen) { pop.classList.remove('is-open'); return }
+  const t = activeTab()
+  const isMixed = t.mode === 'cross-engine'
+  const isBqOnly = t.mode === 'same-bigquery'
+  const enabledCount = t.targets.filter(x => x.enabled).length
+
+  const renderGroup = (provider, title, iconHtml, dbLabel) => {
+    const list = CONNECTIONS.filter(c => c.provider === provider)
+    const activeInGroup = list.filter(c => t.targets.some(x => x.id === c.id && x.enabled)).length
+    return `
+      <div class="vpop-sec-head">
+        <span style="color:${provider === 'bigquery' ? 'var(--accent)' : 'var(--icon)'}">${iconHtml}</span>
+        <span>${title}</span>
+        <span style="margin-left:auto;font-weight:500">${activeInGroup} of ${list.length} selected</span>
+      </div>
+      ${list.map(c => {
+        const trg = t.targets.find(x => x.id === c.id)
+        const checked = !!trg?.enabled
+        const currentDb = trg?.db || c.defaultDb
+        return `
+          <div class="trow ${checked ? '' : 'is-unchecked'}">
+            <input type="checkbox" data-tconn="${c.id}" ${checked ? 'checked' : ''} style="accent-color:var(--accent);margin:0" />
+            <span class="sdot" style="width:7px;height:7px;border-radius:50%;background:${c.color};flex:none"></span>
+            <span style="font-weight:600;color:var(--text-strong)">${c.name}</span>
+            <span class="env-pill ${c.env}">${c.envLabel}</span>
+            <select data-tdb-conn="${c.id}" title="${dbLabel}" ${checked ? '' : 'disabled'}>
+              ${c.dbs.map(d => `<option ${d === currentDb ? 'selected' : ''}>${d}</option>`).join('')}
+            </select>
+          </div>
+        `
+      }).join('')}
+    `
+  }
+
+  pop.innerHTML = `
+    <div class="vpop-head">
+      <strong>${isMixed ? 'Cross-Engine Targets' : 'Query Targets'} (${enabledCount} active)</strong>
+      <button type="button" class="wb-tab-close" id="closeTargetPop">${IC.close}</button>
+    </div>
+    <div class="vpop-body">
+      <div style="font-size:11px;color:var(--text-muted)">
+        ${isMixed
+          ? 'Check any connected SQL Server and BigQuery targets (or drag a server from Object Explorer onto either editor pane):'
+          : `Add or remove connected ${isBqOnly ? 'BigQuery projects' : 'SQL Servers'} and choose each target's ${isBqOnly ? 'default dataset' : 'database'}:`}
+      </div>
+      ${isMixed ? renderGroup('sqlserver', 'SQL Server (Transact-SQL pane)', IC.server, 'Database') + renderGroup('bigquery', 'BigQuery (GoogleSQL pane)', IC.bigquery, 'Default dataset')
+        : isBqOnly ? renderGroup('bigquery', 'Connected BigQuery Projects', IC.bigquery, 'Default dataset')
+        : renderGroup('sqlserver', 'Connected SQL Servers', IC.server, 'Database')}
+    </div>
+    <div class="vpop-foot" style="justify-content:space-between">
+      <span style="font-size:11px;color:var(--text-muted)">${isMixed ? 'Requires ≥1 per engine' : 'Same-engine targets'}</span>
+      <button type="button" class="btn-v primary" id="doneTargetPop">Done</button>
+    </div>
+  `
+  pop.classList.add('is-open')
+  const close = () => { state.targetPopoverOpen = false; renderTargetPopover(); renderQueryBar() }
+  document.getElementById('closeTargetPop').addEventListener('click', close)
+  document.getElementById('doneTargetPop').addEventListener('click', close)
+
+  pop.querySelectorAll('[data-tconn]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const connId = cb.dataset.tconn
+      if (cb.checked) {
+        addTargetToTab(t, connId)
+      } else {
+        const remaining = t.targets.filter(x => x.enabled && x.id !== connId).length
+        if (!isMixed && remaining < 1) {
+          cb.checked = true
+          showToast('At least one target must remain active.', 'warn')
+          return
+        }
+        removeTargetFromTab(t, connId)
+      }
+      renderDocTabs(); renderQueryBar(); renderEditor(); renderTargetPopover(); renderStatusBar()
+    })
+  })
+  pop.querySelectorAll('[data-tdb-conn]').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const connId = sel.dataset.tdbConn
+      const trg = t.targets.find(x => x.id === connId)
+      if (trg) trg.db = sel.value
+      renderEditor()
+    })
+  })
+}
+
+// =============================================================================
+// 3. RENDER EDITOR (Single or Cross-Engine Dual-Dialect Split)
+// =============================================================================
+function renderCodePane(lines, errLine) {
+  return `
+    <div class="wb-monaco">
+      <div class="wb-gutter">${lines.map((_, i) => `<div>${i + 1}</div>`).join('')}</div>
+      <div class="wb-code">${lines.map((l, i) => `<div class="line ${i + 1 === errLine ? 'is-err' : i === 1 ? 'is-active' : ''}">${l || '&nbsp;'}</div>`).join('')}</div>
+    </div>
+  `
+}
+
+function renderEditor() {
+  const t = activeTab()
+  const sec = document.getElementById('editorSection')
+  if (t.mode === 'cross-engine' && t.crossEditorStyle === 'split') {
+    const enabled = t.targets.filter(x => x.enabled)
+    const sqlTargets = enabled.filter(x => connById(x.id)?.provider === 'sqlserver')
+    const bqTargets = enabled.filter(x => connById(x.id)?.provider === 'bigquery')
+
+    const renderChips = (list, provider, emptyLabel) => {
+      const chips = list.map(x => {
+        const c = connById(x.id)
+        return `<span class="ed-target-chip" title="${c.name} (${x.db})">
+          <span style="width:6px;height:6px;border-radius:50%;background:${c.color}"></span>
+          <span>${c.name}</span>
+          <span class="chip-db">· ${x.db}</span>
+          <button type="button" data-rm-target="${x.id}" title="Remove ${c.name}">${IC.close}</button>
+        </span>`
+      }).join('')
+      const btnClass = list.length ? 'ed-add-btn' : 'ed-add-btn is-empty'
+      const btnText = list.length ? '+ Add / Change' : emptyLabel
+      return `${chips}<button type="button" class="${btnClass}" data-open-targets="${provider}">${btnText}</button>`
+    }
+
+    const sqlLines = t.crossGuardViolation
+      ? [
+          `<span class="cmt">-- Transact-SQL · prod-sql-01 (SalesDB)</span>`,
+          `<span class="squiggly-err" title="Cross-Engine queries are read-only (SELECT / WITH only). 'UPDATE' at Line 2 is not allowed here."><span class="kw">UPDATE</span> dbo.FactOrders <span class="kw">SET</span> Synced = <span class="num">1</span> <span class="kw">WHERE</span> OrderDate &gt;= <span class="str">'2026-11-01'</span>;</span>`,
+          ...t.sqlMssql.slice(1)
+        ]
+      : t.sqlMssql
+
+    sec.innerHTML = `
+      <div class="wb-dual-editors">
+        <div class="wb-editor-col" data-drop-provider="sqlserver">
+          <div class="wb-editor-subhead">
+            ${renderChips(sqlTargets, 'sqlserver', '+ Pick SQL Server…')}
+            <span class="lang-tag">Transact-SQL</span>
+          </div>
+          ${t.crossGuardViolation ? `
+            <div class="ed-guard-strip">
+              ${IC.err}
+              <span><strong>Read-only guard (Line 2):</strong> <code>UPDATE</code> is not allowed in Cross-Engine queries (SELECT / WITH only).</span>
+              <button type="button" id="openSingleEngineBtn">Open in SQL Server tab</button>
+            </div>
+          ` : ''}
+          ${renderCodePane(sqlLines, t.crossGuardViolation ? 2 : null)}
+        </div>
+        <div class="wb-editor-col" data-drop-provider="bigquery">
+          <div class="wb-editor-subhead">
+            ${renderChips(bqTargets, 'bigquery', '+ Pick BigQuery…')}
+            <span class="lang-tag">GoogleSQL</span>
+          </div>
+          ${renderCodePane(t.sqlBq, null)}
+        </div>
+      </div>
+    `
+    document.getElementById('openSingleEngineBtn')?.addEventListener('click', () => {
+      state.activeTabId = 'tab-mssql-mixed'
+      syncPresetHighlight('mssql-mixed')
+      renderAll()
+      showToast('Opened T-SQL script in a SQL Server multi-server tab where DDL/DML is supported.')
+    })
+
+    sec.querySelectorAll('[data-rm-target]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation()
+        removeTargetFromTab(t, btn.dataset.rmTarget)
+        renderDocTabs(); renderQueryBar(); renderEditor(); renderTargetPopover(); renderStatusBar()
+      })
+    })
+    sec.querySelectorAll('[data-open-targets]').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation()
+        state.targetPopoverOpen = true
+        state.comparePopoverOpen = false
+        renderTargetPopover(); renderQueryBar()
+      })
+    })
+    sec.querySelectorAll('[data-drop-provider]').forEach(col => {
+      const expected = col.dataset.dropProvider
+      col.addEventListener('dragover', e => {
+        const dragConn = connById(state.draggingConnId)
+        if (!dragConn) return
+        e.preventDefault()
+        col.classList.toggle('is-drop-ok', dragConn.provider === expected)
+        col.classList.toggle('is-drop-bad', dragConn.provider !== expected)
+      })
+      col.addEventListener('dragleave', () => {
+        col.classList.remove('is-drop-ok', 'is-drop-bad')
+      })
+      col.addEventListener('drop', e => {
+        e.preventDefault()
+        col.classList.remove('is-drop-ok', 'is-drop-bad')
+        const id = e.dataTransfer.getData('text/plain') || state.draggingConnId
+        const dragConn = connById(id)
+        if (!dragConn) return
+        if (dragConn.provider !== expected) {
+          showToast(`Drop ${dragConn.provider === 'bigquery' ? 'BigQuery' : 'SQL Server'} connections onto the ${dragConn.provider === 'bigquery' ? 'GoogleSQL' : 'Transact-SQL'} pane.`, 'warn')
+          return
+        }
+        addTargetToTab(t, id)
+        renderDocTabs(); renderQueryBar(); renderEditor(); renderTargetPopover(); renderStatusBar()
+        showToast(`Added ${dragConn.name} to ${t.name}.`)
+      })
+    })
+  } else if (t.mode === 'cross-engine' && t.crossEditorStyle === 'markers') {
+    const combined = [
+      `<span class="cmt">-- Single saveable .sql file using Varia dialect section markers</span>`,
+      `<span class="cmt">-- #Dialect="sqlserver"</span>`,
+      ...t.sqlMssql.slice(1),
+      ``,
+      `<span class="cmt">-- #Dialect="bigquery"</span>`,
+      ...t.sqlBq.slice(1)
+    ]
+    sec.innerHTML = renderCodePane(combined, null)
+  } else {
+    sec.innerHTML = renderCodePane(t.sql, t.errLine)
+  }
+}
+
+// =============================================================================
+// 4. RUN MODE PROMPT MODAL + LIVE SIMULATED EXECUTION
+// =============================================================================
+function openRunModal(t) {
+  state.modalOpen = true
+  const isBq = t.mode === 'same-bigquery'
+  const isBqDdl = t.scriptKind === 'bq-ddl'
+  const isMixedMssql = t.scriptKind === 'mixed-mssql'
+  state.modalPickedMode = isBqDdl ? 'faf' : (t.scriptKind === 'ddl' || t.scriptKind === 'dml' || isMixedMssql ? 'tx' : 'faf')
+  state.modalDryRun = isBq
+  state.modalSequential = isBqDdl
+  state.modalSimOutcome = t.scriptKind === 'ddl' ? 'rollback' : isBqDdl ? 'dryrun-stop' : 'ok'
+  renderRunModal()
+}
+
+function renderRunModal() {
+  const scrim = document.getElementById('runModalScrim')
+  const dlg = document.getElementById('runModal')
+  if (!state.modalOpen) { scrim.classList.remove('is-open'); return }
+
+  const t = activeTab()
+  const targets = t.targets.filter(x => x.enabled)
+  const isBq = t.mode === 'same-bigquery'
+  const isBqDdl = t.scriptKind === 'bq-ddl'
+  const isMixedMssql = t.scriptKind === 'mixed-mssql'
+  const txAllowed = !isBqDdl
+  const hasProd = targets.some(x => connById(x.id)?.env === 'prod')
+
+  const txDesc = isBq
+    ? 'Opens a BigQuery session with BEGIN TRANSACTION on each project. Runs DML across all targets, waits at the barrier, and commits all only if every project succeeds — otherwise issues ROLLBACK / ABORT_SESSION.'
+    : isMixedMssql
+      ? 'Runs all batches (DDL, DML, and verification SELECTs) inside one coordinated local transaction (SET XACT_ABORT ON; BEGIN TRANSACTION) per server. If any server fails on any batch, peers roll back and any streamed SELECT rows are marked "Rolled back — preview only".'
+      : 'Opens a local transaction (SET XACT_ABORT ON; BEGIN TRANSACTION) on each SQL Server in parallel. Holds at the commit barrier until all servers finish: if any fails or is cancelled, all peers execute ROLLBACK.'
+  const txCaveat = isBq
+    ? 'Billing & guarantee: BigQuery still bills bytes processed on rolled-back jobs. Cross-project 2PC does not exist; a network loss during the final COMMIT step itself cannot un-commit a peer that already committed.'
+    : 'Guarantee: Cross-platform coordinated local transactions (no MSDTC required). Holds locks until the slowest peer finishes; a drop during the final COMMIT packet itself is reported as CommitInDoubt.'
+
+  dlg.innerHTML = `
+    <div class="vdialog-head">
+      <span style="color:var(--accent)">${isBq ? IC.bigquery : IC.server}</span>
+      <h3>Execute across ${targets.length} ${isBq ? 'BigQuery Projects' : 'SQL Servers'}</h3>
+      ${hasProd ? `<span class="env-pill prod">Includes PROD</span>` : ''}
+      <button type="button" class="wb-tab-close" id="modalCloseX">${IC.close}</button>
+    </div>
+    <div class="vdialog-body">
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${targets.map(x => {
+          const c = connById(x.id)
+          return `<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:4px;background:var(--panel);border:1px solid var(--border);font-size:11.5px">
+            <span style="width:7px;height:7px;border-radius:50%;background:${c.color}"></span>
+            <strong style="color:var(--text-strong)">${c.name}</strong>
+            <span style="color:var(--text-muted)">(${x.db})</span>
+            <span class="env-pill ${c.env}">${c.envLabel}</span>
+          </span>`
+        }).join('')}
+      </div>
+
+      ${t.detectedStatements?.length ? `
+        <div class="stmt-detect">
+          <span style="color:var(--text-muted)">Detected:</span>
+          ${t.detectedStatements.map(s => `<span class="stmt-tag">${s}</span>`).join('')}
+        </div>
+      ` : ''}
+
+      ${isBqDdl ? `
+        <div class="vbanner warn">
+          <span>${IC.warn}</span>
+          <div><strong>Mixed BigQuery script contains permanent DDL (Line 2: CREATE OR REPLACE VIEW).</strong> BigQuery prohibits permanent DDL inside multi-statement transactions. Use <strong>Pre-flight Dry Run (free) + Sequential stop-on-error</strong> below to validate every project before modifying any target; verification SELECT results will still composite automatically.</div>
+        </div>
+      ` : ''}
+
+      <label class="mode-card ${!txAllowed ? 'is-disabled' : state.modalPickedMode === 'tx' ? 'is-picked' : ''}" id="cardTx">
+        <input type="radio" name="runMode" value="tx" ${!txAllowed ? 'disabled' : ''} ${state.modalPickedMode === 'tx' ? 'checked' : ''} />
+        <div class="mode-card-body">
+          <div class="mode-card-head">
+            <strong>${isBq ? 'Coordinated Session Transaction (DML only)' : 'Coordinated Transaction (All succeed or all roll back)'}</strong>
+            <span class="mode-pill ${txAllowed ? 'ok' : 'warn'}">${txAllowed ? (isBq ? 'DML supported' : isMixedMssql ? 'DDL + DML + SELECT' : 'DDL & DML') : 'Blocked by BigQuery'}</span>
+          </div>
+          <div class="mode-desc">${txDesc}</div>
+          <div class="mode-caveat">${txCaveat}</div>
+        </div>
+      </label>
+
+      <label class="mode-card ${state.modalPickedMode === 'faf' ? 'is-picked' : ''}" id="cardFaf">
+        <input type="radio" name="runMode" value="faf" ${state.modalPickedMode === 'faf' ? 'checked' : ''} />
+        <div class="mode-card-body">
+          <div class="mode-card-head">
+            <strong>Fire and Forget (Independent execution, no rollback)</strong>
+            <span class="mode-pill">${state.modalSequential ? 'Sequential' : 'Parallel'}</span>
+          </div>
+          <div class="mode-desc">Runs independently on every target and reports per-server results and messages. Failures on one target never roll back peers.</div>
+        </div>
+      </label>
+
+      <div class="dialog-checks">
+        ${isBq ? `<label><input type="checkbox" id="chkDryRun" ${state.modalDryRun ? 'checked' : ''} /> Run free <strong>Pre-flight Dry Run</strong> across all projects before executing</label>` : ''}
+        ${state.modalPickedMode === 'faf' ? `<label><input type="checkbox" id="chkSeq" ${state.modalSequential ? 'checked' : ''} /> <strong>Sequential rollout</strong> — stop on first error (do not start remaining targets)</label>` : ''}
+      </div>
+
+      <div style="display:flex;align-items:center;gap:8px;padding-top:4px;border-top:1px dashed var(--border);font-size:11px;color:var(--text-muted)">
+        <span>Mock simulation outcome:</span>
+        <select id="simOutcomeSel" style="height:22px;padding:0 6px;border-radius:3px;background:var(--input);border:1px solid var(--input-border);color:var(--text);font-size:11.5px">
+          <option value="ok" ${state.modalSimOutcome === 'ok' ? 'selected' : ''}>All targets succeed${isMixedMssql ? ' (Committed + SELECTs + schema drift)' : isBqDdl ? ' (DDL + DML + verification SELECT)' : ''}</option>
+          ${!isBq && state.modalPickedMode === 'tx' ? `<option value="rollback" ${state.modalSimOutcome === 'rollback' ? 'selected' : ''}>${isMixedMssql ? 'dev-sql-01 fails Batch 2 → Auto Rollback (with SELECT preview)' : 'dev-sql-01 fails Phase 1 → Auto Rollback peers'}</option>` : ''}
+          ${isBqDdl ? `<option value="dryrun-stop" ${state.modalSimOutcome === 'dryrun-stop' ? 'selected' : ''}>analytics-stage fails Pre-flight Dry Run (0 mutations)</option>` : ''}
+        </select>
+      </div>
+    </div>
+    <div class="vdialog-foot">
+      <span style="font-size:11px;color:var(--text-muted)">Prompted at every multi-server Execute.</span>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="btn-v" id="modalCancelBtn">Cancel</button>
+        <button type="button" class="btn-v primary" id="modalGoBtn">${IC.play}<span>Run on ${targets.length} targets</span></button>
+      </div>
+    </div>
+  `
+  scrim.classList.add('is-open')
+
+  document.getElementById('modalCloseX').addEventListener('click', () => { state.modalOpen = false; renderRunModal() })
+  document.getElementById('modalCancelBtn').addEventListener('click', () => { state.modalOpen = false; renderRunModal() })
+  dlg.querySelectorAll('input[name="runMode"]').forEach(r => r.addEventListener('change', () => { state.modalPickedMode = r.value; renderRunModal() }))
+  document.getElementById('chkDryRun')?.addEventListener('change', e => { state.modalDryRun = e.target.checked })
+  document.getElementById('chkSeq')?.addEventListener('change', e => { state.modalSequential = e.target.checked; renderRunModal() })
+  document.getElementById('simOutcomeSel').addEventListener('change', e => { state.modalSimOutcome = e.target.value })
+  document.getElementById('modalGoBtn').addEventListener('click', () => {
+    state.modalOpen = false
+    renderRunModal()
+    simulateRun(t, state.modalPickedMode, state.modalSimOutcome)
+  })
+}
+
+function triggerCrossGuardRefusal(t) {
+  t.runState = 'done-guard-blocked'
+  t.activeOutputView = 'messages'
+  t.results.messages = [
+    { src: 'coord', err: true, line: 2, text: `READ_ONLY_VIOLATION (blocked before execution · 0 queries sent · $0.00 billed): Transact-SQL pane contains DML ('UPDATE' at Line 2).` },
+    { src: 'coord', text: `Cross-Engine queries support read-only SELECT / WITH queries only. Remove the UPDATE statement, or click "Open in SQL Server tab" to run mutations.` }
+  ]
+  renderAll()
+  showToast(`Blocked before execution: 'UPDATE' at Line 2 is not allowed in Cross-Engine SELECT queries.`, 'err')
+}
+
+function simulateRun(t, mode, outcome) {
+  t.runState = 'running'
+  t.execMode = mode
+  const enabled = t.targets.filter(x => x.enabled)
+  t.liveBarrier = {
+    phase: mode === 'tx' ? 'Phase 1: Executing inside transactions…' : t.mode === 'same-bigquery' && state.modalDryRun ? 'Pre-flight Dry Run across projects…' : 'Executing in parallel…',
+    cards: enabled.map(x => ({ id: x.id, state: 'Running…', tone: 'info', pct: 35, detail: `Connecting & executing on ${x.db}…` }))
+  }
+  renderAll()
+
+  setTimeout(() => {
+    if (mode === 'tx') {
+      t.liveBarrier.phase = 'Waiting at commit barrier…'
+      t.liveBarrier.cards.forEach((c, idx) => {
+        c.pct = idx === t.liveBarrier.cards.length - 1 ? 75 : 100
+        c.state = idx === t.liveBarrier.cards.length - 1 ? 'Finishing Phase 1…' : 'Waiting at barrier'
+        c.detail = idx === t.liveBarrier.cards.length - 1 ? 'Checking constraints & locks…' : 'Phase 1 OK — transaction open, waiting for peers.'
+      })
+      renderOutputPane()
+    }
+  }, 420)
+
+  setTimeout(() => {
+    delete t.liveBarrier
+    t.rolledBackPreview = false
+    if (outcome === 'rollback') {
+      t.runState = 'done-rollback'
+      if (t.scriptKind === 'mixed-mssql') {
+        t.rolledBackPreview = true
+        t.barrier = {
+          tone: 'err',
+          headline: 'Coordinated Transaction rolled back — 0 of 3 SQL Servers committed (streamed SELECT rows kept as preview)',
+          detail: `Batch 2 failed on dev-sql-01 (Msg 547: CHECK constraint 'CK_Orders_PriorityTier' conflicted). prod-sql-01 and stage-sql-01 had already streamed 'Tier Breakdown' before rolling back; those grids remain inspectable as preview only.`,
+          cards: [
+            { id: 'sql-prod', state: 'Rolled Back', tone: 'warn', pct: 100, detail: 'Batch 1–3 ran → streamed 1 result set → ROLLBACK confirmed (@@TRANCOUNT = 0).', meta: 'Preview only · 1 set · 0.29 s', sets: 1 },
+            { id: 'sql-stage', state: 'Rolled Back', tone: 'warn', pct: 100, detail: 'Batch 1–3 ran → streamed 2 result sets → ROLLBACK confirmed (@@TRANCOUNT = 0).', meta: 'Preview only · 2 sets · 0.34 s', sets: 2 },
+            { id: 'sql-dev', state: 'Failed (Batch 2)', tone: 'err', pct: 100, detail: `Msg 547, Line 6: UPDATE conflicted with CHECK constraint 'CK_Orders_PriorityTier'. Local tx rolled back.`, meta: '1/3 batches · 0 sets · 0.12 s', sets: 0 }
+          ]
+        }
+        t.results.perServer['sql-prod'].status = 'rb'
+        t.results.perServer['sql-stage'].status = 'rb'
+        t.results.perServer['sql-dev'] = { status: 'err', ms: 120, sets: [null, null] }
+        t.results.messages = [
+          { src: 'coord', text: 'Started Coordinated Transaction across 3 SQL Servers (3 batches: 1 DDL, 1 DML, 2 SELECTs).' },
+          { src: 'sql-prod', text: 'Batch 1–3 completed (1 result set streamed) — waiting at commit barrier…' },
+          { src: 'sql-stage', text: 'Batch 1–3 completed (2 result sets streamed) — waiting at commit barrier…' },
+          { src: 'sql-dev', err: true, line: 6, text: `Msg 547, Level 16, Line 6: The UPDATE statement conflicted with the CHECK constraint 'CK_Orders_PriorityTier'.` },
+          { src: 'coord', text: 'Aborting barrier. Issuing ROLLBACK TRANSACTION on peers; streamed SELECT rows flagged as rolled-back preview.' },
+          { src: 'sql-prod', text: 'ROLLBACK TRANSACTION confirmed. @@TRANCOUNT = 0.' },
+          { src: 'sql-stage', text: 'ROLLBACK TRANSACTION confirmed. @@TRANCOUNT = 0.' }
+        ]
+        t.activeGroupTab = 'summary'
+      } else {
+        t.activeGroupTab = 'barrier'
+      }
+    } else if (outcome === 'dryrun-stop') {
+      t.runState = 'done-dryrun-stop'
+      t.activeGroupTab = 'barrier'
+    } else if (t.scriptKind === 'mixed-mssql') {
+      t.runState = 'done-ok'
+      t.barrier = {
+        tone: 'ok',
+        headline: mode === 'tx' ? 'Coordinated Transaction committed across 3 of 3 SQL Servers — DDL, DML & 5 result sets completed' : 'Fire and Forget completed across 3 of 3 SQL Servers — DDL, DML & 5 result sets',
+        detail: 'All 3 batches (ALTER TABLE, UPDATE, and verification SELECTs) completed. Inspect Summary, Combined (handles conditional branch + schema drift), or individual server tabs.',
+        cards: [
+          { id: 'sql-prod', state: mode === 'tx' ? 'Committed' : 'Succeeded', tone: 'ok', pct: 100, detail: 'Batch 1: Column existed · Batch 2: 412 rows updated · Batch 3: 1 result set (Audit Warnings branch skipped).', meta: '3/3 batches · 1 set · 0.31 s', sets: 1 },
+          { id: 'sql-stage', state: mode === 'tx' ? 'Committed' : 'Succeeded', tone: 'ok', pct: 100, detail: 'Batch 1: ALTER TABLE OK · Batch 2: 96 rows updated · Batch 3: 2 result sets (3 cols on Audit Warnings).', meta: '3/3 batches · 2 sets · 0.38 s', sets: 2 },
+          { id: 'sql-dev', state: mode === 'tx' ? 'Committed' : 'Succeeded', tone: 'ok', pct: 100, detail: 'Batch 1: ALTER TABLE OK · Batch 2: 14 rows updated · Batch 3: 2 result sets (4 cols on Audit Warnings — extra LegacyNote).', meta: '3/3 batches · 2 sets · 0.22 s', sets: 2 }
+        ]
+      }
+      t.results.perServer['sql-prod'].status = 'ok'
+      t.results.perServer['sql-stage'].status = 'ok'
+      t.results.perServer['sql-dev'] = {
+        status: 'ok', ms: 220,
+        sets: [
+          { cols: [{ name: 'PriorityTier', num: true }, { name: 'Orders', num: true }, { name: 'TotalAmount', num: true }], rows: [[1, 14, 108400.00], [null, 408, 49200.00]] },
+          { cols: [{ name: 'OrderId', num: true }, { name: 'FlagCode', num: false }, { name: 'DetectedAt', num: false }, { name: 'LegacyNote', num: false }], rows: [[1021, 'LEGACY_TAX', '2026-11-25 10:04:00', 'Seeded by QA fixture'], [1024, 'MISSING_SKU', '2026-11-25 11:15:32', 'Pending backfill']] }
+        ]
+      }
+      t.activeGroupTab = 'summary'
+    } else if (t.scriptKind === 'bq-ddl') {
+      t.runState = 'done-ok'
+      t.barrier = {
+        tone: 'ok',
+        headline: `Pre-flight Dry Run passed · Mixed BigQuery script completed on ${enabled.length}/${enabled.length} projects`,
+        detail: 'CREATE OR REPLACE VIEW + UPDATE + verification SELECT completed sequentially. SELECT results composited automatically.',
+        cards: enabled.map((x, i) => ({ id: x.id, state: 'Succeeded', tone: 'ok', pct: 100, detail: `DDL OK · 1 row updated in deploy_log · 1 verification SELECT set (${i === 0 ? '48.2' : '19.4'} MiB).`, meta: '3/3 stmts · 1 set', sets: 1 }))
+      }
+      t.results.statements = ['Active Order Totals']
+      t.results.perServer = {}
+      enabled.forEach((x, i) => {
+        t.results.perServer[x.id] = {
+          status: 'ok', ms: 1050 + i * 240,
+          sets: [{ cols: [{ name: 'active_orders', num: true }, { name: 'total_net', num: true }], rows: [[i === 0 ? 32647 : 8412, i === 0 ? 5315970.75 : 1244010.50]] }]
+        }
+      })
+      t.activeGroupTab = 'summary'
+    } else if (t.scriptKind === 'dml' || t.scriptKind === 'ddl') {
+      t.runState = 'done-barrier-ok'
+      t.activeGroupTab = 'barrier'
+      t.barrier = {
+        tone: 'ok',
+        headline: mode === 'tx' ? `Coordinated Transaction committed across ${enabled.length} of ${enabled.length} targets` : `Completed on ${enabled.length} of ${enabled.length} targets`,
+        detail: mode === 'tx' ? 'All targets passed Phase 1 and confirmed COMMIT TRANSACTION.' : 'Independent execution succeeded on all targets.',
+        cards: enabled.map(x => ({ id: x.id, state: mode === 'tx' ? 'Committed' : 'Succeeded', tone: 'ok', pct: 100, detail: `Completed cleanly on ${x.db} (0.24 s).` }))
+      }
+    } else {
+      t.runState = 'done-ok'
+      if (t.mode === 'cross-engine') {
+        t.results.statements = ['Region Reconciliation']
+        t.results.perServer = {}
+        const baseRows = {
+          'sql-prod': [['NA', 14820, 2418920.50, '2026-11-25 13:30:00'], ['EU', 9412, 1602110.00, '2026-11-25 13:30:00'], ['APAC', 6105, 984500.25, '2026-11-25 13:30:00'], ['LATAM', 2310, 310440.00, '2026-11-25 13:28:12']],
+          'sql-stage': [['NA', 14815, 2418100.00, '2026-11-25 13:29:00'], ['EU', 9410, 1601800.00, '2026-11-25 13:29:00'], ['APAC', 6105, 984500.25, '2026-11-25 13:30:00'], ['LATAM', 2310, 310440.00, '2026-11-25 13:28:12']],
+          'sql-dev': [['NA', 420, 68120.00, '2026-11-25 12:00:00'], ['EU', 310, 51200.00, '2026-11-25 12:00:00'], ['APAC', 180, 29400.00, '2026-11-25 12:00:00'], ['LATAM', 95, 12100.00, '2026-11-25 12:00:00']],
+          'bq-prod': [['NA', 14820, 2418920.50, '2026-11-25 13:30:00'], ['EU', 9408, 1601450.00, '2026-11-25 13:25:00'], ['APAC', 6105, 984500.25, '2026-11-25 13:30:00'], ['LATAM', 2310, 310440.00, '2026-11-25 13:28:12']],
+          'bq-stage': [['NA', 14815, 2418100.00, '2026-11-25 13:25:00'], ['EU', 9405, 1600990.00, '2026-11-25 13:20:00'], ['APAC', 6105, 984500.25, '2026-11-25 13:25:00'], ['LATAM', 2310, 310440.00, '2026-11-25 13:25:00']]
+        }
+        enabled.forEach((x, idx) => {
+          const c = connById(x.id)
+          t.results.perServer[x.id] = {
+            status: 'ok', ms: c.provider === 'bigquery' ? 980 + idx * 140 : 140 + idx * 25,
+            sets: [{
+              cols: [{ name: 'RegionCode', num: false }, { name: 'OrderCount', num: true }, { name: 'TotalRevenue', num: true }, { name: 'LastUpdated', num: false }],
+              rows: baseRows[x.id] || baseRows['sql-prod']
+            }]
+          }
+        })
+        const firstSql = enabled.find(x => connById(x.id).provider === 'sqlserver')?.id || enabled[0].id
+        const firstBq = enabled.find(x => connById(x.id).provider === 'bigquery')?.id || enabled[1]?.id || enabled[0].id
+        t.diffPair = [firstSql, firstBq]
+        t.bqCost = `${(enabled.filter(x => connById(x.id).provider === 'bigquery').length * 42.8).toFixed(1)} MiB · < $0.01`
+        t.results.messages = [
+          { src: 'coord', text: `Cross-Engine Read-Only SELECT finished across ${enabled.length} targets. Combined view & diff ready via shared SortKind.` },
+          ...enabled.map(x => ({ src: x.id, text: `(4 rows affected) · ${x.db}${connById(x.id).provider === 'bigquery' ? ' · 42.8 MiB processed (< $0.01)' : ''}` }))
+        ]
+      } else if (!t.results.statements.length) {
+        t.results.statements = ['Result 1']
+        t.results.perServer = {}
+        enabled.forEach((x, idx) => {
+          const c = connById(x.id)
+          t.results.perServer[x.id] = {
+            status: 'ok', ms: 110 + idx * 35,
+            sets: [{
+              cols: [{ name: 'ServerName', num: false }, { name: 'CurrentDb', num: false }, { name: 'UserTables', num: true }],
+              rows: [[c.name, x.db, 58 + idx * 2]]
+            }]
+          }
+        })
+        t.results.messages = [
+          { src: 'coord', text: `Completed across ${enabled.length} targets. Combined view built automatically.` },
+          ...enabled.map(x => ({ src: x.id, text: `(1 row affected) · ${x.db}` }))
+        ]
+      }
+      t.activeGroupTab = t.mode === 'cross-engine' ? 'diff' : 'combined'
+    }
+    renderAll()
+  }, 980)
+}
+
+// =============================================================================
+// 5. COMPOSITED RESULTS PANE (Server Group Tabs, Combined, Diff, Profile, Messages)
+// =============================================================================
+function formatCell(val, num) {
+  if (val === null || val === undefined) return `<span class="is-null">NULL</span>`
+  if (num && typeof val === 'number') return val.toLocaleString('en-US', Number.isInteger(val) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return String(val)
+}
+
+function buildCombinedSet(t, stmtIdx) {
+  const servers = Object.entries(t.results.perServer || {})
+  if (!servers.length) return null
+  const present = servers.filter(([, data]) => !!data.sets[stmtIdx])
+  if (!present.length) return null
+
+  // Align columns by name across servers (handles schema drift cleanly!)
+  const colMap = new Map()
+  const colOrder = []
+  const colPresence = new Map()
+  present.forEach(([id, data]) => {
+    const set = data.sets[stmtIdx]
+    set.cols.forEach(col => {
+      const key = col.name.toLowerCase()
+      if (!colMap.has(key)) {
+        colMap.set(key, col)
+        colOrder.push(key)
+        colPresence.set(key, [])
+      }
+      colPresence.get(key).push(id)
+    })
+  })
+
+  const cols = [
+    { name: t.mode === 'cross-engine' ? '_Source' : 'Server', num: false, isSrc: true },
+    { name: t.mode === 'cross-engine' ? '_Engine' : 'Env', num: false },
+    ...colOrder.map(k => colMap.get(k))
+  ]
+  const rows = []
+  present.forEach(([id, data]) => {
+    const c = connById(id)
+    const set = data.sets[stmtIdx]
+    const idxByKey = new Map(set.cols.map((col, i) => [col.name.toLowerCase(), i]))
+    set.rows.forEach(r => {
+      rows.push([
+        { label: c.name, color: c.color },
+        t.mode === 'cross-engine' ? (c.provider === 'sqlserver' ? 'SQL Server' : 'BigQuery') : c.envLabel,
+        ...colOrder.map(k => idxByKey.has(k) ? r[idxByKey.get(k)] : null)
+      ])
+    })
+  })
+
+  // Build informative partial-merge / schema-drift notice if applicable
+  const notices = []
+  const omitted = servers.filter(([, data]) => !data.sets[stmtIdx]).map(([id]) => connById(id)?.name || id)
+  if (omitted.length) {
+    notices.push(`Partial merge (${present.length} of ${servers.length} targets): ${omitted.join(', ')} returned no '${t.results.statements[stmtIdx] || `Result ${stmtIdx + 1}`}' set.`)
+  }
+  const driftCols = colOrder.filter(k => colPresence.get(k).length < present.length)
+  if (driftCols.length) {
+    const desc = driftCols.map(k => `'${colMap.get(k).name}' (only on ${colPresence.get(k).map(id => connById(id).name).join(', ')})`).join(', ')
+    notices.push(`Schema drift aligned by column name: ${desc} — filled with NULL on peers.`)
+  }
+
+  return { cols, rows, serverCount: present.length, totalServers: servers.length, notice: notices.join(' ') }
+}
+
+function applySortAndSearch(cols, rows, t) {
+  let out = rows.slice()
+  const q = (t.searchQuery || '').trim().toLowerCase()
+  if (q) {
+    out = out.filter(r => r.some(cell => {
+      const s = cell && typeof cell === 'object' ? cell.label : String(cell ?? '')
+      return s.toLowerCase().includes(q)
+    }))
+  }
+  if (t.sort && t.sort.col !== null && t.sort.dir !== 0) {
+    const ci = t.sort.col
+    const dir = t.sort.dir
+    out.sort((a, b) => {
+      const av = a[ci] && typeof a[ci] === 'object' ? a[ci].label : a[ci]
+      const bv = b[ci] && typeof b[ci] === 'object' ? b[ci].label : b[ci]
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
+      return String(av).localeCompare(String(bv)) * dir
+    })
+  }
+  return out
+}
+
+function renderDataGrid(cols, rows, t) {
+  const shown = applySortAndSearch(cols, rows, t)
+  return `
+    <div class="grid-scroll">
+      <table class="vgrid">
+        <thead>
+          <tr>
+            <th class="rn">#</th>
+            ${cols.map((col, idx) => {
+              const sorted = t.sort?.col === idx && t.sort?.dir !== 0
+              const arrow = sorted ? (t.sort.dir === 1 ? '▲' : '▼') : ''
+              return `<th data-sort-col="${idx}" class="${col.num ? 'num' : ''} ${sorted ? 'is-sorted' : ''}" title="Click to sort by ${col.name}"><div class="th-in"><span>${col.name}</span>${arrow ? `<span class="th-sort">${arrow}</span>` : ''}</div></th>`
+            }).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${shown.map((r, ri) => `
+            <tr>
+              <td class="rn">${ri + 1}</td>
+              ${r.map((cell, ci) => {
+                if (cols[ci].isSrc && cell && typeof cell === 'object') {
+                  return `<td class="src-cell"><span class="sdot" style="background:${cell.color}"></span>${cell.label}</td>`
+                }
+                return `<td class="${cols[ci].num ? 'num' : ''}">${formatCell(cell, cols[ci].num)}</td>`
+              }).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
+}
+
+function renderDiffView(t) {
+  const [leftId, rightId] = t.diffPair || Object.keys(t.results.perServer)
+  const leftConn = connById(leftId), rightConn = connById(rightId)
+  const leftData = t.results.perServer[leftId]?.sets[t.activeStmt]
+  const rightData = t.results.perServer[rightId]?.sets[t.activeStmt]
+  const stmtTitle = t.results.statements[t.activeStmt] || `Result ${t.activeStmt + 1}`
+  if (!leftData || !rightData) {
+    const missing = [!leftData ? leftConn?.name : null, !rightData ? rightConn?.name : null].filter(Boolean).join(', ')
+    return `<div class="barrier-view"><div class="vbanner info"><span>${IC.warn}</span><div><strong>${missing}</strong> did not return a <em>${stmtTitle}</em> result set. Click <strong>Compare…</strong> in the results toolbar to compare two servers that both returned it.</div></div></div>`
+  }
+  // Pair shared columns by name (case-insensitive), report unpaired columns just like Varia's CompareService
+  const rightIdxByName = new Map(rightData.cols.map((c, i) => [c.name.toLowerCase(), i]))
+  const pairs = []
+  const leftOnly = []
+  leftData.cols.forEach((lc, li) => {
+    const ri = rightIdxByName.get(lc.name.toLowerCase())
+    if (ri !== undefined) pairs.push({ col: lc, li, ri })
+    else leftOnly.push(lc.name)
+  })
+  const pairedRight = new Set(pairs.map(p => p.ri))
+  const rightOnly = rightData.cols.filter((_, ri) => !pairedRight.has(ri)).map(c => c.name)
+
+  const entries = []
+  let changed = 0, same = 0, added = 0, removed = 0
+  const changedCols = new Set()
+  const matchedRight = new Set()
+
+  leftData.rows.forEach((lr, idx) => {
+    const rIdx = rightData.rows.findIndex((x, ri) => !matchedRight.has(ri) && x[pairs[0].ri] === lr[pairs[0].li])
+    if (rIdx >= 0) {
+      matchedRight.add(rIdx)
+      const rr = rightData.rows[rIdx]
+      const diffIdx = []
+      for (let p = 1; p < pairs.length; p++) {
+        if (lr[pairs[p].li] !== rr[pairs[p].ri]) { diffIdx.push(p); changedCols.add(p) }
+      }
+      if (diffIdx.length) changed++; else same++
+      entries.push({ kind: diffIdx.length ? 'changed' : 'same', lRow: idx + 1, rRow: rIdx + 1, lr, rr, diffIdx })
+    } else {
+      removed++
+      entries.push({ kind: 'removed', lRow: idx + 1, rRow: null, lr, rr: null, diffIdx: [] })
+    }
+  })
+  rightData.rows.forEach((rr, idx) => {
+    if (!matchedRight.has(idx)) {
+      added++
+      entries.push({ kind: 'added', lRow: null, rRow: idx + 1, lr: null, rr, diffIdx: [] })
+    }
+  })
+  const visible = t.diffChangesOnly ? entries.filter(e => e.kind !== 'same') : entries
+  const unpairedNote = [
+    leftOnly.length ? `Only in ${leftConn.name}: ${leftOnly.join(', ')}` : '',
+    rightOnly.length ? `Only in ${rightConn.name}: ${rightOnly.join(', ')}` : ''
+  ].filter(Boolean).join(' · ')
+
+  return `
+    <div class="diff-bar">
+      <span style="display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--text-strong)">
+        <span style="width:7px;height:7px;border-radius:50%;background:${leftConn.color}"></span>${leftConn.name}
+        <span style="color:var(--text-muted)">→</span>
+        <span style="width:7px;height:7px;border-radius:50%;background:${rightConn.color}"></span>${rightConn.name}
+      </span>
+      <span class="diff-chip" style="--c:var(--chg)"><b>${changed}</b> changed</span>
+      ${added ? `<span class="diff-chip" style="--c:var(--success)"><b>+${added}</b> added</span>` : ''}
+      ${removed ? `<span class="diff-chip" style="--c:var(--error)"><b>−${removed}</b> removed</span>` : ''}
+      <span class="diff-chip" style="--c:var(--text-muted)"><b>${same}</b> same</span>
+      <span style="color:var(--text-muted)">Matched by ${IC.key} <strong>${pairs[0].col.name}</strong></span>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:4px">
+        <button type="button" class="rbtn ${!t.diffChangesOnly ? 'is-active' : ''}" id="diffAllBtn">All rows</button>
+        <button type="button" class="rbtn ${t.diffChangesOnly ? 'is-active' : ''}" id="diffChgBtn">Changes only</button>
+        <button type="button" class="rbtn" id="diffSwapBtn" title="Swap old and new">⇄ Swap</button>
+      </div>
+    </div>
+    ${unpairedNote ? `<div class="grid-notice info">${IC.warn}<span>Unpaired columns omitted from comparison: ${unpairedNote}</span></div>` : ''}
+    <div class="grid-scroll">
+      <table class="vgrid">
+        <thead>
+          <tr>
+            <th class="rn" style="width:54px">Row</th>
+            ${pairs.map((p, idx) => `
+              <th class="${p.col.num ? 'num' : ''} ${changedCols.has(idx) ? 'chgcol' : ''}">
+                <div class="th-in">
+                  ${idx === 0 ? `<span style="color:var(--accent)">${IC.key}</span>` : ''}
+                  <span>${p.col.name}</span>
+                  ${changedCols.has(idx) ? `<span class="pip"></span>` : ''}
+                </div>
+              </th>
+            `).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${visible.map(e => {
+            const kCol = e.kind === 'changed' ? 'var(--chg)' : e.kind === 'added' ? 'var(--success)' : e.kind === 'removed' ? 'var(--error)' : 'transparent'
+            const mk = e.kind === 'changed' ? '~' : e.kind === 'added' ? '+' : e.kind === 'removed' ? '−' : ' '
+            const rLabel = e.kind === 'added' ? `→${e.rRow}` : e.kind === 'removed' ? `${e.lRow}→` : `${e.lRow}→${e.rRow}`
+            const trCls = e.kind === 'added' ? 'd-add' : e.kind === 'removed' ? 'd-rem' : ''
+            return `
+              <tr class="${trCls}">
+                <td class="dgut">
+                  <div class="dg-in">
+                    <span class="bar3" style="--k:${kCol}"></span>
+                    <span class="mk" style="--k:${kCol === 'transparent' ? 'var(--text-muted)' : kCol}">${mk}</span>
+                    <span>${rLabel}</span>
+                  </div>
+                </td>
+                ${pairs.map((p, pi) => {
+                  if (e.kind === 'added') return `<td class="${p.col.num ? 'num' : ''}">${formatCell(e.rr[p.ri], p.col.num)}</td>`
+                  if (e.kind === 'removed') return `<td class="${p.col.num ? 'num' : ''}">${formatCell(e.lr[p.li], p.col.num)}</td>`
+                  if (e.diffIdx.includes(pi)) {
+                    return `<td class="${p.col.num ? 'num' : ''} d-chg"><del>${formatCell(e.lr[p.li], p.col.num)}</del><span class="darrow">→</span><ins>${formatCell(e.rr[p.ri], p.col.num)}</ins></td>`
+                  }
+                  return `<td class="${p.col.num ? 'num' : ''} ${e.kind === 'changed' ? 'd-dim' : ''}">${formatCell(e.rr[p.ri], p.col.num)}</td>`
+                }).join('')}
+              </tr>
+            `
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `
+}
+
+function renderProfilePanel(t, activeSet) {
+  if (!t.profileOpen || !activeSet) return ''
+  return `
+    <aside class="side-panel is-open">
+      <div class="side-head">
+        <strong>Column Profile</strong>
+        <button type="button" class="wb-tab-close" id="closeProfileBtn">${IC.close}</button>
+      </div>
+      <div class="side-body">
+        <div style="font-size:11px;color:var(--text-muted)">In-memory backend stats · ${activeSet.rows.length} rows</div>
+        ${activeSet.cols.map((col, ci) => {
+          const vals = activeSet.rows.map(r => (r[ci] && typeof r[ci] === 'object' ? r[ci].label : r[ci]))
+          const distinct = new Set(vals).size
+          const nums = vals.filter(v => typeof v === 'number')
+          const min = nums.length ? Math.min(...nums).toLocaleString() : String(vals[0] ?? '—')
+          const max = nums.length ? Math.max(...nums).toLocaleString() : String(vals[vals.length - 1] ?? '—')
+          return `
+            <div class="prof-card">
+              <header><b>${col.name}</b><span>${col.num ? 'numeric' : 'text'}</span></header>
+              <dl>
+                <dt>Distinct</dt><dd>${distinct}</dd>
+                <dt>NULLs</dt><dd>0 (0%)</dd>
+                <dt>Min / Max</dt><dd>${min} … ${max}</dd>
+              </dl>
+              <div class="prof-bars">
+                <i style="height:45%"></i><i style="height:85%"></i><i style="height:60%"></i><i style="height:100%"></i><i style="height:35%"></i><i style="height:70%"></i>
+              </div>
+            </div>
+          `
+        }).join('')}
+      </div>
+    </aside>
+  `
+}
+
+function renderComparePopover() {
+  const pop = document.getElementById('comparePopover')
+  const t = activeTab()
+  if (!state.comparePopoverOpen) { pop.classList.remove('is-open'); return }
+  const keys = Object.keys(t.results.perServer || {})
+  const [l, r] = t.diffPair || [keys[0], keys[1] || keys[0]]
+  pop.innerHTML = `
+    <div class="vpop-head">
+      <strong>Compare Server Results</strong>
+      <button type="button" class="wb-tab-close" id="closeCmpPop">${IC.close}</button>
+    </div>
+    <div class="vpop-body">
+      <div style="font-size:11px;color:var(--text-muted)">Diff any two servers' stored result sets using Varia's built-in comparison engine:</div>
+      <div class="trow">
+        <span style="color:var(--error);font-weight:700;width:36px">Old −</span>
+        <select id="cmpLeftSel" style="flex:1">${keys.map(id => `<option value="${id}" ${id === l ? 'selected' : ''}>${connById(id).name} · ${t.results.statements[t.activeStmt] || 'Result 1'}</option>`).join('')}</select>
+      </div>
+      <div class="trow">
+        <span style="color:var(--success);font-weight:700;width:36px">New +</span>
+        <select id="cmpRightSel" style="flex:1">${keys.map(id => `<option value="${id}" ${id === r ? 'selected' : ''}>${connById(id).name} · ${t.results.statements[t.activeStmt] || 'Result 1'}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="vpop-foot">
+      <button type="button" class="btn-v" id="cancelCmpPop">Cancel</button>
+      <button type="button" class="btn-v primary" id="runCmpPop">${IC.compare}<span>Compare</span></button>
+    </div>
+  `
+  pop.classList.add('is-open')
+  const close = () => { state.comparePopoverOpen = false; renderComparePopover() }
+  document.getElementById('closeCmpPop').addEventListener('click', close)
+  document.getElementById('cancelCmpPop').addEventListener('click', close)
+  document.getElementById('runCmpPop').addEventListener('click', () => {
+    const lv = document.getElementById('cmpLeftSel').value
+    const rv = document.getElementById('cmpRightSel').value
+    if (lv === rv) { showToast('Pick two different servers to compare.', 'warn'); return }
+    t.diffPair = [lv, rv]
+    t.activeGroupTab = 'diff'
+    t.activeOutputView = 'results'
+    state.comparePopoverOpen = false
+    renderOutputPane()
+  })
+}
+
+function renderOutputPane() {
+  const t = activeTab()
+  const tb = document.getElementById('outputToolbar')
+  const main = document.getElementById('resultsMain')
+  const msgStrip = document.getElementById('msgStrip')
+
+  const serverKeys = Object.keys(t.results.perServer || {})
+  const totalSets = serverKeys.reduce((acc, id) => acc + t.results.perServer[id].sets.filter(Boolean).length, 0)
+  const msgCount = (t.results.messages || []).length
+  const hasSets = totalSets > 0
+
+  const renderBarrierHtml = (b, allowJump) => `
+    <div class="barrier-view">
+      <div class="vbanner ${b.tone}">
+        <span>${b.tone === 'err' ? IC.rollback : b.tone === 'warn' ? IC.warn : b.tone === 'info' ? IC.spin : IC.check}</span>
+        <div><strong>${b.headline}</strong>${b.detail ? `<div style="margin-top:2px;opacity:0.92">${b.detail}</div>` : ''}</div>
+      </div>
+      <div class="barrier-cards">
+        ${b.cards.map(card => {
+          const c = connById(card.id)
+          const col = card.tone === 'err' ? 'var(--error)' : card.tone === 'warn' ? 'var(--warning)' : card.tone === 'info' ? 'var(--accent)' : 'var(--success)'
+          return `
+            <div class="bcard ${card.tone === 'err' ? 'is-err' : ''}">
+              <div class="bcard-top">
+                <span class="bdot" style="background:${c.color}"></span>
+                <strong>${c.name}</strong>
+                <span class="env-pill ${c.env}">${c.envLabel}</span>
+                <span class="bcard-state" style="color:${col}">${card.state}</span>
+              </div>
+              <div class="bcard-detail">${card.detail}</div>
+              ${card.meta || (allowJump && card.sets > 0) ? `
+                <div class="bcard-meta">
+                  ${card.meta ? `<span>${card.meta}</span>` : ''}
+                  ${allowJump && card.sets > 0 ? `<button type="button" class="bcard-link" data-jump-server="${card.id}">View ${card.sets} ${card.sets === 1 ? 'result' : 'results'} →</button>` : ''}
+                </div>
+              ` : ''}
+              <div class="bprog"><i style="width:${card.pct ?? 100}%;background:${col}"></i></div>
+            </div>
+          `
+        }).join('')}
+      </div>
+    </div>
+  `
+
+  // Run summary status
+  let tone = 'success', sIcon = IC.check, outcomeText = 'Ready', facts = ''
+  if (t.runState === 'running') { tone = 'running'; sIcon = IC.spin; outcomeText = t.liveBarrier?.phase || 'Executing…'; facts = `${t.targets.filter(x => x.enabled).length} targets` }
+  else if (t.runState === 'done-guard-blocked') { tone = 'error'; sIcon = IC.err; outcomeText = 'Blocked by Read-Only Guard'; facts = '0 queries sent · $0.00 billed' }
+  else if (t.runState === 'done-rollback') { tone = 'error'; sIcon = IC.rollback; outcomeText = 'Rolled back (0/3 committed)'; facts = t.rolledBackPreview ? `${totalSets} preview sets · 1 failed · 2 rolled back` : '1 failed · 2 rolled back · 0.42 s' }
+  else if (t.runState === 'done-dryrun-stop') { tone = 'warning'; sIcon = IC.warn; outcomeText = 'Stopped at Pre-flight Dry Run'; facts = '0 mutations · $0.00 billed' }
+  else if (t.runState === 'done-barrier-ok') { tone = 'success'; sIcon = IC.check; outcomeText = `Committed (${t.targets.filter(x => x.enabled).length}/${t.targets.filter(x => x.enabled).length})`; facts = t.bqCost ? `${t.bqCost} · 1.42 s` : '0.24 s' }
+  else if (t.runState === 'done-ok') {
+    const totalRows = serverKeys.reduce((a, id) => a + t.results.perServer[id].sets.filter(Boolean).reduce((b, s) => b + s.rows.length, 0), 0)
+    outcomeText = t.execMode === 'tx' ? `Committed (${serverKeys.length}/${serverKeys.length})` : `${serverKeys.length}/${serverKeys.length} targets succeeded`
+    facts = `${totalRows} rows · ${totalSets} sets${t.bqCost ? ` · ${t.bqCost}` : ' · 0.38 s'}`
+  }
+
+  tb.innerHTML = `
+    <div class="oviews" role="tablist">
+      <button type="button" id="outTabResults" aria-selected="${t.activeOutputView === 'results'}">Results ${hasSets ? `<span class="badge">${totalSets}</span>` : ''}</button>
+      <button type="button" id="outTabMessages" aria-selected="${t.activeOutputView === 'messages'}">Messages <span class="badge">${msgCount}</span></button>
+    </div>
+    <div class="rtb">
+      <div class="rsearch">
+        ${IC.search}
+        <input id="resSearchInput" type="text" value="${t.searchQuery || ''}" placeholder="Find in grid…" ${!hasSets ? 'disabled' : ''} />
+      </div>
+      <button type="button" class="rbtn ${state.comparePopoverOpen ? 'is-active' : ''}" id="btnCompare" ${serverKeys.length < 2 ? 'disabled' : ''}>${IC.compare}<span>Compare…</span></button>
+      <button type="button" class="rbtn ${t.profileOpen ? 'is-active' : ''}" id="btnProfile" ${!hasSets ? 'disabled' : ''}>${IC.profile}<span>Profile</span></button>
+      <button type="button" class="rbtn" id="btnLayout" ${!hasSets ? 'disabled' : ''} title="Switch between Server-Grouped Tabs and Stacked layout">${IC.layers}<span>${t.layout === 'tabs' ? 'Tabs' : 'Stacked'}</span></button>
+    </div>
+    <div class="ostatus" data-tone="${tone}">
+      <span class="os-ic">${sIcon}</span><strong>${outcomeText}</strong>${facts ? `<span>· ${facts}</span>` : ''}
+    </div>
+  `
+
+  document.getElementById('outTabResults').addEventListener('click', () => { t.activeOutputView = 'results'; renderOutputPane() })
+  document.getElementById('outTabMessages').addEventListener('click', () => { t.activeOutputView = 'messages'; renderOutputPane() })
+  document.getElementById('resSearchInput').addEventListener('input', e => { t.searchQuery = e.target.value; renderOutputPane(); document.getElementById('resSearchInput').focus() })
+  document.getElementById('btnCompare').addEventListener('click', e => { e.stopPropagation(); state.comparePopoverOpen = !state.comparePopoverOpen; state.targetPopoverOpen = false; renderComparePopover(); renderOutputPane() })
+  document.getElementById('btnProfile').addEventListener('click', () => { t.profileOpen = !t.profileOpen; renderOutputPane() })
+  document.getElementById('btnLayout').addEventListener('click', () => { t.layout = t.layout === 'tabs' ? 'stacked' : 'tabs'; renderOutputPane() })
+
+  // Main Output Body
+  if (t.activeOutputView === 'messages') {
+    main.innerHTML = `
+      <div class="grid-wrap" style="padding:10px 14px;overflow:auto;font-family:var(--font-mono);font-size:12px;line-height:19px">
+        ${(t.results.messages || []).map(m => {
+          const label = m.src === 'coord' ? '[Coordinator]' : `[${connById(m.src)?.name || m.src}]`
+          return `<div class="msg-line ${m.err ? 'is-err' : m.src === 'coord' ? 'is-coord' : ''}"><span class="msrc">${label}</span><span>${m.text}</span></div>`
+        }).join('')}
+      </div>
+    `
+  } else if (t.runState === 'running' && t.liveBarrier) {
+    main.innerHTML = renderBarrierHtml({
+      tone: 'info',
+      headline: t.liveBarrier.phase,
+      detail: `Holding coordinated execution state across ${t.liveBarrier.cards.length} targets.`,
+      cards: t.liveBarrier.cards
+    }, false)
+  } else if (!hasSets && t.barrier) {
+    main.innerHTML = renderBarrierHtml(t.barrier, false)
+  } else if (!hasSets) {
+    main.innerHTML = `<div class="barrier-view" style="justify-content:center;align-items:center;color:var(--text-muted)">Click <strong>Execute (F5)</strong> in the query bar to run across the selected targets.</div>`
+  } else if (t.layout === 'stacked') {
+    const comb = buildCombinedSet(t, t.activeStmt)
+    main.innerHTML = `
+      <div class="stack-wrap">
+        ${t.rolledBackPreview ? `<div class="grid-notice warn">${IC.warn}<span><strong>Rolled back — preview only (not committed).</strong> These rows streamed before a peer failed and triggered coordinated ROLLBACK.</span></div>` : ''}
+        ${comb ? `
+          <div class="stack-grp">
+            <div class="stack-cap">${IC.layers}<strong>Combined (${comb.serverCount}/${comb.totalServers} targets)</strong><span>· ${t.results.statements[t.activeStmt]} · ${comb.rows.length} rows · Auto-merged</span></div>
+            ${comb.notice ? `<div class="grid-notice info">${IC.warn}<span>${comb.notice}</span></div>` : ''}
+            ${renderDataGrid(comb.cols, comb.rows, t)}
+          </div>
+        ` : ''}
+        ${serverKeys.map(id => {
+          const c = connById(id)
+          const set = t.results.perServer[id].sets[t.activeStmt]
+          if (!set) return ''
+          return `
+            <div class="stack-grp">
+              <div class="stack-cap"><span style="width:7px;height:7px;border-radius:50%;background:${c.color}"></span><strong>${c.name}</strong><span class="env-pill ${c.env}">${c.envLabel}</span><span>· ${t.results.statements[t.activeStmt]} · ${set.rows.length} rows · ${(t.results.perServer[id].ms/1000).toFixed(2)} s</span></div>
+              ${renderDataGrid(set.cols, set.rows, t)}
+            </div>
+          `
+        }).join('')}
+      </div>
+      ${renderProfilePanel(t, comb)}
+    `
+  } else {
+    // TABS LAYOUT: Optional Summary Tab + Combined + Per-Server Group Tabs + Diff
+    const comb = buildCombinedSet(t, t.activeStmt)
+    let activeSetForProfile = comb
+    let gridContent = ''
+    let subBarHtml = ''
+    const stmts = t.results.statements
+    const rbNoticeHtml = t.rolledBackPreview
+      ? `<div class="grid-notice warn">${IC.warn}<span><strong>Rolled back — preview only (not committed).</strong> These rows streamed before dev-sql-01 failed and peers rolled back.</span></div>`
+      : ''
+
+    if (t.activeGroupTab === 'summary' && t.barrier) {
+      activeSetForProfile = null
+      gridContent = renderBarrierHtml(t.barrier, true)
+    } else if (t.activeGroupTab === 'combined' && comb) {
+      activeSetForProfile = comb
+      subBarHtml = `
+        <div class="vbar">
+          <div class="vtabs">
+            ${stmts.map((name, i) => `<button type="button" class="vt" data-stmt="${i}" data-on="${t.activeStmt === i}">${name}</button>`).join('')}
+          </div>
+          <div class="vfacts">
+            <span>Auto-merged (${comb.serverCount}/${comb.totalServers} targets)</span> · <strong>${comb.rows.length} rows</strong> · <span>${comb.cols.length} columns</span>
+          </div>
+        </div>
+      `
+      gridContent = `${rbNoticeHtml}${comb.notice ? `<div class="grid-notice info">${IC.warn}<span>${comb.notice}</span></div>` : ''}${renderDataGrid(comb.cols, comb.rows, t)}`
+    } else if (t.activeGroupTab === 'diff') {
+      activeSetForProfile = comb
+      subBarHtml = stmts.length > 1 ? `
+        <div class="vbar">
+          <div class="vtabs">
+            ${stmts.map((name, i) => `<button type="button" class="vt" data-stmt="${i}" data-on="${t.activeStmt === i}">${name}</button>`).join('')}
+          </div>
+          <div class="vfacts">Built-in Compare engine</div>
+        </div>
+      ` : ''
+      gridContent = `${rbNoticeHtml}${renderDiffView(t)}`
+    } else {
+      const sid = serverKeys.includes(t.activeGroupTab) ? t.activeGroupTab : serverKeys[0]
+      const c = connById(sid)
+      const sdata = t.results.perServer[sid]
+      const set = sdata.sets[t.activeStmt]
+      activeSetForProfile = set
+      subBarHtml = `
+        <div class="vbar">
+          <div class="vtabs">
+            ${stmts.map((name, i) => `<button type="button" class="vt" data-stmt="${i}" data-on="${t.activeStmt === i}">${name}${!sdata.sets[i] ? ' (none)' : ''}</button>`).join('')}
+          </div>
+          <div class="vfacts">
+            <span class="env-pill ${c.env}">${c.envLabel}</span>
+            ${set ? `<strong>${set.rows.length} rows</strong> · <span>${set.cols.length} columns</span> · ` : ''}<span>${(sdata.ms/1000).toFixed(2)} s</span>
+          </div>
+        </div>
+      `
+      gridContent = set
+        ? `${rbNoticeHtml}${renderDataGrid(set.cols, set.rows, t)}`
+        : `<div class="barrier-view" style="justify-content:center;align-items:center;color:var(--text-muted)"><strong>${c.name}</strong> did not return a <em>${stmts[t.activeStmt] || `Result ${t.activeStmt + 1}`}</em> set (${sdata.status === 'err' ? 'failed in an earlier batch' : 'conditional branch did not execute'}).</div>`
+    }
+
+    const [dl, dr] = t.diffPair || [serverKeys[0], serverKeys[1]]
+    const diffReady = serverKeys.filter(id => t.results.perServer[id].sets.some(Boolean)).length >= 2
+    main.innerHTML = `
+      <div class="grid-wrap">
+        <div class="gtabs" role="tablist">
+          ${t.barrier ? `
+            <button type="button" class="gt" data-gtab="summary" data-on="${t.activeGroupTab === 'summary'}" style="--tab-accent:${t.barrier.tone === 'err' ? 'var(--error)' : 'var(--success)'}">
+              <span class="${t.barrier.tone === 'err' ? 'st-err' : 'st-ok'}">${t.barrier.tone === 'err' ? IC.rollback : IC.check}</span>
+              <span>Summary</span>
+            </button>
+            <span class="gt-sep"></span>
+          ` : ''}
+          ${comb ? `
+            <button type="button" class="gt" data-gtab="combined" data-on="${t.activeGroupTab === 'combined'}" style="--tab-accent:var(--accent)">
+              ${IC.layers}
+              <span>Combined (${comb.serverCount}/${comb.totalServers})</span>
+              <span class="gt-cnt">${comb.rows.length}</span>
+            </button>
+            <span class="gt-sep"></span>
+          ` : ''}
+          ${serverKeys.map(id => {
+            const c = connById(id)
+            const sdata = t.results.perServer[id]
+            const cnt = sdata.sets.filter(Boolean).length
+            const stIcon = sdata.status === 'err' ? `<span class="st-err">${IC.err}</span>` : sdata.status === 'rb' ? `<span class="st-rb">${IC.rollback}</span>` : `<span class="st-ok">${IC.check}</span>`
+            return `
+              <button type="button" class="gt" data-gtab="${id}" data-on="${t.activeGroupTab === id}" style="--tab-accent:${c.color}">
+                <span class="sdot" style="background:${c.color}"></span>
+                <span>${c.name}</span>
+                ${stIcon}
+                ${cnt > 0 ? `<span class="gt-cnt">${cnt}</span>` : ''}
+              </button>
+            `
+          }).join('')}
+          ${diffReady ? `
+            <span class="gt-sep"></span>
+            <button type="button" class="gt" data-gtab="diff" data-on="${t.activeGroupTab === 'diff'}" style="--tab-accent:var(--chg)">
+              ${IC.compare}
+              <span>Differences: ${connById(dl).name} → ${connById(dr).name}</span>
+            </button>
+          ` : ''}
+        </div>
+        ${subBarHtml}
+        ${gridContent}
+      </div>
+      ${renderProfilePanel(t, activeSetForProfile)}
+    `
+
+    main.querySelectorAll('[data-gtab]').forEach(btn => {
+      btn.addEventListener('click', () => { t.activeGroupTab = btn.dataset.gtab; t.sort = { col: null, dir: 0 }; renderOutputPane() })
+    })
+    main.querySelectorAll('[data-jump-server]').forEach(btn => {
+      btn.addEventListener('click', () => { t.activeGroupTab = btn.dataset.jumpServer; t.activeStmt = 0; t.sort = { col: null, dir: 0 }; renderOutputPane() })
+    })
+    main.querySelectorAll('[data-stmt]').forEach(btn => {
+      btn.addEventListener('click', () => { t.activeStmt = Number(btn.dataset.stmt); t.sort = { col: null, dir: 0 }; renderOutputPane() })
+    })
+    main.querySelectorAll('[data-sort-col]').forEach(th => {
+      th.addEventListener('click', () => {
+        const ci = Number(th.dataset.sortCol)
+        if (t.sort.col !== ci) t.sort = { col: ci, dir: 1 }
+        else t.sort = { col: ci, dir: t.sort.dir === 1 ? -1 : t.sort.dir === -1 ? 0 : 1 }
+        renderOutputPane()
+      })
+    })
+    document.getElementById('diffAllBtn')?.addEventListener('click', () => { t.diffChangesOnly = false; renderOutputPane() })
+    document.getElementById('diffChgBtn')?.addEventListener('click', () => { t.diffChangesOnly = true; renderOutputPane() })
+    document.getElementById('diffSwapBtn')?.addEventListener('click', () => { t.diffPair = [t.diffPair[1], t.diffPair[0]]; renderOutputPane() })
+    document.getElementById('closeProfileBtn')?.addEventListener('click', () => { t.profileOpen = false; renderOutputPane() })
+  }
+
+  // Collapsible Messages Strip (hidden when Messages is the primary view)
+  if (t.activeOutputView === 'messages') {
+    msgStrip.style.display = 'none'
+  } else {
+    msgStrip.style.display = 'flex'
+    msgStrip.classList.toggle('is-collapsed', !!t.msgCollapsed)
+    const msgs = t.results.messages || []
+    const errCnt = msgs.filter(m => m.err).length
+    const uniqueSrc = [...new Set(msgs.filter(m => m.src !== 'coord').map(m => m.src))]
+    const filteredMsgs = t.msgFilter === 'all' ? msgs : msgs.filter(m => m.src === t.msgFilter || m.src === 'coord')
+    msgStrip.innerHTML = `
+      <div class="msg-strip-head">
+        <button type="button" id="toggleMsgStrip" style="display:inline-flex;align-items:center;gap:4px;color:var(--text-secondary);font-weight:600">
+          ${t.msgCollapsed ? IC.chevR : IC.chevD}
+          <span>Messages · ${msgs.length}${errCnt ? ` · <span style="color:var(--error)">${errCnt} error</span>` : ' · no errors'}</span>
+        </button>
+        <div style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">
+          <button type="button" class="msg-pill ${t.msgFilter === 'all' ? 'is-on' : ''}" data-mf="all">All</button>
+          ${uniqueSrc.map(id => `<button type="button" class="msg-pill ${t.msgFilter === id ? 'is-on' : ''}" data-mf="${id}">${connById(id)?.name || id}</button>`).join('')}
+        </div>
+      </div>
+      <div class="msg-body">
+        ${filteredMsgs.map(m => {
+          const label = m.src === 'coord' ? '[Coordinator]' : `[${connById(m.src)?.name || m.src}]`
+          return `<div class="msg-line ${m.err ? 'is-err' : m.src === 'coord' ? 'is-coord' : ''}" ${m.line ? `data-err-line="${m.line}" title="Click to highlight error line ${m.line}"` : ''}>
+            <span class="msrc">${label}</span><span>${m.text}</span>
+          </div>`
+        }).join('')}
+      </div>
+    `
+    document.getElementById('toggleMsgStrip').addEventListener('click', () => { t.msgCollapsed = !t.msgCollapsed; renderOutputPane() })
+    msgStrip.querySelectorAll('[data-mf]').forEach(b => b.addEventListener('click', () => { t.msgFilter = b.dataset.mf; renderOutputPane() }))
+    msgStrip.querySelectorAll('[data-err-line]').forEach(el => el.addEventListener('click', () => { t.errLine = Number(el.dataset.errLine); renderEditor(); showToast(`Revealed line ${t.errLine} in editor.`) }))
+  }
+}
+
+// =============================================================================
+// 6. STATUS BAR
+// =============================================================================
+function renderStatusBar() {
+  const t = activeTab()
+  const sb = document.getElementById('statusBar')
+  const enabled = t.targets.filter(x => x.enabled)
+  const isMixed = t.mode === 'cross-engine'
+  const modeName = isMixed ? 'Cross-Engine Read-Only' : t.execMode === 'tx' ? 'Coordinated Transaction' : t.execMode === 'seq-dryrun' ? 'Dry Run + Sequential' : 'Fire and Forget'
+  sb.className = 'wb-statusbar ' + (t.runState === 'running' ? 'is-running' : '')
+  sb.innerHTML = `
+    <span class="sb-item">${isMixed ? IC.split : t.mode === 'same-bigquery' ? IC.bigquery : IC.server}<strong>${enabled.map(x => connById(x.id).name).join(', ')}</strong></span>
+    <span class="sb-sep"></span>
+    <span class="sb-item">Mode: <strong>${modeName}</strong></span>
+    <div class="sb-right">
+      <span>Ln 2, Col 1</span>
+      <span class="sb-sep"></span>
+      <span>${isMixed ? 'T-SQL + GoogleSQL' : t.mode === 'same-bigquery' ? 'GoogleSQL' : 'Transact-SQL'}</span>
+      <span class="sb-sep"></span>
+      <span>Result memory: 4.2 / 512 MiB</span>
+    </div>
+  `
+}
+
+function renderAll() {
+  renderExplorer()
+  renderDocTabs()
+  renderQueryBar()
+  renderTargetPopover()
+  renderEditor()
+  renderOutputPane()
+  renderComparePopover()
+  renderStatusBar()
+}
+
+// =============================================================================
+// LAB PRESETS, THEME, SPLITTERS & GLOBAL DISMISS
+// =============================================================================
+function syncPresetHighlight(preset) {
+  document.querySelectorAll('[data-preset]').forEach(b => b.classList.toggle('is-active', b.dataset.preset === preset))
+}
+
+document.querySelectorAll('[data-preset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const p = btn.dataset.preset
+    syncPresetHighlight(p)
+    state.targetPopoverOpen = false
+    state.comparePopoverOpen = false
+    state.modalOpen = false
+    if (p === 'mssql-select') { state.activeTabId = 'tab-mssql-select'; state.oeSelected = ['sql-prod', 'sql-stage', 'sql-dev'] }
+    else if (p === 'mssql-mixed') { state.activeTabId = 'tab-mssql-mixed'; state.oeSelected = ['sql-prod', 'sql-stage', 'sql-dev'] }
+    else if (p === 'mssql-ddl-rb') { state.activeTabId = 'tab-mssql-ddl'; state.oeSelected = ['sql-prod', 'sql-stage', 'sql-dev'] }
+    else if (p === 'bq-dml') { state.activeTabId = 'tab-bq-dml'; state.oeSelected = ['bq-prod', 'bq-stage'] }
+    else if (p === 'bq-ddl') { state.activeTabId = 'tab-bq-ddl'; state.oeSelected = ['bq-prod', 'bq-stage'] }
+    else if (p === 'cross-engine') { state.activeTabId = 'tab-cross'; state.oeSelected = ['sql-prod'] }
+    renderAll()
+    renderRunModal()
+  })
+})
+
+document.querySelectorAll('[data-theme-btn]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const theme = btn.dataset.themeBtn
+    document.documentElement.setAttribute('data-theme', theme)
+    document.querySelectorAll('[data-theme-btn]').forEach(b => b.classList.toggle('is-active', b.dataset.themeBtn === theme))
+  })
+})
+
+document.getElementById('oeFilterInput').addEventListener('input', e => { state.oeFilter = e.target.value; renderExplorer() })
+document.getElementById('oeClearMultiBtn').addEventListener('click', () => { state.oeSelected = []; renderExplorer() })
+document.getElementById('oeBarClearBtn').addEventListener('click', () => { state.oeSelected = []; renderExplorer() })
+document.getElementById('oeOpenMultiBtn').addEventListener('click', () => openNewMultiTabFromSelection())
+
+// Resizable Splitters
+;(function initSplitters() {
+  const vSplit = document.getElementById('vSplitter')
+  const oe = document.getElementById('oePane')
+  vSplit.addEventListener('pointerdown', e => {
+    e.preventDefault(); vSplit.classList.add('is-dragging')
+    const startX = e.clientX, startW = oe.getBoundingClientRect().width
+    const move = ev => { oe.style.width = Math.max(220, Math.min(420, startW + ev.clientX - startX)) + 'px' }
+    const up = () => { vSplit.classList.remove('is-dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  })
+
+  const hSplit = document.getElementById('hSplitter')
+  const ed = document.getElementById('editorSection')
+  hSplit.addEventListener('pointerdown', e => {
+    e.preventDefault(); hSplit.classList.add('is-dragging')
+    const startY = e.clientY, startH = ed.getBoundingClientRect().height
+    const move = ev => { ed.style.height = Math.max(110, Math.min(420, startH + ev.clientY - startY)) + 'px' }
+    const up = () => { hSplit.classList.remove('is-dragging'); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up)
+  })
+})()
+
+// Dismiss popovers/menus on click outside or Escape
+document.addEventListener('click', e => {
+  const menu = document.getElementById('ctxMenu')
+  if (menu.classList.contains('is-open') && !menu.contains(e.target)) menu.classList.remove('is-open')
+  const tp = document.getElementById('targetPopover')
+  if (state.targetPopoverOpen && !tp.contains(e.target) && !e.target.closest('#qbTargetPill') && !e.target.closest('[data-open-targets]')) {
+    state.targetPopoverOpen = false; renderTargetPopover(); renderQueryBar()
+  }
+  const cp = document.getElementById('comparePopover')
+  if (state.comparePopoverOpen && !cp.contains(e.target) && !e.target.closest('#btnCompare')) {
+    state.comparePopoverOpen = false; renderComparePopover(); renderOutputPane()
+  }
+})
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.getElementById('ctxMenu').classList.remove('is-open')
+    state.targetPopoverOpen = false
+    state.comparePopoverOpen = false
+    state.modalOpen = false
+    renderRunModal(); renderTargetPopover(); renderComparePopover(); renderQueryBar()
+  } else if (e.key === 'F5') {
+    e.preventDefault()
+    const t = activeTab()
+    if (t.mode === 'cross-engine') {
+      const en = t.targets.filter(x => x.enabled)
+      const hasSql = en.some(x => connById(x.id)?.provider === 'sqlserver')
+      const hasBq = en.some(x => connById(x.id)?.provider === 'bigquery')
+      if (!hasSql || !hasBq) { state.targetPopoverOpen = true; renderTargetPopover(); renderQueryBar(); showToast('Select at least 1 SQL Server and 1 BigQuery target first.', 'warn'); return }
+      if (t.crossGuardViolation) { triggerCrossGuardRefusal(t); return }
+      simulateRun(t, 'readonly', 'ok')
+    } else openRunModal(t)
+  }
+})
+
+renderAll()
+</script>
+</body>
+</html>
