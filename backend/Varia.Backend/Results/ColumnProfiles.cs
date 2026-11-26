@@ -457,7 +457,14 @@ internal static class ColumnProfiler
                     var written = ViewSorter.SortKey(compare.Info, compare.Options, text, ref key, grown => charges.Add(grown));
                     return key.AsSpan(0, written);
                 }
-                default: return trim ? ViewSorter.TrimEnd(cell) : cell;
+                default:
+                    if (wire == WireKind.Text && ViewSorter.IsInstant(meta))
+                    {
+                        if (ViewSorter.TryInstant(cell, out var ticks, out _, out var dated, out var zoned) && !zoned && dated != timeOnly)
+                            return TaggedEight(0, (ulong)ticks ^ 0x8000_0000_0000_0000UL);
+                        return Tagged(1, cell);
+                    }
+                    return trim ? ViewSorter.TrimEnd(cell) : cell;
             }
         }
 
@@ -476,6 +483,22 @@ internal static class ColumnProfiler
         {
             BinaryPrimitives.WriteUInt64BigEndian(key, value);
             return key.AsSpan(0, 8);
+        }
+
+        private ReadOnlySpan<byte> TaggedEight(byte tag, ulong value)
+        {
+            Grow(9);
+            key[0] = tag;
+            BinaryPrimitives.WriteUInt64BigEndian(key.AsSpan(1), value);
+            return key.AsSpan(0, 9);
+        }
+
+        private ReadOnlySpan<byte> Tagged(byte tag, ReadOnlySpan<byte> bytes)
+        {
+            Grow(bytes.Length + 1);
+            key[0] = tag;
+            bytes.CopyTo(key.AsSpan(1));
+            return key.AsSpan(0, bytes.Length + 1);
         }
 
         private void Grow(int size)

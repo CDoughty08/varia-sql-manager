@@ -209,17 +209,34 @@ internal static class FloatExactChecks
         check(listed == "1×1,1.0000000000000002×1,1.0000000000000002E+300×1" && Distinct(mixed, 1, "0002") == "1.0000000000000002×1,1.0000000000000002E+300×1",
             "a real column holding a float's exact value lists and searches it as that float: " + listed);
 
-        // A real and a float of the same exact value but different display text compare as their hashes do: changed, so
-        // a key on that column never pairs rows that a cell comparison would call the same.
+        // A real and a float of the same exact value but different display text hash and compare by canonical IEEE-754 bits:
+        // unchanged by Id and paired by value.
         ResultColumn[] realKey = [new("Id", "int", "text"), new("V", "real", "text")];
         ResultColumn[] floatKey = [new("Id", "int", "text"), new("V", "float", "text")];
         var realSide = FillRows(store, budget, realKey, row => { row.AppendText("1"); row.AppendReal(MathF.BitIncrement(1f)); });
         var floatSide = FillRows(store, budget, floatKey, row => { row.AppendText("1"); row.AppendFloat(MathF.BitIncrement(1f)); });
         var crossed = ResultDiffer.Compare(realSide, realSide.SealedSnapshot(), floatSide, floatSide.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Columns, [0]));
         var byValue = ResultDiffer.Compare(realSide, realSide.SealedSnapshot(), floatSide, floatSide.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Columns, [1]));
-        check(string.Join(",", crossed.Entries.Select(entry => entry.Kind)) == "Changed" && string.Join(",", byValue.Entries.Select(entry => entry.Kind)) == "Removed,Added",
-            "a real and a float that show differently are a change by Id and no match by value, as their hashes say: "
+        check(string.Join(",", crossed.Entries.Select(entry => entry.Kind)) == "Same" && string.Join(",", byValue.Entries.Select(entry => entry.Kind)) == "Same",
+            "a real and a float holding the same exact IEEE-754 value compare unchanged by Id and pair by value despite differing display text: "
             + string.Join(",", crossed.Entries.Select(entry => entry.Kind)) + " / " + string.Join(",", byValue.Entries.Select(entry => entry.Kind)));
+
+        // Canonical float bits: -0.0 equals +0.0, NaN equals NaN, and unparseable text in a float-vs-text diff never matches NaN.
+        var specialLeft = FillRows(store, budget, floatKey,
+            row => { row.AppendText("1"); row.AppendText("-0"); },
+            row => { row.AppendText("2"); row.AppendText("NaN"); },
+            row => { row.AppendText("3"); row.AppendText("NaN"); });
+        ResultColumn[] textKey = [new("Id", "int", "text"), new("V", "nvarchar(20)", "text")];
+        var specialRight = FillRows(store, budget, textKey,
+            row => { row.AppendText("1"); row.AppendText("0"); },
+            row => { row.AppendText("2"); row.AppendText("NaN"); },
+            row => { row.AppendText("3"); row.AppendText("not-a-float"); });
+        var specialById = ResultDiffer.Compare(specialLeft, specialLeft.SealedSnapshot(), specialRight, specialRight.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Columns, [0]));
+        var specialByRows = ResultDiffer.Compare(specialLeft, specialLeft.SealedSnapshot(), specialRight, specialRight.SealedSnapshot(), false, CancellationToken.None, match: new DiffMatch(DiffMatchMode.Rows, []));
+        check(string.Join(",", specialById.Entries.Select(entry => entry.Kind)) == "Same,Same,Changed"
+            && string.Join(",", specialByRows.Entries.Select(entry => entry.Kind)) == "Same,Same,Removed,Added",
+            "float Kind canonicalizes -0.0/+0.0 and NaN while keeping unparseable text distinct from NaN: "
+            + string.Join(",", specialById.Entries.Select(entry => entry.Kind)) + " / " + string.Join(",", specialByRows.Entries.Select(entry => entry.Kind)));
 
         // A column that is varchar in the first result compares by its text, so a float in the second that shows the same
         // text is the same value, in its hash and cell by cell, exact text or not.
