@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   backendReady, connectDialogWindow, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, memoryIndicator, memorySaved, menubar, movePane, quickInput, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, submitConnect, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, submitConnect, toasts, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -733,7 +733,8 @@ try {
   await page.keyboard.press('F1')
   await page.keyboard.type('Clear Saved Search Indexes')
   await quickInput(page).getByRole('option', { name: /^Object Explorer: Clear Saved Search Indexes/ }).click()
-  await expect(page.getByText('There were no saved search indexes to clear.', { exact: true })).toBeVisible()
+  // An info toast, which the polite live region also reads out: the toast itself is the one to find.
+  await expect(toasts(page).filter({ hasText: 'There were no saved search indexes to clear.' })).toBeVisible()
   expect((await calls('explorer.indexStore.clear')).slice(clearedBefore)).toEqual([{}])
   console.log('Options checks: with no key store Options says the index is not saved and how to opt in, the three saving settings reach the backend at once, the Memory panel follows, and Clear Saved Search Indexes runs from the palette.')
 
