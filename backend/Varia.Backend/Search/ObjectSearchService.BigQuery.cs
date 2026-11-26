@@ -283,7 +283,7 @@ internal sealed partial class ObjectSearchService
             var order = skip is { Project: "", Database: "" } ? SkipList.Server : Interlocked.Increment(ref skipOrder) - 1;
             lock (state.Gate) if (Current()) state.Skipped.Add(order, skip);
         }
-        ObjectIndexSkip SkipOf(Exception error, string project, string dataset, string permission)
+        ObjectIndexSkip SkipOf(Exception error, string project, string dataset, string? permission)
         {
             var mapped = source.Map(error, project, permission, stop);
             var (code, message) = mapped is RequestException request ? (request.Code, request.Message) : ("CATALOG_ERROR", "BigQuery refused the request.");
@@ -770,7 +770,8 @@ internal sealed partial class ObjectSearchService
                     }
                     catch (Exception error) when (!stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
                     {
-                        var skip = SkipOf(error, "", "", "bigquery.projects.list");
+                        // projects.list needs no one permission: it lists the projects where the account holds any BigQuery role.
+                        var skip = SkipOf(error, "", "", null);
                         Skip(new("", skip.Code, skip.Message, Project: ""));
                     }
                 }

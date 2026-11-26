@@ -862,7 +862,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 | `AUTH_EXPIRED` | A refused refresh (`invalid_grant`) of a user sign-in, HTTP 401, or no credentials at all | "Your Google sign-in has expired." or "No Google credentials were found.", with `gcloud auth application-default login` |
 | `AUTH_KEY_FILE` | A key or configuration file Varia cannot read or use, a refused shape, a deleted key (`invalid_grant` for a service account), a federated token Google's STS refuses (`invalid_grant` in federation mode), an unreadable subject token | Names the rule or field; choose the file again |
 | `AUTH_IDENTITY` | The credential now signs in as another principal | Reconnect to use the new account |
-| `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect) and the project |
+| `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect, with BigQuery Job User; `bigquery.datasets.get` for Test Connection) and the project, then Google's own text (left out of Search Objects skips, which name no object). projects.list needs no single permission, so its refusal names none |
+| `PERMISSION_DENIED` (VPC Service Controls) | `accessDenied` or HTTP 403 whose message names VPC Service Controls or whose `ErrorInfo` detail is `SECURITY_POLICY_VIOLATED` | "VPC Service Controls blocked this request…": connect from inside the perimeter or ask an administrator, with Google's identifier for the audit log, never a guessed permission |
 | `API_DISABLED` | `accessNotConfigured`, `SERVICE_DISABLED` | Enable the BigQuery API in the Google Cloud console |
 | `BILLING_DISABLED` | `billingNotEnabled` | Explains the sandbox limits |
 | `QUOTA` | `quotaExceeded`, `rateLimitExceeded`, HTTP 429 | Which kind, with Google's text |

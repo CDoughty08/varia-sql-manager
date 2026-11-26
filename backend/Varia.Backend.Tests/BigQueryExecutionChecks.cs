@@ -648,6 +648,27 @@ internal static partial class BigQueryExecutionChecks
             Error = new Google.Apis.Requests.RequestError { Code = 403, Message = "Response too large to return.", Errors = [new() { Reason = "responseTooLarge", Message = "Response too large to return." }] }
         }, "varia-alpha");
         check(api is RequestException { Code: "RESULT_TOO_LARGE" }, $"a call refused for a job's reason (403 responseTooLarge) maps as the job's would, not as a permission: {(api as RequestException)?.Code}");
+
+        // VPC Service Controls: the same accessDenied as a missing role, told apart by its message or its ErrorInfo detail.
+        var perimeterJob = Job("accessDenied", "VPC Service Controls: Request is prohibited by organization's policy. vpcServiceControlsUniqueIdentifier: Job-Id_42");
+        check(perimeterJob.Code == "PERMISSION_DENIED" && perimeterJob.Message.StartsWith("VPC Service Controls blocked this request to project varia-alpha", StringComparison.Ordinal)
+            && perimeterJob.Message.Contains("identifier Job-Id_42", StringComparison.Ordinal),
+            $"a job VPC Service Controls refused says so with its identifier: {perimeterJob.Message}");
+        Exception Refusal(string message, string raw, string? permission, bool quote = true) => BigQueryErrors.Map(new Google.GoogleApiException("bigquery", message)
+        {
+            HttpStatusCode = System.Net.HttpStatusCode.Forbidden,
+            Error = new Google.Apis.Requests.RequestError { Code = 403, Message = message, Errors = [new() { Reason = "accessDenied", Message = message }], ErrorResponseContent = raw }
+        }, "varia-alpha", permission, quote: quote);
+        var detailOnly = Refusal("Request is prohibited by organization's policy.",
+            """{"error":{"code":403,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SECURITY_POLICY_VIOLATED","domain":"googleapis.com","metadata":{"uniqueIdentifier":"Detail-Id_7"}}]}}""", "bigquery.jobs.create") as RequestException;
+        check(detailOnly is { Code: "PERMISSION_DENIED" } && detailOnly.Message.StartsWith("VPC Service Controls blocked", StringComparison.Ordinal)
+            && detailOnly.Message.Contains("identifier Detail-Id_7", StringComparison.Ordinal) && !detailOnly.Message.Contains("bigquery.jobs.create", StringComparison.Ordinal),
+            $"a refusal whose only VPC sign is its SECURITY_POLICY_VIOLATED detail is not reported as a missing permission: {detailOnly?.Message}");
+        var narrower = Refusal("Access Denied: Table varia-alpha:sales.orders: restricted by an IAM deny policy.", "{}", "bigquery.tables.get") as RequestException;
+        var unquoted = Refusal("Access Denied: Table varia-alpha:sales.orders: restricted by an IAM deny policy.", "{}", "bigquery.tables.get", quote: false) as RequestException;
+        check(narrower is { Code: "PERMISSION_DENIED" } && narrower.Message.Contains("bigquery.tables.get", StringComparison.Ordinal) && narrower.Message.Contains("Google says: Access Denied", StringComparison.Ordinal)
+            && !narrower.Message.Contains("Job User", StringComparison.Ordinal) && unquoted is { Code: "PERMISSION_DENIED" } && !unquoted.Message.Contains("orders", StringComparison.Ordinal),
+            $"a permission refusal keeps Google's text beside the permission (left out when asked), and names Job User only for jobs.create: {narrower?.Message} | {unquoted?.Message}");
     }
 
     static async Task InsertAsync(Action<bool, string> check)
