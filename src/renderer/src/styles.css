@@ -3008,7 +3008,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-flow-pill[data-tone="bad"] { color: var(--varia-errorForeground); border-color: var(--varia-errorForeground); }
 .agent-flow-pill[data-tone="accent"] { color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-focusBorder); background: var(--varia-list-inactiveSelectionBackground); }
 .agent-flow-pill[data-tone="warning"] { border-color: var(--varia-warningForeground); }
-/* Show: Targets only | Last run | Live run, and Last run's run box (mocks rx-flow-lastrun, rx-flow-running). */
+/* Show: Steps | Run | Live run, and Run's run box (mocks rx-flow-lastrun, rx-flow-running). */
 .agent-flow-label { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
 .agent-flow-show .segmented-option { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
 .agent-flow-run { width: auto; max-width: 260px; }

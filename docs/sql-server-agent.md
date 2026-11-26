@@ -220,9 +220,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   backend, so they stay with the draft when the backend is lost; Start job at this step does not. A pane too
   narrow for the graph beside its panel (a split editor) puts the panel under the graph. History's and the copy review's Edit step links open
   Flow's docked editor when Flow shows. Forced colours, or a GPU that cannot draw, leave List (Flow says why).
-  Flow's toolbar **Show** switch (Targets only | Last run | Live run; `FlowRunPanel.tsx`, the rules in `src/shared/agent/flow-run.ts`)
+  Flow's toolbar **Show** switch (Steps | Run | Live run; `FlowRunPanel.tsx`, the rules in `src/shared/agent/flow-run.ts`)
   draws a run over the graph from History's own `agent.history` view, which runs while an overlay shows even with History closed.
-  **Last run** draws the run picked in the run box beside the switch, which is History's selected run (picking one picks it in both;
+  **Run** draws the run picked in the run box beside the switch, which is History's selected run (picking one picks it in both;
   History's run summary has **Show in Flow**, and the panel's **Open in History** goes back). The path it took is bold with the order
   on each edge ("1 · 3" for an edge taken twice), each step says how its passes ended and how long they took (×N for a step a loop
   ran more than once with its last two passes, and its retries; a pass is a step's rows up to its first row that is not a Retry), and
@@ -233,7 +233,7 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Agent's message), every pass in order (a pass selects its step on the graph) and the chosen pass's whole message with Copy; with
   History's Failed on, the run box lists failed runs only and says so. **Live run** turns on by itself when the job starts and goes
   back to the overlay before it when the run ends (the keyboard focus, if the panel had it, goes to the Show switch, and the change is
-  announced); it rings the current step (from the header's watched state) with how long it has run on the server's clock, its usual
+  announced); it rings the current step (from the header's watched state; the ring pulses slowly unless motion is reduced) with how long it has run on the server's clock, its usual
   time and a bar, lights both ways it can go next, and fades the steps to come: Waiting where the steps so far lead on success, else On
   failure only. Finished steps come from History's rows of the in-progress run, so while Live run shows in Flow History's list follows
   the newest run (Failed off, unpinned); in List and History alone a job starting leaves History's filter and pick as they were. Until
@@ -680,9 +680,9 @@ backend's `job-save-race` control file) and saves after Reload and keep my chang
 deletes and undoes steps on Steps and saves them, and creates a job by copying another from New Job. The `agent-flow` smoke suite
 switches Steps to Flow, fixes the End warning, sets an action from the step menu (Shift+F10, On failure ›) and by dragging a port,
 docks the editor with Enter, checks List shows the same draft and saves it. The `agent-flow-run` smoke suite (the fake backend's
-`agent-flow-runs` control file: four branching steps, a failed run with a loop and a retry) draws Last run, picks an older run in the run
+`agent-flow-runs` control file: four branching steps, a failed run with a loop and a retry) draws Run, picks an older run in the run
 box, comes back through History's Show in Flow, then starts the job and follows Live run from step to step until the view returns to
-Last run with the new run; `VARIA_SMOKE_RECORD=1` records it.
+Run with the new run; `VARIA_SMOKE_RECORD=1` records it.
 
 `AgentScheduleChecks` checks the schedules offline: the schedule saves' lint and its near misses (a missing guard, `@force_delete`,
 a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror

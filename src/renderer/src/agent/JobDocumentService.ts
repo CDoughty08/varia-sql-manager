@@ -108,7 +108,7 @@ export interface JobDocumentState {
   /** The Flow view docks the selected step's editor beside the graph (double-click, Enter or Edit step), in place of its summary. */
   readonly stepEditor?: true
   /**
-   * What Flow draws over the graph: a run from History (Last run) or the running job (Live run); none is Targets only. Live run turns on by
+   * What Flow draws over the graph: a run from History (Run) or the running job (Live run); none is Steps. Live run turns on by
    * itself when the job starts and goes back to the overlay before it (`flowBefore`) when the run ends.
    */
   readonly flowOverlay?: 'last' | 'live'
@@ -282,7 +282,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     if (!state?.flowOverlay) return undefined
     return state.flowOverlay === 'live' && !state.live?.running ? state.flowBefore : state.flowOverlay
   }
-  /** Show: Targets only, Last run or Live run (only while the job runs). Both overlays read History's runs; Live run follows the running one (useFlowRun). */
+  /** Show: Steps, Run or Live run (only while the job runs). Both overlays read History's runs; Live run follows the running one (useFlowRun). */
   setFlowOverlay(id: string, overlay: 'targets' | 'last' | 'live'): void {
     const state = this.get(id)
     if (!state || (overlay === 'live' && !state.live?.running)) return
@@ -290,7 +290,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     else if (overlay === 'last') this.patch(id, { flowOverlay: 'last', flowBefore: undefined })
     else this.patch(id, { flowOverlay: 'live', flowBefore: state.flowOverlay === 'last' ? 'last' : undefined })
   }
-  /** History's Show in Flow: Steps › Flow with that run as Last run, its run picked in both. */
+  /** History's Show in Flow: Steps › Flow with that run as Run, its run picked in both. */
   showRunInFlow(id: string, run: HistoryRunKey): void {
     if (!this.get(id)) return
     this.history.selectRun(id, run)
@@ -298,7 +298,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const state = this.get(id)!
     this.setFrame(id, revealSection(state.frame, jobSections, 'steps'))
   }
-  /** Last run's Open in History: the History section, opened and scrolled to, with the same run selected. */
+  /** Run's Open in History: the History section, opened and scrolled to, with the same run selected. */
   openHistory(id: string): void {
     const state = this.get(id)
     if (state) this.setFrame(id, revealSection(state.frame, jobSections, 'history'))

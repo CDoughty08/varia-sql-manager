@@ -8,7 +8,7 @@ import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Text
 import { flowEdgeKey, type FlowLayout, type FlowPoint, type FlowWhich, type StepsFlow } from '../../../shared/agent/flow'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { svgIcons, iconStroke, type SvgIconId } from '../../../shared/icons'
-import { radii, typeScale } from '../../../shared/theme/metrics'
+import { radii, reducedMotionClass, typeScale } from '../../../shared/theme/metrics'
 import type { Disposable } from '../core/types'
 import { observeIntersection, observeResize, windowOf, windows } from '../core/windows'
 import { uiFontFamily } from '../fonts'
@@ -84,6 +84,8 @@ const iconPaths = new Map(Object.entries(svgIcons).map(([key, icon]) => [key, ne
 const portRadius = 7.5
 const dash = 5, gap = 3
 
+/** One pulse of Live run's current step, in ms: slow enough to read as running, not as an alert. */
+const pulsePeriod = 1600
 /** The Flow view's Pixi canvas: one per Flow view, created after an asynchronous import as the plan viewer's is. */
 export class FlowCanvas {
   private readonly app = new Application()
@@ -93,6 +95,8 @@ export class FlowCanvas {
   private readonly back = new Graphics()
   private readonly edges = new Graphics()
   private readonly cards = new Graphics()
+  /** Live run's pulse around the current step, under the cards: redrawn alone each animation frame while a step runs. */
+  private readonly pulse = new Graphics()
   private readonly labels = new Container()
   private readonly front = new Graphics()
   private readonly styles = {
@@ -113,6 +117,9 @@ export class FlowCanvas {
   private disposed = false
   private visible = true
   private frame = 0
+  /** The pulse's animation frame and the current step's box it rings (none while no step runs or motion is reduced). */
+  private pulseFrame = 0
+  private pulseBox?: { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
   private width = 1
   private height = 1
   private hover = -1
@@ -169,7 +176,7 @@ export class FlowCanvas {
       this.app.canvas.setAttribute('aria-hidden', 'true')
       this.app.canvas.addEventListener('webglcontextlost', this.contextLost)
       this.options.root.append(this.app.canvas)
-      this.world.addChild(this.back, this.edges, this.cards, this.labels, this.front)
+      this.world.addChild(this.back, this.edges, this.pulse, this.cards, this.labels, this.front)
       this.app.stage.addChild(this.grid, this.world)
       const gl = this.gl
       if (gl) {
@@ -227,7 +234,24 @@ export class FlowCanvas {
     if (width > this.width) { const scale = Math.max(this.minScale(), (this.width - 16) / width); return { scale, x: Math.round((this.width - width * scale) / 2 - x * scale), y: 0 } }
     return { scale: 1, x: Math.round((this.width - width) / 2 - x), y: 0 }
   }
-  private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0 }
+  private cancelFrame(): void { if (this.frame) this.owner.cancelAnimationFrame(this.frame); this.frame = 0; this.stopPulse() }
+  /** The pulse animates only while the canvas shows and the workbench does not reduce motion (Environment › General). */
+  private get pulsing(): boolean {
+    return !!this.pulseBox && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden && !this.ownerDocument.documentElement.classList.contains(reducedMotionClass)
+  }
+  private stopPulse(): void { if (this.pulseFrame) this.owner.cancelAnimationFrame(this.pulseFrame); this.pulseFrame = 0 }
+  private startPulse(): void { if (!this.pulseFrame && this.pulsing) this.pulseFrame = this.owner.requestAnimationFrame(this.pulseTick) }
+  /** A ring that grows out from the current step and fades, once every `pulsePeriod` ms; the static ring under it stays as the steady mark. */
+  private pulseTick = (time: number) => {
+    this.pulseFrame = 0
+    this.pulse.clear()
+    const box = this.pulseBox
+    if (!box || !this.pulsing) { this.app.render(); return }
+    const phase = (time % pulsePeriod) / pulsePeriod, grow = 3 + phase * 9
+    this.pulse.roundRect(box.x - grow, box.y - grow, box.width + grow * 2, box.height + grow * 2, radii.lg.px + grow).stroke({ color: this.options.colors.accent, width: 2, alpha: 0.55 * (1 - phase) })
+    this.app.render()
+    this.startPulse()
+  }
   private invalidate(): void {
     if (!this.frame && this.ready && !this.disposed && this.visible && !this.ownerDocument.hidden) this.frame = this.owner.requestAnimationFrame(() => { this.frame = 0; this.draw() })
   }
@@ -461,8 +485,10 @@ export class FlowCanvas {
     const resolution = this.app.renderer.resolution * this.camera.scale
     this.world.position.set(this.camera.x, this.camera.y)
     this.world.scale.set(this.camera.scale)
-    this.back.clear(); this.edges.clear(); this.cards.clear(); this.front.clear()
+    this.back.clear(); this.edges.clear(); this.cards.clear(); this.front.clear(); this.pulse.clear()
     this.drawGrid(colors.dots)
+    const current = nodes.findIndex(node => node.current)
+    this.pulseBox = current >= 0 ? layout.nodes[current] : undefined
     this.pool.begin()
     // A sprite is reused frame to frame, so its alpha is set every time: a faded step's or pill's text fades with its box.
     const label = (key: string, text: string, x: number, y: number, style: TextStyle, _fill: string, anchorX = 0, alpha = 1) => {
@@ -608,6 +634,7 @@ export class FlowCanvas {
     }
     if (this.pool.end()) TexturePool.clear(true)
     this.app.render()
+    if (this.pulsing) this.startPulse(); else this.stopPulse()
     this.pruneTextCache()
     void flow
   }

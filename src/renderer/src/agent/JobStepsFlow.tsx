@@ -126,7 +126,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   const flow = useMemo(() => stepsFlow(draft.steps, truncated, startId), [draft.steps, truncated, startId])
   const layout = useMemo(() => flowLayout(flow, flowMetrics), [flow])
   const checks = useMemo(() => truncated ? [] : flowChecks(draft.steps, flow), [draft.steps, flow, truncated])
-  // Show: Targets only, or a run drawn over the graph (Last run, or Live run while the job runs).
+  // Show: Steps, or a run drawn over the graph (Run, or Live run while the job runs).
   const run = useFlowRun(state, model, draft.steps, flow, service)
   const running = !!state.live?.running
   // The switch shows the overlay chosen, even while its run is not readable yet (no connection): the panel says why nothing is drawn.
@@ -145,7 +145,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
     const was = shownBefore.current
     shownBefore.current = shown
     if (was !== 'live' && shown !== 'live') return
-    setShowNotice(`Showing ${shown === 'live' ? 'Live run' : shown === 'last' ? 'Last run' : 'Targets only'}.`)
+    setShowNotice(`Showing ${shown === 'live' ? 'Live run' : shown === 'last' ? 'Run' : 'Steps'}.`)
     const active = document.activeElement as HTMLElement | null
     if (focusWasIn.current && (!active || active === document.body || !active.isConnected || (active as HTMLButtonElement).disabled))
       toolbarRef.current?.querySelector<HTMLElement>(`[data-show="${shown}"]`)?.focus()
@@ -312,7 +312,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
         service.setFlowOverlay(state.id, next)
         event.currentTarget.querySelector<HTMLElement>(`[data-show="${next}"]`)?.focus()
       }}>
-        {([['targets', 'Targets only'], ['last', 'Last run'], ['live', 'Live run']] as const).map(([value, label]) => <button key={value} type="button" role="radio" className="segmented-option" data-show={value}
+        {([['targets', 'Steps'], ['last', 'Run'], ['live', 'Live run']] as const).map(([value, label]) => <button key={value} type="button" role="radio" className="segmented-option" data-show={value}
           aria-checked={shown === value} tabIndex={shown === value ? 0 : -1} disabled={value !== 'targets' && unsaved || value === 'live' && !running}
           title={value !== 'targets' && unsaved ? 'A new job has no runs to draw: save it first.' : value === 'live' && !running ? 'Live run shows while the job runs; it turns on by itself when the job starts.' : undefined}
           onClick={() => service.setFlowOverlay(state.id, value)}>{value === 'live' && running && <Icon name="play" />}{label}</button>)}

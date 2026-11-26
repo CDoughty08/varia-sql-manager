@@ -711,7 +711,7 @@ describe("the job document's Flow overlays", () => {
   const tick = (handle: FakeLiveHandle, seq: number, status: number, step: number) =>
     handle.deliver({ type: 'live.tick', seq, sampledAt: seq, samples: [{ probe: 'agent.jobs.watched', costMs: 1, effectiveIntervalMs: 2000, metrics: [status, step, 2, 0, 1, 0] }] })
 
-  it('reads History for Last run with its section closed, turns Live run on when the job starts and goes back when it ends', async () => {
+  it('reads History for Run with its section closed, turns Live run on when the job starts and goes back when it ends', async () => {
     const { jobDocuments, live } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
@@ -721,7 +721,7 @@ describe("the job document's Flow overlays", () => {
     jobDocuments.history.attach(id, '11111111-1111-1111-1111-111111111111')
     const historyView = () => (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job-history:' + id && !item.disposed)
     expect(historyView()?.owner.visible?.()).toBe(false)
-    // Last run, from the toolbar: Flow's overlay keeps History's view running though its section is closed; on List it does not.
+    // Run, from the toolbar: Flow's overlay keeps History's view running though its section is closed; on List it does not.
     jobDocuments.setStepsView(id, 'flow')
     jobDocuments.setFlowOverlay(id, 'last')
     expect(jobDocuments.flowOverlayOf(id)).toBe('last')
@@ -757,7 +757,7 @@ describe("the job document's Flow overlays", () => {
     expect(jobDocuments.flowOverlayOf(id)).toBe('live')
     expect(jobDocuments.history.get(id)).toMatchObject({ selected: run, pinned: true })
   })
-  it("shows a History run in Flow: the Steps section, Flow's Last run and that run selected", async () => {
+  it("shows a History run in Flow: the Steps section, Flow's Run and that run selected", async () => {
     const { jobDocuments } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()

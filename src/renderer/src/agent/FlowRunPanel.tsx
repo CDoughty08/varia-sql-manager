@@ -1,6 +1,6 @@
 // Steps › Flow's run overlays (docs/sql-server-agent.md › Steps › Flow; mocks rx-flow-lastrun, rx-flow-running): what the graph draws for
 // a run and the side panel beside it. Both read the History section's own view (JobHistoryService), which runs while an overlay shows, and
-// the job header's live state; nothing here polls. Last run's run box and History's list share one selected run.
+// the job header's live state; nothing here polls. Run's run box and History's list share one selected run.
 import { useEffect } from 'react'
 import { currentStepSeconds, lastRunDrawing, liveRunDrawing, nextWords, runPasses, type FlowPass, type FlowRunDrawing } from '../../../shared/agent/flow-run.ts'
 import type { StepsFlow } from '../../../shared/agent/flow.ts'
@@ -68,7 +68,7 @@ const unplacedWords = (count: number, truncated: boolean) => truncated
   ? `${count} ${count === 1 ? 'pass is' : 'passes are'} of a step past the ones Varia reads, so the graph cannot draw ${count === 1 ? 'it' : 'them'}.`
   : `${count} ${count === 1 ? 'pass is' : 'passes are'} of a step the job no longer has, so the graph cannot draw ${count === 1 ? 'it' : 'them'}.`
 
-/** Last run's panel: the run's summary, every pass in order, and the selected (at first the failed) step's whole message. */
+/** Run's panel: the run's summary, every pass in order, and the selected (at first the failed) step's whole message. */
 export function LastRunPanel({ state, model, run, service, select }: { readonly state: JobDocumentState; readonly model: AgentJobDocumentModel; readonly run: FlowRun; readonly service: JobDocumentService; readonly select: (at: number) => void }) {
   const history = service.history
   const view = history.get(state.id)

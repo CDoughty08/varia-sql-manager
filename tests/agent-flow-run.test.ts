@@ -76,7 +76,7 @@ describe('the Flow view\'s run overlays', () => {
     expect(drawing.steps[2]).toMatchObject({ fade: true, right: [{ text: '—' }] })
     expect(drawing.steps[3]!.spoken).toBe('not known: past the rows History reads')
   })
-  it('draws Last run: the path bold and numbered, an edge taken twice numbered twice, the last pass to its quit', () => {
+  it('draws Run: the path bold and numbered, an edge taken twice numbered twice, the last pass to its quit', () => {
     const flow = stepsFlow(nightly())
     const drawing = lastRunDrawing(flow, runPasses(failedRun(), nightly().steps), true)
     expect([...drawing.hot].sort()).toEqual(['0:success', '1:fail', '1:success', '2:fail', '3:success'])

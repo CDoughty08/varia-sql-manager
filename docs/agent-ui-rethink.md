@@ -193,7 +193,7 @@ chip.
 
 ## Flow view (Later)
 
-Status: **built**: the Targets view, the Last run and Live run overlays and History's Show in Flow (docs/sql-server-agent.md › Steps
+Status: **built**: the Targets view, the Run and Live run overlays and History's Show in Flow (docs/sql-server-agent.md › Steps
 describes them). Per-pass usual time stays open (below).
 Mocks: the "Rethink · steps flow (later)" group in `docs/mockups/sql-server-agent.html` (`rx-flow`, `rx-flow-menu`,
 `rx-flow-edit`, `rx-flow-lastrun`, `rx-flow-running`, `rx-flow-end`), in Dark and Light through the page's Theme box. The
@@ -247,11 +247,11 @@ Items 1 to 9 are proposed; the owner's answers of 2026-11-25 are folded in and m
      shortcut: the menu stays the keyboard and screen reader path (owner).
    - Steps are not dragged to reorder them: reordering stays in List and the menu's Move up and Move down, because the
      layout is step order (owner).
-4. **Overlays**: a Show switch with Targets only, Last run and Live run.
-   - **Last run** draws one run from the History section over the graph. A box picks the run. The path is bold, with the
+4. **Overlays**: a Show switch with Steps, Run and Live run.
+   - **Run** draws one run from the History section over the graph. A box picks the run. The path is bold, with the
      order on each edge, and each step shows its outcome and duration. A step that ran more than once shows ×N and each pass.
      Steps the run never reached are faded. Beside the graph: the run's summary, every pass in order, and the selected failed
-     step's message. History's run summary gets a **Show in Flow** link that opens Flow with that run as Last run
+     step's message. History's run summary gets a **Show in Flow** link that opens Flow with that run as Run
      (owner).
    - **Live run** turns on when the job starts and goes back to the previous view when it ends. It shows the current step with
      a ring and a bar against its usual time, each finished step's outcome, the two ways the run can go next, and Stop.
@@ -261,8 +261,8 @@ Items 1 to 9 are proposed; the owner's answers of 2026-11-25 are folded in and m
      `on_fail_action`, `on_fail_step_id`);
    - the History section's `agent.history` view, for both overlays. Today that view opens when History first shows and
      pauses while the History section is collapsed or the document is not the active tab, so it must also run while Flow
-     shows Last run or Live run, even with History collapsed. It returns step rows for **one selected run only**; the section
-     reads up to 200 of them and says when it cut them. So the Last run box and History's selected run are one shared selection: picking a run in either picks it in both. A pass is a step's rows up to and
+     shows Run or Live run, even with History collapsed. It returns step rows for **one selected run only**; the section
+     reads up to 200 of them and says when it cut them. So the Run box and History's selected run are one shared selection: picking a run in either picks it in both. A pass is a step's rows up to and
      including its first row that is not a Retry. Earlier Retry rows count as that pass's retries, so ×N counts passes, not
      rows. A run with more rows than the cap says so in the panel;
    - the header's live run state, which gives only the current step (and whether it is retrying). Live run's finished steps
@@ -271,7 +271,7 @@ Items 1 to 9 are proposed; the owner's answers of 2026-11-25 are folded in and m
      appear once that run is read and selected, as History's live run already does.
 
    Confirm these when the view is built. Two rules need work there:
-   - **The failed step**: the Last run panel's outcome names the step that failed (step 5 in the mock), not the last step to
+   - **The failed step**: the Run panel's outcome names the step that failed (step 5 in the mock), not the last step to
      run, and shows Agent's own message under it. History's run summary takes the step from the message's "last step to run",
      which for a job with a notify step is the notify step (step 6). Both should use the failed step, so they agree. The job
      header names no step, because its outcome comes from Agent's job status, which carries none.

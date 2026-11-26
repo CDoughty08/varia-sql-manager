@@ -1,5 +1,5 @@
 // The Flow view's run overlays (docs/sql-server-agent.md › Steps › Flow; docs/agent-ui-rethink.md › Flow view, decisions 4 and 5): a run's
-// history rows as passes over the steps, and what the graph draws for them. Last run draws one finished (or running) run: the path it took
+// history rows as passes over the steps, and what the graph draws for them. Run draws one finished (or running) run: the path it took
 // in bold with the order on each edge, each step's outcome and duration (×N and each pass for a step a loop ran more than once), and the
 // steps it never reached faded. Live run adds the current step, from the job header's live state, and the two ways it can go next.
 import { flowEdgeKey, type FlowTarget, type FlowWhich, type StepsFlow } from './flow.ts'
@@ -124,7 +124,7 @@ function stepSpoken(passes: readonly FlowPass[]): string {
 }
 
 /**
- * Last run: the run's passes over the steps; steps it never reached are faded and say Not run. With the run's rows cut (`cut`: History read
+ * Run: the run's passes over the steps; steps it never reached are faded and say Not run. With the run's rows cut (`cut`: History read
  * only its first rows) the run went on past the last pass read, so its last edge is not drawn and an unreached step is not known, not Not run.
  */
 export function lastRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], finished: boolean, cut = false): FlowRunDrawing {
@@ -142,7 +142,7 @@ export function lastRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], fin
 export interface FlowLiveStep { readonly at: number; readonly retrying: boolean; readonly seconds?: number; readonly usual?: number }
 
 /**
- * Live run: finished passes as Last run draws them (the current step's own before its ▶), the current step ringed with a bar against its usual time and both its edges lit, and
+ * Live run: finished passes as Run draws them (the current step's own before its ▶), the current step ringed with a bar against its usual time and both its edges lit, and
  * the steps still to come faded: Waiting where the steps that ran so far lead, else On failure only (reached only by a failure edge).
  * Without this run's rows (`known` false) only the current step is known; the rest say nothing rather than Waiting.
  */

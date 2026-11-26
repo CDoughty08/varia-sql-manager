@@ -4,6 +4,7 @@
 import { expect, it, vi } from 'vitest'
 import { flowLayout, flowMetrics, stepsFlow } from '../src/shared/agent/flow'
 import { newStepDraft, type AgentStepsDraft } from '../src/shared/agent/steps'
+import { reducedMotionClass } from '../src/shared/theme/metrics'
 
 const gpu = vi.hoisted(() => ({ limit: 0, allocatable: 0, texts: new Set<{ render(): void }>() }))
 vi.mock('pixi.js/unsafe-eval', () => ({}))
@@ -165,6 +166,36 @@ it("fades a faded step's and an off-path pill's text with its box, and brings it
     expect(alpha('name:2')).toBe(1)
     expect(alpha('quit:0:fail')).toBe(1)
   } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it("pulses Live run's current step only while one runs and motion is not reduced", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const canvas = create(sized(900, 600))
+  const rendering = canvas as unknown as { draw(): void; pulseFrame: number; pulseTick(time: number): void; pulse: { shapes: number[][] } }
+  try {
+    await Promise.resolve()
+    const shown = model()
+    const running = { ...shown, nodes: shown.nodes.map((node, at) => ({ ...node, current: at === 1 })), fadeRest: true }
+    canvas.update(running, 0, false, true)
+    rendering.draw()
+    expect(rendering.pulseFrame).not.toBe(0)
+    // Half way through a pulse its ring is drawn outside the step's box.
+    rendering.pulseTick(800)
+    const box = running.layout.nodes[1]!
+    expect(rendering.pulse.shapes.some(([x, y]) => x! < box.x - 3 && y! < box.y - 3)).toBe(true)
+    // With reduced motion the pulse stops, and the next draw does not start it.
+    document.documentElement.classList.add(reducedMotionClass)
+    rendering.pulseTick(900)
+    expect(rendering.pulse.shapes).toEqual([])
+    expect(rendering.pulseFrame).toBe(0)
+    rendering.draw()
+    expect(rendering.pulseFrame).toBe(0)
+    document.documentElement.classList.remove(reducedMotionClass)
+    // No step running: nothing animates.
+    canvas.update(shown, 0, false, true)
+    rendering.draw()
+    expect(rendering.pulseFrame).toBe(0)
+  } finally { document.documentElement.classList.remove(reducedMotionClass); canvas.dispose(); frames.mockRestore() }
 })
 
 type Placed = { camera: { x: number; y: number; scale: number }; connecting?: unknown }
