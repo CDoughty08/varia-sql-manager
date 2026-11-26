@@ -217,6 +217,9 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
 {
     private readonly IndexBudget budget = pool.Budget;
     private long taken, credited, nameBytes;
+    private int reading = -1;
+    /// <summary>After a read that did not fit: the entry it was reading when it ran out of room, or -1 (the dataset's own name).</summary>
+    public int FailedAt { get; private set; } = -1;
     private long nameCredit = credit?.NameBytes ?? 0, detailCredit = (credit?.Bytes ?? 0) - (credit?.NameBytes ?? 0);
     private int modules, cut, leftOut;
     private readonly ObjectTable.Builder objects = new();
@@ -233,8 +236,19 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     {
         if (detailCredit >= bytes) { detailCredit -= bytes; credited += bytes; }
         else if (budget.TryTake(bytes, keepFree)) taken += bytes;
-        else if (nameCredit >= bytes) { nameCredit -= bytes; credited += bytes; }
-        else return false;
+        else if (!Lend(bytes, ref detailCredit, ref nameCredit)) return false;
+        return true;
+    }
+
+    /// <summary>Pays from what is left of both parts together, <paramref name="own"/> first: the last resort, so the share is
+    /// never refused a charge it covers because it is split.</summary>
+    private bool Lend(long bytes, ref long own, ref long other)
+    {
+        if (own + other < bytes) return false;
+        var mine = Math.Min(own, bytes);
+        own -= mine;
+        other -= bytes - mine;
+        credited += bytes;
         return true;
     }
 
@@ -244,8 +258,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     {
         if (nameCredit >= bytes) { nameCredit -= bytes; credited += bytes; }
         else if (budget.TryTake(bytes, namesFloor)) taken += bytes;
-        else if (detailCredit >= bytes) { detailCredit -= bytes; credited += bytes; }
-        else return false;
+        else if (!Lend(bytes, ref nameCredit, ref detailCredit)) return false;
         nameBytes += bytes;
         return true;
     }
@@ -302,6 +315,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
             var detailed = false;
             foreach (var entry in entries)
             {
+                reading++;
                 var detail = entry.Detail;
                 detailed |= detail is not null;
                 Intern(entry.Name);
@@ -344,7 +358,8 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                     var typeName = InternDetail(column.Type);
                     if (!types.TryGetValue(typeName, out var type))
                     {
-                        // ObjectDetails numbers types in 16 bits: a dataset with more distinct type texts keeps its names only.
+                        // ObjectDetails numbers types in 16 bits: a dataset with more distinct type texts is refused like one past
+                        // the budget (the service then leaves out the table that passed the count, or the dataset's columns).
                         if (types.Count >= MaxTypes) throw new TooLarge();
                         ChargeDetail(IndexMemory.TypeBytes);
                         type = types[typeName] = objects.Details.AddType(objects.Id(typeName), -1, types.Count, 0, userDefined: true, tableType: false);
@@ -371,6 +386,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         }
         catch (TooLarge)
         {
+            FailedAt = reading;
             Abandon();
             return null;
         }
@@ -516,19 +532,6 @@ internal static partial class BigQueryEntries
     /// (whose entry is its newest shard, so its name changes with every new shard) its prefix, which no table name can end in.</summary>
     public static (string Kind, string Name) Key(string kind, string name, Varia.Backend.BigQueryShardsDto? shards) => (kind, shards is null ? name : shards.Prefix + "*");
     public static (string Kind, string Name) Key(BigQueryEntry entry) => Key(entry.Kind, entry.Name, entry.Shards);
-
-    /// <summary>The objects an earlier read holds details of, by <see cref="Key(BigQueryEntry)"/>: what a read that replaces it
-    /// may keep when the details of anything new do not fit. With <paramref name="current"/>, only those whose details are the
-    /// object's own generation's, not carried from one created or changed since.</summary>
-    public static HashSet<(string Kind, string Name)> Detailed(DatabaseIndex? read, bool current = false)
-    {
-        var detailed = new HashSet<(string, string)>();
-        if (read?.Facts is not { } facts || read.ChildrenLeftOut) return detailed;
-        var table = read.Table;
-        for (var at = 0; at < table.Count; at++)
-            if (table.Parent(at) < 0 && facts.Of(at) is { Detailed: true } fact && !(current && fact.Stale)) detailed.Add(Key(table.Kind(at), table.Name(at), facts.Shards(at)));
-        return detailed;
-    }
 
     /// <summary>pass 2's tables.get as a detail: columns flattened depth first (STRUCT fields below their column), layout and size.</summary>
     public static BigQueryDetail FromTable(Table table)

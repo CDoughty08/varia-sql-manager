@@ -536,9 +536,10 @@ internal sealed partial class ObjectSearchService
                 // again above BigQuery's floor, where it would be refused once anything else has taken memory since. They are
                 // marked carried, so a build stopped or a read that fails before pass 2 lands leaves nothing a later build reuses,
                 // and stale when the object was created or changed since, so they are dropped rather than kept if pass 2 cannot
-                // replace them. A date-sharded group is carried by its prefix: its entry is renamed by every new shard.
+                // replace them. A date-sharded group is carried by its prefix, and is never stale: every new shard renames its
+                // entry and gives it a new creation time, and it is the same table for all that.
                 var entries = listed.Select((item, at) => !carried.TryGetValue(BigQueryEntries.Key(item), out var had) ? item
-                    : item with { Detail = again[at] ? had.Detail with { Carried = true, Stale = had.Detail.Stale || !Same(had, item) } : had.Detail }).ToList();
+                    : item with { Detail = again[at] ? had.Detail with { Carried = true, Stale = had.Detail.Stale || item.Shards is null && !Same(had, item) } : had.Detail }).ToList();
                 carried.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
@@ -1380,60 +1381,58 @@ internal sealed partial class ObjectSearchService
     }
 
     /// <summary>Builds and holds a dataset's read. A read past BigQuery's part of the budget (its names floor, and its details floor,
-    /// the higher one for a <paramref name="discovered"/> project, each a step lower for a dataset that already holds details) is
-    /// tried again, in pass 2 (<paramref name="details"/>), with the details only of the objects the earlier read held them of
-    /// (so what was held is kept, and what is new is left out as details missing), then also without those of objects created
-    /// or changed since, whose carried details were another generation's. When that does not fit either, a dataset that holds
-    /// details is left as it was read before (TOO_LARGE), less in pass 2 the details carried from another generation, which
-    /// pass 2 was to replace: it is never swapped for a read without the columns it held. One that holds none is tried
-    /// without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
+    /// the higher one for a <paramref name="discovered"/> project, each a step lower for a dataset that already holds details)
+    /// never swaps a dataset that holds details for one without them. In pass 2 (<paramref name="details"/>) the object the read
+    /// ran out of room at goes back to what the dataset held of it (nothing, for a new object or one created or changed
+    /// since) and the read is tried again, a few times; then every object goes back to that, which is no larger than the read
+    /// it replaces and so fits its share. What was left out is reported as details missing (TOO_LARGE with Details). In pass
+    /// 1, where what does not fit is a name, the dataset is left as it was read before (TOO_LARGE). A dataset that holds no
+    /// details is tried without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
     private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
         CancellationToken token, bool details = false)
     {
         var old = state.Index.Get(project + "\u0001" + dataset);
         var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, Limits.BigQueryDetailsFloor(discovered, old is { Detailed: true }));
-        var built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, true, definitions);
+        BigQueryReader Reader() => new(Limits, pool, old, namesFloor, detailsFloor);
+        var reader = Reader();
+        var built = reader.Read(project, dataset, entries, true, definitions);
         var childrenLeftOut = false;
-        var newLeftOut = 0;
-        var asItWas = false;
+        // Objects whose details pass 2 read and the index could not take; -1 when every object went back to what was held.
+        var detailsLeftOut = 0;
         if (built is null && old is { Detailed: true })
         {
-            if (details)
+            // In pass 1 what does not fit is the names of what is new: the dataset stays as it was until there is room, rather
+            // than lose its columns to list a new object.
+            if (!details)
+                return new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project);
+            // What the dataset holds of each object that is the object's own: pass 1's read of this listing, less the details
+            // carried from an object created or changed since, which were only ever kept for pass 2 to replace.
+            var own = BigQueryEntries.Known(old, definitions, carry: true);
+            BigQueryDetail? Had(BigQueryEntry entry) => own.TryGetValue(BigQueryEntries.Key(entry), out var had) && !had.Detail.Stale ? had.Detail : null;
+            var attempt = entries.ToList();
+            for (var tries = 0; built is null && tries < HoldRetries; tries++)
             {
-                HashSet<(string Kind, string Name)>[] keeps = [BigQueryEntries.Detailed(old), BigQueryEntries.Detailed(old, current: true)];
-                var tried = -1;
-                foreach (var keep in keeps)
-                {
-                    var kept = entries.Select(entry => entry.Detail is null || keep.Contains(BigQueryEntries.Key(entry)) ? entry : entry with { Detail = null }).ToList();
-                    var left = entries.Count(entry => entry.Detail is not null) - kept.Count(entry => entry.Detail is not null);
-                    // Nothing more to leave out than the attempt before: the same read would be refused again.
-                    if (left == 0 || left == tried) continue;
-                    tried = left;
-                    built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, kept, true, definitions);
-                    if (built is null) continue;
-                    newLeftOut = left;
-                    break;
-                }
+                var at = reader.FailedAt;
+                if (at < 0 || attempt[at].Detail is not { } refused) break;
+                var had = Had(attempt[at]);
+                // Already back to what was held and still refused: leaving out one object at a time will not do.
+                if (ReferenceEquals(refused, had)) break;
+                attempt[at] = attempt[at] with { Detail = had };
+                detailsLeftOut++;
+                reader = Reader();
+                built = reader.Read(project, dataset, attempt, true, definitions);
             }
-            // Not even that fits beside what the dataset holds (in pass 1, the names of what is new): it stays as it was until
-            // there is room, rather than lose its columns to list a new object.
             if (built is null)
             {
-                asItWas = true;
-                // In pass 2 "as it was" is pass 1's read of this listing, which may hold details carried from objects created
-                // or changed since. Pass 2 was to replace them and cannot: they go, in a read of the same entries that holds
-                // only what is the objects' own, which is no larger than the one it replaces and so fits its share.
-                var own = details ? BigQueryEntries.Known(old, definitions, carry: true) : [];
-                if (own.Values.Any(had => had.Detail.Stale))
-                    built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset,
-                        [.. entries.Select(entry => entry with { Detail = own.TryGetValue(BigQueryEntries.Key(entry), out var had) && !had.Detail.Stale ? had.Detail : null })], true, definitions);
-                if (built is null)
-                    return new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project);
+                detailsLeftOut = -1;
+                built = Reader().Read(project, dataset, [.. entries.Select(entry => entry with { Detail = Had(entry) })], true, definitions);
             }
+            // Not even that (a text slot that changed parts, at worst): pass 1's read stays, and says its details are missing.
+            if (built is null) return DetailsLeftOut(project, dataset, -1);
         }
         if (built is null)
         {
-            built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, false, definitions);
+            built = Reader().Read(project, dataset, entries, false, definitions);
             childrenLeftOut = built is not null;
         }
         if (built is not null)
@@ -1452,18 +1451,25 @@ internal sealed partial class ObjectSearchService
                 state.Index.Abandon(built);
                 throw new OperationCanceledException(token);
             }
-            return asItWas
-                ? new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project)
-                : childrenLeftOut
+            return childrenLeftOut
                 ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project)
-                : newLeftOut > 0 ? new(dataset, "TOO_LARGE", "The details of " + (newLeftOut == 1 ? "1 object" : newLeftOut.ToString("N0", CultureInfo.InvariantCulture) + " objects")
-                    + " were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project, Details: true)
+                : detailsLeftOut != 0 ? DetailsLeftOut(project, dataset, detailsLeftOut)
                 : null;
         }
         return new(dataset, "TOO_LARGE", old is not null
-            ? "The dataset's updated details did not fit, so earlier names were kept: " + BigQueryPart + ", and the rest is in use."
+            ? "The dataset's changes did not fit, so its earlier names were kept: " + BigQueryPart + ", and the rest is in use."
             : "The dataset was not indexed: " + BigQueryPart + ", and the rest is in use.", Project: project);
     }
+
+    /// <summary>How many times pass 2 leaves out the object a dataset's read ran out of room at and reads it again, before
+    /// every object goes back to what was held: each is a read of the whole dataset.</summary>
+    internal const int HoldRetries = 16;
+
+    /// <summary>The skip of a dataset held with its names as listed and the details it held, the details pass 2 read of
+    /// <paramref name="count"/> objects (-1: of every changed object) left out for memory.</summary>
+    private ObjectIndexSkip DetailsLeftOut(string project, string dataset, int count) => new(dataset, "TOO_LARGE",
+        "The details of " + (count < 0 ? "the dataset's new and changed objects" : count == 1 ? "1 object" : count.ToString("N0", CultureInfo.InvariantCulture) + " objects")
+        + " were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project, Details: true);
 
     /// <summary>Why a BigQuery read was refused with memory still free: true whatever BigQuery itself holds, since SQL Server's
     /// use counts against the same limit. The renderer and the lookup know a memory skip by the words "memory limit".</summary>

@@ -1775,10 +1775,10 @@ describe('Search Objects\' summary', () => {
     // Memory ran out: the line says how many definitions were left out and where, apart from the user's own names-only option
     // and from definitions only cut at their length (`cut` alone), and keeps the line in Object Explorer's band.
     const starved = status({ modules: 12, cut: 1206, leftOut: 1204, leftOutIn: 2 })
-    expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out of 2 databases (not enough index memory)')
-    expect(indexSummary(undefined, status({ cut: 1, leftOut: 1, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 definition left out of 1 database (not enough index memory)')
-    expect(indexSummary(undefined, status({ provider: 'bigquery', cut: 3, leftOut: 3, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 3 definitions left out of 1 dataset (not enough index memory)')
-    // Left out of the server's own or the system objects only: no database to name.
+    expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out (not enough index memory)')
+    expect(indexSummary(undefined, status({ cut: 1, leftOut: 1, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 definition left out (not enough index memory)')
+    expect(indexSummary(undefined, status({ provider: 'bigquery', cut: 3, leftOut: 3, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 3 definitions left out (not enough index memory)')
+    // The count is the index's: some may be the server's own or the system objects', which are in no database.
     expect(indexSummary(undefined, status({ cut: 12, leftOut: 12 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 12 definitions left out (not enough index memory)')
     expect(indexIncomplete(undefined, starved)).toBe(true)
     expect(indexSummary(undefined, status({ cut: 2 }))).toBe('Index: 40 objects, 5 definitions in 2 databases')
@@ -1801,7 +1801,7 @@ describe('Search Objects\' summary', () => {
     const failedToo = { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', details: true, message: 'The details of 1 object could not be read: timed out.' } as const
     expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, failedToo] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
     expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, { ...failedToo, project: 'varia-beta' }] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 2 datasets')
-    // A dataset left as it was read before is listed as skipped, with the note.
+    // A dataset whose new names did not fit is left as it was read before: listed as skipped, with the note.
     const keptAsWas = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE',
       message: 'The dataset\'s changes did not fit, so it was kept as it was read before: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })
     expect(indexSummary(undefined, keptAsWas)).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 dataset skipped')

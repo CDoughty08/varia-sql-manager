@@ -148,7 +148,7 @@ internal static partial class BigQueryIndexChecks
             search.Budget.Force(spare);
             var lookup = search.LookupBigQuery(bigQuery, "varia-alpha");
             var scanned = lookup.Object(lookup.Dataset("star-01", "ds"), "star-01_tbl_0") is not null && wide.LookupBuilds == 0;
-            // Room for exactly the arrays above the floor.
+            // What was forced goes back, and room for the arrays above the floor with it.
             search.Budget.Release(spare + TableLookup.BytesFor(wide.Table));
             lookup = search.LookupBigQuery(bigQuery, "varia-alpha");
             check(scanned && lookup.Object(lookup.Dataset("star-01", "ds"), "star-01_tbl_0") is not null && wide.LookupBuilds == 1,
@@ -227,9 +227,9 @@ internal static partial class BigQueryIndexChecks
             check(Held("star-02") is { ChildrenLeftOut: false, Table.Count: 44 } && named.Status.Skipped.Count(skip => skip is { Project: "star-02", Code: "TOO_LARGE", Details: true }) == 1
                 && named.Status.Skipped.Count == 1,
                 $"with room for one name above the names floor a new table is listed beside the names its dataset holds ({Held("star-02").Table.Count} entries, {named.Status.Skipped.Count} skips)");
-            // Nothing fits in pass 2: one table was created again with other columns, and another gained columns whose names
-            // need room there is none of. The dataset is kept as it was read before, except that the first table's columns, an
-            // earlier generation's that pass 2 was to replace, go: they are never left showing as the new table's.
+            // Pass 2 with nothing free: one table was created again with fewer columns, and another gained columns whose names
+            // need room there is none of. Only the table that does not fit is left out: it keeps the columns it held, to be read
+            // again, while the first table's new columns replace the earlier generation's, which never show as the new table's.
             search.Budget.Force(search.Budget.Free - limits.BigQueryNamesFloorBytes + 500);
             source.TablesPerDataset = new() { [("star-02", "ds")] = 2 };
             await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred, Scope: new("star-02")), source, CancellationToken.None);
@@ -239,10 +239,11 @@ internal static partial class BigQueryIndexChecks
             var nothing = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred, Scope: new("star-02")), source, CancellationToken.None);
             var asItWas = Held("star-02");
             var facts = asItWas.Facts!;
-            check(two && asItWas is { Detailed: true, ChildrenLeftOut: false, Table.Count: 1 + 1 + 21 }
-                && Enumerable.Range(0, asItWas.Table.Count).Count(at => asItWas.Table.Parent(at) < 0 && facts.Of(at) is { Detailed: true }) == 1
-                && nothing.Status.Skipped.Count(skip => skip is { Project: "star-02", Database: "ds", Code: "TOO_LARGE", Details: null }) == 1,
-                $"a dataset pass 2 can fit nothing new of is kept as it was, less the columns carried from a table created again ({asItWas.Table.Count} entries)");
+            check(two && asItWas is { Detailed: true, ChildrenLeftOut: false, Table.Count: 1 + 11 + 21 }
+                && Enumerable.Range(0, asItWas.Table.Count).Count(at => asItWas.Table.Parent(at) < 0 && facts.Of(at) is { Detailed: true }) == 2
+                && BigQueryEntries.Known(asItWas, true).Keys.SequenceEqual([("bqTable", "star-02_tbl_0")])
+                && nothing.Status.Skipped.Count(skip => skip is { Project: "star-02", Database: "ds", Code: "TOO_LARGE", Details: true }) == 1 && nothing.Status.Skipped.Count == 1,
+                $"when one table's new details do not fit, only that table goes back to what was held: the others keep what pass 2 read ({asItWas.Table.Count} entries, {nothing.Status.Skipped.Count} skip)");
             source.CreatedOfTable = null;
             source.ColumnsOfTable = null;
             // The tables are created again and cannot be read: the columns carried from their earlier generation are not kept as
@@ -252,6 +253,14 @@ internal static partial class BigQueryIndexChecks
             var failed = await Build();
             check(Held("star-02") is { Table.Count: 3, Detailed: false } && Held("star-01") is { Table.Count: 22 } && failed.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true }),
                 $"a table created again whose read fails keeps none of its earlier generation's columns ({Held("star-02").Table.Count} entries)");
+            // A date-sharded group is the same table whatever its newest shard: when its read fails on the day a shard is added,
+            // it keeps the columns it held, to be read again.
+            source.FailTableForProject = "star-01";
+            source.ShardDays[("star-01", "ds")] = 4;
+            var shardFailed = await Build();
+            check(Held("star-01") is { ChildrenLeftOut: false, Detailed: true, Table.Count: 22 } kept4 && kept4.Facts!.Shards(1) is { Count: 4 } && BigQueryEntries.Known(kept4, true).Count == 0
+                && shardFailed.Status.Skipped.Any(skip => skip is { Project: "star-01", Details: true }),
+                $"a date-sharded group whose read fails on the day a shard is added keeps its columns ({Held("star-01").Table.Count} entries)");
         }
 
         // 2. SQL Server first, then BigQuery, then a SQL Server rebuild while BigQuery holds its share.
