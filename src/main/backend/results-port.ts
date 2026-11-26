@@ -1,5 +1,5 @@
-import type { BackendState, BackendStatus, QueryEvent, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsDiffParams, ResultsDiffResult, ResultsDiffSeekParams, ResultsDiffSeekResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
-import { type OperationProgressEvent, diffResultSchema, diffSeekResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
+import type { BackendState, BackendStatus, QueryEvent, QueryMultiResult, QueryResult, ResultDescriptor, ResultsCloseResult, ResultsCombineParams, ResultsCombineResult, ResultsDiffParams, ResultsDiffResult, ResultsDiffSeekParams, ResultsDiffSeekResult, ResultsDistinctCloseParams, ResultsDistinctCloseResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsParams, ResultsFindRowsResult, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsReadResult, ResultsRowBytesParams, ResultsRowBytesResult, ResultsRowIdsParams, ResultsRowIdsResult, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewCloseResult, ResultsViewParams, ResultsViewResult, ViewCells, ViewFilter } from '../../shared/contracts'
+import { type OperationProgressEvent, combineResultSchema, diffResultSchema, diffSeekResultSchema, distinctCloseResultSchema, distinctReadResultSchema, distinctResultSchema, distinctTickResultSchema, findRowsResultSchema, identifyResultSchema, type MemoryFeature, type MemoryReport, pivotResultSchema, type PortEndResult, type PortMessage, type PortRequest, portRequestSchema, profileResultSchema, rowBytesResultSchema, rowIdsResultSchema, searchResultSchema, testPortRequestSchema, viewCloseResultSchema, viewResultSchema } from '../../shared/ipc/port-messages'
 import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
@@ -42,6 +42,8 @@ export interface ResultsBackend {
   diff(generation: number, params: ResultsDiffParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsDiffResult>; cancel(reason: CancelReason): void }
   /** Pivoting a result may take seconds: the worker's cancel stops it, as it does a sort. */
   pivot(generation: number, params: ResultsPivotParams, onProgress?: OperationProgressSink): { readonly done: Promise<ResultsPivotResult>; cancel(reason: CancelReason): void }
+  /** Combining 2 to 32 complete results of one query into one stored result; the worker's cancel stops it. */
+  combine(generation: number, params: ResultsCombineParams): { readonly done: Promise<ResultsCombineResult>; cancel(reason: CancelReason): void }
   /** A search reads every stored row: the worker's cancel (a newer search, or the text cleared) stops it. */
   search(generation: number, params: ResultsSearchParams): { readonly done: Promise<ResultsSearchResult>; cancel(reason: CancelReason): void }
   /** A profile reads every row: the worker's cancel (a newer profile, or the panel closed) stops it. */
@@ -113,13 +115,13 @@ export class ResultsPortHost {
   private readonly searching = new Map<number, { cancel(reason: CancelReason): void }>()
   private invalid = 0
   private opens: number[] = []
-  private readonly onRefused?: (method: 'results.diff' | 'results.pivot', issues: readonly string[]) => void
+  private readonly onRefused?: (method: 'results.diff' | 'results.pivot' | 'results.combine', issues: readonly string[]) => void
 
   /** `testSources`: accept test-only live sources (debug.synthetic); main sets it only for unpackaged smoke runs. `schema`
    *  replaces the request schema (tests, with a catalogue the shipped one does not match yet). `onRefused` hears which of a
    *  derived result's answer members failed its schema (member paths and zod issue codes, never values or names), which
    *  the worker only sees as a generic sentence. */
-  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean; schema?: typeof portRequestSchema; onRefused?: (method: 'results.diff' | 'results.pivot', issues: readonly string[]) => void }) {
+  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean; schema?: typeof portRequestSchema; onRefused?: (method: 'results.diff' | 'results.pivot' | 'results.combine', issues: readonly string[]) => void }) {
     this.backend = o.backend
     this.onRefused = o.onRefused
     this.schema = o.schema ?? (o.testSources ? testPortRequestSchema : portRequestSchema)
@@ -249,11 +251,11 @@ export class ResultsPortHost {
     this.post({ t: 'query', queryId, event })
   }
 
-  querySummary(summary: QueryResult): void {
+  querySummary(summary: QueryResult | QueryMultiResult): void {
     // A set the summary names released is gone (a load that Close Results stopped answers its set so): owning it again
     // would send its reads to the backend rather than refuse them here.
     this.own(summary.resultSets.filter(set => set.state !== 'released'))
-    if (summary.planSets) this.own(summary.planSets)
+    if ('planSets' in summary && summary.planSets) this.own(summary.planSets)
     this.rememberMemory('results', summary.budget)
   }
 
@@ -301,6 +303,7 @@ export class ResultsPortHost {
       case 'diffSeek': return this.diffSeek(request)
       case 'diff': return this.diff(request)
       case 'pivot': return this.pivot(request)
+      case 'combine': return this.combine(request)
       case 'search': return this.search(request)
       case 'profile': return this.profile(request)
       case 'distinct': return this.distinct(request)
@@ -867,6 +870,37 @@ export class ResultsPortHost {
     })
   }
 
+  /** Combines 2 to 32 complete rows results of one query into one stored result (`kind: 'combined'`). */
+  private combine(request: Extract<PortRequest, { t: 'combine' }>): void {
+    const { rid, generation } = request
+    if (this.sorting.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (!request.resultIds.every(id => this.current(generation, id))) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    const params: ResultsCombineParams = { resultIds: [...request.resultIds], ...(request.statementName === undefined ? {} : { statementName: request.statementName }) }
+    const combine = this.backend.combine(generation, params)
+    this.sorting.set(rid, combine)
+    combine.done.then(result => {
+      const parsed = combineResultSchema.safeParse(result)
+      const stored = parsed.success ? parsed.data.descriptor.resultId : storedResultId(result)
+      const close = () => { if (stored !== undefined) void this.backend.close(generation, [stored]).catch(() => undefined) }
+      if (this.port !== port || this.sorting.get(rid) !== combine) return close()
+      this.sorting.delete(rid)
+      if (!parsed.success) {
+        close()
+        this.onRefused?.('results.combine', refusedMembers(parsed.error))
+        return this.end(rid, 'BACKEND_ERROR', 'The results could not be combined.')
+      }
+      const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
+      if (generation === this.generation) this.own([descriptor])
+      this.post({ t: 'end', rid, ok: true, result: { descriptor } })
+    }, error => {
+      if (this.port !== port || this.sorting.get(rid) !== combine) return
+      this.sorting.delete(rid)
+      this.fail(rid, error)
+    })
+  }
+
   /** A request of a result this renderer owns, counted with live updates against the 64; `check` bounds its answer. */
   private counted<T>(rid: number, generation: number, resultId: number, run: () => Promise<unknown>, check: (result: unknown) => T | undefined): void {
     if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
@@ -958,6 +992,11 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
     pivot: (generation, params, onProgress) => {
       let id = 0
       const done = supervisor.request('results.pivot', params, { generation, onOperationProgress: onProgress, onSent: sent => { id = sent } })
+      return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
+    },
+    combine: (generation, params) => {
+      let id = 0
+      const done = supervisor.request('results.combine', params, { generation, onSent: sent => { id = sent } })
       return { done, cancel: reason => { if (id) supervisor.cancel(generation, id, reason) } }
     },
     search: (generation, params) => {

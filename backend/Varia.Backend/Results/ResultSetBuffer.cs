@@ -107,6 +107,7 @@ internal sealed class ResultSetBuffer
     private int unpackTotal, unpackDone;
     private TruncationReason refused;
     private volatile bool incomplete;
+    private volatile bool rolledBackPreview;
     /// <summary>The last search's memo (<see cref="SearchMemo"/>), its bytes counted in <see cref="charged"/>.</summary>
     private SearchMemo? searchMemo;
     /// <summary>Sealed pages waiting to be packed as they sealed (<see cref="ResultStore.PackAtSeal"/>), oldest first, each
@@ -162,6 +163,14 @@ internal sealed class ResultSetBuffer
     public string Kind { get; }
     /// <summary>The query's name for this set (a #Name marker, ResultNames.cs); null when it has none.</summary>
     public string? ResultName { get; init; }
+    /// <summary>Multi-server: target key, label, environment, provider and 0-based statement slot; null for single-server sets.</summary>
+    public string? TargetKey { get; init; }
+    public string? TargetLabel { get; init; }
+    public string? TargetEnvironment { get; init; }
+    public string? TargetProvider { get; init; }
+    public int? StatementSlot { get; init; }
+    /// <summary>Multi-server: true when this target's transaction was rolled back after producing preview rows.</summary>
+    public bool RolledBackPreview { get => rolledBackPreview; set => rolledBackPreview = value; }
     /// <summary>A diff's two input results (results.diff), recorded when it is written: its row identity (results.identify)
     /// hashes each entry's (input, row) pairs, ordered by input result id.</summary>
     public (uint Left, uint Right)? DiffInputs { get; set; }
@@ -1367,7 +1376,8 @@ internal sealed class ResultSetBuffer
             return new ResultDescriptor(ResultId, Index, BatchNumber, Iteration, Kind, Columns, RowsRead, rowsStored, rowsAvailable, bytesStored, truncatedCells,
                 state switch { 0 => "open", 1 => "complete", _ => "released" }, reason == TruncationReason.None ? null : Name(reason), Incomplete, ResultName,
                 residence, residence is null || rowsTotal < 0 ? null : rowsTotal, residence is null ? null : revision,
-                remote is { } windowed ? (long)Math.Min(Math.Ceiling(windowed.RowCost * windowed.Rows), 9_007_199_254_740_991d) : null);
+                remote is { } windowed ? (long)Math.Min(Math.Ceiling(windowed.RowCost * windowed.Rows), 9_007_199_254_740_991d) : null,
+                TargetKey, StatementSlot, rolledBackPreview ? true : null);
         }
     }
 

@@ -1,7 +1,8 @@
 // The renderer's access to stored query results (the PR7 grid contract). Rows stay in the backend; the results worker
 // reads and decodes pages, and the UI thread receives only windows of display text. Live subscriptions run through the
 // same worker and port: their tables are ordinary stored results, opened with the same handles.
-import type { ApiResult, BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultResidence, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import type { ApiResult, BackendStatus, DiffLayout, DiffMatch, IdentityBy, PivotValueSpec, QueryEvent, QueryResult, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultResidence, ResultsCombineResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickParams, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowIdsResult, ResultsSearchResult, TruncationReason, VariaApi, ViewFilter, ViewSortKey, WireKind } from '../../../shared/contracts'
+import { refusedResultNameChars, resultNameChars } from '../../../shared/ipc/descriptors'
 import type { MemoryFeature, MemoryReport, OperationPhase } from '../../../shared/ipc/port-messages'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
@@ -65,6 +66,8 @@ export interface ResultSnapshot {
   /** While a windowed result loads into memory, the rows it showed before: the grid keeps drawing them (as loading past
    *  the rows loaded so far) so it neither empties nor loses its scroll position. Gone once the load completes. */
   rowsExpected?: number
+  /** Multi-server: true when this result came from a target whose transaction was rolled back. */
+  rolledBackPreview?: boolean
 }
 /** What a window holds: columns [colStart, colEnd), cells cut at `maxCellChars`, and with `display` grid text. */
 export interface WindowShape { colStart?: number; colEnd?: number; maxCellChars?: number; display?: boolean }
@@ -579,6 +582,39 @@ export class ResultClient implements Disposable {
     }
   }
 
+  /** Combines 2 to 32 complete rows results of the same multi-server query into one stored combined result. */
+  async combine(results: readonly ResultHandle[], o: { statementName?: string; signal?: AbortSignal } = {}): Promise<ResultsCombineResult> {
+    if (results.length < 2 || results.length > 32) throw new ResultError('INVALID_PARAMS', 'Combining results requires 2 to 32 results.')
+    const generation = results[0].key.generation
+    const seen = new Set<number>()
+    for (const item of results) {
+      if (item.key.generation !== generation) throw new ResultError('INVALID_PARAMS', 'All combined results must belong to the same backend generation.')
+      const state = this.results.get(keyOf(item.key))
+      if (state) this.usable(state)
+      else if (item.getSnapshot().state === 'lost') throw new ResultError('RESULT_UNAVAILABLE', unavailable)
+      else if (item.getSnapshot().state === 'released') throw new ResultError('RESULT_RELEASED', released)
+      else throw new ResultError('RESULT_UNAVAILABLE', unavailable)
+      if (seen.has(item.key.resultId)) throw new ResultError('INVALID_PARAMS', 'Combined results must be distinct.')
+      seen.add(item.key.resultId)
+    }
+    if (o.statementName !== undefined && (o.statementName.length < 1 || o.statementName.length > resultNameChars || refusedResultNameChars.test(o.statementName) || o.statementName.trim() !== o.statementName)) {
+      throw new ResultError('INVALID_PARAMS', 'The combined statement name is invalid.')
+    }
+    const late = (message: WorkerResponse) => {
+      if (message.type !== 'combined') return
+      const { descriptor } = message.result
+      void this.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {})
+    }
+    const resultIds = [...seen]
+    const response = await this.request(
+      id => ({ type: 'combine', id, generation, resultIds, ...(o.statementName === undefined ? {} : { statementName: o.statementName }) }),
+      o.signal,
+      late
+    )
+    if (response.type !== 'combined') throw new ResultError('RESULT_DECODER_FAILED', workerStopped)
+    return response.result
+  }
+
   /** results.view through the worker. A view built after its sort was given up is closed by the worker. */
   private async sort(base: ResultState | undefined, keys: readonly ViewSortKey[], o: { filters?: readonly ViewFilter[]; replaces?: ResultView; signal?: AbortSignal; onProgress?: OperationProgressListener } = {}): Promise<ResultView> {
     if (!base) throw new ResultError('RESULT_RELEASED', released)
@@ -659,7 +695,7 @@ export class ResultClient implements Disposable {
   }
 
   /** The summary's descriptors are final; events for the script that arrive later change nothing. */
-  applySummary(summary: QueryResult): void {
+  applySummary(summary: Pick<QueryResult, 'resultSets' | 'planSets'>): void {
     // A summary may overtake its residence event (the event comes through the worker): a newer revision is revised here.
     for (const descriptor of summary.resultSets) {
       const state = this.state(descriptor)
@@ -919,7 +955,7 @@ export class ResultClient implements Disposable {
 
   private received(message: WorkerResponse): void {
     switch (message.type) {
-      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': case 'distinct': {
+      case 'window': case 'cell': case 'closed': case 'rowBytes': case 'measure': case 'stats': case 'liveUpdated': case 'view': case 'viewClosed': case 'identity': case 'search': case 'profile': case 'distinct': case 'combined': {
         const pending = this.pending.get(message.id)
         this.pending.delete(message.id)
         pending?.resolve(message)
@@ -1019,6 +1055,10 @@ export class ResultClient implements Disposable {
       const state = this.results.get(keyOf(event.descriptor))
       if (state) this.revise(state, event.descriptor)
     }
+    else if (event.type === 'resultSet.meta') {
+      const state = this.results.get(keyOf({ generation: event.generation, resultId: event.resultId }))
+      if (state) this.update(state, { rolledBackPreview: event.rolledBackPreview }, false)
+    }
     else if (event.type === 'progress') {
       for (const item of event.results) {
         const state = this.results.get(keyOf({ generation: this.generation, resultId: item.resultId }))
@@ -1086,6 +1126,8 @@ export class ResultClient implements Disposable {
     // A windowed result loading into memory starts its counters again: the grid keeps the rows it showed until they load.
     const expected = revised ? (current.residence === 'remote' && residence === 'memory' ? Math.max(current.rowsAvailable, current.rowsExpected ?? 0) : 0) : previous.rowsExpected ?? 0
     if (next.state === 'open' && residence !== 'remote' && expected > next.rowsAvailable) next.rowsExpected = expected
+    const rolledBackPreview = values.rolledBackPreview ?? previous.rolledBackPreview
+    if (rolledBackPreview !== undefined) next.rolledBackPreview = rolledBackPreview
     this.publish(state, next)
   }
 

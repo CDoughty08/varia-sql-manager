@@ -69,6 +69,30 @@ internal sealed class QueryEventSink : IDisposable
         }
     }
 
+    /// <summary>resultSet.meta: non-droppable metadata update for a stored result (e.g. rolledBackPreview after Phase 2 rollback).</summary>
+    public void ResultSetMeta(uint resultId, bool rolledBackPreview)
+    {
+        lock (gate)
+        {
+            if (stopped) return;
+            Emit(new ResultSetMetaEvent(resultId, rolledBackPreview), droppable: false);
+        }
+    }
+
+    /// <summary>multiQuery.targetState: per-target execution state; terminal phases flush messages and are non-droppable.</summary>
+    public void TargetState(MultiQueryTargetStateEvent state)
+    {
+        lock (gate)
+        {
+            if (stopped) return;
+            var terminal = IsTerminalPhase(state.Phase);
+            if (terminal) FlushMessages();
+            Emit(state, droppable: !terminal);
+        }
+    }
+
+    private static bool IsTerminalPhase(string phase) => phase is "succeeded" or "committed" or "rolledBack" or "commitInDoubt" or "failed" or "cancelled" or "timedOut" or "skipped";
+
     public void Closed(ResultSetBuffer set)
     {
         lock (gate)

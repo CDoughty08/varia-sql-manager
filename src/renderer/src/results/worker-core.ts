@@ -2,7 +2,7 @@
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
 // with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
 // without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
-import type { BackendStatus, ResultsCloseResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
+import type { BackendStatus, ResultsCloseResult, ResultsCombineResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult, WireKind } from '../../../shared/contracts'
 import type { OperationPhase, PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, pageMemoryBytes, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
@@ -117,6 +117,8 @@ export class ResultsWorkerCore {
   /** The diffs and pivots among them, by rid: their generation, and whether the page gave them up. One answered after its
    *  cancel is a stored result nobody holds, so it is closed. */
   private readonly diffs = new Map<number, { readonly generation: number; cancelled: boolean; readonly cancelledText: string }>()
+  /** results.combine requests in flight, by rid. */
+  private readonly combines = new Map<number, { readonly id: number; readonly generation: number; cancelled: boolean }>()
   /** The worker's own viewCloses (a view built after its sort was given up), whose rids stay taken until main answers. */
   private readonly orphanCloses = new Set<number>()
   private readonly lives = new Map<number, Live>()
@@ -157,6 +159,10 @@ export class ResultsWorkerCore {
         this.sorts.delete(rid)
         this.error(sort.id, 'PORT_CLOSED', portClosed)
       }
+      for (const [rid, combine] of [...this.combines]) {
+        this.combines.delete(rid)
+        this.error(combine.id, 'PORT_CLOSED', portClosed)
+      }
       this.orphanCloses.clear()
       this.diffs.clear()
       this.status = undefined
@@ -186,6 +192,7 @@ export class ResultsWorkerCore {
       case 'liveAck': return this.liveAck(request.id, request.bytes)
       case 'forget': return this.forgetResults(request.generation, request.resultIds)
       case 'revise': return this.revise(request.key)
+      case 'combine': return this.combine(request)
     }
   }
 
@@ -209,8 +216,9 @@ export class ResultsWorkerCore {
   /** A long request's progress goes to the page request it serves, while that request still waits for its answer. */
   private progress(rid: number, phase: OperationPhase, percent: number | undefined): void {
     const sort = this.sorts.get(rid)
-    // A sort, pivot or diff the page gave up reports nothing more.
-    const id = sort ? (sort.cancelled ? undefined : sort.id) : this.diffs.get(rid)?.cancelled ? undefined : this.profiles.get(rid) ?? this.distincts.get(rid) ?? this.identities.get(rid)
+    const combine = this.combines.get(rid)
+    // A sort, pivot, diff or combine the page gave up reports nothing more.
+    const id = sort ? (sort.cancelled ? undefined : sort.id) : combine ? (combine.cancelled ? undefined : combine.id) : this.diffs.get(rid)?.cancelled ? undefined : this.profiles.get(rid) ?? this.distincts.get(rid) ?? this.identities.get(rid)
     if (id !== undefined) this.post({ type: 'progress', id, phase, ...percent === undefined ? {} : { percent } })
   }
 
@@ -219,7 +227,7 @@ export class ResultsWorkerCore {
   /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
   private allocate(): number {
     let rid = this.nextRid
-    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.profiles.has(rid) || this.distincts.has(rid) || this.searches.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.identities.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    while (this.reads.has(rid) || this.closes.has(rid) || this.sizes.has(rid) || this.profiles.has(rid) || this.distincts.has(rid) || this.searches.has(rid) || this.sorts.has(rid) || this.viewCloses.has(rid) || this.identities.has(rid) || this.combines.has(rid) || this.orphanCloses.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
     return rid
   }
@@ -376,6 +384,11 @@ export class ResultsWorkerCore {
       sort.cancelled = true
       return this.send({ t: 'cancel', rid })
     }
+    for (const [rid, combine] of this.combines) {
+      if (combine.id !== id) continue
+      combine.cancelled = true
+      return this.send({ t: 'cancel', rid })
+    }
     const live = this.liveIds.get(id)
     if (live) {
       // The stream ends with main's answer (cancelled), which also says what became of its results.
@@ -501,6 +514,17 @@ export class ResultsWorkerCore {
     const rid = this.allocate()
     this.viewCloses.set(rid, request.id)
     this.send({ t: 'viewClose', rid, generation, resultId, viewIds: [...request.viewIds] })
+  }
+
+  private combine(request: Extract<WorkerRequest, { type: 'combine' }>): void {
+    if (!this.port) return this.error(request.id, 'PORT_CLOSED', portClosed)
+    if (this.generation !== 0 && request.generation !== this.generation) return this.error(request.id, 'RESULT_UNAVAILABLE', resultUnavailable)
+    const rid = this.allocate()
+    this.combines.set(rid, { id: request.id, generation: request.generation, cancelled: false })
+    this.send({
+      t: 'combine', rid, generation: request.generation, resultIds: [...request.resultIds],
+      ...(request.statementName === undefined ? {} : { statementName: request.statementName })
+    })
   }
 
   private backend(generation: number, status: BackendStatus): void {
@@ -729,6 +753,19 @@ export class ResultsWorkerCore {
       this.post({ type: 'identity', id: identity, result: result as ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsDiffResult | ResultsPivotResult | ResultsDiffSeekResult })
       return
     }
+    const combine = this.combines.get(rid)
+    if (combine) {
+      this.combines.delete(rid)
+      const combined = result as ResultsCombineResult
+      if (combine.cancelled) {
+        const close = this.allocate()
+        this.orphanCloses.add(close)
+        this.send({ t: 'close', rid: close, generation: combine.generation, resultIds: [combined.descriptor.resultId] })
+        return this.error(combine.id, 'CANCELLED', 'The combine was cancelled.')
+      }
+      this.post({ type: 'combined', id: combine.id, result: combined })
+      return
+    }
     const sizes = this.sizes.get(rid)
     if (sizes !== undefined) {
       this.sizes.delete(rid)
@@ -795,6 +832,11 @@ export class ResultsWorkerCore {
       this.identities.delete(rid)
       this.diffs.delete(rid)
       return this.error(identity, code, message)
+    }
+    const combine = this.combines.get(rid)
+    if (combine) {
+      this.combines.delete(rid)
+      return this.error(combine.id, code, message)
     }
     const sizes = this.sizes.get(rid)
     if (sizes !== undefined) {

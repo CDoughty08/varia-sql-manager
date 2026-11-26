@@ -153,6 +153,8 @@ export const errorCodes = [
   // Backend: a results.diff of all rows (context -1) refused memory for what grows with its rows stored (the rows, their
   // previous values, the change index); showing changes only (context 0) may fit. Other refusals stay TOO_LARGE.
   'DIFF_ROWS_TOO_LARGE',
+  // Backend: a cross-engine SELECT run refused a non-read-only statement.
+  'READ_ONLY_VIOLATION',
   // GOAWAY.
   'PROTOCOL_ERROR', 'PROTOCOL_UNSUPPORTED', 'BACKEND_CRASH',
   // Main.

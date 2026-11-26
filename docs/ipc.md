@@ -254,6 +254,7 @@ noted where it matters.
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
+| `query.executeMulti` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 60` s. Runs one SQL script across 1 – 32 homogeneous targets (`transaction` / `fireAndForget`) or paired `{ sqlserver, bigquery }` scripts (`crossEngineReadOnly`) |
 | `query.cancel` | invoke | unary | control | 10 s. `detach: true` (BigQuery) leaves the job running: the request answers status `detached` and the job holds the tab's session; SQL Server refuses it with `UNSUPPORTED_PROVIDER` |
 | `query.attach` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only. Re-attaches a tab to a job by reference ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)); events, summary, session map and stamping as `query.execute`'s; Stop is `query.cancel` |
 | `results.remoteQuery` | invoke, events on the port | unary with EVENTs | query | none; BigQuery only; Stop is `query.cancel` ([Remote results](#remote-results)) |
@@ -272,6 +273,7 @@ noted where it matters.
 | `results.diffSeek` | port | unary | results | 10 s; the next or previous change, or a look-alike's partner, in a comparison or its view ([Result diffs](#result-diffs)) |
 | `results.search` | port | unary | results | 120 s ([Search in results](#search-in-results)) |
 | `results.pivot` | port | unary | results | 120 s; stored as a new result ([Pivots](#pivots)) |
+| `results.combine` | port | unary | results | 120 s; combines 2 – 32 complete `rows` results of one query into a `combined` result |
 | `results.profile` | port | unary | results | 120 s ([Column profiles](#column-profiles)) |
 | `results.distinct` | port | unary | results | 120 s; a snapshot of a column's distinct values ([Distinct values](#distinct-values)) |
 | `results.distinctRead` | port | unary | results | 30 s; a window of 1 – 512 values, optionally searched |
@@ -743,8 +745,8 @@ both, each source only the engines its catalogue entry names (Job History's `big
 whether the entry holds it), and two serve per-principal Starred Projects: `varia:bigquery-starred-projects` (`{ connectionId? }`,
 optional strict; returns only live verified principals) and `varia:bigquery-star-project` (`{ connectionId, project, starred }`,
 strict; main resolves the verified principal from the live BigQuery handle). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
-with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` serves both, refusing each engine the other's options (`optionsAllow`). `system.health`, `query.cancel`,
-`query.session.close`, `query.session.state` and every other `results.*` method name no connection and are declared for
+with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` and `query.executeMulti` serve both, refusing each engine the other's options (`optionsAllow`; `query.executeMulti` also checks mixed targets and `crossEngineReadOnly` requirements in main and backend). `system.health`, `query.cancel`,
+`query.session.close`, `query.session.state`, `results.combine` and every other `results.*` method name no connection and are declared for
 both engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request
 again first thing (`Providers.BothMethods`, compared with the policies by `tests/validation.test.ts`).
 
@@ -944,8 +946,8 @@ gets Cancel.
 
 ## Query events
 
-EVENT frames whose id is a running `query.execute` or `results.remoteQuery` request. Main validates each
-(`queryEventSchema`), stamps the generation on descriptors, registers the result as owned on `resultSet.opened` (a
+EVENT frames whose id is a running `query.execute`, `query.executeMulti` or `results.remoteQuery` request. Main validates each
+(`queryEventSchema`), stamps the generation on descriptors and `resultSet.meta`, registers the result as owned on `resultSet.opened` (a
 `resultSet.residence` only refreshes a result still owned, and disowns one it names released), and forwards it on the port (or drops it when no port is open).
 
 | type | Emitted |
@@ -953,13 +955,15 @@ EVENT frames whose id is a running `query.execute` or `results.remoteQuery` requ
 | `session.opened` | Before the first batch, once a live query session is acquired; carries `spid` and optional `login`. The summary still says whether the session survived |
 | `resultSet.opened` | When a kept set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 a second per query, latest wins; up to 64 sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`, and `truncated` (the descriptor's reason) once a set stopped storing. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once |
-| `messages` | Every 100 ms or 65,536 characters, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
+| `messages` | Every 100 ms or 65,536 characters, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error', line?, targetKey?, dialect? }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept set, with its final descriptor |
 | `resultSet.residence` | A BigQuery set switched between memory and windowed, with its new descriptor (`residence` and `revision` always present) ([Remote results](#remote-results)) |
-| `query.job` | A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): `{ jobId, project, location?, state, auxiliary, transaction }`, `transaction` (`none`, `open`, `unknown`) being the session's as the job started; never the session id |
+| `resultSet.meta` | Non-droppable (`droppable: false`) metadata update for a stored result (`{ resultId, rolledBackPreview }`; main stamps `generation`) |
+| `multiQuery.targetState` | Per-target execution state for `query.executeMulti` (`{ targetKey, phase, batchesCompleted, batchesTotal, rowsAffected, resultSetCount, elapsedMs, bytesProcessed?, errorCode?, errorMessage? }`); non-droppable for terminal phases |
+| `query.job` | A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): `{ jobId, project, location?, state, auxiliary, transaction, targetKey? }`, `transaction` (`none`, `open`, `unknown`) being the session's as the job started; never the session id |
 
-Progress and messages are droppable: refused while the control lane holds 1,000 frames or 8 MiB, and dropped over
-256 KiB. `session.opened`, `resultSet.opened`, `resultSet.closed`, `resultSet.residence` and `query.job` are essential: never refused, up to 4 MiB (a
+Progress, messages and non-terminal `multiQuery.targetState` events are droppable: refused while the control lane holds 1,000 frames or 8 MiB, and dropped over
+256 KiB. `session.opened`, `resultSet.opened`, `resultSet.closed`, `resultSet.residence`, `resultSet.meta`, terminal `multiQuery.targetState` and `query.job` are essential: never refused, up to 4 MiB (a
 4,096-column descriptor with 128-character names). RESPONSE, PONG and GOAWAY are never dropped. The summary is
 authoritative; a query's events after it are ignored.
 
@@ -1084,12 +1088,12 @@ and reads its rows from BigQuery ([Remote results](#remote-results)).
   (one more marks it truncated; reserved from the query's budget in 256 KiB steps), stored as one row
   (`rowsRead` = `rowsStored` = 1) with role `xml` or `json`. `FOR XML … TYPE` already arrives as one xml cell.
 - **Never unowned.** A summary that cannot be encoded (`RESPONSE_TOO_LARGE`) releases its results at once.
-- **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan', columns,
+- **Descriptor.** `{ generation, resultId, index, batchNumber, iteration, kind: 'rows' | 'executionPlan' | 'diff' | 'pivot' | 'combined', columns,
   rowsRead, rowsStored, rowsAvailable (rows in sealed pages), bytesStored, truncatedCells, state: 'open' | 'complete' |
-  'released', truncated?, incomplete, name? }`. Result ids are u32 from 1 per generation, always paired with it. `name`
+  'released', truncated?, incomplete, name?, residence?, rowsTotal?, revision?, projectedBytes?, targetKey?, statementSlot?, rolledBackPreview? }`. Result ids are u32 from 1 per generation, always paired with it. `name`
   comes from a `#Name="…"` marker comment before the statement (docs/named-result-sets-scope.md): 1 to 128 characters,
   trimmed, no control, line separator or bidirectional characters; `backendDescriptorSchema` refuses one out of bounds. Absent for plan sets, Pivots and comparisons; its
-  bytes count toward the 8 MiB of descriptors.
+  bytes count toward the 8 MiB of descriptors. `targetKey`, `statementSlot` and `rolledBackPreview` appear on multi-server results (`kind: 'combined'` omits `targetKey`).
 - **Released** by `results.close`, the next `query.execute` on the same session (whatever its connection), and process
   exit; closing a session or disconnecting keeps results. A release fails in-flight reads with `RESULT_RELEASED` after
   the current page and stops storing at once.
@@ -1294,7 +1298,7 @@ statistics and the row-size bar use these; nothing re-reads SQL Server.
 ## Messages
 
 The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'print' | 'server' |
-'error', line? }` (`line`: the absolute script line of an error in a submitted batch) in order, under the caps (1,000 entries, 1,000,000 characters); the summary is authoritative. Past the caps,
+'error', line?, targetKey?, dialect? }` (`line`: the absolute script line of an error in a submitted batch; `targetKey` and `dialect`: optional attribution on multi-server runs) in order, under the caps (1,000 entries, 1,000,000 characters); the summary is authoritative. Past the caps,
 "Messages were truncated by the display limit; …" marks the cut, and up to 20 more error entries (each ≤ 16,384
 characters) are kept, so the error, cancel or timeout that stopped a script still shows. An event carries at most 1,000
 entries; a summary at most 1,028 (stored entries, late errors, up to 8 notes). A summary with an `error` but no error
@@ -2581,7 +2585,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `READ_ONLY_VIOLATION` (a cross-engine SELECT run refused a non-read-only statement), `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -2591,6 +2595,8 @@ terminal for live probes. Display login text is never identity proof.
 | `BACKEND_LOST` | "The SQL backend stopped before answering. The request was not retried." |
 | `BACKEND_LOST` (`results.remoteQuery`) | "The SQL backend stopped during a query over a BigQuery result (Load into memory, a sort, a filter, a value list, a sample or a re-run). It was not re-run, and the result is gone with the backend." |
 | `BACKEND_LOST` (BigQuery `query.execute`, `query.attach`) | "The SQL backend stopped while this BigQuery query was running. A job still running carries on in BigQuery and is re-attached once the tab reconnects; a transaction open in its session stays open until the session ends." |
+| `BACKEND_LOST` (BigQuery `query.executeMulti`) | "The SQL backend stopped while this multi-server BigQuery query was running. It was not re-run; running BigQuery jobs carry on in BigQuery until cancelled, and any open transaction stays open until its session ends." |
+| `BACKEND_LOST` (Cross-engine `query.executeMulti`) | "The SQL backend stopped while this cross-engine query was running. It was not re-run; SQL Server rolls back any open transaction when it detects the closed connection, while running BigQuery jobs carry on in BigQuery." |
 | `BACKEND_LOST` (`query.execute`) | "The SQL backend stopped while this script was running. It was not re-run. Statements that finished before the failure may have taken effect; SQL Server rolls back the session's open transaction when it detects the closed connection." |
 | `BACKEND_LOST` (reload) | "The workbench was reloaded." |
 | `CONNECTION_LOST` | "This connection was lost when the SQL backend restarted. Reconnect to continue; its sessions, temporary tables, and open transactions are gone." |
@@ -2612,6 +2618,7 @@ terminal for live probes. Display login text is never identity proof.
 | `RESULT_UNAVAILABLE` (closed during the save dialog) | "These results were closed before they could be saved." |
 | `RESULT_OPEN` | "Save the results after this result set finishes loading." |
 | `EXPORT_FAILED` | "Could not save the results: " + `ACCESS` "access to {file} is denied.", `DISK_FULL` "the disk is full.", `IN_USE` "{file} is open in another program.", `NOT_FOUND` "the folder no longer exists.", `IS_DIRECTORY` "{file} is a folder.", otherwise "{file} could not be written." |
+| `READ_ONLY_VIOLATION` | Refused a non-read-only statement during a `crossEngineReadOnly` run before any query ran. |
 
 | Surface | Text |
 | --- | --- |

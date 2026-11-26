@@ -1,11 +1,11 @@
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { z } from 'zod'
-import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, QueryEvent, ResultDescriptor } from '../../shared/contracts'
+import type { BackendMethod, BackendMethods, BackendResultDescriptor, BackendState, LossReason, LostSummary, MultiQueryOptions, QueryEvent, ResultDescriptor } from '../../shared/contracts'
 import { deadlineFor, methodAllows, optionsAllow, requestProvider } from '../../shared/ipc/methods'
 import type { ProviderId } from '../../shared/providers'
 import { endIdleResultSchema, jobLimits } from '../../shared/bigquery/jobs'
-import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryResultSchema, sessionCloseResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
+import { jobProgressSchema, operationProgressSchema, queryEventSchema, queryMultiResultSchema, queryResultSchema, sessionCloseResultSchema, type JobProgressEvent, type OperationProgressEvent } from '../../shared/ipc/port-messages'
 import { actionProgressEventSchema, type ActionProgressEvent } from '../../shared/actions/schema.ts'
 import { objectIndexProgressEventSchema, type ObjectIndexProgressEvent } from '../../shared/explorer/search.ts'
 import { liveEndSchema, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, type LiveEvent, type LiveSubscribeParams } from '../../shared/live/schema'
@@ -156,6 +156,8 @@ export class BackendSupervisor {
   isLostConnection(id: string): boolean { return this.lost.has(id) }
   /** Whether a live connection is of `provider` (the crash and reload prompts' BigQuery wording). */
   hasProvider(provider: ProviderId): boolean { return [...this.providers.values()].includes(provider) }
+  /** The provider recorded for a live connection handle, if known. */
+  providerOf(connectionId: string): ProviderId | undefined { return this.providers.get(connectionId) }
 
   onState(listener: (state: BackendState) => void): () => void {
     this.listeners.add(listener)
@@ -188,6 +190,7 @@ export class BackendSupervisor {
     const provider = requestProvider(method, params, id => this.providers.get(id))
     if (!methodAllows(method, provider)) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedProvider)
     if (!optionsAllow(method, provider, params)) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+    if (method === 'query.executeMulti') this.validateMultiTargets(params)
     this.start()
     const local = this.answerLocally(method, params)
     if (local) return local.value as BackendMethods[M]['result']
@@ -196,6 +199,7 @@ export class BackendSupervisor {
     // A request that waited out a restart (its idle-session wait) for a connection of the generation it ended: lost with it.
     const named = idOf(params, 'connectionId')
     if (named !== undefined && this.lost.has(named) && method !== 'connections.disconnect') throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+    const multiProviders = method === 'query.executeMulti' ? this.validateMultiTargets(params, connection.generation) : undefined
     const sessionId = method === 'query.execute' || method === 'query.attach' || method === 'plans.estimate' && (params as BackendMethods['plans.estimate']['params']).mode === 'session'
       ? idOf(params, 'sessionId') : undefined
     if (sessionId !== undefined) {
@@ -203,7 +207,7 @@ export class BackendSupervisor {
       this.sessions.set(sessionId, connection.generation)
       if (this.sessions.size > maxSessions) this.sessions.delete(this.sessions.keys().next().value!)
     }
-    const queryId = method === 'query.execute' || method === 'query.attach' || method === 'results.remoteQuery' ? idOf(params, 'queryId') : undefined
+    const queryId = method === 'query.execute' || method === 'query.executeMulti' || method === 'query.attach' || method === 'results.remoteQuery' ? idOf(params, 'queryId') : undefined
     if (queryId !== undefined) {
       this.queries.delete(queryId)
       this.queries.set(queryId, connection.generation)
@@ -219,7 +223,11 @@ export class BackendSupervisor {
         const parsed = queryEventSchema.safeParse(raw)
         if (!parsed.success) return false
         const event = parsed.data
-        onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' || event.type === 'resultSet.residence' ? { ...event, descriptor: stamp(event.descriptor, connection.generation) } : event)
+        onEvent(event.type === 'resultSet.opened' || event.type === 'resultSet.closed' || event.type === 'resultSet.residence'
+          ? { ...event, descriptor: stamp(event.descriptor, connection.generation) }
+          : event.type === 'resultSet.meta'
+            ? { ...event, generation: connection.generation }
+            : event)
       } : onLive ? (raw, bytes) => {
         const parsed = liveEventSchema.safeParse(raw)
         if (!parsed.success || parsed.data.seq !== nextSeq || !subscribed || !liveEventFits(parsed.data, subscribed)) return false
@@ -244,7 +252,14 @@ export class BackendSupervisor {
     let result
     try { result = await sent.done } catch (error) {
       // A lost backend never cancels a BigQuery job: the run's tab hears that, not SQL Server's rollback.
-      if (error instanceof BackendError && error.code === 'BACKEND_LOST' && provider === 'bigquery' && (method === 'query.execute' || method === 'query.attach')) throw new BackendError('BACKEND_LOST', sentences.lostBigQuery)
+      if (error instanceof BackendError && error.code === 'BACKEND_LOST') {
+        if (method === 'query.executeMulti' && multiProviders) {
+          if (multiProviders.hasSqlServer && multiProviders.hasBigQuery) throw new BackendError('BACKEND_LOST', sentences.lostMultiMixed)
+          if (multiProviders.hasBigQuery) throw new BackendError('BACKEND_LOST', sentences.lostMultiBigQuery)
+        } else if (provider === 'bigquery' && (method === 'query.execute' || method === 'query.attach')) {
+          throw new BackendError('BACKEND_LOST', sentences.lostBigQuery)
+        }
+      }
       throw error
     }
     return this.registered(method, params, result, connection) as BackendMethods[M]['result']
@@ -376,7 +391,43 @@ export class BackendSupervisor {
     }
     if (unavailable) throw this.unavailable()
     if (connectionId !== undefined && this.lost.has(connectionId)) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+    if (method === 'query.executeMulti') this.validateMultiTargets(params, this.connection?.generation)
     return undefined
+  }
+
+  private validateMultiTargets(params: unknown, expectedGeneration?: number): { hasSqlServer: boolean; hasBigQuery: boolean } {
+    const options = (params ?? {}) as Partial<MultiQueryOptions>
+    const targets = Array.isArray(options.targets) ? options.targets : []
+    const seen = new Set<string>()
+    let hasSqlServer = false, hasBigQuery = false, allKnown = targets.length > 0
+    for (const target of targets) {
+      if (seen.has(target.connectionId)) throw new BackendError('INVALID_REQUEST', 'Targets must use distinct connections.')
+      seen.add(target.connectionId)
+      if (this.lost.has(target.connectionId)) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+      if (expectedGeneration !== undefined && this.live.get(target.connectionId) !== expectedGeneration) throw new BackendError('CONNECTION_LOST', sentences.connectionLost)
+      const provider = this.providers.get(target.connectionId)
+      if (provider === undefined) { allKnown = false; continue }
+      if (provider === 'sqlserver') {
+        hasSqlServer = true
+        if (target.dataset !== undefined || target.maximumBytesBilled !== undefined) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+      } else {
+        hasBigQuery = true
+        if (target.database !== undefined) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+      }
+    }
+    if (allKnown) {
+      if ((options.mode === 'transaction' || options.mode === 'fireAndForget') && hasSqlServer && hasBigQuery)
+        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.multiTargetMixedProviders)
+      if (options.mode === 'crossEngineReadOnly' && (!hasSqlServer || !hasBigQuery))
+        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.crossEngineNeedsBoth)
+      if (!hasBigQuery && (options.preflightDryRun !== undefined || options.prices !== undefined || options.residence !== undefined || options.windowCacheMiB !== undefined))
+        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+      if (options.stopOnError !== undefined && (options.mode !== 'fireAndForget' || hasBigQuery))
+        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+      if (options.sequential !== undefined && options.mode !== 'fireAndForget')
+        throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+    }
+    return { hasSqlServer, hasBigQuery }
   }
 
   /** While a restart is pending, a request waits for (and is bound to) the next generation. */
@@ -405,6 +456,16 @@ export class BackendSupervisor {
       return { ...summary, resultSets: resultSets.map(descriptor => stamp(descriptor, connection.generation)),
         ...planSets ? { planSets: planSets.map(descriptor => stamp(descriptor, connection.generation)) } : {},
         budget: { ...budget, generation: connection.generation } }
+    }
+    if (method === 'query.executeMulti') {
+      const parsed = queryMultiResultSchema.safeParse(result)
+      if (!parsed.success) throw new BackendError('BACKEND_ERROR', sentences.invalid)
+      const { resultSets, budget, ...summary } = parsed.data
+      return {
+        ...summary,
+        resultSets: resultSets.map(descriptor => stamp(descriptor, connection.generation)),
+        budget: { ...budget, generation: connection.generation }
+      }
     }
     if (method === 'debug.results.synthesize') return stamp(result as BackendResultDescriptor, connection.generation)
     // Main drops a live stream's results from what the renderer may read by these answers, so they are checked too.

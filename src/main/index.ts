@@ -80,7 +80,7 @@ import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox
 import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
 import type { LongRunState } from '../shared/long-runs.ts'
 import { isBigQueryOptions } from '../shared/connections'
-import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryEvent, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
+import { maxClipboardText, type ApiResult, type BigQueryConnectionOptions, type ConnectionOptions, type OpenedFiles, type OpenSqlFile, type ProviderConnectionOptions, type QueryEvent, type QueryMultiResult, type QueryResult, type RecoveredDocument, type ReloadAnswer, type RpcMethod, type RpcMethods } from '../shared/contracts'
 import { preparePlan } from './plan-request'
 import { memoryEventSchema, memoryReport } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -611,8 +611,9 @@ function requestClose(intent: CloseIntent): void {
  * finished jobs it read are dropped (their results are in the tab), and a stopped request's jobs too. A request that ends
  * without a summary (BACKEND_LOST) or left running (`detached`, `superseded`) keeps them for a re-attach.
  */
-function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string, attachJobId?: string) {
+function jobRecorder(queryId: string, jobKey: string, profileId?: string, connectionId?: string, attachJobId?: string, targetConnections?: ReadonlyMap<string, string>) {
   const seen = new Set<string>()
+  const targetOfJob = new Map<string, string>()
   const entry = { jobKey, seen }
   requestJobKeys.set(queryId, entry)
   // A summary answered after a reload or crash replaced the page (a restart waits for bigquery.endIdleSessions first) never
@@ -621,10 +622,25 @@ function jobRecorder(queryId: string, jobKey: string, profileId?: string, connec
   return {
     event(event: QueryEvent): void {
       if (event.type !== 'query.job') return
-      seen.add(event.jobId); jobRecords.record(jobKey, event, profileId)
-      if (connectionId !== undefined) noteJobConnection(jobConnections, event.jobId, connectionId, () => jobRecords.list().map(record => record.jobId), jobLimits.records)
+      const targetConnectionId = event.targetKey !== undefined ? targetConnections?.get(event.targetKey) : connectionId
+      if (event.targetKey !== undefined) targetOfJob.set(event.jobId, event.targetKey)
+      const resolvedProfileId = event.targetKey !== undefined ? profileOf(targetConnectionId ?? '') : profileId
+      seen.add(event.jobId); jobRecords.record(jobKey, event, resolvedProfileId)
+      if (targetConnectionId !== undefined) noteJobConnection(jobConnections, event.jobId, targetConnectionId, () => jobRecords.list().map(record => record.jobId), jobLimits.records)
     },
-    summary(result: QueryResult): void {
+    summary(result: QueryResult | QueryMultiResult): void {
+      if ('targets' in result) {
+        if (generation !== rendererGeneration) return
+        const targetStatus = new Map(result.targets.map(target => [target.targetKey, target.status] as const))
+        jobRecords.drop(jobKey, record => {
+          if (!seen.has(record.jobId)) return false
+          const key = targetOfJob.get(record.jobId)
+          const status = key === undefined ? undefined : targetStatus.get(key)
+          if (status === undefined) return record.state === 'done' || result.status === 'cancelled' || result.status === 'timedOut'
+          return record.state === 'done' || status !== 'commitInDoubt'
+        })
+        return
+      }
       // Leave it running on Close Results: marked from the answer itself, which may arrive before query.cancel's does.
       if (result.status === 'detached') { jobRecords.markDetached(jobKey, seen); return }
       if (result.status === 'superseded' || generation !== rendererGeneration) return
@@ -1338,7 +1354,7 @@ app.whenReady().then(async () => {
     }
     try {
       const validated = validateRequest(method, params)
-      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
+      if (closeApproved && ['connections.connect', 'connections.databases', 'actions.execute', 'bigquery.account', 'bigquery.projects', 'query.executeMulti'].includes(method)) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
       if (method === 'connections.connect') {
         if (closeApproved) throw new BackendError('BACKEND_UNAVAILABLE', 'The application is closing.')
         if (!connectionOpen) throw new Error('The connection owner is unavailable.')
@@ -1415,10 +1431,13 @@ app.whenReady().then(async () => {
       const named = remote ?? remoteEstimate
       if (named && !remoteResultIds(named).every(id => results.owns(named.generation, id))) return failure(new BackendError('RESULT_UNAVAILABLE', sentences.resultUnavailable), 'Backend request failed.')
       // A re-attached BigQuery job (query.attach) is a query too: its events and summary go the same way.
-      const queryId = method === 'query.execute' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.attach']['params']).queryId : remote?.queryId
+      const queryId = method === 'query.execute' || method === 'query.executeMulti' || method === 'query.attach' ? (validated as RpcMethods['query.execute' | 'query.executeMulti' | 'query.attach']['params']).queryId : remote?.queryId
       // A BigQuery request's job key: its query.job events become job records under it, before they are forwarded.
       const jobKey = queryId === undefined ? undefined : (validated as { jobKey?: string }).jobKey
-      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId, method === 'query.attach' ? (validated as { jobId?: string }).jobId : undefined)
+      const targetConnections = method === 'query.executeMulti'
+        ? new Map((validated as RpcMethods['query.executeMulti']['params']).targets.map(target => [target.targetKey, target.connectionId] as const))
+        : undefined
+      const jobs = jobKey === undefined ? undefined : jobRecorder(queryId!, jobKey, profileOf((validated as { connectionId?: string }).connectionId ?? ''), (validated as { connectionId?: string }).connectionId, method === 'query.attach' ? (validated as { jobId?: string }).jobId : undefined, targetConnections)
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
@@ -1454,7 +1473,7 @@ app.whenReady().then(async () => {
       // History and remembered passwords for the connect methods; other methods pass through.
       outcome = await settleConnection(prepared, outcome, { savedPasswords, authentication: connectionAuthentication, connections: history, disconnect: connectionId => backend.request('connections.disconnect', { connectionId }) })
       if (!outcome.ok) return { ...failure(outcome.error, 'Backend request failed.'), ...(outcome.passwordForgotten ? { passwordForgotten: true as const } : {}), ...(outcome.credentialRejected ? { credentialRejected: true as const } : {}) }
-      if (queryId !== undefined) { results.querySummary(result as QueryResult); jobs?.summary(result as QueryResult) }
+      if (queryId !== undefined) { results.querySummary(result as QueryResult | QueryMultiResult); jobs?.summary(result as QueryResult | QueryMultiResult) }
       if (method === 'query.cancel' && (validated as RpcMethods['query.cancel']['params']).detach && (result as { cancelled: boolean }).cancelled) {
         const request = requestJobKeys.get((validated as RpcMethods['query.cancel']['params']).queryId)
         if (request !== undefined) jobRecords.markDetached(request.jobKey, request.seen)
@@ -1554,7 +1573,9 @@ app.whenReady().then(async () => {
     // A BigQuery copy brings its job key back, with the jobs main still has records of under it, to re-attach to.
     const jobs = record.jobKey ? await jobRecords.load().then(() => restoredJobs(jobRecords.forKeys([record.jobKey!])), () => []) : []
     return { text: record.text, name: record.name, kind: record.kind, eol: record.eol, ...file ? { file } : {}, ...record.provider ? { provider: record.provider } : {},
-      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {}, ...record.targetId ? { targetId: record.targetId } : {} }
+      ...record.jobKey ? { jobKey: record.jobKey } : {}, ...jobs.length ? { jobs } : {}, ...record.targetId ? { targetId: record.targetId } : {},
+      ...record.multiMode ? { multiMode: record.multiMode } : {}, ...record.multiTargets ? { multiTargets: record.multiTargets } : {},
+      ...record.crossView ? { crossView: record.crossView } : {} }
   })
   // Hot exit: the page's tabs as its close goes ahead, with main's paths in place of file ids, and the next start's restore.
   handle('varia:session-write', async value => {

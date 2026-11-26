@@ -48,7 +48,7 @@ async function fillAutoRecover(into: string): Promise<void> {
   await mkdir(into, { recursive: true })
   const owner = { instance: randomUUID(), generation: 1 }
   await Promise.all(Array.from({ length: recoveryLimits.records }, (_, index) => {
-    const record = recoveryRecordSchema.parse({ version: 2, id: randomUUID(), owner, name: `Query ${index}`, kind: 'sql', eol: 'lf', savedAt: '2026-11-18T10:00:00.000Z', text: 'select 6' })
+    const record = recoveryRecordSchema.parse({ version: 3, id: randomUUID(), owner, name: `Query ${index}`, kind: 'sql', eol: 'lf', savedAt: '2026-11-18T10:00:00.000Z', text: 'select 6' })
     return writeFile(join(into, record.id + '.json'), JSON.stringify(record) + '\n')
   }))
   await expect(new RecoveryStore(into).write({ id: randomUUID(), name: 'Query', kind: 'sql', eol: 'lf', text: 'select 6' }, 1)).rejects.toThrow(recoveryCapMessage)
@@ -61,12 +61,12 @@ describe('0.9.0 profile migration', () => {
     expect(await read(profileFiles.connections.current)).toEqual(library)
     expect(await read(profileFiles.savedPasswords.current)).toEqual(passwords)
     const migrated = await read(join(profileFiles.session.current, 'session.json'))
-    expect(migrated.version).toBe(3)
+    expect(migrated.version).toBe(4)
     expect(migrated.documents).toEqual(session.documents)
     // The old spelling reads as 'sqlserver' and is written so from then on.
     expect(migrated.workspace.targets[0].expectedPrincipal).toEqual({ provider: 'sqlserver', authentication: 'windows', id: 'sid:0105' })
-    expect((await read(join(profileFiles.session.current, 'previous.json'))).version).toBe(3)
-    expect(await read(join(profileFiles.autoRecover.current, recordId + '.json'))).toEqual({ ...recovery, version: 2 })
+    expect((await read(join(profileFiles.session.current, 'previous.json'))).version).toBe(4)
+    expect(await read(join(profileFiles.autoRecover.current, recordId + '.json'))).toEqual({ ...recovery, version: 3 })
     for (const [name, text] of Object.entries(before)) expect(await readFile(join(directory, name), 'utf8'), name).toBe(text)
     expect(await readFile(join(directory, profileFiles.bigQueryConnections.current)).catch(() => undefined)).toBeUndefined()
   })
@@ -96,7 +96,7 @@ describe('0.9.0 profile migration', () => {
     const tabs = new SessionStore(join(directory, profileFiles.session.current))
     await tabs.take(true)
     await tabs.write({ documents: [{ name: 'New.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'select 3' }], activeIndex: 0 }, 1)
-    expect((await read(join(profileFiles.session.current, 'session.json'))).version).toBe(3)
+    expect((await read(join(profileFiles.session.current, 'session.json'))).version).toBe(4)
     // 0.9.0 reads its own names, which still hold exactly what it wrote: version 2 sessions, version 1 records.
     const frozen = await read(join(profileFiles.session.legacy, 'session.json'))
     expect(frozen).toEqual(session)
@@ -168,7 +168,7 @@ describe('0.9.0 profile migration', () => {
     const names = await readdir(join(directory, profileFiles.autoRecover.current))
     expect(names).toHaveLength(3)
     expect(names).toEqual(expect.arrayContaining([ownId + '.json', recordId + '.json']))
-    expect(await read(join(profileFiles.autoRecover.current, recordId + '.json'))).toEqual({ ...recovery, version: 2 })
+    expect(await read(join(profileFiles.autoRecover.current, recordId + '.json'))).toEqual({ ...recovery, version: 3 })
     // The session 0.10.0 wrote is newer than 0.9.0's, so it stays; 0.9.0's unsaved tab is offered through AutoRecover instead.
     expect((await read(join(profileFiles.session.current, 'session.json'))).documents[0].name).toBe('New.sql')
     const offered = await new RecoveryStore(join(directory, profileFiles.autoRecover.current)).list(7)
