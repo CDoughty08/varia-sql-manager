@@ -4,6 +4,7 @@
 import { expect, it, vi } from 'vitest'
 import { flowLayout, flowMetrics, stepsFlow } from '../src/shared/agent/flow'
 import { newStepDraft, type AgentStepsDraft } from '../src/shared/agent/steps'
+import { reducedMotionClass } from '../src/shared/theme/metrics'
 
 const gpu = vi.hoisted(() => ({ limit: 0, allocatable: 0, texts: new Set<{ render(): void }>() }))
 vi.mock('pixi.js/unsafe-eval', () => ({}))
@@ -17,13 +18,13 @@ vi.mock('pixi.js', async original => {
   let styles = 0, system: TextSystem
   class Container { position = { set() {} }; scale = { set() {} }; addChild() {} }
   class Graphics extends Container {
-    context = this; visible = true
-    clear() { return this } rect() { return this } roundRect() { return this } circle() { return this } fill() { return this } stroke() { return this }
+    context = this; visible = true; shapes: number[][] = []
+    clear() { this.shapes = []; return this } rect() { return this } roundRect(...box: number[]) { this.shapes.push(box); return this } circle() { return this } fill() { return this } stroke() { return this }
     moveTo() { return this } lineTo() { return this } closePath() { return this } save() { return this } setTransform() { return this } path() { return this } restore() { return this }
   }
   class TextStyle { fill = ''; styleKey = `style${styles++}`; constructor(_options: unknown) {} clone() { return new TextStyle({}) } destroy() {} }
   class Text extends Container {
-    text = ''; style: TextStyle; visible = true; private rasterResolution: number | null = null; roundPixels: boolean
+    text = ''; style: TextStyle; visible = true; alpha = 1; private rasterResolution: number | null = null; roundPixels: boolean
     _resolution: number | null = null; private currentKey = ''
     get resolution() { return this.rasterResolution }
     set resolution(value: number | null) { this.rasterResolution = this._resolution = value }
@@ -125,6 +126,76 @@ it('draws again at a new display scale, caps the backing store at what the devic
     gpu.limit = 0; gpu.allocatable = 0
     frames.mockRestore(); media.mockRestore(); pixelRatio.mockRestore()
   }
+})
+
+it("draws the run overlay's order badges under their numbers, not on the layer above the labels", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const root = document.createElement('div')
+  Object.defineProperty(root, 'clientWidth', { value: 900 }); Object.defineProperty(root, 'clientHeight', { value: 600 })
+  const canvas = create(root), rendering = canvas as unknown as Rendering & { front: { shapes: number[][] }; cards: { shapes: number[][] } }
+  try {
+    await Promise.resolve()
+    canvas.update({ ...model(), hot: new Set(['0:success']), fadeRest: true, sequence: new Map([['0:success', '1 · 3']]) }, 0, false, true)
+    rendering.draw()
+    expect(rendering.pool.active.has('seq:0:success')).toBe(true)
+    // The labels layer sits between cards and front (world: back, edges, cards, labels, front): a pill on front hides its number.
+    expect(rendering.front.shapes).toEqual([])
+    expect(rendering.cards.shapes.some(box => box[3] === 16 && box[4] === 8)).toBe(true)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it("fades a faded step's and an off-path pill's text with its box, and brings it back when the overlay goes", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const root = sized(900, 600)
+  const canvas = create(root), rendering = canvas as unknown as { draw(): void; pool: { active: Map<string, { alpha: number }> } }
+  const alpha = (key: string) => rendering.pool.active.get(key)?.alpha
+  try {
+    await Promise.resolve()
+    const shown = model()
+    // Step 1 succeeded to step 2, which is running; step 3 never ran. Step 1's failure Quit is off the path.
+    canvas.update({ ...shown, nodes: shown.nodes.map((node, at) => ({ ...node, fade: at === 2, right: [{ text: at === 2 ? 'Waiting' : '✓ 00:00:01', tone: 'muted' as const }] })),
+      hot: new Set(['0:success']), lit: new Set(['1:success', '1:fail']), fadeRest: true }, 0, false, true)
+    rendering.draw()
+    expect(alpha('name:2')).toBeLessThan(1)
+    expect(alpha('right:2:0')).toBeLessThan(1)
+    expect(alpha('name:0')).toBe(1)
+    expect(alpha('quit:0:fail')).toBeLessThan(1)
+    expect(alpha('quit:1:fail')).toBe(1)
+    canvas.update(shown, 0, false, true)
+    rendering.draw()
+    expect(alpha('name:2')).toBe(1)
+    expect(alpha('quit:0:fail')).toBe(1)
+  } finally { canvas.dispose(); frames.mockRestore() }
+})
+
+it("pulses Live run's current step only while one runs and motion is not reduced", async () => {
+  const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1)
+  const canvas = create(sized(900, 600))
+  const rendering = canvas as unknown as { draw(): void; pulseFrame: number; pulseTick(time: number): void; pulse: { shapes: number[][] } }
+  try {
+    await Promise.resolve()
+    const shown = model()
+    const running = { ...shown, nodes: shown.nodes.map((node, at) => ({ ...node, current: at === 1 })), fadeRest: true }
+    canvas.update(running, 0, false, true)
+    rendering.draw()
+    expect(rendering.pulseFrame).not.toBe(0)
+    // Half way through a pulse its ring is drawn outside the step's box.
+    rendering.pulseTick(800)
+    const box = running.layout.nodes[1]!
+    expect(rendering.pulse.shapes.some(([x, y]) => x! < box.x - 3 && y! < box.y - 3)).toBe(true)
+    // With reduced motion the pulse stops, and the next draw does not start it.
+    document.documentElement.classList.add(reducedMotionClass)
+    rendering.pulseTick(900)
+    expect(rendering.pulse.shapes).toEqual([])
+    expect(rendering.pulseFrame).toBe(0)
+    rendering.draw()
+    expect(rendering.pulseFrame).toBe(0)
+    document.documentElement.classList.remove(reducedMotionClass)
+    // No step running: nothing animates.
+    canvas.update(shown, 0, false, true)
+    rendering.draw()
+    expect(rendering.pulseFrame).toBe(0)
+  } finally { document.documentElement.classList.remove(reducedMotionClass); canvas.dispose(); frames.mockRestore() }
 })
 
 type Placed = { camera: { x: number; y: number; scale: number }; connecting?: unknown }

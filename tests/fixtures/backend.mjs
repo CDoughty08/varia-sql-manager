@@ -1687,7 +1687,8 @@ function sendLive(live, value) {
   live.available -= body.length
   process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
 }
-const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' || probe.probe === 'agent.treeProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
+// agent-flow-runs moves a run a step per watched sample, so it samples every 2.5 s: long enough to see each step, short for CI.
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' || probe.probe === 'agent.treeProbe' ? 200 : probe.probe === 'agent.jobs.watched' && flowRunsOn() ? 2500 : live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
@@ -1876,6 +1877,7 @@ function agentAdvance() {
   for (const [id, run] of agentRuns) {
     // The Agent session's run (activity-agent-job) lasts until Stop Job ends it: its session row says the job runs, so Stop must find it.
     if (run.held && !run.stopped) continue
+    if (run.flow) { flowAdvance(id, run); continue }
     if (run.samples++ < 2) continue
     Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
     agentRuns.delete(id)
@@ -1889,10 +1891,11 @@ function agentJobsSample(live, probe) {
     ;(live.args.watch ?? []).forEach((id, slot) => {
       const job = agentJobs.find(item => item.id === id.toLowerCase())
       const run = job && agentRuns.get(job.id)
-      if (job) metrics.splice(slot * 6, 6, run ? 1 : 4, run ? 1 : null, job.steps, run ? agentStamp(run.started) : null, job.outcome, agentStamp(job.lastRun))
+      if (job) metrics.splice(slot * 6, 6, run ? 1 : 4, run ? run.flow ? flowScript[run.flow.at][0] : 1 : null, agentJobSteps(job).length, run ? agentStamp(run.started) : null, job.outcome, agentStamp(job.lastRun))
     })
-    // The server's clock, on the same clock as a run's start.
-    metrics[metrics.length - 1] = agentStamp(new Date().toISOString().slice(0, 19).replace('T', ' '))
+    // The server's clock, on the same clock as a run's start; a flow run's own clock while one runs.
+    const flowRun = [...agentRuns.values()].find(run => run.flow)
+    metrics[metrics.length - 1] = agentStamp(flowRun ? flowClock(flowRun.flow.now) : new Date().toISOString().slice(0, 19).replace('T', ' '))
     return { metrics }
   }
   const tone = job => agentRunning(job) ? 'running' : job.outcome === 0 ? 'error' : job.enabled ? null : 'muted'
@@ -1975,6 +1978,7 @@ const agentStepContent = (id, name) => ({ id, name, subsystem: 'TSQL', command: 
   server: '', databaseName: 'master', databaseUserName: '', retryAttempts: 0, retryInterval: 0, osRunPriority: 0, outputFileName: '', proxyId: 0 })
 const agentStepLists = new Map()
 function agentJobSteps(job) {
+  flowRunsSetup()
   if (!agentStepLists.has(job.id)) agentStepLists.set(job.id, { start: 1, steps: Array.from({ length: job.steps }, (_, index) => agentStepContent(index + 1, ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`)) })
   return agentStepLists.get(job.id).steps
 }
@@ -2171,26 +2175,33 @@ const agentHistory = [
 const historyOutcomeIds = { 0: 'failed', 1: 'succeeded', 2: 'retry', 3: 'canceled' }
 const historyTones = { 0: 'error', 2: 'warning', 3: 'muted' }
 function agentHistorySample(live, probe) {
+  flowRunsSetup()
   const args = live.args ?? {}
   const checked = args.jobs?.map(id => id.toLowerCase())
   const named = run => checked === undefined || checked.includes(run.job)
   const text = args.text?.toLowerCase()
-  const kept = agentHistory.filter(run => named(run) && (!args.outcome || historyOutcomeIds[run.outcome] === args.outcome)
+  // An in-progress run is listed once a step row is written, keyed by its first step row as AgentHistoryRun.Key keys it.
+  const runKey = run => run.inProgress ? Math.min(...run.steps.map(step => step.instance)) : run.instance
+  const kept = agentHistory.filter(run => named(run) && (!run.inProgress || run.steps.length) && (!args.outcome || historyOutcomeIds[run.outcome] === args.outcome)
     && (!text || [run.message, ...run.steps.map(step => step.message)].some(message => message.toLowerCase().includes(text)))
     && (args.step === undefined || args.step === 0 || run.steps.some(step => step.id === args.step)))
     // Newest first, as AgentHistoryReader orders them.
     .sort((a, b) => b.date.localeCompare(a.date) || b.instance - a.instance)
   const jobName = id => agentJobs.find(job => job.id === id)?.name ?? id
-  const key = run => `${run.job}:${run.instance}`
-  const runs = storeResult({ columns: historyColumns(0), rows: kept.map(run => [run.date, jobName(run.job), agentOutcomes[run.outcome], '00:00:02', String(run.steps.length), run.message, key(run), run.job.toUpperCase(), historyTones[run.outcome] ?? null]) }, 0)
-  const selected = args.run && agentHistory.find(run => run.job === args.run.job.toLowerCase() && run.instance === args.run.instance && named(run))
-  const stepRow = (step, run) => [String(step.id), step.name, agentOutcomes[step.outcome], run.date, '00:00:01', '0', '0', '0', step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
-  const steps = storeResult({ columns: historyColumns(1), rows: selected ? [stepRow({ id: 0, name: '(Job outcome)', outcome: selected.outcome, message: selected.message, instance: selected.instance }, selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
+  const key = run => `${run.job}:${runKey(run)}`
+  const runs = storeResult({ columns: historyColumns(0), rows: kept.map(run => [run.date, jobName(run.job), run.inProgress ? 'In progress' : agentOutcomes[run.outcome], run.inProgress ? null : run.duration ?? '00:00:02', String(run.steps.length), run.message, key(run), run.job.toUpperCase(), run.inProgress ? 'running' : historyTones[run.outcome] ?? null]) }, 0)
+  const selected = args.run && agentHistory.find(run => run.job === args.run.job.toLowerCase() && (!run.inProgress || run.steps.length) && runKey(run) === args.run.instance && named(run))
+  const stepRow = (step, run) => [String(step.id), step.name, step.outcome === 2 ? 'Retry' : agentOutcomes[step.outcome], step.started ?? run.date, step.seconds !== undefined ? flowDuration(step.seconds) : '00:00:01', '0', '0', String(step.retries ?? 0), step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
+  const outcomeRow = run => run.inProgress ? [] : [stepRow({ id: 0, name: '(Job outcome)', outcome: run.outcome, message: run.message, instance: run.instance, ...run.seconds !== undefined ? { seconds: run.seconds } : {} }, run)]
+  const steps = storeResult({ columns: historyColumns(1), rows: selected ? [...outcomeRow(selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
   const jobs = storeResult({ columns: historyColumns(2), rows: [...agentJobs].sort((a, b) => a.name.localeCompare(b.name)).map(job => [job.id.toUpperCase(), job.name, 'sa', agentRunning(job) ? 'Yes' : 'No', job.enabled ? 'Yes' : 'No']) }, 0)
   // The job document's History (AG-6d) asks for one job's usual durations: every run here takes 2 s and each step 1 s.
-  const succeeded = args.usual ? agentHistory.filter(run => named(run) && run.outcome === 1) : []
+  // A flow-runs step that has its own seconds usually takes those.
+  const succeeded = args.usual ? agentHistory.filter(run => named(run) && run.outcome === 1 && !run.inProgress) : []
   const usualSteps = [...new Set(succeeded.flatMap(run => run.steps.map(step => step.id)))].sort((a, b) => a - b)
-  const usual = storeResult({ columns: historyColumns(3), rows: succeeded.length ? [['0', '2', String(succeeded.length)], ...usualSteps.map(id => [String(id), '1', String(succeeded.length)])] : [] }, 0)
+  const usualOf = id => succeeded.flatMap(run => run.steps).find(step => step.id === id && step.seconds !== undefined)?.seconds ?? 1
+  const usualJob = succeeded[0]?.seconds ?? 2
+  const usual = storeResult({ columns: historyColumns(3), rows: succeeded.length ? [['0', String(usualJob), String(succeeded.length)], ...usualSteps.map(id => [String(id), String(usualOf(id)), String(succeeded.length)])] : [] }, 0)
   // Each table keeps its last two revisions and retires its own older ones, as the backend does.
   live.revisions.push(runs.resultId, steps.resultId, jobs.resultId, usual.resultId)
   live.historyRevisions ??= [[], [], [], []]
@@ -2206,6 +2217,68 @@ function agentHistorySample(live, probe) {
   return {
     status: [{ id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }],
     tables: [runs, steps, jobs, usual].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
+  }
+}
+// Steps › Flow's run overlays (scripts/agent-flow-run-smoke.mjs): while the control file agent-flow-runs exists, Nightly has four steps
+// whose actions branch (1 ✓ next ✗ quit failure; 2 ✓ next ✗ go to 1; 3 ✓ quit success ✗ go to 4; 4 quits reporting failure), its newest
+// run failed after a loop (1 retried then ✓, 2 ✗, 1 ✓, 2 ✓, 3 ✗, 4 ✓) and an older one succeeded. Start Job runs flowScript, a step a
+// watched sample (every 2.5 s, periodOf), on a clock of its own (each step's seconds, the current one 4 s in) so a recording shows real-looking times quickly;
+// History lists the run In progress with the rows of its finished steps, and the run lands as Succeeded when the last step ends.
+const flowRunsOn = () => !!controlDirectory && existsSync(join(controlDirectory, 'agent-flow-runs'))
+let flowRunsReady = false
+const flowStepNames = ['Check integrity', 'Rebuild indexes', 'Update statistics', 'Notify operators']
+const flowScript = [[1, 1, 13], [2, 0, 9], [1, 1, 12], [2, 1, 31], [3, 1, 6]]
+const flowDuration = seconds => [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(part => String(part).padStart(2, '0')).join(':')
+const flowClock = seconds => new Date(seconds * 1000).toISOString().slice(0, 19).replace('T', ' ')
+const flowSeconds = text => Date.parse(text.replace(' ', 'T') + 'Z') / 1000
+let flowInstance = 100
+function flowRunsSetup() {
+  if (flowRunsReady || !flowRunsOn()) return
+  flowRunsReady = true
+  const nightly = agentJobs[0]
+  const action = (onSuccessAction, onSuccessStepId, onFailAction, onFailStepId) => ({ onSuccessAction, onSuccessStepId, onFailAction, onFailStepId })
+  const actions = [action(3, 0, 2, 0), action(3, 0, 4, 1), action(1, 0, 4, 4), action(2, 0, 2, 0)]
+  agentStepLists.set(nightly.id, { start: 1, steps: flowStepNames.map((name, at) => ({ ...agentStepContent(at + 1, name), ...actions[at], ...at === 0 ? { retryAttempts: 2, retryInterval: 1 } : {} })) })
+  nightly.steps = flowStepNames.length
+  const run = (instance, outcome, date, rows, message) => {
+    let at = flowSeconds(date)
+    const steps = rows.map(([id, stepOutcome, seconds, retries = 0], index) => {
+      const started = flowClock(at)
+      at += seconds
+      return { instance: instance - rows.length + index, id, name: flowStepNames[id - 1], outcome: stepOutcome, started, seconds, retries,
+        message: stepOutcome === 0 ? `Executed as user: sa. ${flowStepNames[id - 1]} failed: Lock request time out period exceeded. [SQLSTATE 42000] (Error 1222). The step failed.` : stepOutcome === 2 ? 'Executed as user: sa. Deadlock victim. The step will be retried.' : 'Executed as user: sa. The step succeeded.' }
+    })
+    return { job: nightly.id, instance, outcome, date, duration: flowDuration(at - flowSeconds(date)), seconds: at - flowSeconds(date), message, steps }
+  }
+  for (let at = agentHistory.length - 1; at >= 0; at--) if (agentHistory[at].job === nightly.id) agentHistory.splice(at, 1)
+  agentHistory.unshift(
+    run(60, 0, '2026-11-15 02:30:00', [[1, 2, 4], [1, 1, 11, 1], [2, 0, 20], [1, 1, 12], [2, 1, 33], [3, 0, 3], [4, 1, 1]],
+      'The job failed.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 4 (Notify operators).'),
+    run(40, 1, '2026-11-14 02:30:00', [[1, 1, 12], [2, 1, 30], [3, 1, 6]], 'The job succeeded.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 3 (Update statistics).')
+  )
+  Object.assign(nightly, { outcome: 0, lastRun: '2026-11-15 02:30:00' })
+}
+function flowStart(job, run) {
+  const instance = flowInstance += 20
+  const begun = flowSeconds(run.started)
+  run.flow = { at: 0, stepStart: begun, now: begun + 4 }
+  run.history = { job: job.id, instance, outcome: 1, date: run.started, inProgress: true, message: 'The job is running.  The Job was invoked by User sa.', steps: [] }
+  agentHistory.unshift(run.history)
+}
+function flowAdvance(id, run) {
+  if (run.samples++ === 0) return
+  const flow = run.flow, [stepId, outcome, seconds] = flowScript[flow.at]
+  run.history.steps.push({ instance: run.history.instance - 19 + run.history.steps.length, id: stepId, name: flowStepNames[stepId - 1], outcome, started: flowClock(flow.stepStart), seconds,
+    message: outcome === 0 ? `Executed as user: sa. ${flowStepNames[stepId - 1]} failed: Lock request time out period exceeded. The step failed.` : 'Executed as user: sa. The step succeeded.' })
+  flow.stepStart += seconds
+  flow.at++
+  flow.now = flow.stepStart + 4
+  if (run.stopped || flow.at >= flowScript.length) {
+    const total = flow.stepStart - flowSeconds(run.started)
+    Object.assign(run.history, { inProgress: false, outcome: run.stopped ? 3 : 1, duration: flowDuration(total), seconds: total,
+      message: run.stopped ? 'The job was stopped prior to completion by User sa.' : `The job succeeded.  The Job was invoked by User sa.  The last step to run was step 3 (Update statistics).` })
+    Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
+    agentRuns.delete(id)
   }
 }
 function agentHistoryMessage(params) {
@@ -2285,6 +2358,7 @@ function agentJobVerb(params) {
   if (params.action === 'startJob') {
     if (agentRunning(job)) return refused('JOB_STATE', `${job.name} is already running.`)
     agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+    if (flowRunsOn() && job.id === agentJobs[0].id) flowStart(job, agentRuns.get(job.id))
   }
   if (params.action === 'stopJob') {
     // While Agent's session for Nightly shows, Nightly runs, whichever probe sampled first.

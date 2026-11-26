@@ -37,6 +37,7 @@ import type { CustomDocumentProvider, DocumentService } from '../services/docume
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { addStep, agentStepProblems, deleteStep, initialStepsDraft, moveStep, newStepDraft, newStepKey, undoStepDeletion, withSubsystem, type AgentStepDraft, type AgentStepProblem, type StepAction, type StepDeletion } from '../../../shared/agent/steps.ts'
 import type { FlowFix } from '../../../shared/agent/flow.ts'
+import type { HistoryRunKey } from '../../../shared/agent/history.ts'
 import { parseSsisCommand, ssisParameterRows, ssisProblems } from '../../../shared/agent/ssis-step.ts'
 import type { LanguageParseError } from '../../../shared/agent/parse.ts'
 import type { SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
@@ -106,6 +107,12 @@ export interface JobDocumentState {
   readonly stepsView?: 'flow'
   /** The Flow view docks the selected step's editor beside the graph (double-click, Enter or Edit step), in place of its summary. */
   readonly stepEditor?: true
+  /**
+   * What Flow draws over the graph: a run from History (Run) or the running job (Live run); none is Steps. Live run turns on by
+   * itself when the job starts and goes back to the overlay before it (`flowBefore`) when the run ends.
+   */
+  readonly flowOverlay?: 'last' | 'live'
+  readonly flowBefore?: 'last'
   /** The last delete, for its banner and Undo until Save or Reload. */
   readonly deletion?: StepDeletion
   /** The selected step's Parse: running, or its errors (none: it parsed). */
@@ -263,8 +270,39 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   }
 
   get(id: string): JobDocumentState | undefined { return this.getSnapshot().documents[id] }
-  /** The document is the active one and its History section is open. */
-  private historyShows(id: string): boolean { return this.options.documents.getSnapshot().activeId === id && !!this.get(id) && !this.get(id)!.frame.collapsed.includes('history') }
+  /** The document is the active one and History's read shows: its section is open, or Flow draws a run over the graph from it. */
+  private historyShows(id: string): boolean {
+    const state = this.get(id)
+    if (this.options.documents.getSnapshot().activeId !== id || !state) return false
+    return !state.frame.collapsed.includes('history') || (state.stepsView === 'flow' && !state.frame.collapsed.includes('steps') && !!this.flowOverlayOf(id))
+  }
+  /** The overlay Flow draws now: Live run only while the job runs (else the one before it). */
+  flowOverlayOf(id: string): 'last' | 'live' | undefined {
+    const state = this.get(id)
+    if (!state?.flowOverlay) return undefined
+    return state.flowOverlay === 'live' && !state.live?.running ? state.flowBefore : state.flowOverlay
+  }
+  /** Show: Steps, Run or Live run (only while the job runs). Both overlays read History's runs; Live run follows the running one (useFlowRun). */
+  setFlowOverlay(id: string, overlay: 'targets' | 'last' | 'live'): void {
+    const state = this.get(id)
+    if (!state || (overlay === 'live' && !state.live?.running)) return
+    if (overlay === 'targets') this.patch(id, { flowOverlay: undefined, flowBefore: undefined })
+    else if (overlay === 'last') this.patch(id, { flowOverlay: 'last', flowBefore: undefined })
+    else this.patch(id, { flowOverlay: 'live', flowBefore: state.flowOverlay === 'last' ? 'last' : undefined })
+  }
+  /** History's Show in Flow: Steps › Flow with that run as Run, its run picked in both. */
+  showRunInFlow(id: string, run: HistoryRunKey): void {
+    if (!this.get(id)) return
+    this.history.selectRun(id, run)
+    this.patch(id, { stepsView: 'flow', stepEditor: undefined, flowOverlay: 'last', flowBefore: undefined })
+    const state = this.get(id)!
+    this.setFrame(id, revealSection(state.frame, jobSections, 'steps'))
+  }
+  /** Run's Open in History: the History section, opened and scrolled to, with the same run selected. */
+  openHistory(id: string): void {
+    const state = this.get(id)
+    if (state) this.setFrame(id, revealSection(state.frame, jobSections, 'history'))
+  }
 
   /** A job's document: brought forward if open on this connection, otherwise a tab opens at once, loading. With `section` (the
    *  Activity Monitor's job link opens History, AG-16) the document shows that section, scrolled to. */
@@ -911,7 +949,13 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
       // The server clock alone moves every sample: it redraws the document only while History shows its elapsed time.
       const moved = JSON.stringify({ ...next, now: undefined }) !== JSON.stringify({ ...state.live, now: undefined })
       if (!moved && !this.historyShows(id)) return
-      this.patch(id, { live: next })
+      // Live run turns on when the job starts (remembering the overlay before it) and goes back to that one when the run ends.
+      const started = !!next?.running && !state.live?.running, stopped = !next?.running && !!state.live?.running
+      this.patch(id, {
+        live: next,
+        ...started && state.flowOverlay !== 'live' ? { flowOverlay: 'live' as const, flowBefore: state.flowOverlay === 'last' ? 'last' as const : undefined } : {},
+        ...stopped && state.flowOverlay === 'live' ? { flowOverlay: state.flowBefore, flowBefore: undefined } : {}
+      })
       // A step ended or the run did: History, while it shows, reads it now rather than at its next sample (event-driven, not a timer); hidden, it
       // stays paused and samples afresh when it shows again.
       if (moved && this.historyShows(id) && (next?.step !== state.live?.step || next?.running !== state.live?.running)) this.history.refresh(id)
