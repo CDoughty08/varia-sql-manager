@@ -110,7 +110,7 @@ internal sealed partial class BigQueryService
     {
         if (environment.Emulator) return new(0, Faked: true);
         var job = CreateJob(connection, sql, name, null, null, dryRun: true);
-        return Estimate(await MetadataAsync(connection, t => connection.Client.Service.Jobs.Insert(job, connection.Options.Project).ExecuteAsync(t), token));
+        return Estimate(await MetadataAsync(connection, BqMethod.JobsInsert, t => connection.Client.Service.Jobs.Insert(job, connection.Options.Project).ExecuteAsync(t), token));
     }
 
     /// <summary>Waits between polls of a CREATE query whose results are not ready (the emulator answers at once).</summary>
@@ -122,7 +122,7 @@ internal sealed partial class BigQueryService
     async Task<string?> DdlAsync(BigQueryConnection connection, string sql, string name, string dataset, string project, long? cap, CancellationToken token)
     {
         var location = connection.DatasetLocations.TryGetValue(project + ":" + dataset, out var known) ? known
-            : await MetadataAsync(connection, t => DatasetLocationAsync(connection.Client, project, dataset, t), token);
+            : await MetadataAsync(connection, BqMethod.DatasetsGet, t => DatasetLocationAsync(connection.Client, project, dataset, t), token);
         connection.DatasetLocations[project + ":" + dataset] = location;
         var request = CreateJob(connection, sql, name, location, cap, dryRun: false);
         var reference = request.JobReference;
@@ -164,7 +164,7 @@ internal sealed partial class BigQueryService
 
     async Task<string?> RoutineDropAsync(BigQueryConnection connection, string project, string dataset, string name, CancellationToken token)
     {
-        var routine = await MetadataAsync(connection, t =>
+        var routine = await MetadataAsync(connection, BqMethod.RoutinesGet, t =>
         {
             var call = connection.Client.Service.Routines.Get(project, dataset, name);
             call.ReadMask = "routineType";
@@ -182,7 +182,7 @@ internal sealed partial class BigQueryService
     /// <summary>A table-like object's DROP, SELECT, INSERT, UPDATE or DELETE from its type and top-level columns.</summary>
     async Task<string?> TableTemplateAsync(BigQueryConnection connection, string kind, string verb, string project, string dataset, string name, CancellationToken token)
     {
-        var table = await MetadataAsync(connection, t =>
+        var table = await MetadataAsync(connection, BqMethod.TablesGet, t =>
         {
             var call = connection.Client.Service.Tables.Get(project, dataset, name);
             call.Fields = "schema,type";

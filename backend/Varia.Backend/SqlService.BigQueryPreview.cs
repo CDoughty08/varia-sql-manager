@@ -61,7 +61,7 @@ internal sealed partial class SqlService
         var name = args.Project + "." + args.Dataset + "." + args.Table;
         try
         {
-            using var table = await bigQuery.MetadataAsync(connection, t =>
+            using var table = await bigQuery.MetadataAsync(connection, BqMethod.TablesGet, t =>
             {
                 var call = connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Table);
                 call.Fields = "schema,type";
@@ -139,7 +139,7 @@ internal sealed partial class SqlService
         var roomWaited = new RoomWaited();
         do
         {
-            using var page = await bigQuery.MetadataAsync(connection, t =>
+            using var page = await bigQuery.MetadataAsync(connection, BqMethod.TableRows, t =>
             {
                 var call = connection.Client.Service.Tabledata.List(args.Project, args.Dataset, args.Table);
                 call.MaxResults = BigQueryPreviewRows - (int)stored;

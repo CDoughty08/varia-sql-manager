@@ -9,6 +9,8 @@ internal interface IBigQueryIndexSource
 {
     /// <summary>The connection's billing project; throws NOT_CONNECTED.</summary>
     string BillingProject(string connectionId);
+    /// <summary>Whether BigQuery is refusing the connection's principal for its rate right now (the build's progress says so).</summary>
+    bool Throttled(string connectionId) => false;
     /// <summary>Every accessible project via projects.list, sorted ordinally and capped at <paramref name="maxProjects"/>.</summary>
     Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token);
     Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token);
@@ -37,10 +39,11 @@ internal static class BigQueryIndexLimits
 {
     /// <summary>Pages one listing reads (1,000 items each) before it stops and the dataset is marked TOO_LARGE with what it read.</summary>
     public const int ListPages = 500;
-    /// <summary>Datasets listed at once in pass 1.</summary>
-    public const int Datasets = 4;
-    /// <summary>tables.get and routines.get calls one build keeps in flight in pass 2 (the principal's limiter caps every caller at 16).</summary>
-    public const int Details = 8;
+    /// <summary>Datasets listed at once in pass 1 (each lists its tables, routines and models one after another).</summary>
+    public const int Datasets = 32;
+    /// <summary>tables.get and routines.get calls one build keeps in flight in pass 2: enough for the principal's limiter, which paces
+    /// each method at BigQuery's per-user rate, to be the ceiling.</summary>
+    public const int Details = 64;
     /// <summary>Columns, nested fields included, one table keeps; the rest are left out and the table counts as cut.</summary>
     public const int Columns = 10_000;
     /// <summary>The longest column description or routine signature kept.</summary>
@@ -50,9 +53,97 @@ internal static class BigQueryIndexLimits
     /// <summary>The upper bound for the configurable accessible projects cap.</summary>
     public const int MaxProjectsCap = 5000;
     /// <summary>Projects whose datasets are listed concurrently in wave 2.</summary>
-    public const int Projects = 4;
+    public const int Projects = 16;
+    /// <summary>Datasets whose listing goes past its first page (1,000 items) at once, across every build: what a listing read is
+    /// outside the index's budget until the dataset is held.</summary>
+    public const int LargeListings = 4;
+    /// <summary>Objects whose details the datasets in pass 2 may read at once (a larger dataset reads alone): details are outside
+    /// the index's budget until their dataset is held.</summary>
+    public const int DetailObjects = 4096;
     /// <summary>The most starred projects one build or estimate accepts (matches BigQueryLimits.StarredProjects).</summary>
     public const int StarredProjects = 200;
+}
+
+/// <summary>
+/// Admits datasets to pass 2 by how many objects they read: together at most <c>permits</c>, or one dataset alone when it reads
+/// more. First come, first admitted, so a large dataset is never passed over by smaller ones.
+/// </summary>
+internal sealed class BigQueryDetailAdmission(int permits)
+{
+    private readonly object gate = new();
+    private readonly LinkedList<(int Count, TaskCompletionSource Ready)> waiting = new();
+    private int used;
+    private int active;
+
+    /// <summary>Objects and datasets admitted now (the checks read them).</summary>
+    public (int Used, int Active) Admitted { get { lock (gate) return (used, active); } }
+
+    /// <summary>Waits until the dataset's <paramref name="count"/> objects may be read; disposing the result lets others in.</summary>
+    public async Task<IDisposable> EnterAsync(int count, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        LinkedListNode<(int Count, TaskCompletionSource Ready)> node;
+        lock (gate)
+        {
+            if (waiting.Count == 0 && Fits(count))
+            {
+                used += count;
+                active++;
+                return new Ticket(this, count);
+            }
+            node = waiting.AddLast((count, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)));
+        }
+        using (token.Register(() =>
+        {
+            lock (gate)
+            {
+                if (node.List is null) return;
+                waiting.Remove(node);
+                node.Value.Ready.TrySetCanceled(token);
+                GrantLocked();
+            }
+        }))
+            await node.Value.Ready.Task;
+        return new Ticket(this, count);
+    }
+
+    bool Fits(int count) => active == 0 || used + count <= permits;
+
+    void GrantLocked()
+    {
+        while (waiting.First is { } first && Fits(first.Value.Count))
+        {
+            waiting.RemoveFirst();
+            used += first.Value.Count;
+            active++;
+            first.Value.Ready.TrySetResult();
+        }
+    }
+
+    void Leave(int count)
+    {
+        lock (gate)
+        {
+            used -= count;
+            active--;
+            GrantLocked();
+        }
+    }
+
+    sealed class Ticket(BigQueryDetailAdmission owner, int count) : IDisposable
+    {
+        private int done;
+        public void Dispose() { if (Interlocked.Exchange(ref done, 1) == 0) owner.Leave(count); }
+    }
+}
+
+/// <summary>A BigQuery build's explorer.index.progress EVENT: <c>Growing</c> while projects still being listed may add datasets to
+/// the total, <c>Throttled</c> while BigQuery refuses the principal for its rate; both are left out when false.</summary>
+internal sealed record BigQueryIndexProgress(int Done, int Total, int Objects, string Phase,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Growing = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Throttled = null)
+{
+    public string Type => "explorer.index.progress";
 }
 
 /// <summary>A date-sharded group or one object as pass 1 lists it, with what pass 2 (or an earlier read) knows of it.</summary>

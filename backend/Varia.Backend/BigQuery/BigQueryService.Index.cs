@@ -19,6 +19,8 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
 
     string IBigQueryIndexSource.BillingProject(string connectionId) => Connection(connectionId).Options.Project;
 
+    bool IBigQueryIndexSource.Throttled(string connectionId) => Find(connectionId) is { } connection && Limiter.IsThrottled(connection.Principal.PrincipalId);
+
     async Task<BigQueryProjectDiscovery> IBigQueryIndexSource.AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token)
     {
         var cap = Math.Clamp(maxProjects, 1, BigQueryIndexLimits.MaxProjectsCap);
@@ -28,7 +30,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         string? pageToken = null;
         for (var page = 0; page < BigQueryIndexLimits.ListPages; page++)
         {
-            var list = await IndexCallAsync(connection, t =>
+            var list = await IndexCallAsync(connection, BqMethod.ProjectsList, t =>
             {
                 var call = connection.Client.Service.Projects.List();
                 call.MaxResults = ExplorerPageMax;
@@ -55,11 +57,11 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     BigQueryConnection Connection(string connectionId) => Find(connectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
 
     /// <summary>Runs <paramref name="call"/> through the limiter under its own deadline, throwing TimeoutException when only the deadline ran out.</summary>
-    async Task<T> IndexCallAsync<T>(BigQueryConnection connection, Func<CancellationToken, Task<T>> call, CancellationToken token)
+    async Task<T> IndexCallAsync<T>(BigQueryConnection connection, string method, Func<CancellationToken, Task<T>> call, CancellationToken token)
     {
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
         budget.CancelAfter(IndexCallBudget);
-        try { return await MetadataAsync(connection, call, budget.Token); }
+        try { return await MetadataAsync(connection, method, call, budget.Token); }
         catch (OperationCanceledException) when (budget.IsCancellationRequested && !token.IsCancellationRequested) { throw new TimeoutException(); }
     }
 
@@ -71,7 +73,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         string? pageToken = null;
         for (var page = 0; page < BigQueryIndexLimits.ListPages; page++)
         {
-            var list = await IndexCallAsync(connection, t =>
+            var list = await IndexCallAsync(connection, BqMethod.DatasetsList, t =>
             {
                 var call = connection.Client.Service.Datasets.List(project);
                 call.MaxResults = ExplorerPageMax;
@@ -90,9 +92,20 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         return new(names, true, locations);
     }
 
+    /// <summary>Listings past their first page, across every build: a listing holds what it read outside the index's budget until
+    /// it is held, so many small datasets list at once but only a few large ones.</summary>
+    internal SemaphoreSlim LargeListings { get; } = new(BigQueryIndexLimits.LargeListings, BigQueryIndexLimits.LargeListings);
+
     async Task<BigQueryListing> IBigQueryIndexSource.ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token)
     {
         var connection = Connection(connectionId);
+        var large = false;
+        try { return await ObjectsAsync(connection, project, dataset, token, async () => { if (!large) { await LargeListings.WaitAsync(token); large = true; } }); }
+        finally { if (large) LargeListings.Release(); }
+    }
+
+    async Task<BigQueryListing> ObjectsAsync(BigQueryConnection connection, string project, string dataset, CancellationToken token, Func<Task> morePages)
+    {
         var tables = new List<TableList.TablesData>();
         var routines = new List<Routine>();
         var models = new List<Model>();
@@ -101,7 +114,8 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         for (var page = 0; ; page++)
         {
             if (page == BigQueryIndexLimits.ListPages) { cut = true; break; }
-            var list = await IndexCallAsync(connection, t =>
+            if (page > 0) await morePages();
+            var list = await IndexCallAsync(connection, BqMethod.TablesList, t =>
             {
                 var call = connection.Client.Service.Tables.List(project, dataset);
                 call.MaxResults = ExplorerPageMax;
@@ -116,10 +130,11 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         for (var page = 0; ; page++)
         {
             if (page == BigQueryIndexLimits.ListPages) { cut = true; break; }
+            if (page > 0) await morePages();
             ListRoutinesResponse list;
             try
             {
-                list = await IndexCallAsync(connection, t =>
+                list = await IndexCallAsync(connection, BqMethod.RoutinesList, t =>
                 {
                     var call = connection.Client.Service.Routines.List(project, dataset);
                     call.MaxResults = ExplorerPageMax;
@@ -138,7 +153,8 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
         for (var page = 0; ; page++)
         {
             if (page == BigQueryIndexLimits.ListPages) { cut = true; break; }
-            var list = await IndexCallAsync(connection, t =>
+            if (page > 0) await morePages();
+            var list = await IndexCallAsync(connection, BqMethod.ModelsList, t =>
             {
                 var call = connection.Client.Service.Models.List(project, dataset);
                 call.MaxResults = ExplorerPageMax;
@@ -155,7 +171,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     Task<Table> IBigQueryIndexSource.TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token)
     {
         var connection = Connection(connectionId);
-        return IndexCallAsync(connection, t =>
+        return IndexCallAsync(connection, BqMethod.TablesGet, t =>
         {
             var call = connection.Client.Service.Tables.Get(project, dataset, table);
             call.Fields = IndexTableFields;
@@ -166,7 +182,7 @@ internal sealed partial class BigQueryService : IBigQueryIndexSource
     Task<Routine> IBigQueryIndexSource.RoutineAsync(string connectionId, string project, string dataset, string routine, CancellationToken token)
     {
         var connection = Connection(connectionId);
-        return IndexCallAsync(connection, t => connection.Client.Service.Routines.Get(project, dataset, routine).ExecuteAsync(t), token);
+        return IndexCallAsync(connection, BqMethod.RoutinesGet, t => connection.Client.Service.Routines.Get(project, dataset, routine).ExecuteAsync(t), token);
     }
 
     Exception IBigQueryIndexSource.Map(Exception error, string project, string permission, CancellationToken token) =>

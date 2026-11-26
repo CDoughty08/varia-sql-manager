@@ -98,7 +98,8 @@ const api: VariaApi = {
   // Only the known progress fields cross to the page, whatever main sent.
   onExplorerIndexProgress: callback => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({
-      requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}
+      requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {},
+      ...progress.growing === true ? { growing: true as const } : {}, ...progress.throttled === true ? { throttled: true as const } : {}
     })
     ipcRenderer.on('varia:explorer-index-progress', listener)
     return () => { ipcRenderer.removeListener('varia:explorer-index-progress', listener) }

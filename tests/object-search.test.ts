@@ -162,7 +162,9 @@ describe('object search contracts', () => {
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30 }).success).toBe(true)
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, phase: 'projects' }).success).toBe(true)
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30, phase: 'details' }).success).toBe(true)
-    for (const bad of [{ done: 3, total: 2, objects: 0 }, { done: -1, total: 2, objects: 0 }, { done: 1, total: 2, objects: 1.5 }, { done: 1, total: 2, objects: 0, database: 'x' }, { done: 1, total: 2, objects: 0, phase: 'columns' }])
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30, phase: 'names', growing: true, throttled: true }).success).toBe(true)
+    for (const bad of [{ done: 3, total: 2, objects: 0 }, { done: -1, total: 2, objects: 0 }, { done: 1, total: 2, objects: 1.5 }, { done: 1, total: 2, objects: 0, database: 'x' }, { done: 1, total: 2, objects: 0, phase: 'columns' },
+      { done: 1, total: 2, objects: 0, growing: false }, { done: 1, total: 2, objects: 0, throttled: 'yes' }, { done: 1, total: 2, objects: 0, throttled: null }])
       expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', ...bad }).success).toBe(false)
   })
 })
@@ -205,6 +207,16 @@ describe('main\'s index progress relay', () => {
     const target = window(), relay = indexProgressRelay('r', target)
     relay.event({ ...event(1), phase: 'details' })
     expect(target.pushed[0]).toEqual({ requestId: 'r', done: 1, total: 10, objects: 100, phase: 'details' })
+  })
+
+  it('carries a growing total and BigQuery throttling to the window, and leaves both out when absent', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(1), phase: 'names', growing: true, throttled: true })
+    vi.advanceTimersByTime(gap)
+    relay.event({ ...event(2), phase: 'names' })
+    expect(target.pushed).toEqual([
+      { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names', growing: true, throttled: true },
+      { requestId: 'r', done: 2, total: 10, objects: 200, phase: 'names' }])
   })
 })
 
@@ -382,6 +394,12 @@ describe('ObjectSearchService', () => {
     emit({ requestId: 'req1', done: 1, total: 3, objects: 12 })
     emit({ requestId: 'someone-else', done: 9, total: 9, objects: 9 })
     expect(service.getSnapshot().indexes.a).toMatchObject({ requestId: 'req1', done: 1, total: 3, objects: 12 })
+    // A later event without the flags clears them: the build stopped being throttled and its total stopped growing.
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', growing: true, throttled: true })
+    expect(service.getSnapshot().indexes.a).toMatchObject({ growing: true, throttled: true })
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12 })
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('growing')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('throttled')
     pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 5 } })
     await settle()
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() })
@@ -1376,7 +1394,17 @@ describe('ObjectSearchService', () => {
     expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Discovering BigQuery projects…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, { connectionId: 'a', requestId: 'r2', done: 0, total: 0, objects: 0 }])).toBe('Discovering BigQuery projects on 2 servers…')
-    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }])).toBe('Indexing objects 2 / 5')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }])).toBe('Listing BigQuery datasets 2 / 5')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 480, objects: 30, phase: 'names', growing: true }])).toBe('Listing BigQuery datasets 2 / ~480')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 5300, total: 6624, objects: 30, phase: 'details', throttled: true }])).toBe('Reading BigQuery object details 5,300 / 6,624 (rate limited)')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects', throttled: true }])).toBe('Discovering BigQuery projects… (rate limited)')
+    // SQL Server's label is unchanged, alone or across servers; builds counting different things are not summed.
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }])).toBe('Indexing objects 3 / 12')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'c', requestId: 'r2', done: 1, total: 4, objects: 3 }])).toBe('Indexing objects 4 / 16 on 2 servers')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'b', requestId: 'r2', done: 7, total: 30, objects: 3, phase: 'details', throttled: true }])).toBe('Indexing objects on 2 servers… (rate limited)')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'b', requestId: 'r2', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Indexing objects on 2 servers…')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }, { connectionId: 'c', requestId: 'r2', done: 1, total: 4, objects: 3, phase: 'names' }])).toBe('Listing BigQuery datasets 3 / 9 on 2 servers')
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 40, objects: 120, phase: 'names', growing: true, throttled: true }, undefined)).toBe('Indexing 1 of about 40 datasets (120 objects so far)… BigQuery is rate limiting the calls, which retry.')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 120, phase: 'names' }, undefined)).toBe('Indexing 1 of 4 datasets (120 objects so far)…')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 7, total: 30, objects: 120, phase: 'details' }, undefined)).toBe('Reading details of 7 of 30 objects…')
     expect(indexSummary(undefined, bq())).toBe('Index: 40 objects, 5 definitions in 2 datasets')
