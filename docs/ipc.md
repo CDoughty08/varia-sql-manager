@@ -2827,6 +2827,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates,
   then a search inside 10,000 compressed procedure definitions (42 M characters) that matches none, so every one is
   unpacked and scanned (`node.search.definitionScanP95Ms`).
+  Its `--index-file-bench` mode (`IndexFileBench.cs`) reads one database of about 300,000 objects (tables with typed
+  columns, indexes, constraints, 30,000 distinct definitions) through the index's real reader, saves it with the index's
+  on-disk format (`IndexFile`) to a file, flushed, and loads it back into an empty pool, encrypted and in clear text
+  (`node.indexFile.*`): the times, the file's size against the memory the unit holds, and reading the header alone.
   Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
   Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`). A quarter of its cells hold
   characters the fold does not vouch for (Thai, Hindi, ligatures, voiced half-width kana), so its ratio (about 1.9) sits
@@ -2877,6 +2881,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 | Results picker: 1,251 views of 1,000 results listed, filtered and windowed per keystroke | ≥ 2,000 ops/s | ≥ 500 ops/s | – | – |
 | Object search: one letter over 1,000,000 indexed objects (700,000 hits), p95 | ≤ 75 ms | ≤ 500 ms | 55 ms (Windows, 24 CPUs) | not measured |
 | Object search: memory allocated by that search, median | ≤ 16 MB | ≤ 64 MB | 9 MB | not measured |
+| Index file: save a 300,000-object database unit, encrypted and flushed to disk, median of 5 | ≤ 150 ms | ≤ 1,500 ms | 44 ms, clear text 40 ms (Windows, 24 CPUs) | not measured |
+| Index file: load that unit into an empty pool and budget, every check made, median of 5 | ≤ 300 ms | ≤ 3,000 ms | 102 ms, clear text 100 ms (Windows, 24 CPUs) | not measured |
+| Index file: that unit's bytes on disk ÷ the bytes of the index's budget it holds | ≤ 0.35 | ≤ 0.6 | 0.28 (9.4 MB for 33.6 MB) | not measured |
+| Index file: open that file and read its header alone, mean of 200 | ≤ 1 ms | reported only | 0.2 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 10,000 operators, four-way tree, p95 | ≤ 75 ms | ≤ 1,000 ms | 9.9 – 12 ms (Windows, 24 CPUs) | not measured |
 | Plan cached layout lookup: 10,000 operators, p95 | ≤ 5 ms | ≤ 50 ms | 0.92 – 1.08 ms (Windows, 24 CPUs) | not measured |

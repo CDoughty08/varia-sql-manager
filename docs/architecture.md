@@ -640,6 +640,16 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   the next `stale` build (`MarkStale`). Its only jobs are the opt-in billed bulk path (`BigQueryBulk.cs`,
   `BigQueryService.Bulk.cs`): a full build's `bulk` locations exist only after `bigquery.indexEstimate` and the renderer's
   cost prompts, and the rows must fill the same entries pass 2 would (`BigQueryIndexChecks.Bulk`).
+  `IndexFile` (`IndexFileContainer` for the header, encryption and chunks, `IndexFileUnit` for the content; their doc
+  comments are the layout) saves one unit of the index (a `DatabaseIndex`, or the shared resource set) to a versioned file
+  and loads it back; no build calls it yet, so nothing is written. Its rules: a file is untrusted, so every length is
+  checked against `IndexFileLimits` and charged to the budget before anything is allocated by it, and every reference a
+  search or a lookup follows is checked before a table exists (in clear text nothing else vouches for the content); a load
+  takes texts from the `StringPool` and charges as the reader that made the unit charges (a new field must be charged the
+  same way, BigQuery's under its floors); every failure is an `IndexFileProblem` value with everything taken given back;
+  a file's keys are its own (HKDF of the caller's key and a per-file salt), so no nonce repeats; it logs nothing. A layout
+  change bumps `IndexFileContainer.Version` and commits that version's files (`Fixtures/IndexFile`, written by the test
+  program's `--write-index-goldens`), which `IndexFileChecks` loads on every run.
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`

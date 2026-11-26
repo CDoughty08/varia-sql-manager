@@ -225,6 +225,36 @@ internal sealed class ObjectIndexLimits
     public int PreviewChars { get; init; } = 160;
 }
 
+/// <summary>Bounds on one saved unit of the index (<see cref="IndexFile"/>). A file is untrusted input: the loader checks every
+/// length and count against these before it allocates anything by them, and the writer refuses a unit past them rather than
+/// write a file no reader takes. Beyond these, whatever a load keeps is charged to the index's budget as a read's is.</summary>
+internal static class IndexFileLimits
+{
+    /// <summary>One file, header and body.</summary>
+    public const long FileBytes = 4L << 30;
+    /// <summary>Entries in one unit's table, and in the shared resource set's (which is charged whatever the budget holds).</summary>
+    public const int Objects = 1 << 26;
+    public const int ResourceObjects = 1 << 21;
+    /// <summary>Distinct texts in one unit's table.</summary>
+    public const int Texts = 1 << 27;
+    /// <summary>One text, a name or a definition, in UTF-16 code units: four times the longest definition the index keeps by default.</summary>
+    public const int TextChars = 4 << 20;
+    /// <summary>The kind, folder and subtype combinations one unit names (the process knows a few hundred), and each one's length.</summary>
+    public const int Shapes = 4096;
+    public const int ShapeChars = 64;
+    /// <summary>A unit's types (<see cref="ObjectDetails"/> numbers them in 16 bits) and the columns its indexes and keys list.</summary>
+    public const int Types = ushort.MaxValue + 1;
+    public const int KeyColumns = 1 << 27;
+    /// <summary>A database's, project's or dataset's name, or a server's version.</summary>
+    public const int NameChars = 1024;
+    /// <summary>A BigQuery fact's text (a signature, a description, a shard group's prefix): well above <see cref="BigQueryIndexLimits.FactChars"/>.</summary>
+    public const int FactChars = 4096;
+    /// <summary>The caller's identity and sync state in the header, and the opaque bytes it may keep in the body.</summary>
+    public const int IdentityBytes = 1024;
+    public const int SyncBytes = 1 << 20;
+    public const int ExtraBytes = 32 << 20;
+}
+
 /// <summary>The memory held by every connection's index (<see cref="IndexMemory"/>), in bytes.</summary>
 internal sealed class IndexBudget(long limit)
 {

@@ -94,6 +94,22 @@ internal sealed class ObjectDetails
         (this.keyColumn, this.keyOther, this.keyColumnFlags) = (keyColumn, keyOther, keyColumnFlags);
     }
 
+    /// <summary>The details' arrays as they are held, for <see cref="IndexFile"/>: read only on the way out (the details own
+    /// them), and checked by <see cref="IndexFileUnit"/> before <see cref="FromParts"/> on the way in.</summary>
+    internal sealed record Parts(int[] TypeName, int[] TypeSchema, int[] TypeId, byte[] TypeSystem, byte[] TypeFlags, int[] TypedAt, ushort[] TypedType, short[] TypedLength,
+        byte[] TypedPrecision, byte[] TypedScale, short[] TypedOrdinal, byte[] TypedFlags, int[] KeyAt, int[] KeyFrom, short[] KeyCount, int[] KeyReferenced,
+        short[] KeyColumn, short[] KeyOther, byte[] KeyColumnFlags);
+
+    /// <summary>The highest value a type's flags take.</summary>
+    internal const byte TypeFlagsMask = UserDefinedFlag | TableTypeFlag;
+
+    internal Parts ToParts() => new(typeName, typeSchema, typeId, typeSystem, typeFlags, typedAt, typedType, typedLength, typedPrecision, typedScale, typedOrdinal, typedFlags,
+        keyAt, keyFrom, keyCount, keyReferenced, keyColumn, keyOther, keyColumnFlags);
+
+    internal static ObjectDetails FromParts(Parts parts) => new(parts.TypeName, parts.TypeSchema, parts.TypeId, parts.TypeSystem, parts.TypeFlags, parts.TypedAt, parts.TypedType,
+        parts.TypedLength, parts.TypedPrecision, parts.TypedScale, parts.TypedOrdinal, parts.TypedFlags, parts.KeyAt, parts.KeyFrom, parts.KeyCount, parts.KeyReferenced,
+        parts.KeyColumn, parts.KeyOther, parts.KeyColumnFlags);
+
     public int Types => typeName.Length;
     public int TypedCount => typedAt.Length;
     public int KeyCount => keyAt.Length;

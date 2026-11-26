@@ -179,6 +179,11 @@ internal sealed class BigQueryFacts(Dictionary<int, BigQueryObjectFacts> objects
     public Varia.Backend.BigQueryShardsDto? Shards(int at) => shards.GetValueOrDefault(at);
     public int Count => objects.Count;
 
+    /// <summary>The facts as they are held, by entry, for <see cref="IndexFile"/>: never changed once the read is built.</summary>
+    internal IReadOnlyDictionary<int, BigQueryObjectFacts> Objects => objects;
+    internal IReadOnlyDictionary<int, string> Descriptions => descriptions;
+    internal IReadOnlyDictionary<int, Varia.Backend.BigQueryShardsDto> ShardGroups => shards;
+
     /// <summary>Whether a kind is BigQuery's (the catalogue's bq* kinds).</summary>
     public static bool IsBigQuery(string kind) => kind.StartsWith("bq", StringComparison.Ordinal);
 

@@ -19,6 +19,10 @@ internal sealed class ResourceSet(ResourceKey key, ObjectTable table, int module
     public int LeftOut { get; } = leftOut;
 }
 
+/// <summary>What a shared read answers: the objects, and for a set loaded from a file (<see cref="IndexFile.LoadResource"/>) how
+/// many definitions it had left out for memory when it was saved.</summary>
+internal readonly record struct SavedResource(ObjectTable Table, int LeftOut = 0);
+
 /// <summary>
 /// The resource database's objects, shared by every connection whose server has the same key, reference counted and dropped
 /// when the last connection lets go. Its names and definitions come from the <see cref="StringPool"/>, so two builds whose
@@ -77,7 +81,13 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
     /// it); a caller that shares a read waits for it. The read runs under its own token, limited to <paramref name="limit"/> and
     /// cancelled only when every caller waiting for it has stopped (<paramref name="token"/>); a read past its limit throws
     /// <see cref="TimeoutException"/>. Each successful call takes a reference that <see cref="Release"/> gives back.</summary>
-    public async Task<ResourceSet> AcquireAsync(ResourceKey key, Func<CancellationToken, Task<ObjectTable>> read, TimeSpan? limit = null, CancellationToken token = default)
+    public Task<ResourceSet> AcquireAsync(ResourceKey key, Func<CancellationToken, Task<ObjectTable>> read, TimeSpan? limit = null, CancellationToken token = default) =>
+        AcquireSavedAsync(key, async readToken => new SavedResource(await read(readToken)), limit, token);
+
+    /// <summary>As <see cref="AcquireAsync"/>, for a read that may answer a set <see cref="IndexFile"/> loaded: such a set is shared
+    /// exactly as a read's is (its names taken whatever the budget holds, a definition left out below the reserve), and the
+    /// definitions it had already left out for memory when it was saved stay counted.</summary>
+    public async Task<ResourceSet> AcquireSavedAsync(ResourceKey key, Func<CancellationToken, Task<SavedResource>> read, TimeSpan? limit = null, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
         Entry entry;
@@ -120,7 +130,7 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
     }
 
     /// <summary>Runs the shared read and completes <see cref="Entry.Load"/>; it never throws.</summary>
-    private async Task RunAsync(ResourceKey key, Entry entry, Func<CancellationToken, Task<ObjectTable>> read)
+    private async Task RunAsync(ResourceKey key, Entry entry, Func<CancellationToken, Task<SavedResource>> read)
     {
         try
         {
@@ -128,7 +138,7 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
             lock (gate)
             {
                 if (entry.Abandoned) throw new OperationCanceledException(entry.Lifetime.Token);
-                entry.Shared = Share(key, objects);
+                entry.Shared = Share(key, objects.Table, objects.LeftOut);
             }
             entry.Load.SetResult(entry.Shared);
         }
@@ -173,7 +183,7 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
 
     /// <summary>The set with each distinct text swapped for the pool's copy, one reference per set: names are taken whatever the
     /// budget holds, and a definition the budget refuses is left out and counted as cut.</summary>
-    private ResourceSet Share(ResourceKey key, ObjectTable table)
+    private ResourceSet Share(ResourceKey key, ObjectTable table, int alreadyLeftOut)
     {
         var bytes = table.Count * IndexMemory.RecordBytes + (table.Details?.Bytes ?? 0);
         pool.Budget.Force(bytes);
@@ -185,8 +195,9 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
             if (texts[at] is { } text) copies[at] = names[at] ? pool.TryAcquire(text, force: true) : pool.TryAcquire(text, reserve);
         var shared = table.WithTexts(copies);
         var modules = 0;
-        var cut = 0;
-        var leftOut = 0;
+        // A saved set's entries no longer say which of them lost a definition to memory before it was saved: only how many.
+        var cut = alreadyLeftOut;
+        var leftOut = alreadyLeftOut;
         for (var at = 0; at < shared.Count; at++)
         {
             if (shared.HasDefinition(at)) { modules++; if (shared.DefinitionCut(at)) cut++; }
