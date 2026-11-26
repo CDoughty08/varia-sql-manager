@@ -382,6 +382,10 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @container (max-width: 30em) { .oe-chips > .status-pill:not(:first-child) { display: none; } }
 .oe-actions { display: flex; gap: 2px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
+.oe-actions button.oe-star-button { background: transparent; border: none; border-radius: var(--varia-radius-sm); cursor: pointer; opacity: 0.72; }
+.oe-actions button.oe-star-button.starred { color: var(--varia-focusBorder); opacity: 0.92; }
+.oe-actions button.oe-star-button:hover { opacity: 1; background: var(--varia-list-hoverBackground); }
+.explorer-row[aria-selected="true"] .oe-actions button.oe-star-button { color: inherit; opacity: 0.92; }
 /* Use the workbench focus colour for text drags and Object Explorer drops. */
 .monaco-editor .lines-content .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
 /* Only the widgets take input; the document-level host never covers the panels underneath it. Keep it below menus,
@@ -2063,8 +2067,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .bq-account .field-note { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; overflow-wrap: anywhere; }
 .bq-unit { flex: 0 0 84px; width: 84px; }
 .bq-unit-label { flex: 0 0 84px; width: 84px; color: var(--varia-descriptionForeground); }
-.bq-extra-projects { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; grid-column: 2; }
-.bq-extra-projects li { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: var(--varia-size-sm); }
 .bq-source-path { font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); overflow-wrap: anywhere; }
 .dialog-heading h2 { font-weight: 600; font-size: var(--varia-size-lg); margin: 0 0 22px; }
 .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--varia-button-background); }

@@ -190,16 +190,16 @@ describe('Connect dialog: BigQuery', () => {
     expect(view.connectionTargets.getSnapshot()[0]?.options).toMatchObject({ provider: 'bigquery', project: 'varia-alpha' })
   })
 
-  it('sets the cost cap, impersonation and extra projects in Advanced', async () => {
+  it('sets the cost cap and impersonation in Advanced without offering Extra projects', async () => {
     const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
     await view.click('Advanced')
+    expect(view.$('#bq-extra-project')).toBeNull()
     await view.set('#bq-max-bytes', '500')
     await view.set('#bq-impersonate', 'etl@varia-alpha.iam.gserviceaccount.com')
-    await view.set('#bq-extra-project', 'bigquery-public-data')
-    await view.click('Add')
-    expect(view.button('Advanced (3 set)').querySelector('.connect-tab-badge')?.textContent).toBe('3')
+    expect(view.button('Advanced (2 set)').querySelector('.connect-tab-badge')?.textContent).toBe('2')
     await view.click('Connect')
-    expect(view.connect.mock.calls[0]![0]).toMatchObject({ maximumBytesBilled: 500 * 2 ** 30, impersonateServiceAccount: 'etl@varia-alpha.iam.gserviceaccount.com', extraProjects: ['bigquery-public-data'] })
+    expect(view.connect.mock.calls[0]![0]).toMatchObject({ maximumBytesBilled: 500 * 2 ** 30, impersonateServiceAccount: 'etl@varia-alpha.iam.gserviceaccount.com' })
+    expect(view.connect.mock.calls[0]![0]).not.toHaveProperty('extraProjects')
   })
 
   it('lists BigQuery entries in History beside SQL Server\'s: choose, favourite, save and remove', async () => {
@@ -301,17 +301,6 @@ describe('Connect dialog: BigQuery', () => {
     expect(view.$<HTMLSelectElement>('.bq-unit')!.value).toBe('GiB')
   })
 
-  it('preserves pending Extra projects text across tab switches and includes it on Save/Connect', async () => {
-    const view = await mount({ initial: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } })
-    await view.click('Advanced')
-    await view.set('#bq-extra-project', 'bigquery-public-data')
-    await view.click('Connection Properties')
-    await view.click('Advanced')
-    expect(view.$<HTMLInputElement>('#bq-extra-project')!.value).toBe('bigquery-public-data')
-    await view.click('Connect')
-    expect(view.connect.mock.calls[0]![0]).toMatchObject({ extraProjects: ['bigquery-public-data'] })
-  })
-
   it("shows the saved entry's own Prompt above threshold for a live connection's settings, and names one only when changed", async () => {
     const options = { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud' } as const
     const profile: BigQueryConnectionProfile = { id: id(3), options: { ...options, costThreshold: 50 }, favorite: false, lastConnected: '2026-11-10T10:00:00.000Z' }
@@ -371,7 +360,6 @@ describe('Connect dialog: BigQuery', () => {
     await second.click('Connect')
     expect(second.connect.mock.calls.at(-1)![0]).toMatchObject({ project: 'varia-beta', costThreshold: 50 })
   })
-
   it("resets BigQuery cost prompt back to asking when Reset Advanced runs on a saved Don't ask again entry", async () => {
     const profile: BigQueryConnectionProfile = {
       id: id(2),

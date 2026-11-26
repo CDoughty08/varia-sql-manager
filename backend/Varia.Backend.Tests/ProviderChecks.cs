@@ -49,8 +49,9 @@ internal static class ProviderChecks
         check(closeBigQuery != "UNSUPPORTED_PROVIDER" && health == "ok" && planBigQuery == "UNSUPPORTED_PROVIDER",
             $"a method declared for both engines passes the check for a BigQuery request, and a SQL Server-only one does not: {closeBigQuery} {health} {planBigQuery}");
 
-        check(Providers.Of("results.read").SequenceEqual([Providers.SqlServer, Providers.BigQuery]) && Providers.Of("connections.connect").SequenceEqual([Providers.SqlServer, Providers.BigQuery]) && Providers.Of("bigquery.projects").SequenceEqual([Providers.BigQuery]) && Providers.Of("connections.preview").SequenceEqual([Providers.SqlServer])
-            && Providers.Of("not.a.method").SequenceEqual([Providers.SqlServer]),
+        check(Providers.Of("results.read").SequenceEqual([Providers.SqlServer, Providers.BigQuery]) && Providers.Of("connections.connect").SequenceEqual([Providers.SqlServer, Providers.BigQuery])
+            && Providers.Of("bigquery.projects").SequenceEqual([Providers.BigQuery]) && Providers.Of("bigquery.connectionProjects").SequenceEqual([Providers.BigQuery])
+            && Providers.Of("connections.preview").SequenceEqual([Providers.SqlServer]) && Providers.Of("not.a.method").SequenceEqual([Providers.SqlServer]),
             "a method serves SQL Server only unless Providers.BothMethods names it");
     }
 

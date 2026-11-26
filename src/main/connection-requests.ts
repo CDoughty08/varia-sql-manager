@@ -281,6 +281,11 @@ async function settleBigQuery(prepared: PreparedRequest, outcome: Settled, deps:
     catch (error) { return refuse(error) }
     info.targetId = context.targetId
   }
+  await deps.connections.claimBigQueryMigratedProjects?.(verified.principal.principal, {
+    profileId: context?.selectedProfileId,
+    options: validated,
+    targetId: context?.targetId
+  }).catch(() => {})
   if (context?.mode === 'background') return outcome
   try {
     const entry = await deps.connections.rememberEntry(validated, !context?.setsEnvironment, context?.autoReconnect, context?.selectedProfileId)
@@ -414,6 +419,13 @@ export async function settleReused(prepared: PreparedRequest, connected: Connect
     }
     // A choice the dialog named (Advanced Properties' cost-prompt box) is saved as a new connection's would be.
     const bigQueryOptions = (params as ProviderConnectionOptions).provider === 'bigquery' ? params as unknown as BigQueryConnectionOptions : undefined
+    if (bigQueryOptions && pin.expectedPrincipal.provider === 'bigquery') {
+      await deps.connections.claimBigQueryMigratedProjects?.(pin.expectedPrincipal.principal, {
+        profileId: context?.selectedProfileId,
+        options: bigQueryOptions,
+        targetId: context?.targetId ?? connected.targetId
+      }).catch(() => {})
+    }
     if (context?.mode !== 'background' && bigQueryOptions?.costPrompt !== undefined) {
       try {
         if (!await deps.connections.setBigQueryCostPrompt?.(bigQueryOptions, bigQueryOptions.costPrompt)) throw new Error('The saved connection is unavailable.')

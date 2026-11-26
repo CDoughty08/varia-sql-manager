@@ -240,6 +240,7 @@ noted where it matters.
 | `connections.disconnect` | invoke | unary | control | 30 s; answered locally `{ disconnected: false }` for a lost connection or failed backend. A BigQuery handle ends its idle sessions and answers `failedAborts?` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `connections.identity` | invoke | unary | metadata | 10 s. Takes `{}` (**Integrated identity** below). |
 | `bigquery.account`, `bigquery.projects` | invoke | unary | control | 30 s, sensitive. BigQuery before connecting: `{ authentication, keyFile?, impersonateServiceAccount? }` (`.projects` adds `pageToken?` ≤ 1,024). Main adds `credential` (`{ source: 'file' \| 'adc' \| 'metadata' \| 'anonymous', json? ≤ 64 KiB }`), which the renderer never holds. Answers `{ kind, account ≤ 256, impersonated? }` and `{ projects: { id, friendlyName? ≤ 256 }[] ≤ 1,000, nextPageToken? }` ([BigQuery](bigquery.md#pre-connect-methods)). |
+| `bigquery.connectionProjects` | invoke | unary | metadata | 30 s. Connected BigQuery handle: `{ connectionId, pageToken? ≤ 1,024 }`; lists one page of accessible projects through the principal's rate limiter (`projects.list`, free) for Object Explorer's Star a Project… picker. Answers the same `{ projects, nextPageToken? }` shape as `bigquery.projects`. |
 | `bigquery.endIdleSessions` | main only | unary | control | 10 s (main gives up after 15 s). Before every backend stop main makes, except of a backend that is not responding: `{ keepJobKeys?: uuid[] ≤ 1,024 }`; ends every idle BigQuery session but a kept key's with an open or unknown transaction, and answers `{ failedAborts }` ([Re-attaching to jobs](bigquery.md#re-attaching-to-jobs)) |
 | `bigquery.cancelJobs` | main only | unary | control | 60 s, sensitive. A saved profile's jobs without a handle: the credential fields of `bigquery.account` plus `project` and `jobs: { jobId ≤ 1,024, location? ≤ 64 }[] ≤ 64`; cancels each, waits for DONE, lists its children and aborts its session, answering `{ jobs: { jobId, cancelled, note?, error? }[] }` |
 | `bigquery.dryRun` | invoke | unary | metadata | 30 s. A free dry run on a connected BigQuery handle: `{ connectionId, sql ≤ 1,000,000, dataset? ≤ 1,024, sessionId? }` (the tab's id: a tab that holds a BigQuery session dry-runs in it; none is created), or `{ connectionId, remote }` for a sort, filter or value list of a windowed result ([Remote results](#remote-results)). Answers `{ bytesProcessed, incomplete?: 'script' \| 'lowerBound' \| 'unknown' \| 'zeroBytes', statementType?, faked?, fallback? }`; a query BigQuery refuses is `SQL_ERROR` with its `[line:column]` ([BigQuery's Cost](bigquery.md#cost)) |
@@ -733,13 +734,15 @@ absent means SQL Server, an unknown one is `INVALID_PARAMS`). `connections.conne
 a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databases` and `databases.list` serve both
 (BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `live.subscribe` and `live.update` serve
 both, each source only the engines its catalogue entry names (Job History's `bigquery.jobs` is BigQuery's). `bigquery.account`,
-`bigquery.projects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.indexEstimate`, `bigquery.endIdleSessions`,
+`bigquery.projects`, `bigquery.connectionProjects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.indexEstimate`, `bigquery.endIdleSessions`,
 `bigquery.cancelJobs`, `bigquery.jobs.get`, `bigquery.jobs.cancel`, `results.remoteQuery`, `query.attach` and
 `language.lookup` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
-`varia:connections-confirm-source` (records a federation token file the user confirmed), and one serves the cost prompt:
+`varia:connections-confirm-source` (records a federation token file the user confirmed), one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers
-whether the entry holds it). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
+whether the entry holds it), and two serve per-principal Starred Projects: `varia:bigquery-starred-projects` (`{ connectionId? }`,
+optional strict; returns only live verified principals) and `varia:bigquery-star-project` (`{ connectionId, project, starred }`,
+strict; main resolves the verified principal from the live BigQuery handle). Main records each connection's provider at connect and refuses a method whose `providers` lack the connection's
 with `UNSUPPORTED_PROVIDER` before sending (`requestProvider`, `methodAllows`). `query.execute` serves both, refusing each engine the other's options (`optionsAllow`). `system.health`, `query.cancel`,
 `query.session.close`, `query.session.state` and every other `results.*` method name no connection and are declared for
 both engines; `SqlService.DispatchAsync` resolves their provider from the query, session or result and checks every request

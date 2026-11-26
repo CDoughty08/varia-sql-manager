@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, joinBytes, lastServerType, maxListedProjects, mergeProjects, parseExtraProjects,
+  bigQueryDefaults, bigQueryFormOptions, bigQueryReady, bigQueryRowDetail, bigQueryRowText, joinBytes, lastServerType, maxListedProjects, mergeProjects,
   projectError, serverOf, splitBytes, switchServerType, undoServerType, withAuthentication, advancedCostPrompt, bigQueryFormShape, savedCostPrompt, withoutCostPreferences,
   advancedCostThreshold, parseCostThreshold, savedCostThreshold, shownCostThreshold } from '../src/renderer/src/bigquery-connect-form'
 import { bigQueryAdvancedSummary, bigQueryAdvancedValidationError, bigQueryAdvancedDraftFrom, accountText } from '../src/renderer/src/BigQueryConnectFields'
@@ -46,8 +46,8 @@ describe('Connect dialog: BigQuery fields', () => {
     expect(bigQueryReady({ ...bigQueryDefaults(), project: 'no' })).toBe(false)
   })
   it('sends the form trimmed, leaving empty fields out, and refuses what the schema refuses', () => {
-    expect(bigQueryFormOptions({ provider: 'bigquery', project: ' varia-alpha ', authentication: 'gcloud', location: '', dataset: ' sales ', extraProjects: [' ', 'varia-beta'], impersonateServiceAccount: ' ', displayName: ' ', keyFile }))
-      .toEqual({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', dataset: 'sales', extraProjects: ['varia-beta'] })
+    expect(bigQueryFormOptions({ provider: 'bigquery', project: ' varia-alpha ', authentication: 'gcloud', location: '', dataset: ' sales ', impersonateServiceAccount: ' ', displayName: ' ', keyFile }))
+      .toEqual({ provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', dataset: 'sales' })
     expect(bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'serviceAccountKey', keyFile, location: 'EU', maximumBytesBilled: 1024, environment: 'Production', color: '#112233' }))
       .toEqual({ provider: 'bigquery', project: 'varia-alpha', authentication: 'serviceAccountKey', keyFile, location: 'EU', maximumBytesBilled: 1024, environment: 'Production', color: '#112233' })
     expect(() => bigQueryFormOptions({ provider: 'bigquery', project: 'varia-alpha', authentication: 'serviceAccountKey' })).toThrow('This authentication needs a key file.')
@@ -71,12 +71,6 @@ describe('Connect dialog: BigQuery fields', () => {
     expect(joinBytes('0', 'MiB').ok).toBe(false)
     expect(joinBytes('99999999999', 'TiB').ok).toBe(false)
   })
-  it('reads extra projects as typed: each once, never the billing project, at most sixteen', () => {
-    expect(parseExtraProjects('varia-beta, varia-gamma\nvaria-beta varia-alpha', 'varia-alpha')).toEqual({ ok: true, projects: ['varia-beta', 'varia-gamma'] })
-    expect(parseExtraProjects('varia-beta Not_A_Project', 'varia-alpha')).toEqual({ ok: false, error: 'Not_A_Project is not a Google Cloud project id.' })
-    const seventeen = Array.from({ length: 17 }, (_, index) => `varia-extra-${index}`).join(' ')
-    expect(parseExtraProjects(seventeen, 'varia-alpha').ok).toBe(false)
-  })
   it('describes a saved BigQuery entry by engine, dataset and sign-in, with the key file by name only', () => {
     const profile = { options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', authentication: 'serviceAccountKey' as const, keyFile }, keyFileName: 'reader.json' }
     expect(bigQueryRowDetail(profile)).toBe('BigQuery · sales · Service account key file (reader.json)')
@@ -87,7 +81,7 @@ describe('Connect dialog: BigQuery fields', () => {
   })
   it('summarises Advanced and the account line', () => {
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha' })).toBe('')
-    expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', maximumBytesBilled: 1, extraProjects: ['varia-beta'] })).toBe('2 properties set')
+    expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', maximumBytesBilled: 1, impersonateServiceAccount: 'etl@varia-alpha.iam.gserviceaccount.com' })).toBe('2 properties set')
     // Don't ask again counts as a property set; the prompt left on (or turned back on) does not.
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', costPrompt: false })).toBe('1 property set')
     expect(bigQueryAdvancedSummary({ ...bigQueryDefaults(), project: 'varia-alpha', costPrompt: true })).toBe('')

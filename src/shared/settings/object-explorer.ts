@@ -1,3 +1,4 @@
+import { objectSearchLimits } from '../explorer/search.ts'
 import { scriptingOptionDefs, scriptingOptionGroupLabels } from '../scripting/options.ts'
 import type { BooleanSettingDef, EnumSettingDef, SettingDef } from './types'
 
@@ -68,9 +69,15 @@ export const objectExplorerSettings = [
     description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build.'
   },
   {
-    key: 'objectExplorer.search.bigQueryExtraProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index BigQuery extra projects’ schemas', type: 'boolean', default: false, varia: true,
-    keywords: ['search', 'index', 'bigquery', 'projects', 'columns', 'schemas'],
-    description: 'A BigQuery connection’s index reads every table’s columns and every view’s and routine’s text in its billing project, and only the names of datasets and objects in its extra projects. When True, the extra projects’ schemas and text are read as well (free metadata calls, one per table, view and routine). Applies to the next build.'
+    key: 'objectExplorer.search.bigQueryAccessibleProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index all accessible BigQuery projects', type: 'boolean', default: true, varia: true,
+    keywords: ['search', 'index', 'bigquery', 'projects', 'accessible', 'starred', 'columns', 'schemas'],
+    description: 'A BigQuery connection’s Search Objects index discovers and indexes every accessible BigQuery project (up to the configured project limit, including tables, views, routines, models, columns and definitions) in addition to the billing project and starred projects. When False, only the billing project and starred projects are indexed. Applies to the next build.'
+  },
+  {
+    key: 'objectExplorer.search.bigQueryMaxProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Maximum accessible BigQuery projects',
+    type: 'integer', min: 1, max: objectSearchLimits.bigQuery.maxProjectsCap, default: objectSearchLimits.bigQuery.maxProjects, varia: true,
+    enabledBy: 'objectExplorer.search.bigQueryAccessibleProjects', keywords: ['search', 'index', 'bigquery', 'projects', 'limit', 'maximum', 'cap'],
+    description: 'The maximum number of accessible BigQuery projects discovered via projects.list during a Search Objects index build. Starred projects and the billing project are always indexed even when this cap is reached. Applies to the next build.'
   },
   ...scriptingSettingEntries()
 ] as const satisfies readonly SettingDef[]

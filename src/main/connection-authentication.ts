@@ -12,7 +12,7 @@ const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.s
 const settings = (options: ProviderConnectionOptions | ConnectionTargetOptions) => {
   // A BigQuery pin never matches SQL Server options: each provider's settings name the provider first, and BigQuery's
   // drop their labels in the schema's key order.
-  if (options.provider === 'bigquery') return ['bigquery', bigQueryTargetOptions({ ...options, extraProjects: options.extraProjects ? [...options.extraProjects] : undefined })]
+  if (options.provider === 'bigquery') return ['bigquery', bigQueryTargetOptions(options)]
   const clean = connectionTargetOptions(options as ConnectionOptions)
   return [clean.server, clean.database, clean.authentication, clean.username ?? '', clean.encrypt ?? 'mandatory', clean.trustServerCertificate,
     clean.hostNameInCertificate ?? '', Object.keys(advancedDefaults).sort().map(key => [key, clean.advanced?.[key as keyof typeof advancedDefaults] ?? advancedDefaults[key as keyof typeof advancedDefaults]]),

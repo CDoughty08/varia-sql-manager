@@ -32,6 +32,16 @@ const resource = (id, job, parent) => ({
   configuration: { jobType: 'QUERY', ...job.labels ? { labels: job.labels } : {}, query: { query: job.sql } },
   status: { state: job.state ?? 'DONE', ...job.error ? { errorResult: job.error } : {} }
 })
+/** jobs.list's minimal projection (and its default) leaves out each job's configuration and statistics.query, as a real
+ *  project showed, and parentJobId too, to be safe: only projection=full names a child's statement. */
+const listed = (url, job) => {
+  if (url.searchParams.get('projection') === 'full') return job
+  const minimal = { ...job, statistics: { ...job.statistics } }
+  delete minimal.configuration
+  delete minimal.statistics.query
+  delete minimal.statistics.parentJobId
+  return minimal
+}
 const requests = []
 const server = createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1')
@@ -42,8 +52,8 @@ const server = createServer((request, response) => {
   const base = `/bigquery/v2/projects/${project}`
   if (request.method === 'GET' && url.pathname === `${base}/jobs`) {
     if (url.searchParams.get('allUsers') === 'true') return denied(`Access Denied: Project ${project}: User does not have bigquery.jobs.list permission in project ${project}.`)
-    if (url.searchParams.get('parentJobId') === 'script_1') return send(200, { kind: 'bigquery#jobList', jobs: children.map(child => resource(child.id, child, 'script_1')) })
-    return send(200, { kind: 'bigquery#jobList', jobs: [...jobs].map(([id, job]) => resource(id, job)) })
+    if (url.searchParams.get('parentJobId') === 'script_1') return send(200, { kind: 'bigquery#jobList', jobs: children.map(child => listed(url, resource(child.id, child, 'script_1'))) })
+    return send(200, { kind: 'bigquery#jobList', jobs: [...jobs].map(([id, job]) => listed(url, resource(id, job))) })
   }
   const job = /^\/bigquery\/v2\/projects\/[^/]+\/jobs\/([\w-]+)(\/cancel)?$/.exec(url.pathname)
   if (job && jobs.has(job[1])) {
@@ -156,7 +166,9 @@ try {
   await expect(details).toContainText('Statements (2)')
   await details.getByRole('button', { name: 'Show statements in grid', exact: true }).click()
   await expect.poll(async () => (await rows()).map(row => row.job)).toEqual(['varia_running', '▾ script_1', '↳ script_1_a', '↳ script_1_b', 'failed_1', 'cancelled_1'])
-  expect(listings().some(request => request.query.get('parentJobId') === 'script_1')).toBe(true)
+  const childListings = listings().filter(request => request.query.get('parentJobId') === 'script_1')
+  expect(childListings.length).toBeGreaterThan(0)
+  expect(childListings.map(request => request.query.get('projection'))).toEqual(childListings.map(() => 'full'))
   await details.getByRole('button', { name: 'Close details', exact: true }).click()
   await expect(details).toHaveCount(0)
   console.log('Details passed: Enter shows the script\'s SQL and statements, which then show under it.')

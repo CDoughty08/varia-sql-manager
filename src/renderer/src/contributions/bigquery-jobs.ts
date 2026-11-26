@@ -5,8 +5,8 @@ import { serverItems } from './query'
 
 /**
  * BigQuery Job History's commands (docs/bigquery.md, Job History). Job History opens one document per BigQuery
- * connection: the connection of the Object Explorer node its menu runs on (the server node, or the billing project's: an
- * extra project's history is not offered, since jobs belong to the billing project), a Messages job id's tab or the records
+ * connection: the connection of the Object Explorer node its menu runs on (the server node, or the billing project's: a
+ * non-billing project's history is not offered, since jobs belong to the billing project), a Messages job id's tab or the records
  * dialog (`bigQueryJobs`, filtered to those jobs), else the active document's, else the selected node's, else the one live
  * BigQuery connection or the one picked from several. The row actions act on the job selected in the document whose menu or
  * header runs them (`tabId`), else the active one; a grid menu opened on a row other than the active one (inside a
@@ -45,7 +45,7 @@ export function bigQueryJobsContribution({ commands, jobHistory, documents, conn
   })
   const registrations = [
     commands.register('bigquery.jobHistory', {
-      // An extra project's node offers it greyed: its jobs are the billing project's.
+      // A non-billing project's node offers it greyed: its jobs are the billing project's.
       when: args => nodeConnection(args) !== false,
       run: args => {
         const connectionId = target(args)

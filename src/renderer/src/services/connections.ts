@@ -309,11 +309,9 @@ export class ConnectionService extends SnapshotStore<readonly LiveConnection[]> 
   dispose(): void { for (const finish of [...this.associationHandoffs.values()]) finish(); this.unsubscribe(); this.clearListeners(); this.metadata.clear(); this.legacyDetails.clear(); this.targetEpochs.clear(); this.targetStates.clear(); this.legacy = []; this.publish([]) }
 }
 
-/** A target's settings with its labels, as the connection's options (BigQuery's extra projects as a plain list). */
+/** A target's settings with its labels, as the connection's options. */
 export function optionsWith(options: ConnectionTargetOptions, presentation: Partial<Pick<ConnectionDetails, 'displayName' | 'color' | 'environment'>>): SavedOptions {
-  if (!isBigQueryTarget(options)) return { ...options, ...presentation }
-  const { extraProjects, ...rest } = options
-  return { ...rest, ...extraProjects ? { extraProjects: [...extraProjects] } : {}, ...presentation }
+  return { ...options, ...presentation }
 }
 export function detailsOf(options: SavedOptions, autoReconnect: ConnectionDetails['autoReconnect'] = 'inherit'): ConnectionDetails {
   return connectionDetailsSchema.parse({ displayName: options.displayName, color: options.color, environment: options.environment, autoReconnect })

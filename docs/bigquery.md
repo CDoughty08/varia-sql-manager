@@ -30,7 +30,7 @@ tab, no Encrypt, TLS or SqlClient options and no Register server.
 | Project | The billing project, typed or picked: the combo and **Browse** (in the sources pane) list `bigquery.projects`, up to 10 pages (10,000 projects). |
 | Location | Automatic (from the default dataset) or a BigQuery location. |
 | Default dataset | Typed or picked from the project's datasets (`connections.databases`, below), loaded when the box is focused or with its button; a dataset in another location is noted. |
-| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Extra projects (read-only projects Object Explorer and IntelliSense will list, at most 16, never the billing project), Ask before running a query over the cost threshold (cleared by "Don't ask again"), and **Prompt above**, the connection's own threshold in whole GiB (empty, its placeholder naming Options' value, follows Options'; Cost, below). |
+| Advanced tab | Inline properties with a modified-count badge: Maximum bytes billed (MiB, GiB or TiB, binary), Impersonate service account, Ask before running a query over the cost threshold (cleared by "Don't ask again"), and **Prompt above**, the connection's own threshold in whole GiB (empty, its placeholder naming Options' value, follows Options'; Cost, below). |
 
 **Test Connection** loads the datasets with the dialog's options (it proves sign-in and the project without creating a
 job); **Connect** opens the connection through main's connection owner like SQL Server's (receipts, reuse, the target's
@@ -52,7 +52,7 @@ whole GiB; [Cost](#cost)) per entry, written atomically and quarantined if unrea
 saved connections when a reference is first needed (a reconnect at startup included) and maps it back to its file. An
 entry pruned from the 30 most recent leaves its key file's path behind (`keptKeyFiles`, the newest 48, for main only; with the 200 saved entries that stays within main's 256 remembered key files), so a
 connection still open from it reconnects after a restart without asking for the file again; a later connect from the
-history or the dialog takes the path back into an entry. Removing an entry forgets its path, a kept copy included, so a target whose entry was removed asks for the key file again. The file also keeps the newest 64 confirmed federation token files. The dialog's history
+history or the dialog takes the path back into an entry. Removing an entry forgets its path, a kept copy included, so a target whose entry was removed asks for the key file again. The file also keeps the newest 64 confirmed federation token files and per-principal Starred Projects (up to 64 principals, 200 projects each; separate from connection identity, so starring projects never creates duplicate connections; legacy `extraProjects` from earlier files migrate into Starred Projects automatically). The dialog's history
 lists both engines by recency: a BigQuery row shows the project where SQL Server shows the server, then `BigQuery`, the
 default dataset and the sign-in (with the key file's name). Object Explorer, tabs, the query bar and the status bar show
 the project where SQL Server shows the server; the query tab's **Dataset** box, and the palette's Change Database, list the
@@ -221,8 +221,13 @@ In-memory BOOL columns order false before true when they sort, filter between va
 
 A multi-statement script runs as one parent job whose statements are child jobs. Between polls (every 2 s) the backend
 lists the parent's new children (`jobs.list` with `parentJobId`, newest first, so paging stops at the first child it has
-read) and reads each finished one in statement order: a SELECT's rows become the next result set, a DML statement's
-affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
+read) and reads each finished one in statement order. The listing uses `projection=full`: the minimal projection leaves
+out `statistics.query`, so it names no statement type, rows affected or DDL target. Full jobs carry each statement's SQL,
+so each page is read under 16 MiB: the final listing asks for 200 jobs a page and a poll for 20, a page that fits doubles
+the next (up to 200, and to at most half a size that was too large) and a larger one is asked again with a quarter. Only
+the statistics are decoded and the SQL is never kept. A statement too large to read alone leaves the listing incomplete:
+a poll's incomplete listing reads nothing and stops the early reads, so statements keep their order, and an incomplete
+final listing says that earlier statements' results may be missing and leaves the transaction unknown. A SELECT's rows become the next result set, a DML statement's affected rows a `(N rows affected)` line, any other statement its completion sentence, and "The script completed." ends
 it. Early results show while the script runs. A listing that fails between polls stops the early reads (`jobs.list`
 needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
 rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
@@ -627,8 +632,16 @@ Messages).
 A BigQuery connection's tree loads through `explorer.children`, the method SQL Server's uses, from BigQuery's free REST
 listers; nothing in it runs a job.
 
-- **Shape.** The connection node lists the billing project (sublabel "billing project"), then the extra projects. A project
-  lists its datasets (`datasets.list`, sublabel the location). A dataset has six folders: Tables, Views, Materialized Views,
+- **Shape & Starred Projects.** The connection node lists the billing project (sublabel "billing project"), then the
+  principal's **Starred projects** (persisted per verified Google principal in `bigquery-connections.json`, mirroring
+  BigQuery Studio's explorer starring UX without altering connection identity), then **session-only (unstarred) projects**
+  added when Search Objects' Reveal navigates to an unstarred project or when an open BigQuery query tab references another
+  project. Right-click a connection node (or use the palette's **BigQuery: Star a Project…**) to star any accessible
+  project (`bigquery.connectionProjects`) or type any public/dataset-ACL project id such as `bigquery-public-data`
+  (typed project ids are verified for existence and access via a free `datasets.list` check before starring). Click a
+  non-billing project row's star button (or right-click **Star Project** / **Unstar Project**) to toggle persistence;
+  unstarred session projects offer **Remove from Explorer** and clear on restart unless starred or referenced by an open
+  query tab. A project lists its datasets (`datasets.list`, sublabel the location). A dataset has six folders: Tables, Views, Materialized Views,
   External Tables (`tables.list` filtered by type; a snapshot is a table with the snapshot icon, a clone is a table),
   Routines (`routines.list`, icon by routine type, sublabel a non-SQL language) and Models (`models.list`, sublabel the model
   type). A table-like object has Columns (`tables.get`'s schema, sublabel the type, `ARRAY<…>` for a repeated column and
@@ -652,7 +665,7 @@ listers; nothing in it runs a job.
 - **Running jobs.** The connection node's status chip, "N jobs running", counts the connection principal's own pending and
   running jobs in the billing project: jobs.list with `stateFilter` pending and running, without `allUsers`, projection
   minimal, top-level jobs only (a running script counts once), through the rate limiter above. It is a free API call, never a
-  query. Jobs other principals run in the project, and jobs in the extra projects, are not counted; Job History's All users
+  query. Jobs other principals run in the project, and jobs in starred or session projects, are not counted; Job History's All users
   shows those. It is the `explorer.bigquery` probe of the `bigquery.explorer` live source (docs/live.md), every 10 s, sampled
   only while Object Explorer shows and paused while it is hidden, like SQL Server's chips (docs/object-explorer.md, Live
   status); Options › Environment › Live data › Show live status in Object Explorer turns both off. It counts up to 10,000 ("10,000+" past that), shows
@@ -758,7 +771,7 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 `jobs.cancel`) through the principal's rate limiter, never a query and never the billed `INFORMATION_SCHEMA.JOBS` views.
 
 - **Opening it.** One document per connection, opened again it is focused: Job History on the connection's or the billing
-  project's Object Explorer menu (an extra project's is greyed: jobs belong to the billing project), the palette's
+  project's Object Explorer menu (a non-billing project's is greyed: jobs belong to the billing project), the palette's
   "BigQuery: Job History" (the active document's connection, the one live BigQuery connection, or a pick), "Show in Job
   History" under a finished BigQuery tab's Messages (filtered to that job), and Show in Job History in the dialog about
   running jobs left without a tab (filtered to them, per project). A project the page is not connected to is connected
@@ -833,7 +846,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
   - **Copy Job ID** copies `project:LOCATION.job_id`, and **Copy Console Link** the job's address in the BigQuery console
     as text (Varia opens no browser; Google does not document the address, so a test pins the form the console uses).
 - **Methods.** `bigquery.jobs.get` (metadata lane): one job's details and full SQL, and a script's children
-  (`jobs.list?parentJobId`, with `allUsers` for another user's script), whose refusal leaves the details and says why.
+  (`jobs.list?parentJobId` with `projection=full`, with `allUsers` for another user's script), whose refusal leaves the
+  details and says why.
   `bigquery.jobs.cancel` (control lane): one job, answered at once with the state BigQuery reports. Both take a connection
   handle, a job id of at most 1,024 characters and a location of at most 64, and serve BigQuery alone. The session a job
   ran in is reported only as whether there was one; its id never leaves the backend.
@@ -913,7 +927,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   `-- --bigquery-checks`) drive connect, disconnect and the pre-connect methods through `SqlService.DispatchAsync`
   against `BigQueryFake`, an HTTP handler injected through `BigQueryEnvironment.Http` that answers Google's endpoints
   from `backend/Varia.Backend.Tests/Fixtures/BigQuery` (hand-written from Google's documented shapes) and fails any
-  request no route answers. They cover every mode's sign-in and pin, every error row, the accepted and refused
+  request no route answers. Like BigQuery, it applies `fields`, `selectedFields` and `jobs.list`'s projection: unless
+  `projection=full`, listed jobs lose their configuration, `statistics.query` and `statistics.parentJobId` (the Job
+  History smoke fake does the same). They cover every mode's sign-in and pin, every error row, the accepted and refused
   credential shapes, emulator mode and the dataset lists. `BigQueryExecutionChecks` drives `query.execute` against a
   scripted BigQuery: the insert's body and job id, polling, paging, every type, the row limit, budget and cell caps, read
   errors, each error row, the lookup after a network failure and the 409 path, statistics and cost text. Its Storage

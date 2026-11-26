@@ -3,6 +3,7 @@ import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contrac
 import { cloudEngineEditions, explorerLimits, filterProperties, folderFilterFor, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, systemFolderIds, type FolderId, type FilterProperty, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
+import { bigQueryProjectSchema } from '../../../shared/connections'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
 import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
@@ -111,6 +112,23 @@ export interface ExplorerServiceOptions {
   readonly windowsClient?: boolean
   /** The connection workspace: the servers' saved order and expansion (`ConnectionTargetService`). */
   readonly targets?: ExplorerTargets
+  /** Per-principal BigQuery Starred Projects (`BigQueryStarredService`), shown below each BigQuery server's billing project. */
+  readonly bigQueryStarred?: BigQueryStarredSource
+}
+/** A BigQuery project row's role in Object Explorer. */
+export type BigQueryProjectRole = 'billing' | 'starred' | 'session'
+/** Tooltip/cue shown for unstarred session-only BigQuery projects. */
+export const sessionProjectDetail = 'Shown for this session — star to keep in Object Explorer'
+/** Maximum ephemeral session-only projects kept per BigQuery connection. */
+const maxSessionProjectsPerConnection = 50
+/** Per-principal starred BigQuery projects source (`BigQueryStarredService`). */
+export interface BigQueryStarredSource {
+  readonly loaded?: boolean
+  isLoadedFor?(principalId: string | undefined): boolean
+  starredFor(principalId: string | undefined): readonly string[]
+  isStarred(principalId: string | undefined, project: string): boolean
+  isConfirmedStarred?(principalId: string | undefined, project: string): boolean
+  subscribe(listener: () => void): () => void
 }
 /** What the tree asks of the connection workspace, by target id. */
 export interface ExplorerTargets {
@@ -217,9 +235,17 @@ const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEditio
   connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
   ...(node.status ? { status: node.status } : {}), ...(runtime ? { database: runtime } : {}), ...(node.listedAt !== undefined && node.database ? { listedAt: node.listedAt } : {}),
   engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux, ...(connection?.options.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}),
+  ...(node.bigQueryProjectRole ? { bigQueryProjectRole: node.bigQueryProjectRole } : {}),
   ...(node.jobId !== undefined ? { jobId: node.jobId } : {}),
   ...(node.created !== undefined ? { created: node.created } : {}), ...(agent ? { agent } : {})
 })
+const bigQueryBillingOf = (connection: Pick<LiveConnection, 'options'> | undefined): string | undefined =>
+  connection?.options.provider === 'bigquery' ? connection.options.project : undefined
+const bigQueryPrincipalOf = (connection: Pick<LiveConnection, 'options' | 'principalId' | 'authentication'> | undefined): string | undefined => {
+  if (!connection || connection.options.provider !== 'bigquery') return undefined
+  if (connection.authentication?.principal.provider === 'bigquery') return connection.authentication.principal.principal
+  return connection.principalId?.startsWith('bigquery:') ? connection.principalId : undefined
+}
 
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'> & { readonly options?: { readonly provider?: string } }): string {
@@ -313,6 +339,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly unsubscribe: () => void
   private readonly grouping?: GroupBySchemaSource
   private readonly unsubscribeGrouping?: () => void
+  private bigQueryStarred?: BigQueryStarredSource
+  private unsubscribeBigQueryStarred?: () => void
+  /** Ephemeral per-connection BigQuery projects shown for this session (never persisted across restarts). */
+  private readonly sessionProjects = new Map<string, Set<string>>()
   private grouped = false
   private readonly windowsClient: boolean
   private readonly targets?: ExplorerTargets
@@ -344,6 +374,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.targets = options.targets
     this.grouped = !!this.grouping?.get()
     this.unsubscribeGrouping = this.grouping?.subscribe(() => this.guard(() => this.groupingChanged()))
+    if (options.bigQueryStarred) {
+      this.bigQueryStarred = options.bigQueryStarred
+      this.unsubscribeBigQueryStarred = options.bigQueryStarred.subscribe(() => this.guard(() => this.starredChanged()))
+    }
     this.syncConnections()
   }
   /** Whether Group by Schema is on: databases list their schemas, with the schema-scoped folders below each. */
@@ -600,6 +634,100 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const stop = source.subscribe(() => this.guard(() => this.updateContext()))
     this.updateContext()
     return { dispose: () => { stop(); if (this.jobs === source) { this.jobs = undefined; this.updateContext() } } }
+  }
+  /** Connects per-principal BigQuery Starred Projects after construction; reconciles all loaded BigQuery servers on change. */
+  useBigQueryStarred(source: BigQueryStarredSource): Disposable {
+    this.unsubscribeBigQueryStarred?.()
+    this.bigQueryStarred = source
+    const stop = source.subscribe(() => this.guard(() => this.starredChanged()))
+    this.unsubscribeBigQueryStarred = stop
+    this.starredChanged()
+    return {
+      dispose: () => {
+        stop()
+        if (this.bigQueryStarred === source) {
+          this.bigQueryStarred = undefined
+          this.unsubscribeBigQueryStarred = undefined
+          this.starredChanged()
+        }
+      }
+    }
+  }
+  /** Whether `project` is the billing project of `connectionId`. */
+  isBigQueryProjectBilling(connectionId: string, project: string): boolean {
+    return bigQueryBillingOf(this.connectionOf(connectionId)) === project
+  }
+  /** Whether `project` is starred for `connectionId`'s verified BigQuery principal. */
+  isBigQueryProjectStarred(connectionId: string, project: string): boolean {
+    const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
+    return !!principal && !!this.bigQueryStarred?.isStarred(principal, project)
+  }
+  /** Whether `project` is confirmed persisted as starred for `connectionId`'s verified BigQuery principal (false while a star write is still optimistic/unconfirmed). */
+  private isBigQueryProjectConfirmedStarred(connectionId: string, project: string): boolean {
+    const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
+    if (!principal || !this.bigQueryStarred) return false
+    return this.bigQueryStarred.isConfirmedStarred
+      ? this.bigQueryStarred.isConfirmedStarred(principal, project)
+      : this.bigQueryStarred.isStarred(principal, project)
+  }
+  /** Whether starred projects for `connectionId`'s verified BigQuery principal have settled. */
+  private isBigQueryStarredLoaded(connectionId: string): boolean {
+    if (!this.bigQueryStarred) return true
+    const principal = bigQueryPrincipalOf(this.connectionOf(connectionId))
+    return this.bigQueryStarred.isLoadedFor ? this.bigQueryStarred.isLoadedFor(principal) : this.bigQueryStarred.loaded !== false
+  }
+  /** Drops session-only projects that are now the connection's billing project or confirmed starred, reclaiming slots only after persistence succeeds. */
+  private pruneBigQuerySessionProjects(connectionId: string): void {
+    const set = this.sessionProjects.get(connectionId)
+    if (!set) return
+    const connection = this.connectionOf(connectionId)
+    const billing = connection?.options.provider === 'bigquery' ? connection.options.project : undefined
+    for (const project of [...set]) {
+      if (project === billing || this.isBigQueryProjectConfirmedStarred(connectionId, project)) set.delete(project)
+    }
+    if (!set.size) this.sessionProjects.delete(connectionId)
+  }
+  /**
+   * Ensures `project` appears under a BigQuery server node for this session (e.g. before `seek` / Reveal in Object Explorer):
+   * adds it to `sessionProjects` when it is neither the billing project nor already starred, and reconciles the server node's
+   * children immediately so `seek` can walk right into it.
+   */
+  ensureBigQueryProject(connectionId: string, project: string): boolean {
+    const connection = this.connectionOf(connectionId)
+    if (!connection || connection.options.provider !== 'bigquery' || !bigQueryProjectSchema.safeParse(project).success) return true
+    this.pruneBigQuerySessionProjects(connectionId)
+    if (project === connection.options.project || this.isBigQueryProjectStarred(connectionId, project)) return true
+    let set = this.sessionProjects.get(connectionId)
+    if (set?.has(project)) { this.reconcileBigQueryProjects(connectionId); return true }
+    if (!set) { set = new Set(); this.sessionProjects.set(connectionId, set) }
+    if (set.size >= maxSessionProjectsPerConnection) return false
+    set.add(project)
+    this.reconcileBigQueryProjects(connectionId)
+    return true
+  }
+  /** Removes an ephemeral session-only project from a BigQuery server node immediately. */
+  removeBigQuerySessionProject(connectionId: string, project: string): void {
+    const set = this.sessionProjects.get(connectionId)
+    if (!set?.delete(project)) return
+    if (!set.size) this.sessionProjects.delete(connectionId)
+    this.reconcileBigQueryProjects(connectionId)
+  }
+  /** Adds valid projects explicitly referenced in open BigQuery query tabs to `connectionId`'s session projects. */
+  syncBigQueryReferencedProjects(connectionId: string, projects: readonly string[]): void {
+    const connection = this.connectionOf(connectionId)
+    if (!connection || connection.options.provider !== 'bigquery' || !projects.length) return
+    this.pruneBigQuerySessionProjects(connectionId)
+    let set = this.sessionProjects.get(connectionId), changed = false
+    for (const project of projects) {
+      if (!bigQueryProjectSchema.safeParse(project).success) continue
+      if (project === connection.options.project || this.isBigQueryProjectStarred(connectionId, project)) continue
+      if (set?.has(project)) continue
+      if (!set) { set = new Set(); this.sessionProjects.set(connectionId, set) }
+      if (set.size >= maxSessionProjectsPerConnection) break
+      set.add(project)
+      changed = true
+    }
+    if (changed) this.reconcileBigQueryProjects(connectionId)
   }
   private targetOf(node: TreeNode): ExplorerTarget {
     const name = node.kind === 'database' && node.ref.type === 'object' ? node.ref.object.name : undefined
@@ -874,6 +1002,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.endSeek({ ok: false, message: 'Object Explorer closed.', cancelled: true })
     this.unsubscribe()
     this.unsubscribeGrouping?.()
+    this.unsubscribeBigQueryStarred?.()
+    this.sessionProjects.clear()
     this.loader.dispose()
     for (const state of this.states.values()) this.timers.clearTimeout(state.loadingTimer)
     this.running.clear()
@@ -914,6 +1044,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
         this.markLost(root)
         const previousId = root.connectionId, filters = this.filters.get(previousId)
         if (filters) { this.filterCount -= filters.size; this.filters.delete(previousId) }
+        const session = this.sessionProjects.get(previousId)
+        if (session) { this.sessionProjects.delete(previousId); this.sessionProjects.set(connection.id, session) }
         this.rootByConnection.delete(previousId)
         root.connectionId = connection.id
         this.rootByConnection.set(connection.id, root.id)
@@ -1097,6 +1229,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (targetId) { this.remembered.delete(targetId); this.removedTargets.add(targetId) }
     const filters = this.filters.get(connectionId)
     if (filters) { this.filterCount -= filters.size; this.filters.delete(connectionId) }
+    this.sessionProjects.delete(connectionId)
     this.rootByConnection.delete(connectionId)
     this.roots = this.roots.filter(id => id !== rootId)
     this.bury(rootId)
@@ -1325,7 +1458,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
       if (root && (outcome.ok ? error.code === 'CONNECTION_LOST' : outcome.connectionLost)) { root.connectionError = error; root.rev++ }
     }
-    if (this.restoring.size && (!node.cursor || node.more !== 'auto')) this.restoreLoaded(node)
+    const deferBigQueryRestore = node.kind === 'server' && node.children !== undefined && !this.isBigQueryStarredLoaded(node.connectionId) && this.connectionOf(node.connectionId)?.options.provider === 'bigquery'
+    if (this.restoring.size && (!node.cursor || node.more !== 'auto') && !deferBigQueryRestore) this.restoreLoaded(node)
     // The page may have detached nodes a restore waits on (a reconcile dropping rows, Group by Schema moving folders), whose
     // aborted loads never settle.
     if (this.restoring.size) this.pruneRestores()
@@ -1338,17 +1472,21 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.opened?.chain) this.advanceOpen()
   }
   private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
-    const truncated = this.replaceChildren(node, wires)
+    const bigQueryWires = node.kind === 'server' ? this.bigQueryServerWiresFor(node.connectionId) : undefined
+    const effectiveWires = bigQueryWires ?? wires
+    const effectiveTotal = bigQueryWires ? bigQueryWires.length : total
+    const effectiveCursor = bigQueryWires ? undefined : cursor
+    const truncated = this.replaceChildren(node, effectiveWires)
     const state = this.state(node)
     state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
-    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
+    Object.assign(node, { total: effectiveTotal, cursor: truncated ? undefined : effectiveCursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
     node.rev++
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
       this.forgetOpened(node)
       this.announce(`${node.label}: no items`)
-    } else if (cursor && total !== undefined) this.announce(`${node.label}: loaded ${count(node.children!.length)} of ${count(total)}`)
+    } else if (effectiveCursor && effectiveTotal !== undefined) this.announce(`${node.label}: loaded ${count(node.children!.length)} of ${count(effectiveTotal)}`)
     if (!truncated) this.capOrContinue(node)
   }
   private appendPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined): void {
@@ -1362,13 +1500,17 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   /** A reconcile's first page: the old children wait to be matched by this page and the folder's later ones. */
   private reconcileFirst(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined, deep: boolean): void {
+    const bigQueryWires = node.kind === 'server' ? this.bigQueryServerWiresFor(node.connectionId) : undefined
+    const effectiveWires = bigQueryWires ?? wires
+    const effectiveTotal = bigQueryWires ? bigQueryWires.length : total
+    const effectiveCursor = bigQueryWires ? undefined : cursor
     const reconciling: Reconciling = { old: node.children ?? [], next: 0, skipped: new Set(), takenAhead: new Set(), rows: [], added: 0, deep }
     const state = this.state(node)
     state.pendingMode = state.retryMode = state.deep = state.held = undefined
     state.reconciling = reconciling
-    node.staticCount = wires.reduce((sum, wire) => sum + (wire.ref.type === 'folder' ? 1 : 0), 0)
-    const truncated = this.reconcileRows(node, reconciling, wires, cursor)
-    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
+    node.staticCount = effectiveWires.reduce((sum, wire) => sum + (wire.ref.type === 'folder' ? 1 : 0), 0)
+    const truncated = this.reconcileRows(node, reconciling, effectiveWires, effectiveCursor)
+    Object.assign(node, { total: effectiveTotal, cursor: truncated ? undefined : effectiveCursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
     node.rev++
     if (!node.children!.length) {
       node.hasChildren = false
@@ -1377,6 +1519,83 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.announce(`${node.label}: no items`)
     }
     if (!truncated) this.capOrContinue(node)
+  }
+  private bigQueryProjectRoleOf(connectionId: string, project: string): BigQueryProjectRole {
+    if (this.isBigQueryProjectBilling(connectionId, project)) return 'billing'
+    if (this.isBigQueryProjectStarred(connectionId, project)) return 'starred'
+    return 'session'
+  }
+  /** BigQuery server children: billing project first, then starred projects (deduplicated), then session-only projects. */
+  private bigQueryServerWiresFor(connectionId: string): WireNode[] | undefined {
+    const connection = this.connectionOf(connectionId)
+    if (!connection || connection.options.provider !== 'bigquery') return undefined
+    const billing = connection.options.project
+    const principal = bigQueryPrincipalOf(connection)
+    const starred = this.bigQueryStarred?.starredFor(principal) ?? []
+    const session = this.sessionProjects.get(connectionId)
+    const seen = new Set<string>([billing])
+    const wires: WireNode[] = [{
+      ref: { type: 'object', object: { kind: 'bqProject', name: billing } },
+      label: billing, icon: 'project', hasChildren: true, sublabel: 'billing project'
+    }]
+    for (const project of starred) {
+      if (seen.has(project)) continue
+      seen.add(project)
+      wires.push({ ref: { type: 'object', object: { kind: 'bqProject', name: project } }, label: project, icon: 'project', hasChildren: true })
+    }
+    if (session) {
+      for (const project of session) {
+        if (seen.has(project)) continue
+        seen.add(project)
+        wires.push({ ref: { type: 'object', object: { kind: 'bqProject', name: project } }, label: project, icon: 'project', hasChildren: true, detail: sessionProjectDetail })
+      }
+    }
+    return wires
+  }
+  /** Starred projects changed: reconcile every loaded BigQuery server node in place without disrupting expanded subtrees. */
+  private starredChanged(): void {
+    for (const rootId of this.roots) {
+      const root = this.nodes.get(rootId)
+      if (root && !root.lost) this.reconcileBigQueryProjects(root.connectionId)
+    }
+  }
+  /** Reconciles a loaded BigQuery server's project children in memory so star/unstar and `ensureBigQueryProject` take effect immediately. */
+  private reconcileBigQueryProjects(connectionId: string): void {
+    this.pruneBigQuerySessionProjects(connectionId)
+    const rootId = this.rootByConnection.get(connectionId), root = rootId === undefined ? undefined : this.nodes.get(rootId)
+    if (!root || root.lost || root.children === undefined) return
+    const wires = this.bigQueryServerWiresFor(connectionId)
+    if (!wires) return
+    const existing = new Map(root.children.map(child => [refKey(child.connectionId, child.ref), child]))
+    const next: TreeNode[] = []
+    let added = 0
+    for (const wire of wires) {
+      const key = refKey(connectionId, wire.ref)
+      const reused = existing.get(key)
+      if (reused) {
+        existing.delete(key)
+        this.updateChild(reused, wire)
+        next.push(reused)
+      } else {
+        next.push(this.createChild(root, wire))
+        added++
+      }
+    }
+    const removed = [...existing.values()]
+    root.children = next
+    root.total = next.length
+    root.hasChildren = next.length > 0
+    if (added) this.addDescendants(root, added)
+    if (removed.length) this.detach(root, removed, false)
+    if (this.restoring.size && this.isBigQueryStarredLoaded(connectionId)) {
+      this.restoreLoaded(root)
+      this.pruneRestores()
+    }
+    this.flushRestore()
+    root.rev++
+    this.invalidate()
+    this.updateContext()
+    if (this.seeking) this.advanceSeek()
   }
   /**
    * Matches a page against the old children still waiting: a match keeps its node, the rest are created after the rows
@@ -1481,6 +1700,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!!node.connectDenied !== !!wire.connectDenied) { node.connectDenied = wire.connectDenied || undefined; changed = true }
     if (node.jobId !== wire.jobId) { node.jobId = wire.jobId; changed = true }
     if (node.created !== wire.created) { node.created = wire.created; changed = true }
+    if (node.kind === 'bqProject' && node.ref.type === 'object' && node.ref.object.name) {
+      const role = this.bigQueryProjectRoleOf(node.connectionId, node.ref.object.name)
+      if (node.bigQueryProjectRole !== role) { node.bigQueryProjectRole = role; changed = true }
+    }
     this.takeRuntime(node, wire)
     // The subtype picks the folders below (a table's history row), so they are listed again.
     const subtype = node.subtype !== wire.subtype
@@ -1613,6 +1836,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (wire.connectDenied) node.connectDenied = true
     node.jobId = wire.jobId
     node.created = wire.created
+    if (node.kind === 'bqProject' && ref.type === 'object' && ref.object.name) {
+      node.bigQueryProjectRole = this.bigQueryProjectRoleOf(parent.connectionId, ref.object.name)
+    }
     this.takeRuntime(node, wire)
     node.hasChildren = wire.hasChildren
     if (ref.type === 'folder' && this.filters.get(parent.connectionId)?.size) node.filtered = this.filters.get(parent.connectionId)!.has(refKey(parent.connectionId, ref))

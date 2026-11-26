@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { encodeReloadSession, SessionStore, sessionCapMessage, sessionWriteSchema, type SessionInput } from '../src/main/session-store'
+import { encodeReloadSession, legacyBigQueryExtraProjects, SessionStore, sessionCapMessage, sessionWriteSchema, type SessionInput } from '../src/main/session-store'
+import { ConnectionWorkspaceSealer } from '../src/main/connection-workspace-seal'
 import * as jsonFile from '../src/main/json-file'
 import { maxSqlFileBytes } from '../src/main/sql-files'
 import { saveDefaultPath } from '../src/main/file-names'
@@ -379,6 +380,103 @@ describe('the hot exit session store', () => {
     expect(refused({ activeIndex: sessionLimits.documents })).toBe(false)
     expect(sessionWriteSchema.safeParse({ activeIndex: 0, documents: Array.from({ length: sessionLimits.documents + 1 }, () => valid.documents[0]) }).success).toBe(false)
     expect(sessionWriteSchema.safeParse({ ...valid, extra: true }).success).toBe(false)
+    // Renderer session writes strictly reject legacy extraProjects on BigQuery workspace targets.
+    expect(sessionWriteSchema.safeParse({
+      activeIndex: -1, documents: [],
+      workspace: {
+        version: 1,
+        targets: [{
+          id: randomUUID(),
+          options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: ['varia-beta'] },
+          details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true
+        }]
+      }
+    }).success).toBe(false)
+  })
+
+  it('tolerates and extracts legacy BigQuery extraProjects in pre-upgrade session.json while preserving HMAC seal verification', async () => {
+    await mkdir(folder, { recursive: true })
+    const pinnedId = randomUUID(), unpinnedId = randomUUID(), ada = 'bigquery:user:ada@example.com'
+    const cipher = {
+      state: async () => ({ available: true, backend: 'dpapi' as const }),
+      encrypt: async (text: string) => Buffer.from(text, 'utf8'),
+      decrypt: async (data: Buffer) => ({ text: data.toString('utf8'), reEncrypt: false })
+    }
+    const sealer = new ConnectionWorkspaceSealer(cipher)
+    // Pre-upgrade workspace payload with legacy extraProjects in original schema field order (after dataset, before authentication).
+    const preUpgradeWorkspace = {
+      version: 1 as const,
+      targets: [
+        {
+          id: pinnedId,
+          options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', extraProjects: ['varia-beta', 'bigquery-public-data', 'varia-alpha'], authentication: 'gcloud' as const },
+          details: { autoReconnect: 'inherit' as const }, inExplorer: true, resumeWanted: true,
+          expectedPrincipal: { provider: 'bigquery' as const, project: 'varia-alpha', principal: ada }
+        },
+        {
+          id: unpinnedId,
+          options: { provider: 'bigquery' as const, project: 'varia-gamma', extraProjects: ['varia-delta'], authentication: 'gcloud' as const },
+          details: { autoReconnect: 'inherit' as const }, inExplorer: true, resumeWanted: false
+        }
+      ]
+    }
+    const preUpgradeSeal = await sealer.seal(preUpgradeWorkspace as never)
+    expect(preUpgradeSeal).toBeDefined()
+    await writeFile(join(folder, 'session.json'), JSON.stringify({
+      version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0,
+      documents: [{ name: 'q.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'SELECT 1', targetId: pinnedId, provider: 'bigquery', database: 'sales', attachWanted: true }],
+      workspace: preUpgradeWorkspace,
+      seal: preUpgradeSeal
+    }))
+    const store = new SessionStore(folder)
+    const taken = await store.take(true)
+    expect(taken?.documents).toHaveLength(1)
+    expect(taken?.workspace?.targets).toHaveLength(2)
+    expect(taken?.workspace?.targets[0]?.options).toEqual({ provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' })
+    expect(taken?.workspace?.targets[1]?.options).toEqual({ provider: 'bigquery', project: 'varia-gamma', authentication: 'gcloud' })
+    // File was NOT quarantined (moved to previous.json as normal).
+    expect(await files()).toEqual(['previous.json'])
+    const legacyExtra = legacyBigQueryExtraProjects(taken)
+    expect(legacyExtra?.get(pinnedId)).toEqual(['varia-beta', 'bigquery-public-data', 'varia-alpha'])
+    expect(legacyExtra?.get(unpinnedId)).toEqual(['varia-delta'])
+    // Passing legacyExtra lets ConnectionWorkspaceSealer verify the pre-upgrade HMAC seal and keep expectedPrincipal intact!
+    const trusted = await sealer.trusted(taken!.workspace!, taken!.seal, legacyExtra)
+    expect(trusted.targets[0]?.expectedPrincipal).toEqual({ provider: 'bigquery', project: 'varia-alpha', principal: ada })
+    // A tampered seal still fails closed and strips expectedPrincipal!
+    const tampered = await sealer.trusted(taken!.workspace!, { ...taken!.seal!, mac: '0'.repeat(64) }, legacyExtra)
+    expect(tampered.targets[0]?.expectedPrincipal).toBeUndefined()
+    // A post-upgrade sealed target with attacker-injected extraProjects MUST NOT verify against the post-upgrade MAC.
+    const postUpgradeWorkspace = {
+      version: 1 as const,
+      targets: [
+        {
+          id: pinnedId,
+          options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' as const },
+          inExplorer: true, resumeWanted: true, details: { autoReconnect: 'inherit' as const },
+          expectedPrincipal: { provider: 'bigquery' as const, project: 'varia-alpha', principal: ada }
+        }
+      ]
+    }
+    const postUpgradeSeal = await sealer.seal(postUpgradeWorkspace)
+    expect(postUpgradeSeal).toBeDefined()
+    const injectedExtra = new Map<string, readonly string[]>([[pinnedId, ['attacker-proj']]])
+    const rejectedInjection = await sealer.trusted(postUpgradeWorkspace, postUpgradeSeal, injectedExtra)
+    expect(rejectedInjection.targets[0]?.expectedPrincipal).toBeUndefined()
+    // Oversized legacy extraProjects (> 16) quarantines instead of bypassing the pre-upgrade cap.
+    const freshFolder = join(directory, 'SessionOversized')
+    await mkdir(freshFolder, { recursive: true })
+    await writeFile(join(freshFolder, 'session.json'), JSON.stringify({
+      version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: -1, documents: [],
+      workspace: {
+        targets: [{
+          id: unpinnedId,
+          options: { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', extraProjects: Array.from({ length: 17 }, (_, i) => `varia-extra-${String(i).padStart(2, '0')}`) },
+          inExplorer: true, resumeOnStartup: true
+        }]
+      }
+    }))
+    expect(await new SessionStore(freshFolder).take(true)).toBeUndefined()
+    expect((await readdir(freshFolder)).some(name => name.startsWith('session.json.invalid-'))).toBe(true)
   })
 })
 
