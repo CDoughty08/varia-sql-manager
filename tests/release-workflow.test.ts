@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
@@ -107,9 +108,39 @@ describe('Release builds', () => {
     expect(updaterProblem('win32', join('artifacts', 'no-such-project'))).toMatch(/dotnet publish backend\/Varia\.Updater/)
     expect(updaterProblem('linux', join('artifacts', 'no-such-project'))).toBeNull()
     expect(updaterProblem('darwin', join('artifacts', 'no-such-project'))).toBeNull()
-    const project = readFileSync('backend/Varia.Updater/Varia.Updater.csproj', 'utf8')
-    expect(project).toContain('<PublishAot Condition="\'$(RuntimeIdentifier)\' != \'\'">true</PublishAot>')
-    expect(project).toContain('<TreatWarningsAsErrors>true</TreatWarningsAsErrors>')
+    // The same for the backend: without its self-contained publish for the target, the app fails at launch (spawn ENOENT).
+    const { backendFramework, backendProblem } = createRequire(import.meta.url)('../build/backend-check.cjs')
+    expect(backendFramework('.')).toBe(JSON.parse(readFileSync('global.json', 'utf8')).sdk.version.split('.').slice(0, 2).join('.'))
+    expect(readFileSync('build/sqltools-service-check.cjs', 'utf8')).toMatch(/const backend = backendProblem\(rid, context\.packager\.projectDir\)\n {2}if \(backend\) throw new Error\(backend\)\n(?:.*\n)*.*prepareSqlToolsService\(\{ rid,/)
+    const project = mkdtempSync(join(tmpdir(), 'varia-backend-check-')), published = join(project, 'artifacts', 'release-backend')
+    mkdirSync(join(project, 'backend', 'Varia.Backend'), { recursive: true })
+    writeFileSync(join(project, 'backend', 'Varia.Backend', 'Varia.Backend.csproj'), '<TargetFramework>net11.0</TargetFramework>')
+    const publish = (rid: string, selfContained: boolean, version = '11.0') => {
+      mkdirSync(published, { recursive: true })
+      writeFileSync(join(published, rid.startsWith('win-') ? 'Varia.Backend.exe' : 'Varia.Backend'), '')
+      writeFileSync(join(published, 'Varia.Backend.deps.json'), JSON.stringify({ runtimeTarget: { name: `.NETCoreApp,Version=v${version}/${rid}` } }))
+      writeFileSync(join(published, 'Varia.Backend.runtimeconfig.json'), JSON.stringify({ runtimeOptions: selfContained ? { includedFrameworks: [{ name: 'Microsoft.NETCore.App' }] } : { framework: { name: 'Microsoft.NETCore.App' } } }))
+    }
+    try {
+      expect(backendProblem('osx-arm64', project)).toMatch(/not published \(artifacts\/release-backend\/Varia\.Backend\)\. Publish it for osx-arm64 first .*: node scripts\/package-prepare\.mjs --rid osx-arm64$/)
+      publish('osx-x64', true)
+      expect(backendProblem('osx-arm64', project)).toMatch(/is for osx-x64, not osx-arm64/)
+      publish('osx-arm64', true, '10.0')
+      expect(backendProblem('osx-arm64', project)).toMatch(/different build \(\.NETCoreApp,Version=v10\.0, not \.NET 11\.0\)/)
+      publish('osx-arm64', false)
+      expect(backendProblem('osx-arm64', project)).toMatch(/not self-contained/)
+      publish('osx-arm64', true)
+      expect(backendProblem('osx-arm64', project)).toBeNull()
+      expect(backendProblem('win-x64', project)).toMatch(/Varia\.Backend\.exe/)
+      writeFileSync(join(published, 'Varia.Backend.deps.json'), '{')
+      expect(backendProblem('osx-arm64', project)).toMatch(/no readable Varia\.Backend\.deps\.json/)
+      publish('osx-arm64', true)
+      writeFileSync(join(project, 'backend', 'Varia.Backend', 'Varia.Backend.csproj'), '<TargetFrameworks>net11.0</TargetFrameworks>')
+      expect(backendProblem('osx-arm64', project)).toMatch(/Could not read the \.NET version/)
+    } finally { rmSync(project, { recursive: true, force: true }) }
+    const updaterProject = readFileSync('backend/Varia.Updater/Varia.Updater.csproj', 'utf8')
+    expect(updaterProject).toContain('<PublishAot Condition="\'$(RuntimeIdentifier)\' != \'\'">true</PublishAot>')
+    expect(updaterProject).toContain('<TreatWarningsAsErrors>true</TreatWarningsAsErrors>')
   })
   // What the docs say about packaging must match the workflow: the weekly Intel run, and the paths filter's 3,000-file limit.
   it('documents the weekly Intel run and the paths filter\'s 3,000-file limit', () => {

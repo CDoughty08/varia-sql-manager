@@ -85,6 +85,8 @@ npm run dev        # build the backend and start Electron with hot reload
 npm run build && npm start   # production build, no dev server
 ```
 
+To build an installer, see [packaging locally](docs/ci.md#packaging-locally).
+
 On Ubuntu 24.04+, AppArmor may block the user namespaces Electron's sandbox needs; allow them if Electron will not start.
 
 ## Development
