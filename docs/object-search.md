@@ -188,10 +188,14 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   read whole), marked so that a build stopped or a read that fails in between leaves nothing a later build reuses. A
   dataset that already holds details keeps one floor less free than its project's (7/16 for a discovered project, 3/8
   for the billing and starred projects), so a column added or a table recreated a little wider still fits, and
-  discovered datasets that hold details are read before the half-free line is checked. When the details of new objects
-  do not fit even there, the dataset keeps what it held and the new objects are listed by name, reported as details
-  missing; only when that fails too is it kept without its columns (`CHILDREN_LEFT_OUT`). A read of one project or
-  dataset (Refresh, or a project a search hit reveals) uses the billing and starred floors, whatever the project.
+  discovered datasets that hold details are read before the half-free line is checked, whatever the names pass found.
+  An object whose pass 2 read fails keeps the details it had, to be read again by the next build. When the details of
+  new objects do not fit even there, the dataset keeps what it held and the new objects are listed by name, reported
+  as details missing; when not even their names fit beside what it holds, the dataset is left as it was read before
+  (skipped as `TOO_LARGE`, its earlier read kept, without stopping the build's names pass) until there is room. A
+  read never swaps a dataset that holds details for one without them: only a dataset that holds none is kept without
+  its columns (`CHILDREN_LEFT_OUT`). A read of one project or dataset (Refresh, or a project a search hit reveals)
+  uses the billing and starred floors, whatever the project.
 - **When memory runs out, the index says so.** The status counts the definitions left out for memory (`leftOut`) and
   the databases or datasets they belong to (`leftOutIn`; the server's own and the system objects are in none), apart
   from definitions only cut at their length and from turning `objectExplorer.search.definitions` off. The index line

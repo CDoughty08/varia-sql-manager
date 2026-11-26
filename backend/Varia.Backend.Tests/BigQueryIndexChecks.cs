@@ -723,7 +723,7 @@ internal static partial class BigQueryIndexChecks
                 $"wave 2 budget early-stop halts further discovered listing calls ({source.DiscoveredObjectCalls}/{discoveredCount}), records one summary TOO_LARGE skip, and keeps Wave 1 intact");
         }
 
-        // 3. Wave 3 budget early-stop (via Hold returning CHILDREN_LEFT_OUT on a wide discovered table, and via NamesReserveBytes / 2 floor).
+        // 3. Wave 3 budget early-stop (via Hold returning CHILDREN_LEFT_OUT on a wide discovered table, and via the discovered projects' floor).
         {
             // The first discovered detail read goes at once; the rest wait for the early stop to cancel them (the build reads many
             // datasets at once, so without the wait they would all be in flight before the first one's dataset is held).

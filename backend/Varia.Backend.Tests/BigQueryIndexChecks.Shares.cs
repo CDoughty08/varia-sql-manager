@@ -115,24 +115,84 @@ internal static partial class BigQueryIndexChecks
             var failing = await search.IndexBigQueryAsync(new ObjectIndexArgs(bigQuery, Guid.NewGuid().ToString(), StarredProjects: ShareStarred, Scope: new("star-02")), source, CancellationToken.None);
             var afterFailure = Starred("star-02");
             source.FailTableForProject = null;
-            // The table lost its columns with the failed read, so reading them again needs room above the floor: what was forced
-            // goes back, and more, as if another connection had closed (discovered projects then read details too).
-            search.Budget.Release(taken + 100_000);
             calls = source.DiscoveredDetailCalls;
             await Rebuild();
-            check(BigQueryEntries.Known(afterFailure, true).Count == 0 && afterFailure.Table.Count == 2 && failing.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true })
-                && Starred("star-02") is { ChildrenLeftOut: false, Table.Count: 307 } healed && BigQueryEntries.Known(healed, true).Count == 1 && source.DiscoveredDetailCalls > calls,
-                $"a Refresh whose detail read failed leaves nothing reusable, so the next build reads the table again ({Starred("star-02").Table.Count} entries, {source.DiscoveredDetailCalls - calls} detail reads)");
+            // The table keeps the columns it held through the failed read, so the next build needs no room above the floor for them.
+            check(BigQueryEntries.Known(afterFailure, true).Count == 0 && afterFailure is { ChildrenLeftOut: false, Table.Count: 302 }
+                && failing.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true })
+                && Starred("star-02") is { ChildrenLeftOut: false, Table.Count: 307 } healed && BigQueryEntries.Known(healed, true).Count == 1 && source.DiscoveredDetailCalls == calls + 1
+                && search.Budget.Free < limits.BigQueryDetailsFloorBytes,
+                $"a Refresh whose detail read failed keeps the table's columns but nothing reusable, so the next build reads it again ({afterFailure.Table.Count} then {Starred("star-02").Table.Count} entries, {source.DiscoveredDetailCalls - calls} detail read)");
+            // No room at all above the names floor, and a new table whose name the pool already holds (the same name in a sibling
+            // dataset), so its record is charged to the replaced read's share: the dataset is kept as it was read before, columns
+            // and all, rather than swapped for a read without them. With room, the next build lists the table with its columns.
+            var none = search.Budget.Free - limits.BigQueryNamesFloorBytes + 1_000;
+            search.Budget.Force(none);
+            var sibling = search.Pool.TryAcquire("star-03_tbl_1");
+            source.TablesPerDataset = new() { [("star-01", "ds")] = 2, [("star-03", "ds")] = 2 };
+            var full = await Rebuild();
+            var keptAsWas = Starred("star-03");
+            check(search.Budget.Free < limits.BigQueryNamesFloorBytes && keptAsWas is { ChildrenLeftOut: false, Table.Count: 302 }
+                && full.Status.Skipped.Count(skip => skip is { Project: "star-03", Database: "ds", Code: "TOO_LARGE", Details: null }) == 1
+                && full.Status.Skipped.All(skip => skip.Code != ObjectSearchService.ChildrenLeftOut) && full.Status.Skipped.All(skip => skip is not { Project: "", Database: "" })
+                && search.HeldOf(bigQuery).Where(read => read.Database.StartsWith("star-", StringComparison.Ordinal)).All(read => !read.ChildrenLeftOut && read.Table.Count >= 302),
+                $"with nothing free above the names floor a dataset that gains a table is kept as it was, columns and all ({keptAsWas.Table.Count} entries, {full.Status.Skipped.Count} skips)");
+            search.Budget.Release(none + taken);
+            search.Pool.Release([sibling]);
+            var listed = await Rebuild();
+            check(Starred("star-03") is { ChildrenLeftOut: false, Table.Count: 1 + 301 + 306 } && listed.Status.Skipped.All(skip => skip.Project != "star-03"),
+                $"with room the next build lists the new table with its columns ({Starred("star-03").Table.Count} entries)");
             // Its lookup arrays are BigQuery's too: at the names floor they are not built and the lookup scans; with room, they are.
             var wide = search.HeldOf(bigQuery).Single(read => read.Database == "star-01");
             var spare = search.Budget.Free - limits.BigQueryNamesFloorBytes;
             search.Budget.Force(spare);
             var lookup = search.LookupBigQuery(bigQuery, "varia-alpha");
             var scanned = lookup.Object(lookup.Dataset("star-01", "ds"), "star-01_tbl_0") is not null && wide.LookupBuilds == 0;
-            search.Budget.Release(spare);
+            // Room for exactly the arrays above the floor.
+            search.Budget.Release(spare + TableLookup.BytesFor(wide.Table));
             lookup = search.LookupBigQuery(bigQuery, "varia-alpha");
             check(scanned && lookup.Object(lookup.Dataset("star-01", "ds"), "star-01_tbl_0") is not null && wide.LookupBuilds == 1,
-                "a BigQuery lookup array that would pass the names floor is not built (the lookup answers by scanning), and is built once there is room");
+                $"a BigQuery lookup array that would pass the names floor is not built (the lookup answers by scanning), and is built once there is room (scanned {scanned}, {wide.LookupBuilds} built, {TableLookup.BytesFor(wide.Table)} bytes of arrays, {spare} spare)");
+        }
+
+        // Discovered datasets that already hold details are read again whatever is free: below the discovered floor, and in a
+        // build whose names pass stopped for memory. Their changed objects cost only what has grown.
+        {
+            var limits = ShareLimits();
+            var projects = new List<string> { "disc-01", "disc-02", "disc-03" };
+            var source = new FakeBudgetSource(projects, tablesPerDiscovered: 1, columnsPerTable: 20);
+            using var search = new ObjectSearchService(new UnusedHost(), limits);
+            var id = Guid.NewGuid().ToString();
+            Task<ObjectIndexResult> Build() => search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            DatabaseIndex Held(string project) => search.HeldOf(id).Single(read => read.Database == project);
+            var first = await Build();
+            var allDetailed = first.Status.NamesOnly is null && projects.All(project => Held(project) is { Detailed: true, Table.Count: 22 });
+            search.Budget.Force(search.Budget.Free - limits.BigQueryDiscoveredFloorBytes + 1_000);
+            var created = new Dictionary<string, long> { ["disc-01"] = 1_800_000_000_000 };
+            source.CreatedOf = project => created.TryGetValue(project, out var at) ? at : null;
+            source.ColumnsPerTable = 22;
+            var calls = source.DiscoveredDetailCalls;
+            var below = await Build();
+            check(allDetailed && search.Budget.Free < limits.BigQueryDiscoveredFloorBytes && Held("disc-01") is { Detailed: true, Table.Count: 24 } wider
+                && BigQueryEntries.Known(wider, true).Count == 1 && below.Status.NamesOnly is null && source.DiscoveredDetailCalls == calls + 1,
+                $"below the discovered floor a discovered dataset that holds details has its changed table read again ({Held("disc-01").Table.Count} entries, {source.DiscoveredDetailCalls - calls} detail read, names only: {below.Status.NamesOnly?.Count ?? 0})");
+            // A new project whose names do not fit stops the names pass for memory; disc-02's table, created again meanwhile, is
+            // still read. The new project's listing waits until disc-02's names are held, so the stop cannot cut that read off.
+            search.Budget.Force(search.Budget.Free - limits.BigQueryNamesFloorBytes - 60);
+            created["disc-02"] = 1_900_000_000_000;
+            source.ColumnsPerTable = 20;
+            var before = Held("disc-02");
+            projects.Add("disc-zz");
+            source.OnDatasetObjectsAsync = async (project, _, token) =>
+            {
+                while (project == "disc-zz" && ReferenceEquals(Held("disc-02"), before)) await Task.Delay(1, token);
+            };
+            calls = source.DiscoveredDetailCalls;
+            var tight = await Build();
+            source.OnDatasetObjectsAsync = null;
+            check(tight.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }) && search.HeldOf(id).All(read => read.Database != "disc-zz")
+                && Held("disc-02") is { Detailed: true, Table.Count: 22 } again && BigQueryEntries.Known(again, true).Count == 1 && source.DiscoveredDetailCalls == calls + 1,
+                $"a build whose names pass stopped for memory still reads a held dataset's changed table again ({source.DiscoveredDetailCalls - calls} detail read, {BigQueryEntries.Known(Held("disc-02"), true).Count} whole)");
         }
 
         // 2. SQL Server first, then BigQuery, then a SQL Server rebuild while BigQuery holds its share.

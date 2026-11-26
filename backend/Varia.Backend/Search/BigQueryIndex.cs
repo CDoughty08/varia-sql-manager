@@ -293,7 +293,9 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                 var detail = entry.Detail;
                 detailed |= detail is not null;
                 Intern(entry.Name);
-                var at = Add(entry.Kind, entry.Folder, detail?.Subtype ?? entry.Subtype, dataset, entry.Name, detail?.Modified ?? entry.Modified ?? entry.Created);
+                // Carried details may be an earlier generation's (a table created again): the listing's own facts name the object.
+                var current = detail is { Carried: false } ? detail : null;
+                var at = Add(entry.Kind, entry.Folder, current?.Subtype ?? entry.Subtype, dataset, entry.Name, current?.Modified ?? entry.Modified ?? entry.Created);
                 var signature = detail?.Signature is { } sig ? Clip(sig) : null;
                 var partitioning = detail?.Partitioning is { } part ? Clip(part) : null;
                 var clustering = detail?.Clustering is { } cluster ? Clip(cluster) : null;

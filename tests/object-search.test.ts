@@ -1792,6 +1792,12 @@ describe('Search Objects\' summary', () => {
     expect(indexMemoryNote([status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] })])).toBe(partly)
     expect(indexMemoryNote([status({ skipped: [{ database: 'Huge', code: 'TOO_LARGE', message: 'The database does not fit in the index\'s memory (512 MiB across every connection).' }] })])).toBe(partly)
     expect(indexMemoryNote([status({ provider: 'bigquery', namesOnly: ['disc-a'] })])).toBe(partly)
+    // A BigQuery dataset that kept what it held while new objects' details did not fit: details missing, and the note.
+    const partial = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE', details: true,
+      message: 'The details of 3 objects were left out: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest does not hold them.' }] })
+    expect(indexSummary(undefined, partial)).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
+    expect(indexGap({ connectionId: 'bq', done: 0, total: 0, objects: 0, status: partial })).toBe('details missing')
+    expect(indexMemoryNote([partial])).toBe(partly)
     expect(indexMemoryShort(starved)).toBe(true)
     for (const fine of [status(), status({ cut: 2 }), status({ definitions: false }), status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }),
       status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'p', code: 'TOO_LARGE', message: 'The dataset has more objects than the index lists; it keeps the first ones.' }] }),
