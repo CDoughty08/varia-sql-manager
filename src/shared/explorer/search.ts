@@ -229,8 +229,12 @@ export interface ObjectIndexStatus {
   readonly projects?: number
   /** BigQuery: the newest DDL stale mark no stale-only build has spent yet (absent when none is left). */
   readonly staleMark?: number
+  /** The last full build was stopped before it finished: the index holds only what it read (absent otherwise). */
+  readonly stopped?: true
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
+/** explorer.indexStatus: what a connection's index holds now, without building or searching. */
+export interface ObjectIndexStatusParams { readonly connectionId: string }
 
 export interface ObjectSearchParams {
   readonly connectionId: string
@@ -360,6 +364,8 @@ const bigQueryName = (kind: 'project' | 'dataset') => z.string().refine(value =>
 const bigQueryLocation = z.string().min(1).max(64).regex(/^[A-Za-z0-9-]+$/)
 const bigQueryIndexLocationSchema = z.object({ project: bigQueryName('project'), location: bigQueryLocation }).strict()
 const starredProjectsSchema = z.array(bigQueryName('project')).max(objectSearchLimits.bigQuery.starredProjects)
+export const objectIndexStatusParamsSchema = z.object({ connectionId: z.uuid() }).strict()
+
 export const objectIndexParamsSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), definitions: z.boolean().optional(),
   starredProjects: starredProjectsSchema.optional(), allProjects: z.boolean().optional(),

@@ -48,6 +48,11 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
   says "This server has no index yet." with **Build index** (**Build indexes** on All servers).
 - **Progress.** The status bar shows "Indexing objects N / M" and Stop. A newer build of the same connection stops the
   older one.
+- **Stopped builds.** What a stopped build read stays searchable: the index line reports it with "· build stopped" and
+  offers **Build index** until a full build finishes (the window reads the status with `explorer.indexStatus`). A new build
+  lists everything again, so drops and additions are seen, but on BigQuery it reuses the details already held of objects
+  whose creation and modification times are unchanged, so only the names are listed again for them; a dataset whose details
+  were still being read when the build stopped is read again.
 - **Reading.** First the server's objects, in one constant batch on the server's connection, then every online database
   the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), two at a time; an unexpected failure stops the other
   read in flight. Each database is one constant batch of catalog views on the

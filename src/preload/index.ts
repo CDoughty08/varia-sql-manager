@@ -90,6 +90,7 @@ const api: VariaApi = {
   explorerChildren: params => request('explorer.children', params),
   explorerCancel: requestIds => ipcRenderer.invoke('varia:explorer-cancel', { requestIds }),
   explorerIndex: params => request('explorer.index', params),
+  explorerIndexStatus: params => request('explorer.indexStatus', params),
   explorerSearch: params => request('explorer.search', params),
   explorerPeek: params => request('explorer.peek', params),
   explorerPeekDependencies: params => request('explorer.peekDependencies', params),

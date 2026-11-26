@@ -103,7 +103,7 @@ export interface RevealHost {
   readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
-  readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'> & Partial<Pick<VariaApi, 'bigQueryIndexEstimate'>>
+  readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'> & Partial<Pick<VariaApi, 'bigQueryIndexEstimate' | 'explorerIndexStatus'>>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'update' | 'subscribe'>>
   readonly connections: Pick<ConnectionService, 'getSnapshot' | 'subscribe' | 'get'>
   readonly settings: { get<K extends SettingKey>(key: K): SettingValue<K> }
@@ -337,6 +337,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly staleAsked = new Map<string, number>()
   /** Builds the user stopped: their CANCELLED answer keeps the stale mark asked, so only a newer mark asks again. */
   private readonly stopping = new Set<string>()
+  /** Each connection's last status read after a stopped build: a reply that is not the latest, or that a build started since, is dropped. */
+  private readonly statusReads = new Map<string, number>()
+  private statusSeq = 0
 
   constructor(private readonly o: ObjectSearchOptions) {
     super({ indexes: {}, documents: {}, paneFocus: 0 })
@@ -365,6 +368,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const partial = refresh && !('full' in refresh) ? refresh : undefined
     if (!partial) this.refreshes.delete(connectionId)
     const requestId = this.newId()
+    // A status read still in flight describes the index before this build: its reply must not land over this build's answer.
+    this.statusReads.delete(connectionId)
     const previous = this.getSnapshot().indexes[connectionId]
     const definitions = this.o.settings.get('objectExplorer.search.definitions')
     const allProjects = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryAccessibleProjects') : undefined
@@ -435,6 +440,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           // A stale-only build that did not run its course is asked again at the next hint, unless the user stopped it: Stop waits
           // for a newer mark. A refresh queued behind a build that ended this way is dropped, and so is its mark.
           if (!stopped && (result.code === 'CANCELLED' || failed || (partial && 'stale' in partial))) this.staleAsked.delete(connectionId)
+          // A stopped build keeps what it read, but its CANCELLED answer carries no status: ask for it, or a first build stopped
+          // part way would still say there is no index while the search finds what it read.
+          if (result.code === 'CANCELLED') this.readStatus(connectionId)
         }
         this.nextRefresh(connectionId)
       }, onUnexpectedError)
@@ -1111,6 +1119,22 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       if (departed) void this.search(document.id)
       else this.searchServers(document.id, joined)
     }
+  }
+
+  /** Reads a connection's index status after a stopped build, unless a newer build or a disconnect came first. */
+  private readStatus(connectionId: string): void {
+    const read = this.o.api.explorerIndexStatus
+    if (!read) return
+    const seq = ++this.statusSeq
+    this.statusReads.set(connectionId, seq)
+    void read({ connectionId }).then(result => {
+      if (this.statusReads.get(connectionId) !== seq) return
+      this.statusReads.delete(connectionId)
+      const entry = this.getSnapshot().indexes[connectionId]
+      if (this.disposed || !result.ok || !entry || entry.requestId || !live(this.o.connections.get(connectionId))) return
+      const { status } = result.value
+      this.putIndex({ connectionId, done: status.indexed, total: status.databases, objects: status.objects, status, ...entry.error ? { error: entry.error } : {} })
+    }, onUnexpectedError)
   }
 
   private progress(progress: ObjectIndexProgress): void {

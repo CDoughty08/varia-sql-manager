@@ -208,11 +208,19 @@ internal static class SearchLiveChecks
             var ended = service.Search.Builds;
             var running = service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token);
             stop.Cancel();
+            var cancelled = false;
             try { await running; check(true, "Stop ends a build (it had finished)"); }
-            catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
+            catch (RequestException error) { cancelled = error.Code == "CANCELLED"; check(cancelled, "Stop ends a build with CANCELLED"); }
             // Stopped or finished, the build's end tells the memory report to walk again (no read left showing as running).
             check(service.Search.Builds >= ended + 1, "a stopped build counts as ended for the memory report");
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
+            // explorer.indexStatus, through dispatch, tells the window what the stopped build kept: ready, and stopped.
+            async Task<ObjectIndexStatus> IndexStatus() =>
+                ((ObjectIndexResult)await service.DispatchAsync("explorer.indexStatus", JsonSerializer.SerializeToElement(new ObjectIndexStatusArgs(connectionId), json), json)).Status;
+            var afterStop = await IndexStatus();
+            check(afterStop.State == "ready" && afterStop.Stopped == (cancelled ? true : null), $"explorer.indexStatus reports a stopped build's index as ready and stopped ({afterStop.State}, {afterStop.Stopped}, cancelled {cancelled})");
+            await Build();
+            check((await IndexStatus()).Stopped is null, "a finished build clears the stopped mark");
         }
 
         // A budget the system objects alone fill: every database read stops at its first record, and the build still ends ready,

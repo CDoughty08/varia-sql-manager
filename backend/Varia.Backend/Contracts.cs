@@ -474,10 +474,13 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is projects, names (pass 1) or details (pass 2) while building; NamesOnly lists
 /// projects whose details could not be read due to the memory budget; Bulk is the last full build's billed bulk path, when it ran;
-/// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left).</summary>
+/// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left);
+/// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise).</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
+/// <summary>explorer.indexStatus: what a connection's index holds now, without building or searching.</summary>
+internal sealed record ObjectIndexStatusArgs(string ConnectionId);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
 internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, string Text, bool? CaseSensitive = null, bool? WholeWord = null, bool? Regex = null, string? In = null,

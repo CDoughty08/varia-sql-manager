@@ -671,6 +671,11 @@ internal static partial class BigQueryIndexChecks
             var afterCancel = search.LookupBigQuery(id, "varia-alpha");
             check(cancelled && afterCancel.NamesOnly("disc-01") && afterCancel.NamesOnly("disc-02") && afterCancel.NamesOnly("disc-03"),
                 "cancelled full rebuild preserves prior NamesOnly list");
+            // explorer.indexStatus tells a window what the stopped build kept: still ready, marked stopped.
+            var stoppedStatus = search.IndexStatus(new ObjectIndexStatusArgs(id), bigQuery: true).Status;
+            var unknown = search.IndexStatus(new ObjectIndexStatusArgs(Guid.NewGuid().ToString()), bigQuery: true).Status;
+            check(stoppedStatus is { State: "ready", Stopped: true, Objects: > 0, Provider: Providers.BigQuery } && unknown is { State: "none", Stopped: null, Provider: Providers.BigQuery },
+                $"explorer.indexStatus reports a stopped full build's index as ready and stopped ({stoppedStatus.State}, {stoppedStatus.Stopped}, {stoppedStatus.Objects} objects), and an unindexed connection as none");
 
             // 5. Whole-project scoped refresh that hits a detail failure keeps the project in NamesOnly; a clean scoped refresh clears only that project.
             source.FailTableForProject = "disc-01";
@@ -682,6 +687,9 @@ internal static partial class BigQueryIndexChecks
             var cleanScope = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("disc-01")), source, CancellationToken.None);
             check(cleanScope.Status.NamesOnly is ["disc-02", "disc-03"],
                 "clean whole-project scoped refresh clears only that project from NamesOnly");
+            var rebuilt = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            check(cleanScope.Status.Stopped == true && rebuilt.Status.Stopped is null,
+                "a scoped refresh leaves a stopped build's mark; only a finished full build clears it");
         }
 
         // 6. Wave 2 budget early-stop racing with a sibling non-OCE API error still completes cleanly (does not crash with TIMEOUT).

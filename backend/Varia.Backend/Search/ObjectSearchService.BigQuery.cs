@@ -1220,6 +1220,8 @@ internal sealed partial class ObjectSearchService
                 if (!Current()) throw new OperationCanceledException(stop);
                 state.Building = false;
                 state.Built = true;
+                // Only a full build reads everything; a refresh re-reads a part and leaves a stopped build's gaps as they were.
+                if (scope is null && !staleOnly) state.Stopped = false;
                 state.BuiltAt = DateTime.UtcNow;
                 state.Phase = null;
             }
@@ -1229,6 +1231,8 @@ internal sealed partial class ObjectSearchService
         }
         catch (Exception error) when (error is OperationCanceledException || (stop.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" }))
         {
+            // A full build stopped, not superseded: what it read stays, and the status says the index is partial until one finishes.
+            if (scope is null && !staleOnly) lock (state.Gate) if (Current()) state.Stopped = true;
             throw new RequestException("CANCELLED", "The object index build was stopped.");
         }
         finally

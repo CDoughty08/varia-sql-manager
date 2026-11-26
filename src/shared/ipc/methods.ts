@@ -156,6 +156,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a
   // disconnect ends it; a search answers its own 5 s budget as a partial value.
   'explorer.index': { kind: 'unary', lane: 'explorer', deadlineMs: 0, ...both },
+  // Reads the index's counters only: what a stopped build kept, since its CANCELLED answer carries no status.
+  'explorer.indexStatus': { kind: 'unary', lane: 'explorer', deadlineMs: 5_000, ...both },
   'explorer.search': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000, ...both },
   // The backend answers its own 15 s budget (peekLimits.budgetMs) as a TIMEOUT value, inside this deadline.
   'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },

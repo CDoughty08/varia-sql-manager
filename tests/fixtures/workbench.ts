@@ -311,6 +311,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     onActionProgress: vi.fn<VariaApi['onActionProgress']>(() => () => {}),
     onExplorerIndexProgress: vi.fn<VariaApi['onExplorerIndexProgress']>(() => () => {}),
     explorerIndex: vi.fn<VariaApi['explorerIndex']>(async () => ({ ok: true, value: { status: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
+    explorerIndexStatus: vi.fn<VariaApi['explorerIndexStatus']>(async () => ({ ok: true, value: { status: { state: 'none', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
     explorerSearch: vi.fn<VariaApi['explorerSearch']>(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
