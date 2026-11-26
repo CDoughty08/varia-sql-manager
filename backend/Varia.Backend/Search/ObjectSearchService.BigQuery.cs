@@ -543,6 +543,7 @@ internal sealed partial class ObjectSearchService
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
                 var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop);
+                NamesHeld?.Invoke(project, dataset);
                 if (held is { Code: not ChildrenLeftOut })
                 {
                     onIncomplete?.Invoke(project);
@@ -1383,8 +1384,9 @@ internal sealed partial class ObjectSearchService
     /// tried again, in pass 2 (<paramref name="details"/>), with the details only of the objects the earlier read held them of
     /// (so what was held is kept, and what is new is left out as details missing), then also without those of objects created
     /// or changed since, whose carried details were another generation's. When that does not fit either, a dataset that holds
-    /// details is left as it was read before (TOO_LARGE): it is never swapped for a read without the columns it held. One that
-    /// holds none is tried without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
+    /// details is left as it was read before (TOO_LARGE), less in pass 2 the details carried from another generation, which
+    /// pass 2 was to replace: it is never swapped for a read without the columns it held. One that holds none is tried
+    /// without columns (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
     private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
         CancellationToken token, bool details = false)
     {
@@ -1393,6 +1395,7 @@ internal sealed partial class ObjectSearchService
         var built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, true, definitions);
         var childrenLeftOut = false;
         var newLeftOut = 0;
+        var asItWas = false;
         if (built is null && old is { Detailed: true })
         {
             if (details)
@@ -1415,7 +1418,18 @@ internal sealed partial class ObjectSearchService
             // Not even that fits beside what the dataset holds (in pass 1, the names of what is new): it stays as it was until
             // there is room, rather than lose its columns to list a new object.
             if (built is null)
-                return new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project);
+            {
+                asItWas = true;
+                // In pass 2 "as it was" is pass 1's read of this listing, which may hold details carried from objects created
+                // or changed since. Pass 2 was to replace them and cannot: they go, in a read of the same entries that holds
+                // only what is the objects' own, which is no larger than the one it replaces and so fits its share.
+                var own = details ? BigQueryEntries.Known(old, definitions, carry: true) : [];
+                if (own.Values.Any(had => had.Detail.Stale))
+                    built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset,
+                        [.. entries.Select(entry => entry with { Detail = own.TryGetValue(BigQueryEntries.Key(entry), out var had) && !had.Detail.Stale ? had.Detail : null })], true, definitions);
+                if (built is null)
+                    return new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project);
+            }
         }
         if (built is null)
         {
@@ -1438,7 +1452,9 @@ internal sealed partial class ObjectSearchService
                 state.Index.Abandon(built);
                 throw new OperationCanceledException(token);
             }
-            return childrenLeftOut
+            return asItWas
+                ? new(dataset, "TOO_LARGE", "The dataset's changes did not fit, so it was kept as it was read before: " + BigQueryPart + ", and the rest is in use.", Project: project)
+                : childrenLeftOut
                 ? new(dataset, ChildrenLeftOut, "The dataset's columns were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project)
                 : newLeftOut > 0 ? new(dataset, "TOO_LARGE", "The details of " + (newLeftOut == 1 ? "1 object" : newLeftOut.ToString("N0", CultureInfo.InvariantCulture) + " objects")
                     + " were left out: " + BigQueryPart + ", and the rest does not hold them.", Project: project, Details: true)

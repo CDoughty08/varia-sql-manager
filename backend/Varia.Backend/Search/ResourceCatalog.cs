@@ -113,6 +113,8 @@ internal sealed class ResourceCatalog(StringPool pool, Func<long>? keepFree = nu
                     sets.Remove(key);
                     Drop(set);
                 }
+                // The same, for a set retired meanwhile.
+                else if (entry.Refs == 0 && entry.Shared is { } gone && retired.Remove(gone)) Drop(gone);
             }
             try { stop?.Cancel(); } catch (ObjectDisposedException) { }
             throw;

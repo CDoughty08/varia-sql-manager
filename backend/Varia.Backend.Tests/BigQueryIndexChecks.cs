@@ -252,6 +252,8 @@ internal static partial class BigQueryIndexChecks
         // the dataset keeps the memory its columns hold between the passes, and a build stopped in between reuses nothing stale.
         var carried = BigQueryEntries.Known(tight, true, carry: true);
         var held2 = new BigQueryReader(limits, pool, tight).Read("p", "d", [entries[0] with { Detail = carried[("bqView", "v")].Detail }], true, true)!;
+        check(carried[("bqView", "v")].Detail is { TextLeftOut: true, Definition: null } && held2 is { Cut: 1, LeftOut: 1 } && BigQueryEntries.Known(held2, true, carry: true)[("bqView", "v")].Detail.TextLeftOut,
+            $"a view's text left out for memory is still counted while its details are carried ({held2.LeftOut} left out)");
         check(carried[("bqView", "v")].Detail is { Carried: true, Columns.Count: 1 } && BigQueryEntries.Known(read, true, carry: true)[("bqView", "v")].Detail.Carried == false
             && held2.Table.Count == tight.Table.Count && BigQueryEntries.Known(held2, true).Count == 0 && BigQueryEntries.Known(held2, true, carry: true).Count == 1
             && BigQueryEntries.Known(bare, true, carry: true)[("bqView", "v")].Detail.Carried && BigQueryEntries.Known(names, true, carry: true).Count == 0,
@@ -1352,6 +1354,9 @@ internal static partial class BigQueryIndexChecks
         public Func<string, CancellationToken, Task>? OnTableAsync { get; set; }
         /// <summary>A project's tables' creation time, when not the default: a table created again.</summary>
         public Func<string, long?>? CreatedOf { get; set; }
+        /// <summary>One table's creation time or column count, when not its project's.</summary>
+        public Func<string, string, long?>? CreatedOfTable { get; set; }
+        public Func<string, string, int?>? ColumnsOfTable { get; set; }
         /// <summary>Datasets that hold one date-sharded group instead: events_20261101 to the day given, each shard created on its day.</summary>
         public Dictionary<(string Project, string Dataset), int>? ShardDays { get; set; }
         public bool Throttled(string connectionId) => ThrottledNow?.Invoke() ?? false;
@@ -1411,7 +1416,7 @@ internal static partial class BigQueryIndexChecks
                 : Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
                 {
                     TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },
-                    Type = "TABLE", CreationTime = CreatedOf?.Invoke(project) ?? 1700000000000
+                    Type = "TABLE", CreationTime = CreatedOfTable?.Invoke(project, project + "_tbl_" + index) ?? CreatedOf?.Invoke(project) ?? 1700000000000
                 }).ToList();
             return new BigQueryListing(tables, [], [], false);
         }
@@ -1424,7 +1429,7 @@ internal static partial class BigQueryIndexChecks
                 Interlocked.Increment(ref discoveredDetailCalls);
                 await Task.Yield();
             }
-            var count = project == "varia-alpha" ? 2 : ColumnsPerTable;
+            var count = ColumnsOfTable?.Invoke(project, table) ?? (project == "varia-alpha" ? 2 : ColumnsPerTable);
             var fields = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableFieldSchema
             {
                 Name = "col_" + project + "_" + index, Type = "STRING", Mode = "NULLABLE"

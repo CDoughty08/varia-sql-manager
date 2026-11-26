@@ -181,17 +181,18 @@ internal static partial class BigQueryIndexChecks
             search.Budget.Force(search.Budget.Free - limits.BigQueryNamesFloorBytes - 60);
             created["disc-02"] = 1_900_000_000_000;
             source.ColumnsPerTable = 20;
-            var before = Held("disc-02");
             projects.Add("disc-zz");
             // Bounded, so a build that never holds disc-02's names fails the check below rather than hang the suite.
-            var waited = System.Diagnostics.Stopwatch.StartNew();
+            var names02 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            search.NamesHeld = (project, _) => { if (project == "disc-02") names02.TrySetResult(); };
             source.OnDatasetObjectsAsync = async (project, _, token) =>
             {
-                while (project == "disc-zz" && ReferenceEquals(Held("disc-02"), before) && waited.Elapsed < TimeSpan.FromSeconds(60)) await Task.Delay(1, token);
+                if (project == "disc-zz") await names02.Task.WaitAsync(TimeSpan.FromSeconds(60), token);
             };
             calls = source.DiscoveredDetailCalls;
             var tight = await Build();
             source.OnDatasetObjectsAsync = null;
+            search.NamesHeld = null;
             check(tight.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }) && search.HeldOf(id).All(read => read.Database != "disc-zz")
                 && Held("disc-02") is { Detailed: true, Table.Count: 22 } again && BigQueryEntries.Known(again, true).Count == 1 && source.DiscoveredDetailCalls == calls + 1,
                 $"a build whose names pass stopped for memory still reads a held dataset's changed table again ({source.DiscoveredDetailCalls - calls} detail read, {BigQueryEntries.Known(Held("disc-02"), true).Count} whole)");
@@ -226,12 +227,30 @@ internal static partial class BigQueryIndexChecks
             check(Held("star-02") is { ChildrenLeftOut: false, Table.Count: 44 } && named.Status.Skipped.Count(skip => skip is { Project: "star-02", Code: "TOO_LARGE", Details: true }) == 1
                 && named.Status.Skipped.Count == 1,
                 $"with room for one name above the names floor a new table is listed beside the names its dataset holds ({Held("star-02").Table.Count} entries, {named.Status.Skipped.Count} skips)");
+            // Nothing fits in pass 2: one table was created again with other columns, and another gained columns whose names
+            // need room there is none of. The dataset is kept as it was read before, except that the first table's columns, an
+            // earlier generation's that pass 2 was to replace, go: they are never left showing as the new table's.
+            search.Budget.Force(search.Budget.Free - limits.BigQueryNamesFloorBytes + 500);
+            source.TablesPerDataset = new() { [("star-02", "ds")] = 2 };
+            await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred, Scope: new("star-02")), source, CancellationToken.None);
+            var two = Held("star-02") is { Detailed: true, Table.Count: 43 } pair && BigQueryEntries.Known(pair, true).Count == 2 && search.Budget.Free < limits.BigQueryNamesFloorBytes;
+            source.CreatedOfTable = (_, table) => table == "star-02_tbl_0" ? 1_750_000_000_000 : null;
+            source.ColumnsOfTable = (_, table) => table == "star-02_tbl_0" ? 10 : table == "star-02_tbl_1" ? 25 : null;
+            var nothing = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), StarredProjects: starred, Scope: new("star-02")), source, CancellationToken.None);
+            var asItWas = Held("star-02");
+            var facts = asItWas.Facts!;
+            check(two && asItWas is { Detailed: true, ChildrenLeftOut: false, Table.Count: 1 + 1 + 21 }
+                && Enumerable.Range(0, asItWas.Table.Count).Count(at => asItWas.Table.Parent(at) < 0 && facts.Of(at) is { Detailed: true }) == 1
+                && nothing.Status.Skipped.Count(skip => skip is { Project: "star-02", Database: "ds", Code: "TOO_LARGE", Details: null }) == 1,
+                $"a dataset pass 2 can fit nothing new of is kept as it was, less the columns carried from a table created again ({asItWas.Table.Count} entries)");
+            source.CreatedOfTable = null;
+            source.ColumnsOfTable = null;
             // The tables are created again and cannot be read: the columns carried from their earlier generation are not kept as
             // if they were the new tables'.
             source.CreatedOf = project => project == "star-02" ? 1_800_000_000_000 : null;
             source.FailTableForProject = "star-02";
             var failed = await Build();
-            check(Held("star-02") is { Table.Count: 4, Detailed: false } && Held("star-01") is { Table.Count: 22 } && failed.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true }),
+            check(Held("star-02") is { Table.Count: 3, Detailed: false } && Held("star-01") is { Table.Count: 22 } && failed.Status.Skipped.Any(skip => skip is { Project: "star-02", Details: true }),
                 $"a table created again whose read fails keeps none of its earlier generation's columns ({Held("star-02").Table.Count} entries)");
         }
 
@@ -281,6 +300,33 @@ internal static partial class BigQueryIndexChecks
             check(limits.BigQueryDetailsFloor(discovered: true, holds: false) == limits.BigQueryDiscoveredFloorBytes && limits.BigQueryDetailsFloor(true, true) == limits.BigQueryDetailsFloorBytes
                 && limits.BigQueryDetailsFloor(false, false) == limits.BigQueryDetailsFloorBytes && limits.BigQueryDetailsFloor(false, true) == limits.BigQueryNamesFloorBytes,
                 "a dataset that already holds details keeps one floor less free than its project's, never less than the names floor");
+            // A read no larger than the one it replaces fits its share, whatever the budget: a table dropped and one added (its
+            // name pooled already), with nothing free, pays the new name from what the dropped table's columns held; and a
+            // column added where a table without details went pays from what that table's name held.
+            {
+                var none = new StringPool(new IndexBudget(limits.MemoryBytes));
+                BigQueryDetail Columns(int count) => new(null, null, null, [.. Enumerable.Range(0, count).Select(at => new BigQueryColumn("c" + at, false, "STRING", true, null))]);
+                BigQueryReader Replacing(DatabaseIndex earlier) => new(limits, none, earlier, limits.BigQueryNamesFloorBytes, limits.BigQueryDetailsFloorBytes);
+                var index = new ConnectionIndex(none.Budget, pool: none);
+                var first = new BigQueryReader(limits, none, null).Read("p", "d",
+                    [new("bqTable", "bqTables", null, "t1", 1, null, Detail: Columns(20)), new("bqTable", "bqTables", null, "t2", 1, null, Detail: Columns(30)), new("bqTable", "bqTables", null, "t3", 1, null)], true, true)!;
+                index.Put(first);
+                var sibling = none.TryAcquire("t4");
+                none.Budget.Force(none.Budget.Free);
+                var used = none.Budget.Used;
+                var swapped = Replacing(first).Read("p", "d",
+                    [new("bqTable", "bqTables", null, "t1", 1, null, Detail: Columns(20)), new("bqTable", "bqTables", null, "t3", 1, null), new("bqTable", "bqTables", null, "t4", 1, null)], true, true);
+                if (swapped is not null) index.Put(swapped);
+                var afterSwap = none.Budget.Used;
+                // t3 (a name, no details) goes and t1 gains a column whose name the pool holds (t4): the column's record is paid
+                // from what t3's name held.
+                var wider = swapped is null ? null : Replacing(swapped).Read("p", "d",
+                    [new("bqTable", "bqTables", null, "t1", 1, null, Detail: new(null, null, null, [.. Columns(20).Columns, new BigQueryColumn("t4", false, "STRING", true, null)])), new("bqTable", "bqTables", null, "t4", 1, null)], true, true);
+                if (wider is not null) index.Put(wider);
+                check(swapped is { Table.Count: 1 + 21 + 2 } && afterSwap < used && wider is { Table.Count: 1 + 22 + 1 } && none.Budget.Used <= afterSwap && none.Budget.Free >= 0,
+                    $"a read no larger than the one it replaces fits its share with nothing free, names and details lending to each other ({swapped?.Table.Count} then {wider?.Table.Count} entries, {used} then {none.Budget.Used} bytes)");
+                none.Release([sibling]);
+            }
             // A read given no floors (as only checks build one) still leaves the names' reserve to names when it keeps view text.
             var view = new BigQueryDetail(null, null, "SELECT 1 AS a FROM t", []);
             var reserved = new BigQueryReader(new ObjectIndexLimits { NamesReserveBytes = long.MaxValue / 4 }, new StringPool(new IndexBudget(limits.MemoryBytes)), null)
