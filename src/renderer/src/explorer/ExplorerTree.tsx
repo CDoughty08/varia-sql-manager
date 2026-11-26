@@ -11,7 +11,7 @@ import { explorerTargetDragType } from '../editor-groups/server-drop'
 import type { Announcement } from './ExplorerService'
 import { focusLost } from './ExplorerErrorBoundary'
 import ExplorerPinnedBand from './ExplorerPinnedBand'
-import ExplorerRow, { PinnedServerRow, recoveryLabel, type RowActions } from './ExplorerRow'
+import ExplorerRow, { PinnedServerRow, recoveryLabel, type RowActions, type RowMouseEvent } from './ExplorerRow'
 import { rowStatus } from './ExplorerStatusService'
 import { childrenShown, lastDescendant, layoutWindow, pinnedServerBands, renderedIndices, revealChildrenScroll, revealPinnedScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction, type VisibleRows } from './tree-model'
 
@@ -32,7 +32,7 @@ interface FollowedQuery {
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId, activeQueryId }: { readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
-  const { explorer, commands, connections, actions: objectActions, explorerStatus, agentTree, settings, menuTargets, peek, gestures, serverDrop } = useWorkbench()
+  const { explorer, commands, connections, actions: objectActions, explorerStatus, agentTree, settings, menuTargets, peek, gestures, serverDrop, notifications } = useWorkbench()
   const snapshot = useServiceSnapshot(explorer)
   const { servers: statuses } = useServiceSnapshot(explorerStatus)
   // Job rows' chips (AG-12): subscribing renders the rows again when they change; rowStatus reads them from the service.
@@ -84,8 +84,13 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     typeAheadTimer.current = setTimeout(() => tree.removeAttribute('data-type-ahead'), explorerLimits.typeAheadMs)
   }
   useEffect(() => () => clearTimeout(typeAheadTimer.current), [])
-  const { rows, selected } = snapshot
+  const { rows, selected, multiSelected } = snapshot
   const selectedIndex = rowIndex(rows, selected)
+  const focusedNode = selectedIndex >= 0 ? rows.nodes[selectedIndex] : undefined
+  const serverFocused = !!focusedNode && focusedNode.parent === 0 && focusedNode.kind === 'server' && !focusedNode.lost
+  const multiSelectedSet = useMemo(() => new Set(multiSelected), [multiSelected])
+  const inMultiSelect = multiSelected.length >= 2
+  const lockedProvider = inMultiSelect ? explorer.multiSelectProvider : undefined
   const layout = useMemo(() => rowLayout(rows), [rows])
   const latest = useRef({ rows, layout })
   latest.current = { rows, layout }
@@ -142,6 +147,11 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
   useEffect(() => {
     const next = snapshot.announcement
     if (!next || next.id === heard.current) return
+    if (next.immediate) {
+      heard.current = next.id
+      setAnnouncement(next)
+      return
+    }
     const timer = setTimeout(() => { heard.current = next.id; setAnnouncement(next) }, announceDelayMs)
     return () => clearTimeout(timer)
   }, [snapshot.announcement])
@@ -244,8 +254,35 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     const verb = ssisDefaultVerb(node?.kind)
     if (verb) run(ssisVerbSpecs[verb].command, rowId)
   }, [explorer, run])
+  const handleServerMouseDown = useCallback((rowId: number, event: RowMouseEvent, focusTreeEl = true) => {
+    if (event.button === 2 || gestures.matches('grid.secondaryClick', event)) {
+      const current = explorer.getSnapshot().multiSelected
+      if (current.length >= 2 && current.includes(rowId)) {
+        if (focusTreeEl) element.current?.focus({ preventScroll: true })
+        return
+      }
+      explorer.endOpen()
+      explorer.select(rowId)
+      if (focusTreeEl) element.current?.focus({ preventScroll: true })
+      return
+    }
+    if (event.button === 0 && gestures.matches('explorer.addToSelection', event)) {
+      event.preventDefault?.()
+      explorer.endOpen()
+      const result = explorer.toggleMultiSelect(rowId)
+      if (result.notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: result.notice })
+      if (focusTreeEl) element.current?.focus({ preventScroll: true })
+      return
+    }
+    if (focusTreeEl) {
+      explorer.endOpen()
+      explorer.select(rowId)
+      element.current?.focus({ preventScroll: true })
+    }
+  }, [explorer, gestures, notifications])
   const actions = useMemo<RowActions>(() => ({
     select: rowId => { explorer.endOpen(); explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
+    serverMouseDown: (rowId, event) => handleServerMouseDown(rowId, event, true),
     toggle: rowId => explorer.toggleOpen(rowId, autoExpand),
     activate,
     reconnect: rowId => run('connection.reconnect', rowId),
@@ -303,13 +340,17 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       else peek.pointer(undefined)
     },
     click: (rowId, event) => {
+      const node = explorer.node(rowId)
+      // Top-level server rows use mod+click for multi-server selection and never open Peek tabs.
+      if (node && node.parent === 0) return
       if (!gestures.matches('explorer.openPeekTab', event)) return
+      explorer.clearMultiSelect()
       // Ctrl resting on the row may have opened the card already: the tab takes its place.
       peek.cancelHover()
       if (peek.getSnapshot().open?.source === 'hover') peek.close()
       run('explorer.openPeekTab', rowId)
     }
-  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark, autoExpand, serverDrop, connections])
+  }), [explorer, run, activate, objectActions, peek, gestures, setDropMark, autoExpand, serverDrop, connections, handleServerMouseDown])
   // The background below the last row drops a server last, and its line shows that: below the tree's last row, which is
   // the last server's last child when it is expanded. Rows mark themselves (actions.dragOver);
   // an outer drop target (the dock panel) may have called preventDefault already, so a row is told apart by the target.
@@ -345,7 +386,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       case 'select': {
         const id = current.ids[action.index]
         if (explorer.getSnapshot().selected === id) { const now = explorer.getSnapshot().rows; ensureVisible(now, rowIndex(now, id)) }
-        else { reveal.current = id; explorer.select(id) }
+        else { reveal.current = id; explorer.select(id, { preserveMultiSelect: true }) }
         return
       }
       case 'expand': explorer.open(action.id, autoExpand); return
@@ -376,6 +417,7 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       }
       if (event.key === 'Escape' && typing.value) { typing.clear(); markTypeAhead(); event.preventDefault(); return }
       if (event.key === 'Escape' && peek.getSnapshot().open) { peek.close(); event.preventDefault(); return }
+      if (event.key === 'Escape' && now.multiSelected.length > 0) { explorer.clearMultiSelect(); event.preventDefault(); return }
       const text = typing.accept(event.nativeEvent)
       if (text === undefined) {
         // Space is Peek's catalogue key (explorer.peek); the tree swallows the Space it leaves, Shift+Space included.
@@ -409,9 +451,13 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
     if (!height) return null
     return <ExplorerPinnedBand edge={edge} band={bands[edge]} onWheel={scrollPinnedBand} renderServer={(index, menu, top) => {
       const node = rows.nodes[index]!
+      const incompatible = inMultiSelect && !node.lost && explorer.serverProvider(node.id) !== lockedProvider
       return <PinnedServerRow key={node.id} node={node} edge={edge} current={edge === 'top' && bands.current === index} menu={menu} top={top}
         active={node.connectionId === activeConnectionId} color={accents.get(node.connectionId)} environment={environments.get(node.connectionId)}
-        status={rowStatus(statuses.get(node.connectionId), node)} jump={() => {
+        status={rowStatus(statuses.get(node.connectionId), node)}
+        multiSelected={multiSelectedSet.has(node.id)} inMultiSelect={inMultiSelect} incompatible={incompatible} lockedProvider={lockedProvider}
+        onServerMouseDown={event => handleServerMouseDown(node.id, event, false)}
+        jump={() => {
           actions.select(node.id)
           const now = explorer.getSnapshot().rows
           ensureVisible(now, rowIndex(now, node.id), true)
@@ -425,7 +471,8 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
       if (event.relatedTarget && event.relatedTarget !== event.currentTarget.ownerDocument.body) focusedPin.current = undefined
     }}>
     {pinned('top')}
-    <div ref={element} className="explorer-tree" style={{ scrollPaddingTop: bands.top.height, scrollPaddingBottom: bands.bottom.height }} role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
+    <div ref={element} className="explorer-tree" style={{ scrollPaddingTop: bands.top.height, scrollPaddingBottom: bands.bottom.height }} role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-server-focused={serverFocused ? '' : undefined} data-pane-focus aria-activedescendant={active}
+      aria-multiselectable={layout.serverIndices.length >= 2 ? 'true' : undefined}
       aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}
       onDragOver={dragOverTree} onDrop={dropOnTree}
       // A server drag out of the tree leaves no drop line behind.
@@ -435,8 +482,13 @@ export default function ExplorerTree({ activeConnectionId, activeQueryId }: { re
           const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
           const recovery = kind === RowKind.Node ? undefined : treeKey(rows, index, 'enter', 1)
           const label = recovery && recoveryLabel(recovery)
+          const rowMultiSelected = multiSelectedSet.has(rowId)
+          const rowSelected = multiSelected.length > 0 ? rowMultiSelected : rowId === selected
+          const incompatible = inMultiSelect && !!node && node.parent === 0 && node.kind === 'server' && !node.lost && explorer.serverProvider(node.id) !== lockedProvider
           return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
-            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && (explorer.canInsert(rowId) || (explorer.serverPlace(rowId)?.count ?? 0) > 1 || (node?.kind === 'server' && explorer.queryTarget(rowId) !== undefined))}
+            node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowSelected} focused={rowId === selected}
+            multiSelected={rowMultiSelected} inMultiSelect={inMultiSelect} incompatible={incompatible} lockedProvider={lockedProvider}
+            draggable={kind === RowKind.Node && (explorer.canInsert(rowId) || (explorer.serverPlace(rowId)?.count ?? 0) > 1 || (node?.kind === 'server' && explorer.queryTarget(rowId) !== undefined))}
             active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
             actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming}
             status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node, agentTree) : undefined}

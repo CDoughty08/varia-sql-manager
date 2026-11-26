@@ -5,7 +5,7 @@ import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerN
 import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { bigQueryProjectSchema } from '../../../shared/connections'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
-import { explorerNodeProvider, type ProviderContext } from '../../../shared/providers.ts'
+import { explorerNodeProvider, type ProviderContext, type ProviderId } from '../../../shared/providers.ts'
 import { isDependencyKind } from '../../../shared/explorer/dependencies.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { currentDatabaseRuntime, liveJobStatus, type DatabaseRuntime, type DatabaseStatusRow } from '../../../shared/explorer/status.ts'
@@ -25,12 +25,31 @@ import { emptyRows, flatten, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan
 
 export type { NodeNote, TreeNode } from './tree-model'
 /** A sentence for the tree's live region; `id` changes with every announcement, so a repeated sentence is heard again. */
-export interface Announcement { readonly text: string; readonly id: number }
+export interface Announcement { readonly text: string; readonly id: number; readonly immediate?: boolean }
+/** A connected top-level server in the active multi-server selection, ordered by selection order. */
+export interface MultiSelectedServerTarget {
+  readonly rowId: number
+  readonly connectionId: string
+  readonly targetId?: string
+  readonly provider: ProviderId
+  readonly label: string
+  readonly database: string
+  readonly environment?: string
+}
+export interface ToggleMultiSelectResult {
+  readonly changed: boolean
+  readonly multiSelected: readonly number[]
+  readonly notice?: string
+}
 export interface ExplorerSnapshot {
   readonly version: number
   readonly rows: VisibleRows
   /** A node id, or a synthetic row's (negative) id. */
   readonly selected?: number
+  /** Connected top-level server row ids in multi-selection order; index 0 defines the locked engine. */
+  readonly multiSelected: readonly number[]
+  /** Calm status notice when multi-select rejects an incompatible-engine server. */
+  readonly multiSelectNotice?: string
   readonly announcement?: Announcement
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
@@ -114,6 +133,8 @@ export interface ExplorerServiceOptions {
   readonly targets?: ExplorerTargets
   /** Per-principal BigQuery Starred Projects (`BigQueryStarredService`), shown below each BigQuery server's billing project. */
   readonly bigQueryStarred?: BigQueryStarredSource
+  /** Optional callback invoked when multi-select rejects an incompatible-engine server. */
+  readonly onMultiSelectNotice?: (message: string) => void
 }
 /** A BigQuery project row's role in Object Explorer. */
 export type BigQueryProjectRole = 'billing' | 'starred' | 'session'
@@ -309,6 +330,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private nextId = 1
   private clock = 0
   private selected?: number
+  private multiSelected: readonly number[] = []
+  private multiSelectNotice?: string
+  private readonly onMultiSelectNotice?: (message: string) => void
   private announcement?: Announcement
   private announcements = 0
   private reveals = 0
@@ -360,13 +384,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
 
   constructor(options: ExplorerServiceOptions) {
-    super({ version: 0, rows: emptyRows })
+    super({ version: 0, rows: emptyRows, multiSelected: [] })
     this.connections = options.connections
     this.events = options.events
     this.timers = options.timers ?? browserTimers
     this.schedule = options.schedule ?? (callback => requestFrame(callback))
     this.limits = { ...explorerLimits, ...options.limits }
     this.now = options.now ?? Date.now
+    this.onMultiSelectNotice = options.onMultiSelectNotice
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.grouping = options.groupBySchema
@@ -579,24 +604,153 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   /**
    * Selects a row and publishes the selection and context keys at once, so a menu opened next reads them. `reveal` asks
-   * the tree to scroll the row into view, as it does for rows its keys select.
+   * the tree to scroll the row into view, as it does for rows its keys select. Clears multi-server selection unless
+   * `preserveMultiSelect` is set (keyboard navigation moving focus while building a multi-selection).
    */
-  select(id: number, options?: { readonly reveal?: boolean }): void {
+  select(id: number, options?: { readonly reveal?: boolean; readonly preserveMultiSelect?: boolean }): void {
     const node = this.nodes.get(rowOwner(id))
     if (!node || !this.attached(node)) return
     node.lastUsed = ++this.clock
     const reveal = !!options?.reveal
-    if (this.selected === id && !reveal) return
+    const clearMulti = !options?.preserveMultiSelect && (this.multiSelected.length > 0 || this.multiSelectNotice !== undefined)
+    if (this.selected === id && !reveal && !clearMulti) return
     // A selection the user made wins over one a reconcile still waits to make.
     this.pendingSelect = undefined
     // It also ends the user's expand: coming back to the row later does not start it again.
     if (this.opened && this.opened.selected !== id) this.opened = undefined
+    if (clearMulti) {
+      const hadMulti = this.multiSelected.length > 0
+      this.multiSelected = []
+      this.multiSelectNotice = undefined
+      if (hadMulti) this.announce('Multi-server selection cleared', true)
+    }
     this.selected = id
     if (reveal) this.reveals++
     this.evictable = true
-    if (this.dirty) this.flush()
-    else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id, ...(this.reveals ? { reveal: this.reveals } : {}) })
-    this.updateContext()
+    this.publishNow()
+  }
+  /** Engine of a top-level server row, or undefined for other rows. */
+  serverProvider(id: number | undefined): ProviderId | undefined {
+    if (id === undefined || id <= 0) return undefined
+    const node = this.nodes.get(id)
+    if (!node || node.parent !== 0 || node.kind !== 'server' || !this.attached(node)) return undefined
+    const provider = explorerNodeProvider(this.targetOf(node))
+    return provider || undefined
+  }
+  /** Locked engine of the active multi-server selection (defined by index 0), or undefined when empty. */
+  get multiSelectProvider(): ProviderId | undefined {
+    return this.multiSelected.length ? this.serverProvider(this.multiSelected[0]) : undefined
+  }
+  /**
+   * Toggles a connected top-level server row in `multiSelected` (defaults to the focused row). Index 0 defines the
+   * engine-homogeneity lock; attempting to add an incompatible-engine server keeps the selection unchanged and raises a
+   * calm status notice pointing to New Cross-Engine SELECT….
+   */
+  toggleMultiSelect(id?: number): ToggleMultiSelectResult {
+    const targetId = id ?? this.selected
+    if (!this.isEligibleMultiSelectServer(targetId)) return { changed: false, multiSelected: this.multiSelected }
+    const node = this.nodes.get(targetId!)!
+    const targetProvider = this.serverProvider(node.id)
+    if (!targetProvider) return { changed: false, multiSelected: this.multiSelected }
+    node.lastUsed = ++this.clock
+    this.pendingSelect = undefined
+    this.opened = undefined
+    const existingIndex = this.multiSelected.indexOf(node.id)
+    if (existingIndex >= 0) {
+      this.multiSelected = this.multiSelected.filter(member => member !== node.id)
+      this.multiSelectNotice = undefined
+      this.selected = node.id
+      this.evictable = true
+      this.announce(this.multiSelected.length
+        ? `${node.label} removed from selection, ${this.multiSelectSummary(this.multiSelectProvider, this.multiSelected.length)}`
+        : `${node.label} removed from selection, multi-selection cleared`, true)
+      this.publishNow()
+      return { changed: true, multiSelected: this.multiSelected }
+    }
+    if (this.multiSelected.length === 0) {
+      if (this.selected !== undefined && this.selected !== node.id && this.isEligibleMultiSelectServer(this.selected)) {
+        const anchor = this.nodes.get(this.selected)!
+        const anchorProvider = this.serverProvider(anchor.id)
+        if (anchorProvider && anchorProvider !== targetProvider) {
+          const notice = this.engineLockNotice(anchorProvider)
+          this.multiSelectNotice = notice
+          this.announce(notice, true)
+          this.publishNow()
+          this.onMultiSelectNotice?.(notice)
+          return { changed: false, multiSelected: this.multiSelected, notice }
+        }
+        this.multiSelected = [anchor.id, node.id]
+      } else {
+        this.multiSelected = [node.id]
+      }
+    } else {
+      const lockedProvider = this.multiSelectProvider
+      if (lockedProvider && lockedProvider !== targetProvider) {
+        const notice = this.engineLockNotice(lockedProvider)
+        this.multiSelectNotice = notice
+        this.announce(notice, true)
+        this.publishNow()
+        this.onMultiSelectNotice?.(notice)
+        return { changed: false, multiSelected: this.multiSelected, notice }
+      }
+      this.multiSelected = [...this.multiSelected, node.id]
+    }
+    this.multiSelectNotice = undefined
+    this.selected = node.id
+    this.evictable = true
+    this.announce(`${node.label} added to selection, ${this.multiSelectSummary(this.multiSelectProvider, this.multiSelected.length)}`, true)
+    this.publishNow()
+    return { changed: true, multiSelected: this.multiSelected }
+  }
+  /** Exits multi-server selection while keeping focus on the currently focused row. */
+  clearMultiSelect(): void {
+    if (!this.multiSelected.length && this.multiSelectNotice === undefined) return
+    const hadMulti = this.multiSelected.length > 0
+    this.multiSelected = []
+    this.multiSelectNotice = undefined
+    if (hadMulti) this.announce('Multi-server selection cleared', true)
+    this.publishNow()
+  }
+  /** Clears the current incompatible-engine status notice without changing selection. */
+  dismissMultiSelectNotice(): void {
+    if (this.multiSelectNotice === undefined) return
+    this.multiSelectNotice = undefined
+    this.publishNow()
+  }
+  /** Multi-selects every connected top-level server of `provider` in Explorer order when at least two exist. */
+  selectAllServersByProvider(provider: ProviderId): readonly number[] {
+    const matching = this.roots.filter(rootId => this.isEligibleMultiSelectServer(rootId) && this.serverProvider(rootId) === provider)
+    if (matching.length < 2) return []
+    this.pendingSelect = undefined
+    this.opened = undefined
+    this.multiSelected = matching
+    this.multiSelectNotice = undefined
+    if (this.selected === undefined || !matching.includes(this.selected)) this.selected = matching[0]
+    this.evictable = true
+    this.announce(`Selected all ${this.multiSelectSummary(provider, matching.length)}`, true)
+    this.publishNow()
+    return this.multiSelected
+  }
+  /** Ordered target descriptors for the active multi-server selection (for New Multi-Server Query, Refresh Selected, Disconnect Selected). */
+  multiSelectedTargets(): readonly MultiSelectedServerTarget[] {
+    const targets: MultiSelectedServerTarget[] = []
+    for (const rowId of this.multiSelected) {
+      if (!this.isEligibleMultiSelectServer(rowId)) continue
+      const node = this.nodes.get(rowId)!
+      const connection = this.connectionOf(node.connectionId)
+      const provider = this.serverProvider(rowId)
+      if (!connection || !provider) continue
+      targets.push({
+        rowId,
+        connectionId: connection.id,
+        ...(connection.targetId ? { targetId: connection.targetId } : {}),
+        provider,
+        label: connection.displayName || connection.server,
+        database: connection.database,
+        ...(connection.options.environment ? { environment: connection.options.environment } : {})
+      })
+    }
+    return targets
   }
   /**
    * The snapshot, with rows a change left for the next frame published now. The tree's keys read it, so a key that
@@ -764,9 +918,20 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
     const node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
-    return node && this.attached(node)
-      ? { ...this.targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) }
-      : undefined
+    if (!node || !this.attached(node)) return undefined
+    const target = this.targetOf(node)
+    const isLiveServer = node.parent === 0 && node.kind === 'server' && !node.lost
+    const multiSelected = isLiveServer && this.multiSelected.length >= 2 && this.multiSelected.includes(node.id)
+    const sameEngineMultiple = isLiveServer && this.connectedServerCountByProvider(explorerNodeProvider(target)) >= 2
+    return {
+      ...target,
+      id: node.id,
+      lost: node.lost,
+      ...(node.filtered ? { filtered: true } : {}),
+      ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}),
+      ...(multiSelected ? { multiSelected: true } : {}),
+      ...(sameEngineMultiple ? { sameEngineMultiple: true } : {})
+    }
   }
   /** A connection's loaded SQL Server Agent node as a menu target (the Agent overview's Properties and Start fixes, AG-15); undefined until the
    *  server's node lists it. */
@@ -988,6 +1153,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = []
     this.rootByConnection.clear()
     this.selected = undefined
+    this.multiSelected = []
+    this.multiSelectNotice = undefined
     this.pendingSelect = undefined
     this.dialogStore.set(undefined)
     this.renameStore.set(undefined)
@@ -1063,6 +1230,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.roots = roots
     if (removedAt >= 0) this.selected = roots[Math.min(removedAt, roots.length - 1)]
     if (this.selected === undefined && roots.length) this.selected = added[0] ?? roots[0]
+    this.pruneMultiSelected()
     for (const id of added) if (this.nodes.get(id)?.hasChildren) this.openRoot(id)
     this.invalidate()
     // A seek on a server that went away ends now, not when a load that will never come settles.
@@ -2105,7 +2273,63 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   // Publishing
 
-  private announce(text: string): void { this.announcement = { text: displayText(text), id: ++this.announcements } }
+  private isEligibleMultiSelectServer(id: number | undefined): boolean {
+    if (id === undefined || id <= 0) return false
+    const node = this.nodes.get(id)
+    if (!node || node.parent !== 0 || node.kind !== 'server' || node.lost || !this.attached(node)) return false
+    const connection = this.connectionOf(node.connectionId)
+    return !!connection && connectionAvailable(connection)
+  }
+  private connectedServerCountByProvider(provider: ProviderContext): number {
+    if (!provider) return 0
+    let total = 0
+    for (const rootId of this.roots) {
+      if (this.isEligibleMultiSelectServer(rootId) && this.serverProvider(rootId) === provider) total++
+    }
+    return total
+  }
+  private engineLockNotice(locked: ProviderId): string {
+    const engine = locked === 'bigquery' ? 'BigQuery' : 'SQL Server'
+    return `Multi-server selection is locked to ${engine} connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.`
+  }
+  private multiSelectSummary(provider: ProviderId | undefined, total: number): string {
+    if (provider === 'bigquery') return `${total} BigQuery project${total === 1 ? '' : 's'} selected`
+    return `${total} SQL Server${total === 1 ? '' : 's'} selected`
+  }
+  private pruneMultiSelected(): void {
+    if (!this.multiSelected.length) return
+    const remaining = this.multiSelected.filter(id => this.isEligibleMultiSelectServer(id))
+    if (remaining.length === this.multiSelected.length) return
+    if (remaining.length < 2) {
+      this.multiSelected = []
+      this.multiSelectNotice = undefined
+      this.announce('Multi-server selection cleared', true)
+      return
+    }
+    this.multiSelected = remaining
+    this.multiSelectNotice = undefined
+  }
+  private announce(text: string, immediate = false): void {
+    this.announcement = { text: displayText(text), id: ++this.announcements, ...(immediate ? { immediate: true } : {}) }
+  }
+  private buildSnapshot(rows: VisibleRows): ExplorerSnapshot {
+    return {
+      version: ++this.version,
+      rows,
+      ...(this.selected !== undefined ? { selected: this.selected } : {}),
+      multiSelected: this.multiSelected,
+      ...(this.multiSelectNotice !== undefined ? { multiSelectNotice: this.multiSelectNotice } : {}),
+      ...(this.announcement ? { announcement: this.announcement } : {}),
+      ...(this.reveals ? { reveal: this.reveals } : {})
+    }
+  }
+  private publishNow(): void {
+    if (this.dirty) this.flush()
+    else {
+      this.publish(this.buildSnapshot(this.getSnapshot().rows))
+      this.updateContext()
+    }
+  }
   private invalidate(): void {
     if (this.disposed) return
     this.dirty = true
@@ -2123,8 +2347,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     // A synthetic row can disappear (a load finished); its owner is selected instead.
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
-    this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}),
-      ...(this.reveals ? { reveal: this.reveals } : {}) })
+    this.pruneMultiSelected()
+    this.publish(this.buildSnapshot(rows))
     this.updateContext()
   }
   private updateContext(): void {

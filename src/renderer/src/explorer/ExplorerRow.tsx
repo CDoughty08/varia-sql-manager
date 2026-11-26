@@ -4,6 +4,7 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
 import { liveJobStatus, loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
+import type { ProviderId } from '../../../shared/providers.ts'
 import { codiconClass } from '../../../shared/icons'
 import { isBigQueryPropertyKind } from '../../../shared/bigquery/objects'
 import { isPeekKind } from '../../../shared/explorer/peek.ts'
@@ -32,8 +33,13 @@ export function recoveryLabel(action: TreeAction): string | undefined {
   return action.type === 'retry' ? 'Retry' : action.type === 'continue' ? 'Continue loading' : action.type === 'filter' ? 'Filter…' : undefined
 }
 
+/** Pointer mousedown fields forwarded to GestureService and secondary-click checks (never raw modifier reads). */
+export type RowMouseEvent = GestureEvent & { readonly button: number; readonly preventDefault?: () => void }
+
 export interface RowActions {
   select(rowId: number): void
+  /** Top-level server row press: handles `explorer.addToSelection`, `grid.secondaryClick`, and plain selection. */
+  serverMouseDown?(rowId: number, event: RowMouseEvent): void
   toggle(rowId: number): void
   /** A double-click on a node that does not expand: its kind's default action, if it has one. */
   activate(rowId: number): void
@@ -91,6 +97,16 @@ export interface RowProps {
   readonly recovery?: { readonly label: string; run(): void }
   /** A server being dragged would drop above or below this server row, or (after) below everything when it is the tree's last row. */
   readonly drop?: 'before' | 'after'
+  /** Row currently holds `aria-activedescendant` focus in the tree. */
+  readonly focused?: boolean
+  /** Top-level server row is a member of `multiSelected`. */
+  readonly multiSelected?: boolean
+  /** Multi-server selection mode (`multiSelected.length >= 2`) is active. */
+  readonly inMultiSelect?: boolean
+  /** Connected top-level server whose engine does not match the active multi-select engine lock. */
+  readonly incompatible?: boolean
+  /** Locked engine while `inMultiSelect` is active, for the `SQL only` / `BQ only` pill. */
+  readonly lockedProvider?: ProviderId
 }
 
 const statusWords = { disabled: ', disabled', unavailable: ', unavailable', noAccess: ', no access', readOnly: '' } as const
@@ -272,13 +288,23 @@ export function RowEnd({ count, connection, active, children, actions }: { count
 }
 
 /** Shared 2-line content for both in-tree server rows and pinned server bands, keeping top/bottom sticky stacking jump-free. */
-function ServerBandContent({ node, twistie, sublabel, active, environment, tag, chips, actions }: {
+function ServerBandContent({ node, twistie, sublabel, active, environment, tag, chips, actions, multiSelected, inMultiSelect, incompatible, lockedProvider }: {
   node: TreeNode; twistie: ReactNode; sublabel: string | undefined; active: boolean; environment?: string; tag: ReturnType<typeof environmentTag>; chips?: readonly StatusChip[]; actions?: ReactNode
+  multiSelected?: boolean; inMultiSelect?: boolean; incompatible?: boolean; lockedProvider?: ProviderId
 }) {
+  const icon = <ExplorerIcon name={node.icon} badge={badgeOf(node)} />
+  const lockLabel = lockedProvider === 'bigquery' ? 'BQ only' : 'SQL only'
+  const lockTitle = lockedProvider === 'bigquery'
+    ? 'Multi-server selection is locked to BigQuery connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.'
+    : 'Multi-server selection is locked to SQL Server connections. Use New Cross-Engine SELECT… to query SQL Server and BigQuery together.'
   return <>
     <span className="oe-server-top">
       {twistie}
-      <ExplorerIcon name={node.icon} badge={badgeOf(node)} />
+      {inMultiSelect && !node.lost && <span className={`oe-server-check${multiSelected ? ' checked' : ''}`} data-checked={multiSelected ? '' : undefined} aria-hidden="true"
+        style={{ width: 14, height: 14, flex: 'none', display: 'inline-grid', placeItems: 'center', borderRadius: 'var(--varia-radius-sm)' }}>
+        {multiSelected && <Icon name="check" />}
+      </span>}
+      {incompatible ? <span className="oe-icon-muted" style={{ opacity: 0.55, display: 'inline-flex', flex: 'none' }}>{icon}</span> : icon}
       <Label text={node.label} />
       <RowEnd connection={connectionState(node)}>
         {tag && <EnvironmentTag environment={environment} place="explorer" />}
@@ -288,6 +314,9 @@ function ServerBandContent({ node, twistie, sublabel, active, environment, tag, 
       {sublabel && <span className="oe-sublabel">{displayText(sublabel)}</span>}
       {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
       <span className="oe-server-sub-end">
+        {incompatible && lockedProvider && <span className="oe-lock-tag" aria-hidden="true">
+          <StatusPill tone="neutral" variant="tag" size="small" icon="lock" label={lockLabel} title={lockTitle} />
+        </span>}
         {chips && chips.length > 0 && <StatusChips chips={chips} />}
         {active && <span className="oe-active" title="Server of the active query" aria-hidden="true"><Icon name="file-code" /></span>}
         {actions}
@@ -297,10 +326,11 @@ function ServerBandContent({ node, twistie, sublabel, active, environment, tag, 
 }
 
 /** A shortcut to the server's real tree row, with the same 44 px 2-line band and connection indicators. */
-export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, top, jump }: {
+export function PinnedServerRow({ node, edge, current, active, color, environment, status, menu, top, jump, multiSelected, inMultiSelect, incompatible, lockedProvider, onServerMouseDown }: {
   node: TreeNode; edge: 'top' | 'bottom'; current: boolean; active: boolean; color: string | undefined; environment?: string; status?: RowStatus; menu: boolean; top?: number; jump(): void
+  multiSelected?: boolean; inMultiSelect?: boolean; incompatible?: boolean; lockedProvider?: ProviderId; onServerMouseDown?: (event: RowMouseEvent) => void
 }) {
-  const { explorer } = useWorkbench()
+  const { explorer, gestures, notifications } = useWorkbench()
   const accent = useConnectionAccent(color)
   const menuTarget = useMenuTarget<HTMLButtonElement>(button => {
     const target = explorer.menuNode(node.id)
@@ -311,20 +341,43 @@ export function PinnedServerRow({ node, edge, current, active, color, environmen
     const popup = button.closest<HTMLElement>('[popover]')
     return popup ? button.ownerDocument.querySelector<HTMLButtonElement>(`[popovertarget="${CSS.escape(popup.id)}"]`) ?? undefined : button
   })
+  const handleMouseDown = (event: MouseEvent<HTMLButtonElement>) => {
+    if (onServerMouseDown) { onServerMouseDown(event); return }
+    if (event.button === 2 || gestures?.matches('grid.secondaryClick', event)) {
+      const currentSelected = explorer.getSnapshot().multiSelected
+      if (currentSelected.length >= 2 && currentSelected.includes(node.id)) return
+      explorer.select(node.id)
+      return
+    }
+    if (event.button === 0 && gestures?.matches('explorer.addToSelection', event)) {
+      event.preventDefault()
+      const result = explorer.toggleMultiSelect(node.id)
+      if (result.notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: result.notice })
+    }
+  }
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (gestures?.matches('explorer.addToSelection', event) || gestures?.matches('grid.secondaryClick', event)) return
+    jump()
+  }
   const sublabel = shownSublabel(node), tag = environmentTag(environment)
   const facts = [status?.words && displayText(status.words), tag?.description]
   const name = [`Jump to ${rowName(node)}`, ...facts, active && 'server of the active query', current && 'current section'].filter(Boolean).join(', ')
-  return <button ref={menuTarget} type="button" className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}`}
-    style={accentStyle(accent, top === undefined ? undefined : { top })} data-accent={accent ? '' : undefined} data-current-section={current || undefined} role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
-    aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onClick={jump}>
+  return <button ref={menuTarget} type="button"
+    className={`explorer-row server explorer-pinned-server${active ? ' active-connection' : ''}${node.lost ? ' lost dimmed' : ''}${multiSelected ? ' multi-selected' : ''}${incompatible ? ' dimmed engine-incompatible' : ''}`}
+    style={accentStyle(accent, top === undefined ? undefined : { top })} data-accent={accent ? '' : undefined} data-current-section={current || undefined}
+    data-multi-selected={multiSelected ? '' : undefined} data-engine-incompatible={incompatible ? '' : undefined}
+    role={menu ? 'menuitem' : undefined} tabIndex={menu ? -1 : undefined}
+    aria-label={name} title={clip([rowTooltip(node), ...facts].filter(Boolean).join('\n'))} onMouseDown={handleMouseDown} onClick={handleClick}>
     <ServerBandContent node={node} twistie={<span className="oe-twistie"><Icon name={edge === 'top' ? 'chevron-up' : 'chevron-down'} /></span>}
-      sublabel={sublabel} active={active} environment={environment} tag={tag} chips={status?.chips} />
+      sublabel={sublabel} active={active} environment={environment} tag={tag} chips={status?.chips}
+      multiSelected={multiSelected} inMultiSelect={inMultiSelect} incompatible={incompatible} lockedProvider={lockedProvider} />
   </button>
 }
 
 /** Root server treeitem: subscribes to the theme accent only on server rows so non-server rows avoid extra subscriptions. */
-function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, draggable, active, color, environment, actions, menuTarget, status, drop, expandable, dimmed, sublabel, tag, chips, name, tooltip, note, peekable, select, toggle, edgeOf }: {
-  rowId: number; top: number; level: number; posinset: number; setsize: number; node: TreeNode; selected: boolean; draggable: boolean; active: boolean; color: string | undefined; environment?: string
+function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, focused, multiSelected, inMultiSelect, incompatible, lockedProvider, draggable, active, color, environment, actions, menuTarget, status, drop, expandable, dimmed, sublabel, tag, chips, name, tooltip, note, peekable, select, toggle, edgeOf }: {
+  rowId: number; top: number; level: number; posinset: number; setsize: number; node: TreeNode; selected: boolean; focused?: boolean; multiSelected?: boolean; inMultiSelect?: boolean; incompatible?: boolean; lockedProvider?: ProviderId
+  draggable: boolean; active: boolean; color: string | undefined; environment?: string
   actions: RowActions; menuTarget: RefCallback<HTMLDivElement>; status?: RowStatus; drop?: 'before' | 'after'; expandable: boolean; dimmed: boolean; sublabel: string | undefined
   tag: ReturnType<typeof environmentTag>; chips?: readonly StatusChip[]; name: string; tooltip: string; note?: string; peekable: boolean
   select: (event: MouseEvent) => void; toggle: (event: MouseEvent) => void; edgeOf: (event: DragEvent) => 'before' | 'after'
@@ -332,27 +385,34 @@ function ServerTreeRow({ rowId, top, level, posinset, setsize, node, selected, d
   const accent = useConnectionAccent(color)
   const style = accentStyle(accent, { transform: `translateY(${top}px)` })
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
-    className={`explorer-row server${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
+    className={`explorer-row server${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed || incompatible ? ' dimmed' : ''}${multiSelected ? ' multi-selected' : ''}${incompatible ? ' engine-incompatible' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || serverConnectionStatus(node)?.busy || undefined} aria-label={name} aria-description={rowDescription(node, note)} title={clip(tooltip)} style={style} draggable={draggable || undefined}
     data-accent={accent ? '' : undefined} data-peekable={peekable || undefined} data-drop={drop}
+    data-focused={focused ? '' : undefined} data-multi-selected={multiSelected ? '' : undefined} data-engine-incompatible={incompatible ? '' : undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
-    onClick={(event: MouseEvent) => rowClick(actions, rowId, event)}
     onMouseMove={(event: MouseEvent) => actions.peekHover(rowId, event)} onMouseLeave={() => actions.peekHover(rowId)}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}
     onDragOver={(event: DragEvent) => actions.dragOver(rowId, edgeOf(event), event)} onDragEnd={() => actions.dragEnd()}>
     <ServerBandContent node={node}
       twistie={<span className={`oe-twistie${expandable ? ' ' + codiconClass(node.expanded ? 'chevron-down' : 'chevron-right') : ''}`} aria-hidden="true" onClick={toggle} />}
       sublabel={sublabel} active={active} environment={environment} tag={tag} chips={chips ?? status?.chips}
+      multiSelected={multiSelected} inMultiSelect={inMultiSelect} incompatible={incompatible} lockedProvider={lockedProvider}
       actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />} />
   </div>
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery, drop }: RowProps) {
+function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed, text, selected, focused, multiSelected, inMultiSelect, incompatible, lockedProvider, draggable, active, color, environment, actions, menuTarget, renaming, status, recovery, drop }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = level > 1 ? <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} aria-hidden="true" /> : null
   const select = (event: MouseEvent) => { const target = event.target as Element; if (!target.closest('.oe-twistie') && !target.closest('.oe-star-button')) actions.select(rowId) }
+  const serverMouseDown = (event: MouseEvent) => {
+    const target = event.target as Element
+    if (target.closest('.oe-twistie') || target.closest('.oe-star-button')) return
+    if (actions.serverMouseDown) actions.serverMouseDown(rowId, event)
+    else actions.select(rowId)
+  }
   const half = (event: DragEvent): 'before' | 'after' => { const box = event.currentTarget.getBoundingClientRect(); return event.clientY < box.top + box.height / 2 ? 'before' : 'after' }
   if (kind !== RowKind.Node || !listed) {
     // Loading rows do nothing; the capped row's Enter opens Filter Settings, so it is not announced as unavailable.
@@ -396,9 +456,10 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
     return root && expandable && node.expanded ? 'before' : half(event)
   }
   if (root) {
-    return <ServerTreeRow rowId={rowId} top={top} level={level} posinset={posinset} setsize={setsize} node={node} selected={selected} draggable={draggable && !renaming}
+    return <ServerTreeRow rowId={rowId} top={top} level={level} posinset={posinset} setsize={setsize} node={node} selected={selected} focused={focused}
+      multiSelected={multiSelected} inMultiSelect={inMultiSelect} incompatible={incompatible} lockedProvider={lockedProvider} draggable={draggable && !renaming}
       active={active} color={color} environment={environment} actions={actions} menuTarget={menuTarget} status={status} drop={drop} expandable={expandable}
-      dimmed={dimmed} sublabel={sublabel} tag={tag} chips={chips} name={name} tooltip={tooltip} note={note} peekable={peekable} select={select} toggle={toggle} edgeOf={edgeOf} />
+      dimmed={dimmed} sublabel={sublabel} tag={tag} chips={chips} name={name} tooltip={tooltip} note={note} peekable={peekable} select={serverMouseDown} toggle={toggle} edgeOf={edgeOf} />
   }
   const column = node.kind === 'column' || node.kind === 'bqColumn'
   const primaryKey = isPrimaryKeyColumn(node)
