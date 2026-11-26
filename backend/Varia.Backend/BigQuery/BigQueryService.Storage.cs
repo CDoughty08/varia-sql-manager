@@ -104,6 +104,8 @@ internal sealed partial class BigQueryService
         // A sign-in failure is not about Storage Read: REST reads the result and reports it.
         if (SignIn(rpc) is not null || rpc.StatusCode == StatusCode.Unauthenticated) return null;
         var detail = rpc.Status.Detail ?? "";
+        if (rpc.StatusCode == StatusCode.PermissionDenied && Perimeter(rpc, out var identifier))
+            return new("perimeter", Slower + "VPC Service Controls blocked the BigQuery Storage API from this network or account. " + BigQueryErrors.PerimeterAdvice(identifier), true);
         return rpc.StatusCode switch
         {
             StatusCode.PermissionDenied when detail.Contains("SERVICE_DISABLED", StringComparison.Ordinal) || detail.Contains("has not been used", StringComparison.Ordinal)
@@ -128,6 +130,20 @@ internal sealed partial class BigQueryService
             return status?.Details.Any(detail => detail.TryUnpack<Google.Rpc.ErrorInfo>(out var info) && info.Reason == "SERVICE_DISABLED") == true;
         }
         catch (Exception error) when (error is Google.Protobuf.InvalidProtocolBufferException or InvalidOperationException) { return false; }
+    }
+
+    /// <summary>Whether a refused RPC is VPC Service Controls' (docs/bigquery.md, Errors): its message, or an ErrorInfo detail
+    /// in its trailers, read as REST's error body is.</summary>
+    internal static bool Perimeter(RpcException rpc, out string? identifier)
+    {
+        string? raw = null;
+        try
+        {
+            if (rpc.GetRpcStatus() is { } status)
+                raw = string.Join(' ', status.Details.Select(detail => detail.TryUnpack<Google.Rpc.ErrorInfo>(out var info) ? Google.Protobuf.JsonFormatter.Default.Format(info) : null).Where(text => text is not null));
+        }
+        catch (Exception error) when (error is Google.Protobuf.InvalidProtocolBufferException or InvalidOperationException) { }
+        return BigQueryErrors.IsPerimeter(rpc.Status.Detail, raw, out identifier);
     }
 
     static BigQueryStorageFallback Unreachable() =>
@@ -155,6 +171,7 @@ internal sealed partial class BigQueryService
     {
         StatusCode.Unavailable or StatusCode.DeadlineExceeded => new RequestException("CONNECTION_LOST", BigQueryErrors.Unreachable),
         StatusCode.Unauthenticated => new RequestException("AUTH_EXPIRED", BigQueryErrors.Expired),
+        StatusCode.PermissionDenied when Perimeter(error, out var identifier) => BigQueryErrors.Perimeter(identifier),
         StatusCode.PermissionDenied => new RequestException("PERMISSION_DENIED", "The account may not read this result through the BigQuery Storage API in project " + project + "."),
         _ => new RequestException("BACKEND_ERROR", "Reading the result through the BigQuery Storage API failed: " + BigQueryErrors.Sanitize(error.Status.Detail is { Length: > 0 } detail ? detail : error.StatusCode.ToString()))
     };

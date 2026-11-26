@@ -309,6 +309,15 @@ internal static class BigQueryJobHistoryChecks
         var mine = await SampleAsync(sampler);
         check(Status(mine, "allUsersDenied") is 0 && Status(mine, "held") is 7, "My jobs lists again once the renderer turns the toggle off");
 
+        // A VPC Service Controls refusal is no missing bigquery.jobs.list: an error naming the perimeter, not allUsersDenied.
+        using var fenced = new Harness();
+        await fenced.ConnectAsync(key);
+        fenced.Fake.On("GET", Jobs, BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        using var blocked = fenced.Sampler(new("all", Hours: 24));
+        var perimeter = await SampleAsync(blocked);
+        check((perimeter.Samples.Count == 0 || Status(perimeter, "allUsersDenied") is not 1) && perimeter.Errors.Any(error => error.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal)),
+            "an All users listing VPC Service Controls refuses is an error naming the perimeter, not the allUsersDenied status: " + string.Join(" | ", perimeter.Errors.Select(error => error.Code + " " + error.Message)));
+
         using var allowed = new Harness();
         await allowed.ConnectAsync(key);
         allowed.Fake.On("GET", Jobs, request => request.Uri.Query.Contains("projection=minimal", StringComparison.Ordinal)

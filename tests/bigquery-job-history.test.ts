@@ -5,6 +5,7 @@ import {
   jobHistoryDetailsSchema, qualifiedJobId, type JobHistoryDetails, type JobHistoryRow
 } from '../src/shared/bigquery/history'
 import { jobsByProject, jobsUnavailableText } from '../src/shared/bigquery/jobs'
+import { isPerimeterRefusal, isPermissionRefusal, perimeterOpening } from '../src/shared/bigquery/errors'
 import { optionsAllow } from '../src/shared/ipc/methods'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 import { commandDescriptor } from '../src/shared/commands/catalog'
@@ -140,6 +141,18 @@ describe('Job History rules', () => {
     expect(cancelNotice(row(), { ok: true, value: { cancelled: true, state: 'done' } })).toEqual({ tone: 'info', text: jobHistoryText.cancelDone('job_1') })
     expect(cancelNotice(row(), { ok: true, value: { cancelled: true, state: 'cancelled' } })).toEqual({ tone: 'info', text: jobHistoryText.cancelled('job_1') })
     expect(cancelNotice(row({ mine: false }), { ok: false, error: 'No.', code: 'PERMISSION_DENIED' }).text).toBe(jobHistoryText.cancelDenied('No.'))
+    // VPC Service Controls' refusal is no missing permission: its text stands without the bigquery.jobs.update advice.
+    const fenced = `${perimeterOpening}: the organization's service perimeter does not allow it from this network or account.`
+    expect(cancelNotice(row({ mine: false }), { ok: false, error: fenced, code: 'PERMISSION_DENIED' }).text).toBe(jobHistoryText.cancelFailed(fenced))
+  })
+  it('tells VPC Service Controls refusals apart by the opening the backend gives it', () => {
+    const backend = readFileSync('backend/Varia.Backend/BigQuery/BigQueryErrors.cs', 'utf8')
+    expect(backend).toContain(`PerimeterOpening = "${perimeterOpening}"`)
+    expect(isPerimeterRefusal('PERMISSION_DENIED', `${perimeterOpening}: …`)).toBe(true)
+    expect(isPermissionRefusal('PERMISSION_DENIED', `${perimeterOpening}: …`)).toBe(false)
+    expect(isPerimeterRefusal('QUOTA', `${perimeterOpening}: …`)).toBe(false)
+    expect(isPermissionRefusal('PERMISSION_DENIED', 'The account lacks the bigquery.jobs.get permission.')).toBe(true)
+    expect(isPermissionRefusal('NOT_FOUND', 'Not found.')).toBe(false)
   })
   it('hold the same bounds as the backend\'s BigQueryJobHistory', () => {
     const backend = readFileSync('backend/Varia.Backend/BigQuery/BigQueryJobHistory.cs', 'utf8')

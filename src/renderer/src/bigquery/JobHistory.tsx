@@ -20,6 +20,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { gridTarget } from '../grid/anchor'
 import { useRuns } from '../search/SearchDetails'
 import type { JobHistoryEnd, JobHistoryService, JobHistoryState } from './JobHistoryService'
+import { isPermissionRefusal } from '../../../shared/bigquery/errors'
 
 const probeSpec = liveProbes[jobHistoryProbe]
 const noSubscribe = () => () => {}
@@ -198,7 +199,7 @@ function Details({ state, service, prices }: { readonly state: JobHistoryState; 
     <div className="bq-jobs-details-body">
       {!selected ? <p className="peek-note">Select a job to see its details.</p>
         : !details || details.loading || details.jobId !== selected.jobId ? <p className="peek-note">Loading the job…</p>
-          : details.error ? <p className="peek-note error" role="alert">{selected.hidden || details.error.code === 'PERMISSION_DENIED' ? `Details hidden by BigQuery. ${details.error.message}` : details.error.message}</p>
+          : details.error ? <p className="peek-note error" role="alert">{selected.hidden || isPermissionRefusal(details.error.code, details.error.message) ? `Details hidden by BigQuery. ${details.error.message}` : details.error.message}</p>
             : details.value && <>
               {details.value.job.hidden && <p className="peek-note">Details hidden by BigQuery: only the listed fields came back.</p>}
               <Facts details={details.value} prices={prices} />

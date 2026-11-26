@@ -363,12 +363,12 @@ internal sealed class BigQueryJobsSampler : ILiveSampler
     }
 
     /// <summary>One page; a refused All users listing (PERMISSION_DENIED) marks the view denied and answers null (an empty list),
-    /// so the renderer turns the toggle off and says why.</summary>
+    /// so the renderer turns the toggle off and says why. A VPC Service Controls refusal is no missing permission: it fails the read.</summary>
     private async Task<HistoryPage?> ListPageAsync(BigQueryConnection connection, View state, HistoryListing listing, string? pageToken, int size, int limit, CancellationToken token)
     {
         try { return await service.ListHistoryAsync(connection, listing, pageToken, size, limit, token, Throttled); }
         catch (Exception error) when (listing.AllUsers && !token.IsCancellationRequested && error is not BigQueryOverLimit
-            && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" })
+            && BigQueryErrors.Map(error, connection.Options.Project) is RequestException { Code: "PERMISSION_DENIED" } denied && !BigQueryErrors.IsPerimeter(denied))
         {
             state.AllUsersDenied = true;
             state.Held.Clear();

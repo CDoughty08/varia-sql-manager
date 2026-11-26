@@ -846,6 +846,23 @@ internal static partial class BigQueryExecutionChecks
             && BigQueryService.ReadFailure(Rpc(StatusCode.PermissionDenied, "no getData"), "varia-emulator").Code == "PERMISSION_DENIED"
             && BigQueryService.TransientRead(Rpc(StatusCode.Internal, "RST_STREAM"), CancellationToken.None),
             "a refused token refresh inside the channel is AUTH_EXPIRED and not retried; Unauthenticated and PermissionDenied map as REST's do");
+
+        // VPC Service Controls guards the Storage API as it does REST: its refusal, in the message or in an ErrorInfo trailer,
+        // is no missing read-session permission. A refused name that merely spells the reason is not one.
+        var perimeterDetail = Rpc(StatusCode.PermissionDenied, "VPC Service Controls: Request is prohibited by organization's policy. vpcServiceControlsUniqueIdentifier: Rpc-Id_3");
+        var errorInfo = new Google.Rpc.Status { Code = (int)StatusCode.PermissionDenied, Message = "Request is prohibited by organization's policy." };
+        errorInfo.Details.Add(Google.Protobuf.WellKnownTypes.Any.Pack(new Google.Rpc.ErrorInfo { Reason = "SECURITY_POLICY_VIOLATED", Domain = "googleapis.com", Metadata = { ["uniqueIdentifier"] = "Trailer-Id_5" } }));
+        var perimeterTrailer = new RpcException(new Status(StatusCode.PermissionDenied, "Request is prohibited by organization's policy."),
+            new Metadata { { "grpc-status-details-bin", Google.Protobuf.MessageExtensions.ToByteArray(errorInfo) } });
+        var namedLikeIt = Rpc(StatusCode.PermissionDenied, "Permission denied on table ds.SECURITY_POLICY_VIOLATED");
+        var detailFallback = BigQueryService.Fallback(perimeterDetail, "varia-emulator");
+        var trailerFallback = BigQueryService.Fallback(perimeterTrailer, "varia-emulator");
+        var trailerRead = BigQueryService.ReadFailure(perimeterTrailer, "varia-emulator");
+        check(detailFallback is { Reason: "perimeter", Lasting: true } && detailFallback.Sentence.Contains("identifier Rpc-Id_3", StringComparison.Ordinal)
+            && trailerFallback is { Reason: "perimeter" } && trailerFallback.Sentence.Contains("identifier Trailer-Id_5", StringComparison.Ordinal) && !trailerFallback.Sentence.Contains("readsessions", StringComparison.Ordinal)
+            && trailerRead.Code == "PERMISSION_DENIED" && trailerRead.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal) && trailerRead.Message.Contains("Trailer-Id_5", StringComparison.Ordinal)
+            && BigQueryService.Fallback(namedLikeIt, "varia-emulator") is { Reason: "permission" } && !BigQueryService.ReadFailure(namedLikeIt, "varia-emulator").Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal),
+            $"a Storage API refusal VPC Service Controls made says so, from its message or its ErrorInfo trailer: {detailFallback?.Sentence} | {trailerFallback?.Sentence} | {trailerRead.Message}");
         {
             var (jobs, storage) = Numbers(1500, 500);
             storage.ReadFault = (_, _) => refresh;
