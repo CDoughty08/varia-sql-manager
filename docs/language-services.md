@@ -178,7 +178,7 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
 `npm run dev`, `npm run build`, `npm start` and `npm run build:smoke` prepare the pinned runtime first. The first run
 downloads the upstream archive; later runs verify and reuse it. Transient failures get up to three attempts within one
 three-minute budget, the last through the pinned asset's official GitHub API download, checksum unchanged.
-`npm run package` prepares its platform in `beforePack`; release CI prepares it explicitly.
+`npm run package` prepares its platform in `beforePack`; release CI prepares it explicitly ([packaging locally](ci.md#packaging-locally)).
 
 The pin and per-platform SHA-256 hashes are in `build/sqltools-service.json`. Preparation verifies the archive before
 extraction, keeps the whole runtime and upstream notices, adds the component's MIT license and records each file's hash.
