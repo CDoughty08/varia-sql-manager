@@ -16,6 +16,10 @@ namespace Varia.Backend.Search;
 internal readonly record struct SqlSync(bool Definitions, bool Children, int DatabaseId, long Created, Guid Broker, int Collation, byte[] Digest)
 {
     public const byte Version = 1;
+    /// <summary>What <see cref="ObjectSearchSql.Batch"/> read when <see cref="Version"/> was last set (the first hex digits of its
+    /// SHA-256, pinned by a check): a change to what the batch indexes must raise the version too, or an unchanged fingerprint
+    /// would keep files read the old way.</summary>
+    public const string BatchShape = "6F660146F59A7C18";
     public const int Bytes = 50;
     public const int DigestBytes = 16;
 

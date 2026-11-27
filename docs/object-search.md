@@ -397,8 +397,8 @@ database's catalog can run:
 - **Changed.** Otherwise the build lists the database's objects (each id, parent, last change and a checksum of its name,
   schema, type and statistics) and compares them with the list saved beside the file. Only new and changed objects, a
   changed child's parent, and their children and definitions are read again; dropped ones are dropped, and the rest keep
-  what the file held. The file is then saved in place. A database is read whole instead when more than 20,000 objects,
-  or more than a quarter of a database of over 256, changed; when its file left definitions out for memory; or when its
+  what the file held. The file is then saved in place. A database is read whole instead when the objects to read again
+  (the changed ones with their children) number more than 20,000, or more than 256 and more than a quarter of its objects; when its file left definitions out for memory; or when its
   compatibility level is below 130 (the selective read needs `OPENJSON`). Table types are always read again whole.
 - **Failures are values.** A fingerprint, listing or selective read that fails, is denied or takes longer than 15 seconds
   (the fingerprint) reads the database whole as if nothing were saved; a file that does not open or does not load is

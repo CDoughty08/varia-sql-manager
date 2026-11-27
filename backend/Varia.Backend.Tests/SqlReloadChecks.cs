@@ -121,6 +121,10 @@ internal static class SqlReloadChecks
             && whole.Contains("WHERE st.auto_created = 0", StringComparison.Ordinal) && only.Contains("WHERE st.auto_created = 0", StringComparison.Ordinal)
             && ObjectSearchSql.Fingerprint(render).Contains("DB_ID()", StringComparison.Ordinal) && !ObjectSearchSql.Fingerprint(render).Contains("@", StringComparison.Ordinal),
             "the fingerprint, listing and selective batch pass the index's lint; no batch reads auto-created statistics; only the selective batch names its ids");
+        check(only.Contains("m.object_id IN " + ObjectSearchSql.DdlTriggerIds, StringComparison.Ordinal),
+            "a selective batch reads the database DDL triggers' definitions again, which no listing names (they are not in sys.objects)");
+        var shape = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(whole)))[..16];
+        check(shape == SqlSync.BatchShape, "what the batch reads is the shape the sync version was set for (raise SqlSync.Version and pin " + shape + ")");
     }
 
     // ---- A model database read through fake batches ----

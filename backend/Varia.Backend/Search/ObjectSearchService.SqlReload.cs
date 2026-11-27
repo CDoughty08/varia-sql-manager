@@ -58,6 +58,13 @@ internal sealed partial class ObjectSearchService
             state.Index.Abandon(loaded);
             return Count(ref reloadRefused, database, "refused:rewritten");
         }
+        // Unchanged, but saved with definitions left out for memory: read whole once there is room above the names' reserve (as
+        // much again as the read takes), as a held resource set is, so raising the limit brings them back.
+        if (unchanged && loaded.LeftOut > 0 && budget.Free >= Limits.NamesReserveBytes + loaded.Bytes)
+        {
+            state.Index.Abandon(loaded);
+            return Count(ref reloadWhole, database, "whole");
+        }
         if (unchanged)
         {
             loaded.Sync = unit.Sync;
@@ -141,6 +148,14 @@ internal sealed partial class ObjectSearchService
         InDatabase(command, database, perDatabase, ReloadFingerprint(render));
         await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, limit.Token);
         return await SqlFingerprint.ReadAsync(rows, limit.Token);
+    }
+
+    /// <summary>The fingerprint a whole read saves beside it, or null where it failed, timed out or was denied (the read goes on
+    /// as it would without one, and the next build reads the database whole again); a stop of the build itself still throws.</summary>
+    private async Task<SqlFingerprint?> TryFingerprintAsync(SqlConnection connection, string database, SqlRender render, bool perDatabase, CancellationToken token)
+    {
+        try { return await FingerprintAsync(connection, database, render, perDatabase, token); }
+        catch (Exception error) when (error is SqlException or OperationCanceledException or InvalidOperationException && !token.IsCancellationRequested) { return null; }
     }
 
     /// <summary>The database's indexed sys.objects rows now (<see cref="ObjectSearchSql.Listing"/>), at most as many as a listing holds.</summary>

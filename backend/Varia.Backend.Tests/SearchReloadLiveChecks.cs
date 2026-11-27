@@ -35,6 +35,7 @@ internal static class SearchReloadLiveChecks
             await Run("CREATE VIEW rl.vw_orders AS SELECT id AS c, N'" + marker + "_one' AS v FROM rl.Orders;", "create a view");
             await Run("CREATE PROCEDURE rl.usp_keep AS SELECT N'" + marker + "_keep' AS v;", "create a procedure");
             await Run("CREATE PROCEDURE rl.usp_gone AS SELECT 2;", "create a procedure to drop");
+            await Run("CREATE TRIGGER tr_rl ON DATABASE FOR CREATE_SYNONYM AS DECLARE @v nvarchar(64) = N'" + marker + "_ddl';", "create a database DDL trigger");
             var auto = await sql("SELECT COUNT(*) FROM sys.stats WHERE object_id = OBJECT_ID(N'rl.Orders') AND auto_created = 1;", database);
             check(auto.Error is null && int.TryParse(auto.Scalar, out var autos) && autos >= 1, "the server created an auto statistic on the scratch table (" + auto.Scalar + ")");
 
@@ -78,6 +79,7 @@ internal static class SearchReloadLiveChecks
             check(outcomes.GetValueOrDefault(database) is { } renamed && renamed.StartsWith("reread:1:", StringComparison.Ordinal)
                 && (await Names("New_Name")).Contains("table:rl.New_Name") && !(await Names("Old_Name")).Any(hit => hit.StartsWith("table:rl.", StringComparison.Ordinal)),
                 "a renamed table is read again alone and found by its new name (" + outcomes.GetValueOrDefault(database) + ")");
+            check((await Names(marker + "_ddl")).Count == 1, "a database DDL trigger (not in sys.objects, so in no listing) keeps its definition through a selective re-read");
 
             // An altered view and procedure, a new table, a dropped procedure and a column added: only those are read again.
             await Run("ALTER VIEW rl.vw_orders AS SELECT id AS c, N'" + marker + "_two' AS v FROM rl.Orders;", "alter the view");
@@ -111,6 +113,13 @@ internal static class SearchReloadLiveChecks
             await Session();
             check(outcomes.GetValueOrDefault(database) == "failed" && service.Search.SqlReloads.Failed > failed && await Names(marker + "_kept") is ["procedure:rl.usp_keep"],
                 "a fingerprint that fails is counted and the database read whole");
+            // The whole read's own fingerprint failed too: the read was kept and saved with nothing to compare, so the next build
+            // reads it whole again, now saving a fingerprint.
+            check(service.Search.Store.Find(scope, IndexUnitKind.Database, database) is { Sync.Length: 0 }, "a whole read whose fingerprint failed is saved with no fingerprint");
+            service.Search.ReloadFingerprint = ObjectSearchSql.Fingerprint;
+            await Session();
+            check(outcomes.GetValueOrDefault(database) == "unverifiable" && service.Search.Store.Find(scope, IndexUnitKind.Database, database) is { } refreshed && SqlSync.From(refreshed.Sync) is not null,
+                "a file with no fingerprint is read whole, and saved with one (" + outcomes.GetValueOrDefault(database) + ")");
             service.Search.ReloadFingerprint = render => "WAITFOR DELAY '00:00:10';\n" + ObjectSearchSql.Fingerprint(render);
             service.Search.FingerprintBudget = TimeSpan.FromMilliseconds(300);
             watch.Restart();
@@ -119,6 +128,22 @@ internal static class SearchReloadLiveChecks
                 "a fingerprint past its budget is counted and the database read whole (" + watch.ElapsedMilliseconds + " ms)");
             service.Search.ReloadFingerprint = ObjectSearchSql.Fingerprint;
             service.Search.FingerprintBudget = TimeSpan.FromSeconds(15);
+            await Session();
+
+            // Saved with its definitions left out for memory: an unchanged fingerprint does not keep it so once there is room.
+            await service.Search.Store.ClearAsync();
+            await service.Search.Store.Idle();
+            var reserve = service.Search.Limits.NamesReserveBytes;
+            service.Search.Limits.NamesReserveBytes = service.Search.Budget.Limit;
+            try { await Session(); }
+            finally { service.Search.Limits.NamesReserveBytes = reserve; }
+            check((await Names(marker + "_kept")).Count == 0 && service.Search.Store.Find(scope, IndexUnitKind.Database, database) is not null,
+                "a read with no room for definitions is saved without them");
+            await Session();
+            check(outcomes.GetValueOrDefault(database) == "whole" && await Names(marker + "_kept") is ["procedure:rl.usp_keep"],
+                "an unchanged database saved without its definitions is read whole once there is room for them (" + outcomes.GetValueOrDefault(database) + ")");
+            await Session();
+            check(outcomes.GetValueOrDefault(database) == "unchanged", "and is then held from its file (" + outcomes.GetValueOrDefault(database) + ")");
 
             // Dropped and created again under the same name: another database, read whole.
             SqlConnection.ClearAllPools();

@@ -30,6 +30,10 @@ internal static class ObjectSearchSql
     /// <summary>The table types' own object ids: a selective re-read reads every table type again, with its columns, keys and indexes.</summary>
     internal const string TableTypeIds = "(SELECT tt.type_table_object_id FROM sys.table_types AS tt)";
 
+    /// <summary>The database DDL triggers, which sys.objects (and so no listing) holds: a selective read reads them whole, as the
+    /// batch's trigger result set does, definitions included.</summary>
+    internal const string DdlTriggerIds = "(SELECT tr.object_id FROM sys.triggers AS tr WHERE tr.parent_class = 0)";
+
     /// <summary>The sys.objects types the index lists, as Object Explorer's folders do: tables (and external tables), views,
     /// procedures (T-SQL, CLR, extended and replication-filter), functions, synonyms, sequences, rules, stand-alone defaults and
     /// security policies, and the children kept with their table or view: DML triggers, keys and constraints.</summary>
@@ -135,7 +139,8 @@ internal static class ObjectSearchSql
                 + (only ? " WHERE fk.parent_object_id IN " + Only : "") + " ORDER BY fk.constraint_object_id, fk.constraint_column_id;\n"
             : "")
         + (definitions
-            ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL" + (only ? " AND m.object_id IN " + Only : "")
+            ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL"
+                + (only ? " AND (m.object_id IN " + Only + " OR m.object_id IN " + DdlTriggerIds + ")" : "")
                 + " UNION ALL SELECT cc.object_id, cc.definition FROM sys.check_constraints AS cc WHERE cc.definition IS NOT NULL"
                 + (only ? " AND (cc.parent_object_id IN " + Only + " OR cc.parent_object_id IN " + TableTypeIds + ")" : "")
                 + " UNION ALL SELECT dc.object_id, dc.definition FROM sys.default_constraints AS dc WHERE dc.definition IS NOT NULL"

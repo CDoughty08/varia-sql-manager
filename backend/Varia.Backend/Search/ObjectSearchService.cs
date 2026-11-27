@@ -613,17 +613,14 @@ internal sealed partial class ObjectSearchService : IDisposable
             // Nothing held yet (the connection's first build, or a database it could not read before): what was saved of it stands
             // in only once its fingerprint says it still may, or once what changed has been read again.
             if (held is null && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token) is { } reloaded) return reloaded.Skip;
+            // The fingerprint is taken before the batch (whatever DDL lands while it reads makes the next one differ from the saved
+            // one), and only where a file would keep it; one that fails leaves the read as it was, with nothing to compare next time.
+            var fingerprint = state.Index.Sink?.Scope is not null && Store.Saves ? await TryFingerprintAsync(connection, database, render, perDatabase, budgetSource.Token) : null;
+            if (fingerprint is null) reader.ListNothing();
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
-            // The fingerprint comes first: whatever DDL lands while the batch reads makes the next fingerprint differ from the saved one.
-            InDatabase(command, database, perDatabase, ObjectSearchSql.Fingerprint(render) + ObjectSearchSql.Batch(render, definitions, children));
-            SqlFingerprint? fingerprint = null;
-            var index = await ReadBatchAsync(command, async rows =>
-            {
-                fingerprint = await SqlFingerprint.ReadAsync(rows, budgetSource.Token);
-                await rows.NextResultAsync(budgetSource.Token);
-                return await reader.ReadAsync(rows, definitions, budgetSource.Token, children);
-            }, read =>
+            InDatabase(command, database, perDatabase, ObjectSearchSql.Batch(render, definitions, children));
+            var index = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), read =>
             {
                 read.Sync = fingerprint?.Sync(definitions, children).ToBytes() ?? default(ReadOnlyMemory<byte>);
                 read.Extra = fingerprint is null ? default : reader.Listing ?? default(ReadOnlyMemory<byte>);
@@ -894,6 +891,10 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     /// <summary>The sys.objects rows the read listed (<see cref="SqlListing"/>), each with the entry it added (or -1); null where the
     /// batch's first result set has no checksum column (a read of another shape).</summary>
     private List<SqlListingRow>? listed;
+    private bool listing = true;
+
+    /// <summary>Keeps no listing of this read: nothing will compare it (no fingerprint, or nothing saved).</summary>
+    public void ListNothing() => listing = false;
     /// <summary>A selective re-read's saved side (<see cref="Seed"/>), or null for a whole read.</summary>
     private Merge? merge;
 
@@ -1105,7 +1106,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         try
         {
             var byId = merge?.Ids ?? [];
-            listed = reader.FieldCount > 9 ? [] : null;
+            listed = listing && reader.FieldCount > 9 ? [] : null;
             while (await reader.ReadAsync(token))
             {
                 var id = reader.GetInt32(0);
