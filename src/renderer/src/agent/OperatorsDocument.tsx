@@ -65,7 +65,7 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
     event.currentTarget.querySelector<HTMLButtonElement>(`[data-cell="${next.row}:${next.column}"]`)?.focus()
   }
   return <div className="agent-operators-grid-wrap">
-    <table className="properties-table agent-operators-grid" aria-label="Operators and notifications">
+    <table className="agent-operators-grid" aria-label="Operators and notifications">
       <thead><tr><th scope="col">Alert</th>{model.operators.map(operator => <th key={operator.id} scope="col" data-selected={operator.name === selected || undefined}>
         <button type="button" className="agent-operators-head" aria-pressed={operator.name === selected} onClick={() => onSelect(operator.name)}>{operator.name}{!operator.enabled && ' (disabled)'}</button>
       </th>)}</tr></thead>
@@ -166,7 +166,7 @@ function JobsTable({ state, model }: { readonly state: State; readonly model: Ag
   if (!jobs.length) return null
   return <section className="agent-operators-jobs" aria-label="Jobs that notify operators">
     <h3>Jobs that notify operators</h3>
-    <table className="properties-table">
+    <table className="agent-table">
       <thead><tr><th scope="col">Job</th><th scope="col">E-mail</th><th scope="col">Page</th><th scope="col"><span className="visually-hidden">Open</span></th></tr></thead>
       <tbody>{jobs.map(job => <tr key={job.id}><th scope="row">{job.name}</th><td>{job.email || '—'}</td><td>{job.page || '—'}</td>
         <td><button type="button" aria-label={`Open ${job.name}`} disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => jobDocuments.openJob(connectionId, job.name), 'The job could not be opened.') }}>Open job</button></td>
@@ -197,13 +197,15 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
   const verbs: Verb[] = [{ command: 'agentOperators.reload', args, label: 'Reload' }, { command: 'agentOperators.save', args, label: state.changes ? `Save · ${state.changes} ${state.changes === 1 ? 'change' : 'changes'}` : 'Save', emphasis: 'primary' }]
   const operator = model?.operators.find(item => item.name === selected) ?? model?.operators[0]
   const content = !model || !draft ? state.phase === 'loading' ? <Skeleton rows={4} label="Reading the operators" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the operators could not be read.' : ''}</p>
-    : <div className="agent-operators-body">
-      <Grid state={state} model={model} draft={draft} editable={editable} service={operatorsDocuments} {...operator ? { selected: operator.name } : {}} onSelect={setSelected} />
-      {operator && <SidePane state={state} model={model} operator={operator} service={operatorsDocuments} onDelete={() => setDialog('delete')} />}
+    : <>
+      <div className="agent-operators-body">
+        <Grid state={state} model={model} draft={draft} editable={editable} service={operatorsDocuments} {...operator ? { selected: operator.name } : {}} onSelect={setSelected} />
+        {operator && <SidePane state={state} model={model} operator={operator} service={operatorsDocuments} onDelete={() => setDialog('delete')} />}
+      </div>
       <JobsTable state={state} model={model} />
       {dialog === 'delete' && operator && <DeleteOperator state={state} model={model} operator={operator} service={operatorsDocuments} onClose={() => setDialog(undefined)} />}
       {dialog === 'recommended' && <AddRecommended state={state} model={model} service={operatorsDocuments} onClose={() => { setDialog(undefined); operatorsDocuments.setAsk(state.id, undefined) }} />}
-    </div>
+    </>
   const sections: FrameSection[] = operatorsSections.map(section => ({ id: section.id, title: section.title, problem: false, content }))
   const phaseLabel = state.phase === 'loading' ? 'Reading the operators…' : state.phase === 'saving' ? 'Saving the notifications…' : state.busy
   const recovery = state.phase === 'loadFailed' ? [{ label: 'Reload', run: () => operatorsDocuments.reload(state.id) }] : []

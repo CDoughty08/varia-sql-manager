@@ -20,6 +20,8 @@ input, textarea, [contenteditable="true"], .monaco-editor, .messages, [role="ale
 button, select { user-select: none; }
 button, input, select { font: inherit; }
 button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: var(--varia-radius-sm); cursor: pointer; padding: 6px 9px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; }
+button:where(:has(> .codicon)), button:where(:has(> .icon)) { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+button:where(:has(> .codicon)) > .codicon { flex: none; }
 /* Only hover and pressed fills fade in (80 ms; leaving hover is instant): selection, the current page or tab and a menu moved to with the keys
    change at once, as in SSMS, so a state rule that colours a button or row sets transition: none. */
 button:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
@@ -2924,17 +2926,20 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-bulk-state { min-width: 8ch; color: var(--varia-descriptionForeground); }
 .agent-bulk-lines > li[data-state="failed"] .agent-bulk-state { color: var(--varia-errorForeground); }
 .agent-bulk-message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-job-status, .agent-stopped-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-3); white-space: nowrap; }
+.agent-job-status, .agent-stopped-status { display: flex; align-items: center; gap: var(--varia-space-1); margin-left: var(--varia-space-2); white-space: nowrap; min-width: 0; }
+.agent-job-status::before, .agent-stopped-status::before { content: ''; width: 1px; height: 12px; margin-right: var(--varia-space-1); background: var(--varia-statusBar-separatorForeground); opacity: 0.35; flex-shrink: 0; }
 .agent-job-status .codicon, .agent-stopped-status .codicon { font-size: var(--varia-glyph-sm); }
-.agent-job-status button { color: inherit; background: transparent; border: 1px solid currentColor; padding: 0 var(--varia-space-1); font-size: var(--varia-size-xs); line-height: 14px; }
-.agent-job-status-text { max-width: 48ch; overflow: hidden; text-overflow: ellipsis; }
-.agent-stopped-status button { display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); color: inherit; font-size: inherit; border-color: transparent; background: transparent; cursor: pointer; }
+.agent-job-status .icon { font-size: var(--varia-glyph-sm); }
+.agent-job-status button, .agent-stopped-status button { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: inherit; font-size: inherit; line-height: inherit; cursor: pointer; }
+.agent-job-status button:focus-visible, .agent-stopped-status button:focus-visible { outline-offset: -2px; transition: none; }
+.agent-job-status-text { min-width: 0; max-width: 48ch; overflow: hidden; text-overflow: ellipsis; }
+.agent-job-status-more { color: inherit; opacity: 0.8; flex-shrink: 0; }
 .agent-job-start { display: flex; flex-direction: column; gap: var(--varia-space-2); max-width: 560px; padding: var(--varia-space-4); }
 .agent-job-start-choice { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-3); text-align: left; white-space: normal; border-color: var(--varia-widget-border); }
 .agent-job-start-choice > span { display: flex; flex-direction: column; gap: var(--varia-space-0); }
 .agent-job-start-choice:hover:not(:disabled) { background: var(--varia-list-hoverBackground); }
 .agent-job-start-split { display: inline-flex; align-items: center; }
-.agent-job-start-split > button + button { padding-left: var(--varia-space-1); padding-right: var(--varia-space-1); }
+.agent-job-start-split > button + button { justify-content: center; padding-left: var(--varia-space-1); padding-right: var(--varia-space-1); }
 .agent-job-stale { display: flex; flex-direction: column; gap: var(--varia-space-2); font-size: var(--varia-size-sm); padding: var(--varia-space-2) var(--varia-space-4); border-left: 2px solid var(--varia-warningForeground); }
 .agent-job-stale p { margin: 0; display: flex; align-items: center; gap: var(--varia-space-1); }
 .agent-job-stale .agent-job-stale-actions { gap: var(--varia-space-2); }
@@ -3794,6 +3799,24 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 @keyframes server-drop-wash { 0% { opacity: 0; background-position: -60% 0; } 20%, 70% { opacity: 0.18; } 100% { opacity: 0; background-position: 160% 0; } }
 @keyframes server-drop-details { 0% { opacity: 1; } 35% { opacity: 0; filter: blur(2px); } 100% { opacity: 1; } }
 
+/* SQL Server Agent shared typography & Calm Pro table primitives (AP-1). */
+.agent-eyebrow { margin: 0 0 var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.agent-mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.agent-table { width: 100%; border-collapse: collapse; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
+.agent-table.borderless { border: 0; border-radius: 0; }
+.agent-table thead th { position: sticky; top: 0; z-index: 1; height: var(--varia-row); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-align: left; white-space: nowrap; }
+.agent-table tbody td, .agent-table tbody th { height: var(--varia-row); padding: var(--varia-space-0) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); font-weight: normal; text-align: left; vertical-align: middle; }
+.agent-table tbody tr:last-child td, .agent-table tbody tr:last-child th { border-bottom: 0; }
+.agent-table .num { text-align: right; font-family: var(--varia-font-mono); font-variant-numeric: tabular-nums; }
+.agent-table tbody tr:hover { background: var(--varia-list-hoverBackground); }
+.agent-table tbody tr[aria-selected="true"], .agent-table tbody tr[data-selected] { transition: none; background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.agent-table tbody tr[data-removed] { opacity: 0.6; text-decoration: line-through; }
+@media (forced-colors: active) {
+  .agent-table { border-color: CanvasText; }
+  .agent-table thead th, .agent-table tbody td, .agent-table tbody th { border-color: CanvasText; }
+  .agent-table tbody tr[aria-selected="true"], .agent-table tbody tr[data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}
+
 /* SQL Server Agent Properties (AG-8a). */
 .agent-properties { display: flex; flex-direction: column; gap: 12px; }
 .agent-service-facts { display: grid; grid-template-columns: 176px minmax(0, 1fr); gap: 4px 12px; margin: 0 0 8px; font-size: var(--varia-size-xs); }
@@ -3808,42 +3831,43 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-purge-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .agent-purge-actions { display: flex; gap: 8px; margin-left: auto; }
 .agent-purge-question { flex: 1 1 320px; min-width: 0; }
-.agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 360px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
-.agent-history-body { display: flex; flex: 1; gap: var(--varia-space-3); min-height: 0; }
-.agent-history-sources { display: flex; flex-direction: column; flex: 0 0 220px; min-height: 0; overflow: auto; border: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); }
-.agent-history-sources > h3 { margin: 0; padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); font-weight: 600; }
-.agent-history-sources > ul { margin: 0; padding: 0 0 var(--varia-space-1) var(--varia-space-4); list-style: none; }
-.agent-history-source { display: flex; align-items: center; gap: var(--varia-space-1); padding: 2px var(--varia-space-2); cursor: default; }
-.agent-history-source:hover { background: var(--varia-list-hoverBackground); }
-.agent-history-source > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-history-running { color: var(--varia-descriptionForeground); }
-.agent-history-main { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-2); min-width: 0; min-height: 0; }
-.agent-history-select { display: inline-flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); }
-.agent-history-step { width: 64px; }
-.agent-history-grid { position: relative; display: flex; flex: 1; min-height: 140px; border: 1px solid var(--varia-panel-border); }
-.agent-history-empty { position: absolute; inset: var(--varia-space-5) 0 0; background: var(--varia-resultsGrid-background); }
-.agent-history-ended { display: flex; flex: 1; flex-direction: column; justify-content: center; min-height: 0; }
-.agent-history-note, .agent-history-caps { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
-.agent-history-run { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--varia-space-2); height: 220px; }
-.agent-history-run > :first-child { display: flex; min-width: 0; border: 1px solid var(--varia-panel-border); }
-.agent-history-details { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); }
-.agent-history-details-head { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); }
-.agent-history-details-head > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-history-details-head > span { flex: 1; min-width: 0; color: var(--varia-descriptionForeground); }
-.agent-history-details-head > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
-.agent-history-message { flex: 1; margin: 0; padding: var(--varia-space-1) var(--varia-space-2); overflow: auto; font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
-.agent-history-message-empty { margin: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
-.agent-history-deleted { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); border-radius: var(--varia-radius-sm); border: 1px solid var(--varia-chip-activeBorder); background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); font-size: var(--varia-size-sm); }
-.agent-history-deleted > span { flex: 1; min-width: 0; }
-.agent-history-delete-jobs { max-height: 140px; margin: var(--varia-space-2) 0; overflow: auto; }
-.agent-history-delete-scope { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); }
-.agent-history-delete-older { display: flex; gap: var(--varia-space-1); padding-left: var(--varia-space-5); }
-.agent-history-delete-older > input { width: 72px; }
-.agent-history-delete-note { margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.lfv { display: flex; flex-direction: column; gap: var(--varia-space-2); box-sizing: border-box; height: 100%; min-height: 360px; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.lfv-body { display: flex; flex: 1; gap: var(--varia-space-3); min-height: 0; }
+.lfv-sources { display: flex; flex-direction: column; flex: 0 0 220px; min-height: 0; overflow: auto; border: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); }
+.lfv-sources > h3 { margin: 0; padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); font-weight: 600; }
+.lfv-sources > ul { margin: 0; padding: 0 0 var(--varia-space-1) var(--varia-space-4); list-style: none; }
+.lfv-source { display: flex; align-items: center; gap: var(--varia-space-1); padding: 2px var(--varia-space-2); cursor: default; }
+.lfv-source:hover { background: var(--varia-list-hoverBackground); }
+.lfv-source > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lfv-running { color: var(--varia-descriptionForeground); }
+.lfv-main { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-2); min-width: 0; min-height: 0; }
+.lfv-select { display: inline-flex; align-items: center; gap: var(--varia-space-1); font-size: var(--varia-size-sm); }
+.lfv-step { width: 64px; }
+.lfv-grid { position: relative; display: flex; flex: 1; min-height: 140px; border: 1px solid var(--varia-panel-border); }
+.lfv-empty { position: absolute; inset: var(--varia-space-5) 0 0; background: var(--varia-resultsGrid-background); }
+.lfv-ended { display: flex; flex: 1; flex-direction: column; justify-content: center; min-height: 0; }
+.lfv-note, .lfv-caps { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.lfv-run { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: var(--varia-space-2); height: 220px; }
+.lfv-run > :first-child { display: flex; min-width: 0; border: 1px solid var(--varia-panel-border); }
+.lfv-details { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); }
+.lfv-details-head { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); font-size: var(--varia-size-sm); }
+.lfv-details-head > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lfv-details-head > span { flex: 1; min-width: 0; color: var(--varia-descriptionForeground); }
+.lfv-details-head > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
+.lfv-message { flex: 1; margin: 0; padding: var(--varia-space-1) var(--varia-space-2); overflow: auto; font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.lfv-message-empty { margin: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.lfv-deleted { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); border-radius: var(--varia-radius-sm); border: 1px solid var(--varia-chip-activeBorder); background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); font-size: var(--varia-size-sm); }
+.lfv-deleted > span { flex: 1; min-width: 0; }
+.agent-step-banner > button[aria-label="Dismiss"], .agent-last-run-head > button, .lfv-deleted > button { justify-content: center; }
+.lfv-delete-jobs { max-height: 140px; margin: var(--varia-space-2) 0; overflow: auto; }
+.lfv-delete-scope { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); }
+.lfv-delete-older { display: flex; gap: var(--varia-space-1); padding-left: var(--varia-space-5); }
+.lfv-delete-older > input { width: 72px; }
+.lfv-delete-note { margin: var(--varia-space-2) 0 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
 /* The Agent error log's rows and the selected row's message (AG-5b). */
-.agent-history-errorlog { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-2); min-height: 0; }
-.agent-history-errorlog > .agent-history-details { flex: 0 0 140px; }
-.agent-history-sources > .inline-error, .agent-history-sources > .agent-history-note { margin: 0 var(--varia-space-2) var(--varia-space-1); }
+.lfv-errorlog { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-2); min-height: 0; }
+.lfv-errorlog > .lfv-details { flex: 0 0 140px; }
+.lfv-sources > .inline-error, .lfv-sources > .lfv-note { margin: 0 var(--varia-space-2) var(--varia-space-1); }
 /* SQL Server Agent alerts and operators (AG-7): the alert document's When / Then / Options, its operator chips with E, P and N toggles, the
    operator document, and the Operators and notifications grid with its side pane. A pressed toggle, a changed cell and the selected operator
    column read from colour and weight, and from the system colours in forced colours. */
@@ -3852,7 +3876,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-alert-condition > select.property-input { flex: 0 0 auto; }
 .agent-alert-wmi { margin: 0; padding: var(--varia-space-2); white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--varia-font-mono); font-size: var(--varia-size-sm); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); }
 .agent-alert-counter-values { display: flex; flex-direction: column; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
-.agent-alert-counter-values .properties-table { width: auto; }
+.agent-alert-counter-values .agent-table { width: auto; }
 .agent-alert-chips, .agent-alert-chip-list { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .agent-alert-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-0) var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
 .agent-alert-chip[data-new] { border-style: dashed; }
@@ -3861,7 +3885,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-alert-new-operator { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-top: var(--varia-space-2); }
 .agent-alert-new-operator > .property-input { flex: 1 1 140px; min-width: 0; }
 .agent-alert-new-operator > .field-note { flex-basis: 100%; margin: 0; }
-.agent-operator-duty .properties-table, .agent-operator-notifications .properties-table { width: auto; }
+.agent-operator-duty .agent-table, .agent-operator-notifications .agent-table { width: auto; }
 .agent-operator-jobs { margin: var(--varia-space-1) 0 0; padding-left: var(--varia-space-4); font-size: var(--varia-size-sm); }
 .agent-operators-body { display: flex; align-items: flex-start; gap: var(--varia-space-3); min-height: 0; }
 .agent-operators-grid-wrap { flex: 1 1 auto; min-width: 0; max-height: 60vh; overflow: auto; }
@@ -3950,6 +3974,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-proxy-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); padding: 0 var(--varia-space-1) 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
 .agent-proxy-chip[data-changed] { border-color: var(--varia-list-highlightForeground); }
 .agent-proxy-chip > button { padding: 0 var(--varia-space-0); }
+.agent-alert-chip > button[aria-label^="Remove"], .agent-proxy-chip > button { justify-content: center; }
 .credential-uses, .credential-uses ul { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; font-size: var(--varia-size-sm); }
 .credential-uses li > span, .credential-uses ul li { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
 .credential-uses ul { padding-left: var(--varia-space-5); }
@@ -3963,38 +3988,38 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-bulk-form-buttons { display: flex; gap: var(--varia-space-2); margin: var(--varia-space-1) 0 0; }
 .agent-bulk-schedules { max-height: 280px; overflow: auto; }
 /* The job document's History section (AG-6d): the run durations' bars with the usual time, the runs beside the selected run's detail, and the live run view. */
-.agent-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }
-.agent-history-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
-.agent-history-head > :last-child { margin-left: auto; }
-.agent-history-spark { height: 40px; max-width: 360px; }
-.agent-history-filter { display: inline-flex; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
-.agent-history-filter > button { padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: none; font-size: var(--varia-size-xs); }
-.agent-history-filter > button[aria-checked="true"] { transition: none; background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
-.agent-history-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 2fr); gap: var(--varia-space-3); align-items: start; }
-.agent-history-runs { display: flex; flex-direction: column; gap: 1px; max-height: 360px; margin: 0; padding: 0; overflow: auto; list-style: none; }
-.agent-history-runs button { display: grid; grid-template-columns: auto 1fr auto; gap: 0 var(--varia-space-2); width: 100%; padding: var(--varia-space-1) var(--varia-space-2); border: 0; border-radius: var(--varia-radius-sm); background: none; text-align: left; }
-.agent-history-runs button:hover { background: var(--varia-list-hoverBackground); }
-.agent-history-runs button[aria-pressed="true"] { transition: none; background: var(--varia-list-inactiveSelectionBackground); }
-.agent-history-run-note { grid-column: 2 / 4; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
-.agent-history-run-tag, .agent-history .mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
-.agent-history-detail { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
-.agent-history-detail dd[data-tone="error"] { color: var(--varia-errorForeground); }
-.agent-history-steps tr[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); }
-.agent-history .link-button { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
-.agent-history-message-head { display: flex; align-items: center; gap: var(--varia-space-2); }
-.agent-history-message-head > button { margin-left: auto; }
-.agent-history-message-text { max-height: 240px; margin: 0; padding: var(--varia-space-2); overflow: auto; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); white-space: pre-wrap; word-break: break-word; }
-.agent-history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); margin: 0; }
-.agent-history-running { display: flex; flex-direction: column; gap: var(--varia-space-2); padding-bottom: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
-.agent-history-progress-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
-.agent-history-progress-head > span { margin-left: auto; color: var(--varia-descriptionForeground); }
-.agent-history-progress { height: 6px; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); overflow: hidden; }
-.agent-history-progress > i { display: block; height: 100%; background: var(--varia-list-highlightForeground); }
+.agent-job-history { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-job-history-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-job-history-head > :last-child { margin-left: auto; }
+.agent-job-history-spark { height: 40px; max-width: 360px; }
+.agent-job-history-filter { display: inline-flex; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.agent-job-history-filter > button { padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: none; font-size: var(--varia-size-xs); }
+.agent-job-history-filter > button[aria-checked="true"] { transition: none; background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
+.agent-job-history-body { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(320px, 2fr); gap: var(--varia-space-3); align-items: start; }
+.agent-job-history-runs { display: flex; flex-direction: column; gap: 1px; max-height: 360px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.agent-job-history-runs button { display: grid; grid-template-columns: auto 1fr auto; gap: 0 var(--varia-space-2); width: 100%; padding: var(--varia-space-1) var(--varia-space-2); border: 0; border-radius: var(--varia-radius-sm); background: none; text-align: left; }
+.agent-job-history-runs button:hover { background: var(--varia-list-hoverBackground); }
+.agent-job-history-runs button[aria-pressed="true"] { transition: none; background: var(--varia-list-inactiveSelectionBackground); }
+.agent-job-history-run-note { grid-column: 2 / 4; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.agent-job-history-run-tag, .agent-job-history .mono { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); }
+.agent-job-history-detail { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.agent-job-history-detail dd[data-tone="error"] { color: var(--varia-errorForeground); }
+.agent-job-history-steps tr[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); }
+.agent-job-history .link-button { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
+.agent-job-history-message-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.agent-job-history-message-head > button { margin-left: auto; }
+.agent-job-history-message-text { max-height: 240px; margin: 0; padding: var(--varia-space-2); overflow: auto; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); white-space: pre-wrap; word-break: break-word; }
+.agent-job-history-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); margin: 0; }
+.agent-job-history-running { display: flex; flex-direction: column; gap: var(--varia-space-2); padding-bottom: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-job-history-progress-head { display: flex; align-items: baseline; gap: var(--varia-space-2); font-size: var(--varia-size-sm); }
+.agent-job-history-progress-head > span { margin-left: auto; color: var(--varia-descriptionForeground); }
+.agent-job-history-progress { height: 6px; border-radius: var(--varia-radius-pill); background: var(--varia-list-hoverBackground); overflow: hidden; }
+.agent-job-history-progress > i { display: block; height: 100%; background: var(--varia-list-highlightForeground); }
 @media (forced-colors: active) {
-  .agent-history-progress > i { background: Highlight; forced-color-adjust: none; }
-  .agent-history .link-button { color: LinkText; }
+  .agent-job-history-progress > i { background: Highlight; forced-color-adjust: none; }
+  .agent-job-history .link-button { color: LinkText; }
 }
-@media (max-width: 720px) { .agent-history-body { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .agent-job-history-body { grid-template-columns: 1fr; } }
 /* Create Job Like This (AG-6e): the copy banner, Changes from source and Compare with source. */
 .agent-copy-banner { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-4); font-size: var(--varia-size-sm); border-left: 2px solid var(--varia-focusBorder); }
 .agent-copy-banner .link-button, .agent-copy .link-button { padding: 0; border: 0; background: none; color: var(--varia-list-highlightForeground); font: inherit; text-decoration: underline; cursor: pointer; }
@@ -4074,6 +4099,16 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .inspector-vitals-sash::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--varia-panel-border); }
 .inspector-vitals-sash:hover::after { left: 1px; width: 3px; background: var(--varia-sash-hoverBorder); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .inspector-vitals-sash[data-dragging]::after, .inspector-vitals-sash:focus-visible::after { left: 1px; width: 3px; background: var(--varia-sash-hoverBorder); transition: none; }
+/* Shared ResizableSplit kit (AP-1). */
+.varia-split { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.varia-split[data-stacked="true"] { flex-direction: column; overflow-y: auto; }
+.varia-split-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.varia-split-rail { flex: 0 0 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.varia-split[data-stacked="true"] > .varia-split-rail, .varia-split[data-stacked="true"] > .varia-split-main { flex: none; overflow: visible; }
+.varia-sash { position: relative; z-index: 4; flex: none; width: 5px; margin-left: -2px; margin-right: -2px; cursor: col-resize; touch-action: none; user-select: none; outline: none; }
+.varia-sash::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--varia-panel-border); }
+.varia-sash:hover::after { left: 1px; width: 3px; background: var(--varia-sash-hoverBorder); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.varia-sash[data-dragging]::after, .varia-sash:focus-visible::after { left: 1px; width: 3px; background: var(--varia-sash-hoverBorder); transition: none; }
 .inspector-vitals-rail { flex: 0 0 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--varia-sideBar-background); }
 .inspector-vitals-head { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); height: var(--varia-bar); padding: 0 var(--varia-space-2) 0 var(--varia-space-4); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); color: var(--varia-sideBarTitle-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .inspector-vitals-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4172,6 +4207,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .inspector-tab[aria-selected="true"] { border-bottom-color: Highlight; }
   .inspector-vitals-sash::after { forced-color-adjust: none; background: CanvasText; }
   .inspector-vitals-sash:hover::after, .inspector-vitals-sash[data-dragging]::after, .inspector-vitals-sash:focus-visible::after { forced-color-adjust: none; background: Highlight; }
+  .varia-sash::after { forced-color-adjust: none; background: CanvasText; }
+  .varia-sash:hover::after, .varia-sash[data-dragging]::after, .varia-sash:focus-visible::after { forced-color-adjust: none; background: Highlight; }
   .cap-chip, .cap-chip.on { border-color: CanvasText; }
   .cap-chip.on { outline: 1px solid Highlight; }
   .fact-grid-link { color: LinkText; }
@@ -4225,6 +4262,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* The Schedules Timeline (AG-14, rx-timeline): TimelineView draws the bars, ticks and now line into the lanes. */
 .agent-timeline-wrap { display: flex; flex-direction: column; gap: var(--varia-space-2); flex: 1; min-height: 0; }
 .agent-timeline-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); }
+.agent-timeline-zoom { display: inline-flex; align-items: center; justify-content: center; }
 .agent-timeline-zoom[aria-disabled="true"], .agent-timeline-scroll[aria-disabled="true"] { opacity: .4; cursor: default; pointer-events: none; }
 .agent-timeline-scroll { flex: 0 1 200px; min-width: 80px; }
 .agent-timeline-hint { flex: 1 1 260px; min-width: 0; }
@@ -4504,3 +4542,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-check-detail { grid-column: 2; color: var(--varia-descriptionForeground); }
 .agent-check-objects { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin-top: var(--varia-space-1); }
 .agent-check-object { padding: 0; font-size: inherit; line-height: inherit; vertical-align: baseline; }
+
+/* === AP-2: Job Document === */
+
+/* === AP-3: JAM & Overview === */
+
+/* === AP-4: LFV & Schedules === */
+
+/* === AP-5: Operators, Alerts, Proxies & Props === */

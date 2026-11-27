@@ -78,7 +78,7 @@ function Sparkline({ runs, usual }: { readonly runs: readonly JobHistoryRun[]; r
   if (!shown) return null
   // One image named by the summary (its children, ChartView's canvas among them, are presentational), which the pointer shows too: a
   // sparkline has no crosshair, and each run's start, outcome and duration are in the list beside it.
-  return <div ref={rootRef} className="live-chart agent-history-spark" data-variant="sparkline" role="img" aria-label={label} title={label}><canvas ref={canvasRef} className="live-chart-canvas" /></div>
+  return <div ref={rootRef} className="live-chart agent-job-history-spark" data-variant="sparkline" role="img" aria-label={label} title={label}><canvas ref={canvasRef} className="live-chart-canvas" /></div>
 }
 
 /** The running job's view: this run against the usual time, each step's state, and Stop. */
@@ -91,14 +91,14 @@ function RunningView({ state, model, rows, known, usual, service }: {
   const elapsed = elapsedSeconds(live.started, live.now)
   const progress = runProgress(elapsed, usual?.job)
   const steps = runningSteps(model.steps.map(step => ({ id: step.id, name: step.name })), rows.filter(row => row.stepId > 0), live.step, !!live.retrying, usual, known)
-  return <div className="agent-history-running" role="group" aria-label="This run">
+  return <div className="agent-job-history-running" role="group" aria-label="This run">
     <p className="document-status" role="status"><Icon name="play" />{jobHistoryCopy.running(live.started ? stampText(live.started, live.now ? Math.trunc(live.now / 1_000_000) : undefined) : undefined)}</p>
-    <div className="agent-history-progress-head"><strong>This run</strong><span>{progress.text}</span></div>
-    {progress.share !== undefined && <div className="agent-history-progress" role="progressbar" aria-label="This run against the usual time" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.share * 100)} aria-valuetext={progress.text}>
+    <div className="agent-job-history-progress-head"><strong>This run</strong><span>{progress.text}</span></div>
+    {progress.share !== undefined && <div className="agent-job-history-progress" role="progressbar" aria-label="This run against the usual time" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress.share * 100)} aria-valuetext={progress.text}>
       <i style={{ width: `${Math.round(progress.share * 100)}%` }} />
     </div>}
     <p className="field-note">{jobHistoryCopy.intro}</p>
-    <table className="properties-table" aria-label="Steps of this run">
+    <table className="agent-table" aria-label="Steps of this run">
       <thead><tr><th scope="col">Step</th><th scope="col">State</th><th scope="col">This run</th><th scope="col">Usual</th></tr></thead>
       <tbody>{steps.map(step => <tr key={step.id} data-state={step.state} aria-current={step.state === 'executing' || step.state === 'retrying' ? 'step' : undefined}>
         <td>{step.id} · {step.name}</td>
@@ -109,7 +109,7 @@ function RunningView({ state, model, rows, known, usual, service }: {
       </tr>)}</tbody>
     </table>
     {!known && <p className="field-note">{jobHistoryCopy.runningUnknown}</p>}
-    <p className="agent-history-actions">
+    <p className="agent-job-history-actions">
       <button type="button" className="danger" disabled={!service.canStop(state.id)} onClick={() => void commands.execute('agentJob.stop', { tabId: state.id }, 'toolbar')}><Icon name="debug-stop" />Stop job</button>
       <span className="field-note">{jobHistoryCopy.stopHint}</span>
     </p>
@@ -130,15 +130,15 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
   const text = history.messageText(state.id)
   // Edit and Start at step act on the job as it is now: the step with the name history recorded, which a reorder may have moved.
   const current = chosen ? model.steps.find(step => step.name === chosen.name) : undefined
-  return <div className="agent-history-detail" role="group" aria-label={`Run of ${run.started}`}>
-    <p className="agent-history-actions"><button type="button" className="link-button" onClick={() => service.showRunInFlow(state.id, run.key)}><Icon name="type-hierarchy" />Show in Flow</button></p>
+  return <div className="agent-job-history-detail" role="group" aria-label={`Run of ${run.started}`}>
+    <p className="agent-job-history-actions"><button type="button" className="link-button" onClick={() => service.showRunInFlow(state.id, run.key)}><Icon name="type-hierarchy" />Show in Flow</button></p>
     <dl className="agent-job-facts">
       <dt>Started</dt><dd>{run.started || '—'} (server time)</dd>
       <dt>Duration</dt><dd>{run.duration || (runIsInProgress(run) ? 'In progress' : '—')}{usual !== undefined && ` · usual ${durationText(usual)}`}</dd>
       {by && <><dt>Invoked by</dt><dd>{by}</dd></>}
       <dt>Outcome</dt><dd data-tone={run.tone || undefined}>{outcomeRow?.message || run.message || run.outcome}</dd>
     </dl>
-    {view.stepsFor === historyRunKeyText(run.key) ? steps.length > 0 && <table className="properties-table agent-history-steps" aria-label="Steps of the selected run">
+    {view.stepsFor === historyRunKeyText(run.key) ? steps.length > 0 && <table className="agent-table agent-job-history-steps" aria-label="Steps of the selected run">
       <thead><tr><th scope="col">Step</th><th scope="col">Outcome</th><th scope="col">Duration</th><th scope="col">Retries</th><th scope="col">Details</th></tr></thead>
       <tbody>{steps.map(step => {
         const execution = ssisExecutionId(step.message)
@@ -153,14 +153,14 @@ function RunDetail({ state, model, run, service }: { readonly state: JobDocument
       })}</tbody>
     </table> : <Skeleton rows={2} label="Reading the run's steps" />}
     {rows.length > 0 && view.stepsCut && <p className="field-note">{jobHistoryCopy.stepsCut(rows.length)}</p>}
-    {chosen && <section className="agent-history-message" aria-label={`Step ${chosen.stepId} message`}>
-      <div className="agent-history-message-head"><strong>Step {chosen.stepId} message</strong>
+    {chosen && <section className="agent-job-history-message" aria-label={`Step ${chosen.stepId} message`}>
+      <div className="agent-job-history-message-head"><strong>Step {chosen.stepId} message</strong>
         <button type="button" disabled={text === undefined} onClick={() => void history.copyMessage(state.id)}><Icon name="copy" />Copy</button></div>
       {view.message?.state === 'reading' && <p className="document-status" role="status"><Icon name="loading" spin />Reading the whole message…</p>}
       {view.message?.state === 'failed' && <p className="field-note"><Icon name="warning" />{jobHistoryText.messageFailed}</p>}
-      <pre className="agent-history-message-text">{text}</pre>
+      <pre className="agent-job-history-message-text">{text}</pre>
       {view.notice && <p className="document-status" role="status">{view.notice}</p>}
-      {current && <p className="agent-history-actions">
+      {current && <p className="agent-job-history-actions">
         <button type="button" onClick={() => { service.editStep(state.id, `s${current.id}`); document.getElementById(`agent-job-${state.id}-section-steps`)?.scrollIntoView({ block: 'start' }) }}><Icon name="edit" />Edit step {current.id}</button>
         <button type="button" disabled={!service.canStart(state.id)} onClick={() => void service.start(state.id, current.name)}><Icon name="play" />Start at step {current.id}</button>
       </p>}
@@ -191,32 +191,32 @@ export default function JobHistory({ state, model, service }: { readonly state: 
     const connectionId = tabs.get(state.id)?.connectionId
     try { if (connectionId) logViewer.open(connectionId, { jobs: [jobId] }) } catch (error) { commands.reportError(error instanceof Error ? error.message : 'Log File Viewer could not open.') }
   }
-  return <div className="agent-history" data-agent-history={state.id}>
+  return <div className="agent-job-history" data-agent-job-history={state.id}>
     {running && <RunningView state={state} model={model} rows={runningRows} known={runningKnown} usual={view?.usual} service={service} />}
     {ended && <InlineError message={ended.message} code={ended.code} context={`History of ${model.job!.name} on ${state.server}`} actions={ended.code === 'PERMISSION_DENIED' ? [] : [{ label: 'Retry', run: () => history.refresh(state.id) }]} />}
     {!view?.loaded ? !ended && (history.connected(state.id) ? <Skeleton rows={3} label="Reading the job's history" /> : <p className="field-note">{jobHistoryCopy.disconnected}</p>) : <>
-      <div className="agent-history-head">
+      <div className="agent-job-history-head">
         <strong>{spanned ? `Duration, last ${spanned} ${spanned === 1 ? 'run' : 'runs'}` : 'Duration'}</strong>
         <span className="field-note">{view.usual?.job !== undefined ? `usual ${durationWords(view.usual.job)}` : 'no usual time yet: no successful run'}</span>
       </div>
       <Sparkline runs={view.spark} usual={view.usual?.job} />
-      <div className="agent-history-head">
+      <div className="agent-job-history-head">
         <strong>Runs</strong>
-        <span className="agent-history-filter" role="radiogroup" aria-label="Runs to list">
+        <span className="agent-job-history-filter" role="radiogroup" aria-label="Runs to list">
           <button type="button" role="radio" aria-checked={!view.failedOnly} onClick={() => history.setFailedOnly(state.id, false)}>All</button>
           <button type="button" role="radio" aria-checked={view.failedOnly} onClick={() => history.setFailedOnly(state.id, true)}>Failed</button>
         </span>
       </div>
-      <div className="agent-history-body">
+      <div className="agent-job-history-body">
         {view.runs.length === 0 ? !ended && <p className="field-note">{view.failedOnly ? jobHistoryCopy.noneFailed : jobHistoryCopy.none}</p>
-          : <ul className="agent-history-runs" aria-label="Runs">{view.runs.map(run => {
+          : <ul className="agent-job-history-runs" aria-label="Runs">{view.runs.map(run => {
             const by = invokedBy(run.message), last = lastStepOf(run.message)
             return <li key={historyRunKeyText(run.key)}>
               <button type="button" aria-pressed={sameRun(run.key, view.selected)} onClick={() => history.selectRun(state.id, run.key)}
                 aria-label={`${run.started}, ${runSummary(run)}${run.duration ? `, ${run.duration}` : ''}`}>
-                <Icon name={runGlyph(run)} /><span className="agent-history-run-when">{runIsInProgress(run) ? `${run.started} · in progress` : run.started}</span>
-                <span className="agent-history-run-tag mono">{run.duration}</span>
-                <span className="agent-history-run-note">{runSummary(run)}{by ? ` · ${by}` : last && run.tone !== 'error' ? ` · last step ${last.id}` : ''}</span>
+                <Icon name={runGlyph(run)} /><span className="agent-job-history-run-when">{runIsInProgress(run) ? `${run.started} · in progress` : run.started}</span>
+                <span className="agent-job-history-run-tag mono">{run.duration}</span>
+                <span className="agent-job-history-run-note">{runSummary(run)}{by ? ` · ${by}` : last && run.tone !== 'error' ? ` · last step ${last.id}` : ''}</span>
               </button>
             </li>
           })}</ul>}

@@ -29,13 +29,13 @@ describe('followPointerDrag', () => {
     expect(onMove).not.toHaveBeenCalled()
     expect(onEnd).not.toHaveBeenCalled()
   })
-  it.each(['src/renderer/src/designer/TableDesigner.tsx', 'src/renderer/src/activity/ActivityMonitor.tsx', 'src/renderer/src/kit/ObjectInspectorFrame.tsx'])('is how %s drags its splitter, with the left button only', file => {
+  it.each(['src/renderer/src/designer/TableDesigner.tsx', 'src/renderer/src/activity/ActivityMonitor.tsx', 'src/renderer/src/kit/ObjectInspectorFrame.tsx', 'src/renderer/src/kit/ResizableSplit.tsx'])('is how %s drags its splitter, with the left button only', file => {
     const source = readFileSync(file, 'utf8')
     expect(source).toMatch(/followPointerDrag\(\s*event\.currentTarget,\s*event\.pointerId/)
     expect(source).toContain('event.button !== 0) return')
     expect(source).not.toContain('setPointerCapture')
   })
-  it.each(['.table-designer-splitter', '.activity-splitter', '.inspector-vitals-sash'])('keeps a touch drag on %s from turning into a pan, which would cancel it at once', selector => {
+  it.each(['.table-designer-splitter', '.activity-splitter', '.inspector-vitals-sash', '.varia-sash'])('keeps a touch drag on %s from turning into a pan, which would cancel it at once', selector => {
     const styles = readFileSync('src/renderer/src/styles.css', 'utf8')
     const rule = styles.split(/\r?\n/).find(line => line.startsWith(selector + ' {'))
     expect(rule).toContain('touch-action: none')
