@@ -412,7 +412,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
       if (dirty !== current.dirty) this.replace(id, { dirty })
     })
-    this.entries.set(id, { model, subscription, plain, viewState, edits: 0 })
+    this.entries.set(id, { model, subscription, plain, viewState, edits: model.getVersionId() })
     const current = this.getSnapshot(), documents = [...current.documents]
     const firstUnpinned = document.pinned ? documents.findIndex(tab => !tab.pinned) : -1
     documents.splice(firstUnpinned < 0 ? documents.length : firstUnpinned, 0, document)
@@ -638,11 +638,11 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (this.customs.has(id)) { this.closeCustom(id); return }
     const entry = this.entries.get(id)
     if (!entry) return
-    const version = entry.model.getVersionId()
+    const version = entry.edits
     // Only a query has a session to end.
     const note = isQueryDocument(this.get(id)) ? await this.endSession(id, transaction, options) : undefined
     if (this.disposed || this.entries.get(id) !== entry) return note
-    if (version !== entry.model.getVersionId()) {
+    if (version !== entry.edits) {
       // The session has ended all the same, so what became of it shows in the query that stays.
       if (note) this.sessionHooks?.note?.(id, note)
       throw new Error('The query changed while closing. Close it again to review the latest changes.')
@@ -653,7 +653,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Sessions and the transport have ended. Validate the complete reviewed query set before the first local close. */
   closeDisconnectedQueries(approved: readonly { readonly id: string; readonly revision: number }[]): void {
     if (this.disposed || !this.getSnapshot().busy || new Set(approved.map(item => item.id)).size !== approved.length || approved.some(({ id, revision }) =>
-      !isQueryDocument(this.get(id)) || !this.entries.has(id) || this.revision(id) !== revision))
+      !isQueryDocument(this.get(id)) || !this.entries.has(id) || this.editRevision(id) !== revision))
       throw new Error('The approved queries changed before local close. All tabs stayed open.')
     for (const { id } of approved) this.closeText(id, this.entries.get(id)!)
   }
@@ -661,6 +661,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.keepClosed(id, entry)
     const current = this.getSnapshot(), next = this.closing(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)
+    entry.fill?.finish()
+    entry.fill = undefined
     entry.subscription.dispose()
     entry.model.dispose()
     this.entries.delete(id)

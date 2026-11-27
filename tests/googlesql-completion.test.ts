@@ -457,6 +457,24 @@ describe('completion from the index', () => {
     expect((await complete('SELECT * FROM |', truncated)).incomplete).toBe(true)
   })
 
+  it('scopes nested CTEs lexically (inner shadows outer, inner does not leak to outer FROM) and preserves case-distinct BigQuery tables', async () => {
+    // Inner CTE x shadows outer CTE x inside the subquery.
+    const inner = await complete('WITH x AS (SELECT 1 AS outer_col) SELECT * FROM (WITH x AS (SELECT 2 AS inner_col) SELECT x.| FROM x)')
+    expect(inner.labels('column')).toEqual(['inner_col'])
+    // CTE declared inside another CTE does not leak as an outer FROM candidate.
+    const outerFrom = await complete('WITH a AS (WITH inner_cte AS (SELECT 1 AS c) SELECT * FROM inner_cte) SELECT * FROM |')
+    expect(outerFrom.labels('cte')).toEqual(['a'])
+    // Outer x containing a nested WITH x still resolves to outer_col in the outer query.
+    const outerRef = await complete('WITH x AS (SELECT 1 AS outer_col FROM (WITH x AS (SELECT 2 AS inner_col) SELECT * FROM x)) SELECT x.| FROM x')
+    expect(outerRef.labels('column')).toEqual(['outer_col'])
+    // Case-distinct BigQuery tables (Orders and orders) both appear in completion.
+    const caseDistinct: IndexLookup = async requests => requests.map(request => request.path.join('.') === 'varia-alpha.sales'
+      ? { path: request.path, state: 'ready', items: [{ kind: 'bqTable', name: 'Orders' }, { kind: 'bqTable', name: 'orders' }], truncated: false }
+      : { path: request.path, state: 'ready', items: [], truncated: false })
+    const tables = await complete('SELECT * FROM sales.or|', caseDistinct)
+    expect(tables.labels('table')).toEqual(['Orders', 'orders'])
+  })
+
   it('still offers keywords and functions when the index cannot answer, and asks again', async () => {
     const list = await complete('SELECT | FROM sales.orders', async () => undefined)
     expect(list.labels('column')).toEqual([])

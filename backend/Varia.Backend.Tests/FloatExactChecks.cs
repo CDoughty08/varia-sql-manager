@@ -91,6 +91,21 @@ internal static class FloatExactChecks
         check(open >= 4 + 2 * PageLengths.ExactBytes && lengths.MemoryBytes == PageLengths.Overhead + 4 * 2 + 2 * PageLengths.ExactBytes,
             "the exact values are charged with the page's lengths sidecar, and an open row's are counted before it commits");
         check(!PageView.Parse(page, 2).TryExact(1, 0, out _), "a view without its page's sidecar reads only text");
+        // JSON export writes a finite round-trippable number for double.MaxValue / -double.MaxValue from page exacts, and KeepsValue rejects overflowing G15 text.
+        var boundsBuilder = new PageBuilder(1, [WireKind.Text]);
+        boundsBuilder.BeginRow(); boundsBuilder.AppendFloat(double.MaxValue); boundsBuilder.CommitRow();
+        boundsBuilder.BeginRow(); boundsBuilder.AppendFloat(-double.MaxValue); boundsBuilder.CommitRow();
+        var boundsPage = boundsBuilder.Seal(out var boundsLengths);
+        var boundsView = PageView.Parse(boundsPage, 1).With(boundsLengths);
+        var jsonOut = new System.Buffers.ArrayBufferWriter<byte>();
+        var writer = new ResultTextWriter(jsonOut, new TextOptions(TextFormat.Json, true, true, false, false, false), [new ResultColumn("v", "float", "text")]);
+        writer.Begin(); writer.Row(boundsView, 0, [0]); writer.Row(boundsView, 1, [0]); writer.End();
+        using var jsonDoc = System.Text.Json.JsonDocument.Parse(jsonOut.WrittenMemory);
+        var parsedMax = jsonDoc.RootElement[0].GetProperty("v").GetDouble();
+        var parsedMin = jsonDoc.RootElement[1].GetProperty("v").GetDouble();
+        check(double.IsFinite(parsedMax) && parsedMax == double.MaxValue && double.IsFinite(parsedMin) && parsedMin == -double.MaxValue
+            && !ResultTextWriter.KeepsValue("1.79769313486232E+308"u8) && !ResultTextWriter.KeepsValue("-1.79769313486232E+308"u8),
+            "JSON export writes round-trippable finite doubles for double.MaxValue and -double.MaxValue and KeepsValue refuses overflowing G15 bounds");
     }
 
     private static string CellText(double value)

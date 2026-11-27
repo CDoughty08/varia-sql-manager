@@ -236,6 +236,13 @@ internal sealed partial class ActionService
         }
         string Path(string path) => ScriptingErrors.Display(path);
         ActionError NotAPath(string path) => Error("PATH_NOT_FOUND", Path(path) + " is not a full path to a file on this server" + (linux ? " (SQL Server runs on Linux, so paths start with /)." : "."));
+        var seenTargets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in listed)
+        {
+            var destination = moves.TryGetValue(file.Logical, out var to) ? to : file.Physical;
+            if (ServerPath.Key(destination, linux) is not { } key) return NotAPath(destination);
+            if (!seenTargets.Add(key)) return Error("NAME_IN_USE", "Two files would restore to " + Path(destination) + ". Choose another path on the Files page.");
+        }
         var unknown = new List<string>();
         foreach (var target in targets)
         {

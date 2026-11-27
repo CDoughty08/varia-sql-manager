@@ -644,6 +644,42 @@ describe('file commands', () => {
     expect(api.releaseSqlFile).toHaveBeenCalledExactlyOnceWith('unclaimed')
     expect(documents.getSnapshot().documents).toHaveLength(2)
   })
+  it('prompts before closing a filling large value edited in flight: cancel keeps the edit, save waits for all chunks, discard ignores background chunks', async () => {
+    const { documents, files, model, api, frames, frame } = fixture()
+    const text = 'x'.repeat(3 * gridLimits.documentChunk)
+    const value = documents.openText({ name: 'big.json', text, kind: 'json' })
+    model(value.id).edit('edited:' + model(value.id).getValue())
+    expect(documents.get(value.id)?.dirty).toBe(false)
+    expect(documents.hasUnsavedEdits(value.id)).toBe(true)
+    // Cancel keeps the tab open and preserves the edit once remaining chunks arrive.
+    api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'cancel' })
+    await files.close(value.id)
+    expect(api.confirmClose).toHaveBeenCalledWith('big.json')
+    expect(documents.get(value.id)).toBeDefined()
+    // Save waits for all remaining chunks and writes the complete document with the user edit.
+    api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'save' })
+    api.saveSqlFile.mockResolvedValueOnce({ ok: true, value: { id: 'f1', name: 'big.json', path: 'C:/big.json', encoding: 'utf8', readOnly: false } })
+    const savingClose = files.close(value.id)
+    await vi.waitFor(() => expect(api.confirmClose).toHaveBeenCalledTimes(2))
+    expect(api.saveSqlFile).not.toHaveBeenCalled()
+    while (frames.length) frame()
+    await savingClose
+    expect(api.saveSqlFile).toHaveBeenCalledTimes(1)
+    expect(api.saveSqlFile.mock.calls[0][0].content).toBe('edited:' + text)
+    expect(documents.get(value.id)).toBeUndefined()
+    // Don't Save ignores incoming background chunks during the prompt, without reporting a spurious change.
+    const second = documents.openText({ name: 'second.json', text, kind: 'json' })
+    model(second.id).edit('draft:' + model(second.id).getValue())
+    const confirm = deferred<Awaited<ReturnType<VariaApi['confirmClose']>>>()
+    api.confirmClose.mockReturnValueOnce(confirm.promise)
+    const discarding = files.close(second.id)
+    await vi.waitFor(() => expect(api.confirmClose).toHaveBeenCalledTimes(3))
+    frame()
+    confirm.resolve({ ok: true, value: 'discard' })
+    await discarding
+    expect(files.getSnapshot().error).toBe('')
+    expect(documents.get(second.id)).toBeUndefined()
+  })
   it('unregisters file commands when the contribution is disposed', async () => {
     const { contribution, commands } = fixture()
     contribution.dispose()

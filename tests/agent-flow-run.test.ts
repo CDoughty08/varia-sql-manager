@@ -127,6 +127,17 @@ describe('the Flow view\'s run overlays', () => {
     const again = runPasses([row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 4), row(2, 'Rebuild indexes', 'Failed', '2026-11-09 02:00:04', 9), row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:13', 5)], nightly().steps)
     expect(liveRunDrawing(flow, again, { at: 1, retrying: false, seconds: 4 }, true).steps[1]!.right.map(part => part.text)).toEqual(['✗ 00:00:09', '▶ 00:00:04'])
   })
+  it('classifies live-run pending steps from the current step after a failure branch, marking skipped and unreachable steps Not run', () => {
+    // 1 ✓ -> 2, ✗ -> 3; 2 ✓ -> qs; 3 ✓ -> 4, ✗ -> qf; 4 ✓ -> qs; 5 unreachable.
+    const branched = job([['Step 1', 2, 3], ['Step 2', 'qs', 'qf'], ['Step 3', 4, 'qf'], ['Step 4', 'qs', 'qf'], ['Orphan', 'qs', 'qf']])
+    const passes = runPasses([row(1, 'Step 1', 'Failed', '2026-11-09 02:00:00', 2)], branched.steps)
+    const drawing = liveRunDrawing(stepsFlow(branched), passes, { at: 2, retrying: false, seconds: 5 }, true)
+    expect(drawing.steps[0]!.right[0]!.text).toBe('✗ 00:00:02')
+    expect(drawing.steps[1]).toMatchObject({ fade: true, right: [{ text: 'Not run' }], spoken: 'not run' })
+    expect(drawing.steps[2]).toMatchObject({ current: true })
+    expect(drawing.steps[3]).toMatchObject({ fade: true, right: [{ text: 'Waiting' }], spoken: 'waiting' })
+    expect(drawing.steps[4]).toMatchObject({ fade: true, right: [{ text: 'Not run' }], spoken: 'not run' })
+  })
   it('says where the current step goes next, and how long it has run from the server\'s clock', () => {
     const flow = stepsFlow(nightly())
     expect(nextWords(flow, 1, 'success')).toBe('step 3')

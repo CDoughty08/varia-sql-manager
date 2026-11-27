@@ -41,7 +41,7 @@ internal sealed partial class SqlService
         // re-attached job's): the statement is always read from the job, which also says whether it was one SELECT.
         return new RemotePlan(set, window, "", [], false, null, false)
         {
-            Kind = kind, FromJob = true, Dataset = window.Args.Dataset ?? window.Connection.Options.Dataset
+            Kind = kind, FromJob = true, Dataset = window.Args.NoDefaultDataset ? null : window.Args.Dataset ?? window.Connection.Options.Dataset
         };
     }
 

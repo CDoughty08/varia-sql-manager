@@ -136,10 +136,54 @@ internal sealed class BigQueryLookup
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
         if (at >= 0) return new(dataset.Project, table, at, read);
-        // A wildcard reads tables only: routines and models neither match nor stand in its way.
-        var entries = Objects(dataset).Where(entry => entry.Kind is not ("bqRoutine" or "bqModel")).ToList();
-        var pick = PickShardGroup(name, [.. entries.Select(entry => (entry.Name, Shards(entry)))]);
-        return pick >= 0 ? entries[pick] : null;
+        // Fast exit: only datasets with shard groups can match a wildcard (*) or an 8-digit shard suffix.
+        var shardGroups = read.Facts?.ShardGroups;
+        if (shardGroups is null || shardGroups.Count == 0) return null;
+        var isWildcard = name.EndsWith('*');
+        if (!isWildcard && !HasEightDigitSuffix(name)) return null;
+        if (!isWildcard)
+        {
+            // A concrete 8-digit shard name can only match a shard group (never a plain table).
+            int found = -1, matches = 0;
+            foreach (var (index, shards) in shardGroups)
+            {
+                if (table.Kind(index) is "bqRoutine" or "bqModel") continue;
+                if (Shard(shards, name))
+                {
+                    found = index;
+                    if (++matches > 1) return null;
+                }
+            }
+            return matches == 1 ? new(dataset.Project, table, found, read) : null;
+        }
+        // Wildcard (*): check shard groups first; a whole-group match beats plain tables without scanning them.
+        var stem = name[..^1];
+        int whole = -1, begun = -1, wholes = 0, begins = 0;
+        foreach (var (index, shards) in shardGroups)
+        {
+            if (table.Kind(index) is "bqRoutine" or "bqModel") continue;
+            if (Shard(shards, name)) { whole = index; wholes++; }
+            else if (shards.Prefix.Length > stem.Length && shards.Prefix.StartsWith(stem, StringComparison.Ordinal)) { begun = index; begins++; }
+        }
+        if (wholes > 0) return wholes == 1 ? new(dataset.Project, table, whole, read) : null;
+        if (begins != 1) return null;
+        // One group begins with stem: verify no plain table also begins with stem, without materializing all objects.
+        for (var i = 0; i < table.Count; i++)
+        {
+            if (table.Parent(i) >= 0) continue;
+            var kind = table.Kind(i);
+            if (kind is "bqDataset" or "bqRoutine" or "bqModel" || shardGroups.ContainsKey(i)) continue;
+            if (table.Name(i).StartsWith(stem, StringComparison.Ordinal)) return null;
+        }
+        return new(dataset.Project, table, begun, read);
+    }
+
+    private static bool HasEightDigitSuffix(string name)
+    {
+        if (name.Length < 9) return false;
+        for (var i = name.Length - 8; i < name.Length; i++)
+            if (!char.IsAsciiDigit(name[i])) return false;
+        return true;
     }
 
     /// <summary>Which shard group a written name means, by its index among <paramref name="entries"/> (a dataset's objects, each

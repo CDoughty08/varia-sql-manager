@@ -28,6 +28,7 @@ const subtypeLabels: Readonly<Record<string, string>> = { snapshot: 'Snapshot', 
 const kinds: Readonly<Record<string, CompletionKind>> = {
   bqProject: 'container', bqDataset: 'container', bqTable: 'table', bqExternalTable: 'table', bqView: 'view', bqMaterializedView: 'view', bqRoutine: 'routine', bqModel: 'model', bqColumn: 'column'
 }
+const caseSensitiveKinds = new Set<CompletionKind>(['container', 'table', 'view', 'routine', 'model'])
 
 /** Where a BigQuery tab's unqualified names resolve: the connection's billing project and the tab's default dataset, if any. */
 export interface GoogleSqlDefaults { readonly project: string; readonly dataset?: string }
@@ -51,6 +52,7 @@ export function googleSqlDialect(defaults: GoogleSqlDefaults): CompletionDialect
     },
     quote: quoteGoogleSqlName,
     itemKind: item => item.kind === 'bqColumn' && item.subtype === 'struct' ? 'field' : kinds[item.kind] ?? 'table',
+    itemKey: (kind, label) => caseSensitiveKinds.has(kind) ? `${kind}:${label}` : `${kind}:${label.toLowerCase()}`,
     itemDetail(item: LanguageLookupItem) {
       const label = (item.subtype && subtypeLabels[item.subtype]) || labels[item.kind] || item.kind
       if (item.kind === 'bqProject') return item.detail === 'names' ? 'Project · names only' : 'Project'

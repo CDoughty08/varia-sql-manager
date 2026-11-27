@@ -4,7 +4,7 @@ import { restoreMessages, type BackupSetRow, type RestoreModel, type RestoreServ
 import type { RestoreRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionScriptResult } from '../src/shared/actions/schema'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
-import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
+import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, restoreToText, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
 import { coverage, followPoint, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
@@ -301,6 +301,19 @@ describe('Restore Database as a document', () => {
     restore.updateDraft(id, { restoreAs: { Sales: 'L:\\LOG\\Sales_copy_log.ldf' } })
     expect(fileRows(state().draft!, state().facts).map(item => item.problem)).toEqual(['Another file is restored to this path.', 'Another file is restored to this path.'])
     expect(draftProblems(state().draft!, state().facts).files).toHaveLength(2)
+    // Forward-slash and backslash Windows spellings of the same file are detected as duplicates.
+    restore.updateDraft(id, { restoreAs: { Sales: 'C:\\Data\\sales.mdf', Sales_log: 'C:/Data/sales.mdf' } })
+    expect(fileRows(state().draft!, state().facts).map(item => item.problem)).toEqual(['Another file is restored to this path.', 'Another file is restored to this path.'])
+    // A valid logical file name matching an Object.prototype property (e.g. constructor) does not break Restore As lookup.
+    const protoFacts = { ...state().facts, files: [{ ...state().facts.files[0], logical: 'constructor' }] }
+    const protoRow = fileRows({ ...state().draft!, restoreAs: {} }, protoFacts)[0]
+    expect(protoRow.typed).toBe(false)
+    expect(protoRow.problem).toBeUndefined()
+    // When a later copy-only log is skipped, Restore to names the latest supported recovery point rather than calling the older set the last backup.
+    const copyOnlyLog = { ...history[0], id: uuid(99), name: 'copy_log', firstLsn: '68800001', lastLsn: '70000001', checkpointLsn: '70000001', finish: '2026-10-29T21:06:00', start: '2026-10-29T21:06:00', copyOnly: true }
+    const copyFacts = { ...state().facts, sets: [copyOnlyLog, ...state().facts.sets] }
+    const copyDraft = { ...state().draft!, stopAt: undefined }
+    expect(restoreToText(copyDraft, copyFacts, draftPlan(copyDraft, copyFacts))).toBe('Latest supported recovery point (2026-10-29 21:05:46; skips later copy-only log)')
   })
   it('says when the server goes while it reads, and the test hook opens it only on a live connection', async () => {
     const { restore, state, connections } = opened()

@@ -36,8 +36,8 @@ export function savedAgo(savedAt: string, now: number = Date.now()): string {
   if (seconds > -86_400) return format.format(Math.round(seconds / 3600), 'hour')
   return format.format(Math.round(seconds / 86_400), 'day')
 }
-/** A query's record, and the model version and engine it holds (none until a write succeeded). */
-interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string; state?: string; targetId?: string }
+/** A query's record, and the model version, engine and displayed metadata it holds (none until a write succeeded). */
+interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string; name?: string; fileId?: string; eol?: 'lf' | 'crlf'; server?: string; database?: string; state?: string; targetId?: string }
 const minuteMs = 60_000
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const failed = (error: unknown) => error instanceof Error ? error.message : 'The operation failed.'
@@ -96,10 +96,18 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   copyId(tabId: string): string | undefined { return this.kept.get(tabId)?.id }
   /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
   resume(tabId: string, id: string): void {
-    const document = this.options.documents.get(tabId)
+    const document = this.options.documents.get(tabId), model = this.options.documents.getModel(tabId)
     // A SQL Server Agent document's copy is written again at the next interval, with its state as it is then.
     if (isKeptAgentKind(document?.kind)) { this.kept.set(tabId, { id }); return }
-    this.kept.set(tabId, { id, version: this.options.documents.getModel(tabId)?.getAlternativeVersionId(), provider: document && !document.kind ? document.provider : undefined, jobKey: document && !document.kind ? document.jobKey : undefined })
+    const provider = document && !document.kind ? document.provider : undefined
+    const bigQuery = provider === 'bigquery'
+    const server = document?.connectionId ? this.options.server?.(document.connectionId)?.slice(0, recoveryLimits.serverChars) : undefined
+    const database = server && document?.database ? document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) : undefined
+    this.kept.set(tabId, {
+      id, version: model?.getAlternativeVersionId(), provider, jobKey: bigQuery ? document?.jobKey : undefined,
+      name: document?.name.slice(0, recoveryLimits.nameChars), fileId: document?.file?.id, eol: model ? (model.getEOL() === '\r\n' ? 'crlf' : 'lf') : undefined,
+      server, database
+    })
   }
 
   /**
@@ -121,26 +129,31 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     if (document?.dirty && isKeptAgentKind(document.kind)) return this.keepAgent(tabId)
     // A table designer, Database Properties, SSIS properties, an Activity Monitor or Operations has no model: AutoRecover keeps text only.
     if (!document?.dirty || !model || isCustomKind(document.kind)) return
-    // Moving a query to another engine changes no text, but the copy must still reopen in the new language.
-    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId), provider = !document.kind ? document.provider : undefined, jobKey = provider === 'bigquery' ? document.jobKey : undefined
-    // A job key given since the last copy must reach it too, so a recovered copy re-attaches to the tab's jobs.
-    if (current?.version === version && current.provider === provider && current.jobKey === jobKey) return
+    // Moving a query to another engine, renaming it or switching server/database changes no text, but the copy must reflect the current metadata.
+    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId), provider = !document.kind ? document.provider : undefined, bigQuery = provider === 'bigquery', jobKey = bigQuery ? document.jobKey : undefined
+    const name = document.name.slice(0, recoveryLimits.nameChars), fileId = document.file?.id, eol: 'lf' | 'crlf' = model.getEOL() === '\r\n' ? 'crlf' : 'lf'
+    const rawServer = document.connectionId ? this.options.server?.(document.connectionId) : undefined
+    const server = rawServer ? rawServer.slice(0, recoveryLimits.serverChars) : undefined
+    const database = server && document.database ? document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) : undefined
+    if (current?.version === version && current.provider === provider && current.jobKey === jobKey
+      && current.name === name && current.fileId === fileId && current.eol === eol && current.server === server && current.database === database) return
     // Kept before the write, so a save or close meanwhile deletes the copy after it is written.
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
     this.kept.set(tabId, kept)
-    const server = document.connectionId ? this.options.server?.(document.connectionId) : undefined
-    // A BigQuery query keeps its engine, so it reopens as GoogleSQL; SQL Server is the absence of one.
-    const bigQuery = provider === 'bigquery'
     try {
       unwrap(await this.options.api.writeRecovery({
-        id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...document.file ? { fileId: document.file.id } : {},
-        eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', ...server ? { server: server.slice(0, recoveryLimits.serverChars) } : {},
-        ...server && document.database ? { database: document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) } : {},
+        id: kept.id, name, kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...fileId ? { fileId } : {},
+        eol, ...server ? { server } : {}, ...database ? { database } : {},
         ...bigQuery ? { provider: 'bigquery' as const, ...jobKey ? { jobKey } : {} } : {}, text: model.getValue()
       }))
       kept.version = version
       kept.provider = provider
       kept.jobKey = jobKey
+      kept.name = name
+      kept.fileId = fileId
+      kept.eol = eol
+      kept.server = server
+      kept.database = database
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
   }
   /** A SQL Server Agent document with unsaved changes (AG-6g): its kept state (no secrets) and connection target, when either changed. */
@@ -150,17 +163,23 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     // A document with no durable target could never connect again once recovered, so it is not copied.
     if (!document || !isKeptAgentKind(document.kind) || state === undefined || !document.targetId) return
     const current = this.kept.get(tabId), targetId = document.targetId
-    if (current?.state === state && current.targetId === targetId) return
+    const name = document.name.slice(0, recoveryLimits.nameChars)
+    const rawServer = document.connectionId ? this.options.server?.(document.connectionId) : undefined
+    const server = rawServer ? rawServer.slice(0, recoveryLimits.serverChars) : undefined
+    const database = server && document.database ? document.database.slice(0, recoveryLimits.databaseChars) : undefined
+    if (current?.state === state && current.targetId === targetId && current.name === name && current.server === server && current.database === database) return
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
     this.kept.set(tabId, kept)
-    const server = document.connectionId ? this.options.server?.(document.connectionId) : undefined
     try {
       unwrap(await this.options.api.writeRecovery({
-        id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: document.kind, eol: 'lf', ...server ? { server: server.slice(0, recoveryLimits.serverChars) } : {},
-        ...server && document.database ? { database: document.database.slice(0, recoveryLimits.databaseChars) } : {}, ...targetId ? { targetId } : {}, text: state
+        id: kept.id, name, kind: document.kind, eol: 'lf', ...server ? { server } : {},
+        ...database ? { database } : {}, ...targetId ? { targetId } : {}, text: state
       }))
       kept.state = state
       kept.targetId = targetId
+      kept.name = name
+      kept.server = server
+      kept.database = database
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
   }
   /** A query that has no unsaved changes any more, or closed, needs no copy. */

@@ -95,6 +95,7 @@ export const jobHistoryText = {
   getDenied: (message: string) => `BigQuery refused reading another user's job: ${message} Reading other users' jobs needs bigquery.jobs.get on the project.`,
   noSql: 'BigQuery returned no SQL for this job.',
   sqlTruncated: 'The job\'s SQL is longer than Varia reads: the tab holds its first part only.',
+  externalDataset: (dataset: string) => `The job ran with default dataset ${dataset} in another project, so it was opened without running. Choose a dataset or qualify its table names before running.`,
   copied: (what: string) => `Copied ${what}.`,
   copyFailed: (message: string) => `Could not copy: ${message}`,
   failed: 'Job History stopped reading the jobs.',
@@ -570,9 +571,11 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const sql = details.value.job.sql
     if (!sql) { this.patch(id, { notice: { tone: 'info', text: jobHistoryText.noSql } }); return }
     // The job's own default dataset when it is in this project, so its unqualified names resolve as they did; else none.
-    const dataset = details.value.job.dataset?.startsWith(state.project + '.') ? details.value.job.dataset.slice(state.project.length + 1) : ''
+    const externalDataset = details.value.job.dataset && !details.value.job.dataset.startsWith(state.project + '.') ? details.value.job.dataset : undefined
+    const dataset = details.value.job.dataset && !externalDataset ? details.value.job.dataset.slice(state.project.length + 1) : ''
     const tab = this.options.documents.newQuery(sql, undefined, connectionId, dataset)
     if (details.value.job.sqlTruncated) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.sqlTruncated } })
+    else if (run && externalDataset) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.externalDataset(externalDataset) } })
     // The cost prompts name the job they would run again.
     else if (run) void this.options.queries.execute(tab.id, undefined, job.jobId).catch(onUnexpectedError)
   }

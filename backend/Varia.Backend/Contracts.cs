@@ -58,7 +58,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
     long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null,
-    string? JobKey = null);
+    string? JobKey = null, bool NoDefaultDataset = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
@@ -1189,7 +1189,7 @@ internal sealed record SsisExecutionParameterDto(int ObjectType, string Name, st
 /// <summary>SsisPackageRun in src/shared/ssis/schema.ts.</summary>
 internal sealed record SsisPackageRunDto(long Id, int Status, string? Created, string? Started, string? Ended, string? Caller = null, long? Errors = null, long? Warnings = null);
 internal sealed record SsisExecutionModel(SsisExecutionOverviewDto Overview, List<SsisMessageCountDto> Counts, List<int>? Types, string? Source, List<SsisExecutionMessageDto> Messages, bool Truncated,
-    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer);
+    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer, SsisExecutionMessageDto? FirstError = null);
 internal sealed record SsisExecutionResult(SsisExecutionModel? Model, long ElapsedMs, SsisError? Error = null);
 /// <summary>ssis.packageRuns (src/shared/ssis/schema.ts SsisPackageRunsRequest): one package's newest runs.</summary>
 internal sealed record SsisPackageRunsArgs(string ConnectionId, string RequestId, string Folder, string Project, string Package);

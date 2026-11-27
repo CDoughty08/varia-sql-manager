@@ -196,6 +196,16 @@ describe('Restore Files and Filegroups as a document', () => {
     restore.updateDraft(id, { restoreAs: { Sales_3: 'd:\\data\\SIMPLE.mdf' } })
     expect(filesMoveRows(draft(), state().facts)[0].problem).toBe('The file is in use by the database Simple.')
     expect(request()).toEqual({ problem: 'Sales_3: The file is in use by the database Simple.' })
+    // Prototype-named logical files and mixed-slash Windows duplicate targets are handled safely.
+    const protoFile = { ...state().facts.setFiles![uuid(1)].find(file => file.type !== 'log')!, logical: 'constructor' }
+    const protoFacts = { ...state().facts, setFiles: { ...state().facts.setFiles, [uuid(1)]: [protoFile] } }
+    const protoMove = filesMoveRows({ ...draft(), files: { ...draft().files!, set: uuid(1), chosen: ['constructor'] }, restoreAs: {} }, protoFacts)[0]
+    expect(protoMove.typed).toBe(false)
+    expect(protoMove.problem).toBeUndefined()
+    check(uuid(1), 'Sales_2')
+    restore.updateDraft(id, { restoreAs: { Sales_2: 'C:\\Data\\same.ndf', Sales_3: 'C:/Data/same.ndf' } })
+    expect(filesMoveRows(draft(), state().facts).map(item => item.problem)).toEqual(['Another file is restored to this path.', 'Another file is restored to this path.'])
+    check(uuid(1), 'Sales_2', false)
     restore.updateDraft(id, { restoreAs: {} })
     restore.setFrame(id, setScriptOpen(state().frame, true))
     await vi.waitFor(() => expect(state().script).toMatchObject({ state: 'ready' }))

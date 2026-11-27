@@ -54,7 +54,7 @@ internal sealed partial class ActionService
         var moves = options.Relocate ?? throw Invalid("restoreFiles.relocate.");
         if (moves.Count > Restore.Limit("restoreMoves") || moves.Any(move => move is null || !ExplorerRefs.Ident(move.Logical) || !RestorePath(move.Physical))) throw Invalid("restoreFiles.relocate.");
         if (moves.Select(move => move.Logical).Distinct(StringComparer.Ordinal).Count() != moves.Count
-            || moves.Select(move => move.Physical.ToLowerInvariant()).Distinct(StringComparer.Ordinal).Count() != moves.Count) throw Invalid("restoreFiles.relocate: a file or a path is listed twice.");
+            || moves.Select(move => MovePathKey(move.Physical)).Distinct(StringComparer.Ordinal).Count() != moves.Count) throw Invalid("restoreFiles.relocate: a file or a path is listed twice.");
         if (RestoreFilesParameters(options) > Restore.Limit("parameters")) throw Invalid("restoreFiles: too many parameters for one RESTORE.");
         if (!Restore.RecoveryStates.Contains(options.Recovery, StringComparer.Ordinal)) throw Invalid("restoreFiles.recovery.");
         if ((options.Recovery == "standby") != (options.StandbyFile is not null) || (options.StandbyFile is not null && !RestorePath(options.StandbyFile))) throw Invalid("restoreFiles.standbyFile.");

@@ -113,6 +113,20 @@ describe('saved connection library', () => {
     expect(profiles.find(profile => profile.id === untouched.id)).toEqual(untouched)
     expect(profiles.every(profile => !('autoReconnect' in profile.options))).toBe(true)
   })
+  it('preserves a saved favorite when connecting to a case-distinct database or explicit zero timeout', async () => {
+    const { store: library, path } = await store()
+    const favoriteOptions = { ...connectionDefaults('win32'), server: 'case-server', database: 'Sales' }
+    const saved = await library.saveEntry({ options: favoriteOptions, favorite: true })
+    await library.rememberEntry({ ...favoriteOptions, database: 'sales' })
+    await library.rememberEntry({ ...favoriteOptions, advanced: { commandTimeout: 0 } })
+    const profiles = (await new ConnectionStore(path).load()).library.profiles
+    expect(profiles).toHaveLength(3)
+    const favorite = profiles.find(profile => profile.id === saved.id)
+    expect(favorite).toMatchObject({ favorite: true, options: { database: 'Sales' } })
+    expect(favorite?.options.advanced?.commandTimeout).toBeUndefined()
+    expect(profiles.some(profile => profile.id !== saved.id && profile.options.database === 'sales')).toBe(true)
+    expect(profiles.some(profile => profile.id !== saved.id && profile.options.database === 'Sales' && profile.options.advanced?.commandTimeout === 0)).toBe(true)
+  })
   it('accepts older profiles without reconnect metadata, defaults new profiles to inherit and bounds explicit choices', async () => {
     const { store: library, path } = await store()
     const options = connectionDefaults('win32'), id = crypto.randomUUID()
@@ -206,10 +220,12 @@ describe('Advanced Properties OK', () => {
     expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(['commandTimeout']))).toEqual({ commandTimeout: 0 })
     expect(advancedToStore(draft(), new Set(['commandTimeout']))).toEqual({})
   })
-  it('keeps a command timeout the profile already stored, and the profile\'s identity', () => {
+  it('keeps a command timeout the profile already stored, and distinguishes inherited timeout from explicit zero', () => {
     expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(), { commandTimeout: 0 })).toEqual({ commandTimeout: 0 })
     const options = { ...connectionDefaults('win32'), server: 'db' }
-    expect(connectionKey({ ...options, advanced: advancedToStore(draft(), new Set()) })).toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+    expect(connectionKey({ ...options, advanced: advancedToStore(draft({ commandTimeout: 0 }), new Set(), { commandTimeout: 0 }) })).toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+    expect(connectionKey({ ...options, advanced: advancedToStore(draft(), new Set()) })).not.toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+    expect(connectionKey({ ...options, advanced: {} })).toBe(connectionKey({ ...options, advanced: { connectTimeout: advancedDefaults.connectTimeout } }))
   })
 })
 

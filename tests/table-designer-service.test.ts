@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
-import type { ActionExecuteResult, ActionRequest } from '../src/shared/actions/schema'
+import type { ActionExecuteResult, ActionRequest, ActionScriptResult } from '../src/shared/actions/schema'
 import type { ApiResult } from '../src/shared/contracts'
 import { commandDescriptor, commandIds } from '../src/shared/commands/catalog'
 import { contextRecord } from '../src/shared/commands/context-keys'
@@ -311,6 +311,45 @@ describe('table designer', () => {
     await designers.answerScript(id, true)
     expect(saveCopy).toHaveBeenCalledWith('Table_1.sql', 'CREATE TABLE dbo.Table_1')
     expect(state().prompt).toBeUndefined()
+  })
+  it('keeps Save\'s Choose Name prompt owned when overlapping with Generate Change Script in either reply order', async () => {
+    // Order 1: Generate Change Script starts, Save opens Choose Name, then the script reply arrives before Choose Name is answered.
+    const first = designer()
+    await settled()
+    first.designers.setCell(first.id, 0, 'name', 'Id')
+    let resolveScript1!: (value: ApiResult<ActionScriptResult>) => void
+    first.api.scriptObjectAction.mockImplementationOnce(() => new Promise(resolve => { resolveScript1 = resolve }))
+    const scripting1 = first.designers.generateScript(first.id)
+    const saving1 = first.designers.save(first.id)
+    expect(first.state().prompt?.kind).toBe('chooseName')
+    expect(first.state().scripting).toBe(false)
+    expect(first.api.cancelObjectActions).toHaveBeenCalledTimes(1)
+    // Calling Generate Change Script while Choose Name is active does not replace the prompt.
+    await first.designers.generateScript(first.id)
+    expect(first.state().prompt?.kind).toBe('chooseName')
+    resolveScript1({ ok: true, value: { text: 'CREATE TABLE dbo.Table_1', database: 'AppData', warnings: [] } })
+    await scripting1
+    expect(first.state().prompt?.kind).toBe('chooseName')
+    first.designers.answerName(first.id, 'Orders')
+    expect(await saving1).toBe(true)
+    expect(first.api.executeObjectAction).toHaveBeenCalledTimes(1)
+    expect(first.state().phase).toBe('saved')
+
+    // Order 2: Choose Name is answered and createTable starts before the cancelled script reply settles.
+    const second = designer()
+    await settled()
+    second.designers.setCell(second.id, 0, 'name', 'Id')
+    let resolveScript2!: (value: ApiResult<ActionScriptResult>) => void
+    second.api.scriptObjectAction.mockImplementationOnce(() => new Promise(resolve => { resolveScript2 = resolve }))
+    const scripting2 = second.designers.generateScript(second.id)
+    const saving2 = second.designers.save(second.id)
+    expect(second.state().prompt?.kind).toBe('chooseName')
+    second.designers.answerName(second.id, 'Invoices')
+    expect(await saving2).toBe(true)
+    resolveScript2({ ok: true, value: { text: 'CREATE TABLE dbo.Table_1', database: 'AppData', warnings: [] } })
+    await scripting2
+    expect(second.state().prompt).toBeUndefined()
+    expect(second.state().phase).toBe('saved')
   })
   it('resolves a pending Choose Name as Cancel when it closes or the service goes', async () => {
     const { designers, id } = designer()

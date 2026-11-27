@@ -364,7 +364,11 @@ internal static class ColumnProfiler
             };
             if (measure is not { } value) return -1;
             var (from, to) = Range();
-            return to <= from ? 0 : (int)Math.Min(Bins - 1, Math.Max(0, Math.Floor((value - from) / (to - from) * Bins)));
+            if (to <= from || value <= from) return 0;
+            if (value >= to) return Bins - 1;
+            var span = to - from;
+            var fraction = double.IsFinite(span) ? (value - from) / span : (value * 0.5 - from * 0.5) / (to * 0.5 - from * 0.5);
+            return double.IsFinite(fraction) ? (int)Math.Min(Bins - 1, Math.Max(0, Math.Floor(fraction * Bins))) : 0;
         }
 
         private (double From, double To) Range() => basis switch

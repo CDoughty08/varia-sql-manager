@@ -20,8 +20,8 @@ const literals = new Map<string, Uint8Array>()
 const literal = (text: string): Uint8Array => { let encoded = literals.get(text); if (!encoded) literals.set(text, encoded = encoder.encode(text)); return encoded }
 const numberKinds = new Set<SortKind>(['integer', 'decimal', 'float'])
 const jsonNumber = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/
-// A JSON number keeps its digits through a double (how most readers parse one) at 15 significant digits or fewer.
-const keepsValue = (text: string) => text.split(/[eE]/)[0].replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '').length <= 15
+// A JSON number keeps its digits through a double (how most readers parse one) at 15 significant digits or fewer, provided it stays finite.
+const keepsValue = (text: string) => Number.isFinite(Number(text)) && text.split(/[eE]/)[0].replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '').length <= 15
 const hexDigits = bytes('0123456789ABCDEF')
 const B = { tab: 9, lf: 10, cr: 13, quote: 34, comma: 44, backslash: 92 } as const
 
@@ -57,15 +57,23 @@ export class ChunkedBytes {
   private used = 0
   constructor(size = 1024 * 1024) { this.size = size; this.chunk = new Uint8Array(size) }
   write(data: Uint8Array): void {
+    const len = data.length
+    if (len === 0) return
+    if (len <= this.size - this.used) {
+      this.chunk.set(data, this.used)
+      this.used += len
+      this.length += len
+      return
+    }
     let offset = 0
-    while (offset < data.length) {
+    while (offset < len) {
       if (this.used === this.size) this.seal()
-      const count = Math.min(this.size - this.used, data.length - offset)
+      const count = Math.min(this.size - this.used, len - offset)
       this.chunk.set(data.subarray(offset, offset + count), this.used)
       this.used += count
       offset += count
     }
-    this.length += data.length
+    this.length += len
   }
   seal(): void {
     if (this.used === 0) return
@@ -161,7 +169,14 @@ function tsvText(out: ChunkedBytes, text: Uint8Array, clipboard: boolean | undef
 
 /** RFC 4180: quoted only when needed, or when empty so '' differs from NULL. */
 function csvField(out: ChunkedBytes, text: Uint8Array): void {
-  if (text.length > 0 && !text.some(value => value === B.comma || value === B.quote || value === B.cr || value === B.lf)) { out.write(text); return }
+  if (text.length > 0) {
+    let needsQuotes = false
+    for (let i = 0; i < text.length; i++) {
+      const value = text[i]
+      if (value === B.comma || value === B.quote || value === B.cr || value === B.lf) { needsQuotes = true; break }
+    }
+    if (!needsQuotes) { out.write(text); return }
+  }
   out.write(literal('"'))
   let start = 0
   for (let i = 0; i < text.length; i++) {

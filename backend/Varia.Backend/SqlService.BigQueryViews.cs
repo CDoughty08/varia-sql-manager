@@ -175,7 +175,7 @@ internal sealed partial class SqlService
     private async Task<BigQueryDryRunResult> RemoteDryRunAsync(BigQueryDryRunArgs args, CancellationToken token)
     {
         var remote = args.Remote!;
-        if (args.Sql is not null || args.Dataset is not null || args.SessionId is not null) throw new RequestException("INVALID_PARAMS", "A dry run takes query text or a remote query, not both.");
+        if (args.Sql is not null || args.Dataset is not null || args.NoDefaultDataset || args.SessionId is not null) throw new RequestException("INVALID_PARAMS", "A dry run takes query text or a remote query, not both.");
         var connection = bigQuery.Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);
         if (set.Remote is not { Source: BigQueryWindow window }) throw NotWindowed();
@@ -197,7 +197,7 @@ internal sealed partial class SqlService
         {
             plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true, estimate: true);
             sql = plan.Sql;
-            dataset = window.Args.Dataset ?? connection.Options.Dataset;
+            dataset = window.Args.NoDefaultDataset ? null : window.Args.Dataset ?? connection.Options.Dataset;
         }
         BigQueryEstimate estimate;
         try { estimate = await bigQuery.EstimateAsync(connection, sql, token, dataset, plan.Parameters, window.Location); }
@@ -268,7 +268,7 @@ internal sealed partial class SqlService
         var project = window.Project;
         var jobId = BigQueryService.NewJobId();
         var location = window.Location;
-        var dataset = plan.Fallback ? window.Args.Dataset ?? connection.Options.Dataset : plan.Dataset;
+        var dataset = plan.Fallback ? (window.Args.NoDefaultDataset ? null : window.Args.Dataset ?? connection.Options.Dataset) : plan.Dataset;
         var cap = connection.Options.MaximumBytesBilled ?? window.Args.MaximumBytesBilled;
         var prices = window.Args.Prices != false;
         var sent = false;

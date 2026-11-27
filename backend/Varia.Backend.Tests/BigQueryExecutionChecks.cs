@@ -733,6 +733,14 @@ internal static partial class BigQueryExecutionChecks
             && body["configuration"]?["jobTimeoutMs"] is null && HttpUtility.ParseQueryString(jobs.Reads.Last().Query)["location"] == "US",
             $"a finished job's bytes, slot time and cache hit are in Messages, priced, and in the summary; a request's dataset replaces the connection's: {code} {message} {Texts(result?.Messages ?? [])}");
 
+        // Explicit noDefaultDataset suppresses the connection's default dataset rather than falling back to it.
+        (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["noDefaultDataset"] = true);
+        body = jobs.InsertBodies.Last();
+        check(code == "ok" && result?.Database == "" && body["configuration"]?["query"]?["defaultDataset"] is null,
+            $"noDefaultDataset: true sends no defaultDataset even when the connection sets one: {code} {message} {body}");
+        var (bothCode, _, _) = await harness.Execute("SELECT * FROM t", args => { args["dataset"] = "other_set"; args["noDefaultDataset"] = true; });
+        check(bothCode == "INVALID_PARAMS", $"combining dataset and noDefaultDataset is refused: {bothCode}");
+
         // Show cost as Bytes only: the same figures without dollars.
         (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["prices"] = false);
         check(code == "ok" && Says(result, "Bytes processed: 1.24 GiB · Bytes billed: 1.24 GiB · Slot time: 1.3 s · Cache hit: no") && !Texts(result?.Messages ?? []).Contains('$'),

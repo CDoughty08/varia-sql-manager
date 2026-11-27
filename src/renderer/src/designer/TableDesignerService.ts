@@ -340,6 +340,8 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
     if (state.phase !== 'ready') return false
     if (!this.live(id)) { this.patch(id, { error: designerStrings.disconnected }); return false }
     if (!this.refuse(id)) return false
+    // Save takes ownership of the prompt and request slot from any in-flight Generate Change Script.
+    this.dropScript(id)
     if (!state.nameChosen) {
       const chosen = await this.ask(id, state.name)
       state = this.get(id)
@@ -399,19 +401,28 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
   }
   /** Generate Change Script…: the script Save would run, in SSMS's Save Change Script dialog. */
   async generateScript(id: string): Promise<void> {
-    if (this.canEdit(id) && !this.get(id)?.scripting) this.commitEditor(id)
+    if (this.canEdit(id) && !this.get(id)?.scripting && !this.saving.has(id)) this.commitEditor(id)
     const state = this.get(id), connectionId = this.connectionOf(id)
-    if (!state || !connectionId || !this.canEdit(id) || state.scripting) return
+    if (!state || !connectionId || !this.canEdit(id) || state.scripting || this.saving.has(id) || state.prompt) return
     if (!this.live(id)) { this.patch(id, { error: designerStrings.disconnected }); return }
     if (!this.refuse(id)) return
     const { design } = TableDesignerService.design(state)
     const requestId = this.begin(id, 'script')
     this.patch(id, { scripting: true, error: undefined })
     const result = await this.call(() => this.options.api.scriptObjectAction({ action: 'createTable', connectionId, requestId, target: { kind: 'database', name: state.database }, design }))
-    if (!this.end(id, requestId)) { this.patch(id, { scripting: false }); return }
+    if (!this.end(id, requestId) || this.saving.has(id) || this.prompts.has(id)) { this.patch(id, { scripting: false }); return }
     const text = result.ok ? result.value.text : undefined
     if (text === undefined) { this.patch(id, { scripting: false, error: (result.ok ? result.value.error?.message : error(result)) ?? 'No script was produced.' }); return }
     this.patch(id, { scripting: false, prompt: { kind: 'script', text, warnings: result.ok ? result.value.warnings : [] } })
+  }
+  private dropScript(id: string): void {
+    const request = this.requests.get(id)
+    if (request?.kind === 'script' && !request.dropped) {
+      request.dropped = true
+      this.requests.delete(id)
+      this.cancel([request.id])
+      this.patch(id, { scripting: false })
+    }
   }
   /** Save Change Script's Yes (save it to a file the user picks) or No. */
   async answerScript(id: string, save: boolean): Promise<void> {

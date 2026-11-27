@@ -822,7 +822,7 @@ internal static partial class ViewSorter
             Kind.Approximate => new NumberKey(capacity, kept, source, column, exact: false),
             Kind.Ticks => new TicksKey(capacity),
             Kind.Guid => new GuidKey(capacity),
-            Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(capacity, kept, source, column, culture.Info, culture.Options, memory),
+            Kind.Collated => BuildTextKey(meta, capacity, kept, source, column, memory),
             _ => new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null)
         };
         // The date and time types' text is fixed-width, so its byte order is its instants': read as ticks, 8 bytes are the
@@ -953,6 +953,41 @@ internal static partial class ViewSorter
         if ((collation.Options & 8) != 0) options |= CompareOptions.IgnoreKanaType;
         if ((collation.Options & 16) != 0) options |= CompareOptions.IgnoreWidth;
         return (info, options);
+    }
+
+    /// <summary>Non-Unicode SQL Server character types (char, varchar, text), which follow SQL sort-order rules under SQL_*
+    /// collations (SortId != 0) and code-page bytes under non-UTF-8 binary collations.</summary>
+    internal static bool IsNonUnicodeText(ResultColumn column) =>
+        column.DataType.StartsWith("char", StringComparison.OrdinalIgnoreCase)
+        || column.DataType.StartsWith("varchar", StringComparison.OrdinalIgnoreCase)
+        || column.DataType.Equals("text", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether SQL Server applies word sort (hyphen and apostrophe as special weights: ab &lt; a-c) rather than
+    /// SQL string sort (a-c &lt; ab): always for Unicode types and Windows collations (SortId == 0); non-Unicode SQL_*
+    /// collations (SortId != 0) use string sort.</summary>
+    internal static bool UseWordSort(ResultColumn column) => column.Collation is { SortId: 0 } || !IsNonUnicodeText(column);
+
+    private static Key BuildTextKey(ResultColumn meta, int capacity, int[]? kept, PageSource source, int column, KeyMemory? memory)
+    {
+        var collation = meta.Collation;
+        if (collation is not null)
+        {
+            var bin2 = (collation.Options & 16384) != 0;
+            var bin = (collation.Options & 32768) != 0;
+            if (bin || bin2)
+            {
+                if (bin && !bin2 && !IsNonUnicodeText(meta))
+                    return new LegacyBinaryKey(capacity, kept, source, column, memory);
+                return new OrdinalKey(capacity, kept, source, column, memory, trim: true);
+            }
+            if (Culture(collation) is { } culture)
+            {
+                var wordSort = UseWordSort(meta);
+                var options = wordSort ? culture.Options : culture.Options | CompareOptions.StringSort;
+                return new CollatedKey(capacity, kept, source, column, culture.Info, options, wordSort, memory);
+            }
+        }
+        return new OrdinalKey(capacity, kept, source, column, memory, trim: collation is not null);
     }
 
     /// <summary>A UTF-8 cell without its trailing spaces (U+0020), which SQL Server's comparisons ignore.</summary>
@@ -1537,7 +1572,9 @@ internal static partial class ViewSorter
         public override string Layout => "ticks";
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            var first = Interlocked.CompareExchange(ref width, cell.Length, 0);
+            if (Volatile.Read(ref declined) != 0) return;
+            var first = Volatile.Read(ref width);
+            if (first == 0) first = Interlocked.CompareExchange(ref width, cell.Length, 0);
             if ((first != 0 && first != cell.Length) || !TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
             {
                 Volatile.Write(ref declined, 1);
@@ -1583,6 +1620,7 @@ internal static partial class ViewSorter
             room = null;
         }
         public char[] Chars = new char[256];
+        public char[] Stripped = new char[256];
         public byte[] SortKey = new byte[512];
         /// <summary>The page's sort keys end to end, <see cref="Used"/> bytes of them.</summary>
         public byte[] Keys = [];
@@ -1885,18 +1923,47 @@ internal static partial class ViewSorter
         }
     }
 
-    /// <summary>A collation's order: by each value's sort key, and by the collation itself where cells are read again.</summary>
-    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options, KeyMemory? memory)
+    /// <summary>A collation's order: by each value's sort key, and by the collation itself where cells are read again.
+    /// Under .NET's ICU runtime, CompareOptions.None treats hyphen and apostrophe as non-ignorable (string sort); when
+    /// <paramref name="wordSort"/> is true (SQL Server Unicode columns and Windows collations), '-' and '\'' are weighted
+    /// after base characters so words like ab and a-c order as SQL Server orders them.</summary>
+    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options, bool wordSort, KeyMemory? memory)
         : BytesKey(rows, map, source, column, memory)
     {
         [ThreadStatic] private static char[]? left;
         [ThreadStatic] private static char[]? right;
+        [ThreadStatic] private static char[]? leftStripped;
+        [ThreadStatic] private static char[]? rightStripped;
 
         protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            // The key may grow the buffer: its length first, then the buffer it is in.
-            var written = SortKey(info, options, Decode(TrimEnd(cell), ref scratch.Chars!), ref scratch.SortKey);
-            return scratch.SortKey.AsSpan(0, written);
+            var text = Decode(TrimEnd(cell), ref scratch.Chars!);
+            if (!wordSort || text.IndexOfAny('-', '\'') < 0)
+            {
+                var written = SortKey(info, options, text, ref scratch.SortKey);
+                if (wordSort)
+                    while (written > 0 && scratch.SortKey[written - 1] == 0) written--;
+                return scratch.SortKey.AsSpan(0, written);
+            }
+            var stripped = StripWordPunctuation(text, ref scratch.Stripped!, out var specials);
+            var baseLen = SortKey(info, options, stripped, ref scratch.SortKey);
+            while (baseLen > 0 && scratch.SortKey[baseLen - 1] == 0) baseLen--;
+            var needed = baseLen + 1 + specials * 5;
+            if (scratch.SortKey.Length < needed) Array.Resize(ref scratch.SortKey, Math.Max(needed, scratch.SortKey.Length * 2));
+            scratch.SortKey[baseLen] = 0;
+            var at = baseLen + 1;
+            for (var i = 0; i < text.Length; i++)
+            {
+                var ch = text[i];
+                if (ch is not ('-' or '\'')) continue;
+                var inv = uint.MaxValue - (uint)i;
+                scratch.SortKey[at++] = (byte)(inv >> 24);
+                scratch.SortKey[at++] = (byte)(inv >> 16);
+                scratch.SortKey[at++] = (byte)(inv >> 8);
+                scratch.SortKey[at++] = (byte)inv;
+                scratch.SortKey[at++] = (byte)ch;
+            }
+            return scratch.SortKey.AsSpan(0, at);
         }
 
         // Sorts compare on several threads.
@@ -1904,7 +1971,95 @@ internal static partial class ViewSorter
         {
             var x = Decode(TrimEnd(Source.Cell(Row(a), Column)), ref left);
             var y = Decode(TrimEnd(Source.Cell(Row(b), Column)), ref right);
-            return Math.Sign(info.Compare(x, y, options));
+            if (!wordSort || (x.IndexOfAny('-', '\'') < 0 && y.IndexOfAny('-', '\'') < 0))
+                return Math.Sign(info.Compare(x, y, options));
+            var sx = StripWordPunctuation(x, ref leftStripped, out var countX);
+            var sy = StripWordPunctuation(y, ref rightStripped, out var countY);
+            var primary = info.Compare(sx, sy, options);
+            if (primary != 0) return Math.Sign(primary);
+            if (countX == 0 && countY == 0) return 0;
+            int ix = 0, iy = 0;
+            while (true)
+            {
+                while (ix < x.Length && x[ix] is not ('-' or '\'')) ix++;
+                while (iy < y.Length && y[iy] is not ('-' or '\'')) iy++;
+                bool hasX = ix < x.Length, hasY = iy < y.Length;
+                if (!hasX || !hasY) return hasX == hasY ? 0 : hasX ? 1 : -1;
+                if (ix != iy) return ix > iy ? -1 : 1;
+                if (x[ix] != y[iy]) return x[ix] < y[iy] ? -1 : 1;
+                ix++;
+                iy++;
+            }
+        }
+
+        private static ReadOnlySpan<char> StripWordPunctuation(ReadOnlySpan<char> text, ref char[]? buffer, out int specials)
+        {
+            if (buffer is null || buffer.Length < text.Length) buffer = new char[Math.Max(Math.Max(text.Length, 256), 2 * (buffer?.Length ?? 0))];
+            int length = 0;
+            specials = 0;
+            for (var i = 0; i < text.Length; i++)
+            {
+                var ch = text[i];
+                if (ch is '-' or '\'') specials++;
+                else buffer[length++] = ch;
+            }
+            return buffer.AsSpan(0, length);
+        }
+
+        private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[]? buffer)
+        {
+            if (buffer is null || buffer.Length < utf8.Length) buffer = new char[Math.Max(Math.Max(utf8.Length, 256), 2 * (buffer?.Length ?? 0))];
+            return buffer.AsSpan(0, Encoding.UTF8.GetChars(utf8, buffer));
+        }
+    }
+
+    /// <summary>SQL Server legacy Unicode _BIN order (SqlCompareOptions.BinarySort): the first UTF-16 code unit compares as
+    /// an unsigned 16-bit WCHAR (big-endian), and remaining code units compare byte-by-byte in UTF-16LE order.</summary>
+    private sealed class LegacyBinaryKey(int rows, int[]? map, PageSource source, int column, KeyMemory? memory)
+        : BytesKey(rows, map, source, column, memory)
+    {
+        [ThreadStatic] private static char[]? left;
+        [ThreadStatic] private static char[]? right;
+
+        protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch)
+        {
+            var trimmed = TrimEnd(cell);
+            if (scratch.Chars.Length < trimmed.Length) scratch.Chars = new char[Math.Max(Math.Max(trimmed.Length, 256), scratch.Chars.Length * 2)];
+            var chars = scratch.Chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, scratch.Chars));
+            var needed = chars.Length * 2;
+            if (scratch.SortKey.Length < needed) scratch.SortKey = new byte[Math.Max(needed, scratch.SortKey.Length * 2)];
+            for (var i = 0; i < chars.Length; i++)
+            {
+                var unit = (ushort)chars[i];
+                if (i == 0)
+                {
+                    scratch.SortKey[0] = (byte)(unit >> 8);
+                    scratch.SortKey[1] = (byte)unit;
+                }
+                else
+                {
+                    scratch.SortKey[i * 2] = (byte)unit;
+                    scratch.SortKey[i * 2 + 1] = (byte)(unit >> 8);
+                }
+            }
+            return scratch.SortKey.AsSpan(0, needed);
+        }
+
+        protected override int Cells(int a, int b)
+        {
+            var x = Decode(TrimEnd(Source.Cell(Row(a), Column)), ref left);
+            var y = Decode(TrimEnd(Source.Cell(Row(b), Column)), ref right);
+            var min = Math.Min(x.Length, y.Length);
+            for (var i = 0; i < min; i++)
+            {
+                if (x[i] == y[i]) continue;
+                if (i == 0) return x[0] < y[0] ? -1 : 1;
+                var loX = (byte)x[i];
+                var loY = (byte)y[i];
+                if (loX != loY) return loX < loY ? -1 : 1;
+                return (x[i] >> 8) < (y[i] >> 8) ? -1 : 1;
+            }
+            return x.Length.CompareTo(y.Length);
         }
 
         private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[]? buffer)

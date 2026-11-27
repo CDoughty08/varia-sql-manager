@@ -146,6 +146,20 @@ internal static class ProfileChecks
         var each = set.RowBytes(0, count);
         check(sizes.Columns.Length == 0 && sizes.Rows == count && sizes.RowBytes is { } bytes && bytes.Min == each.Min() && bytes.Max == each.Max() && bytes == result.RowBytes,
             "a profile of no columns sizes every row of every page, as one with columns does");
+        // Wide float distribution [-double.MaxValue, 0, double.MaxValue] must not overflow (to - from) into one bar or drop endpoints.
+        var wide = store.Open(store.BeginQuery("wide-hist"), 0, 1, 1, "rows", [new ResultColumn("v", "float", "text")], [WireKind.Text])
+            ?? throw new InvalidOperationException("The result set was not kept.");
+        foreach (var value in new[] { -double.MaxValue, 0.0, double.MaxValue })
+        {
+            wide.CountRow();
+            wide.BeginRow()!.AppendFloat(value);
+            wide.TryCommitRow();
+        }
+        wide.Complete();
+        var wideHist = Profile(wide, null, 0).Columns[0].Histogram;
+        check(wideHist is not null && wideHist.Counts.Length == 20 && wideHist.Counts.Sum() == 3
+            && wideHist.Counts[0] == 1 && wideHist.Counts[10] == 1 && wideHist.Counts[19] == 1,
+            "wide float distribution [-double.MaxValue, 0, double.MaxValue] bins across endpoints and midpoint without overflow: " + (wideHist is null ? "null" : string.Join(",", wideHist.Counts)));
     }
 
     /// <summary>Pages with no set (a view read's, holding their own bytes) profile as the result's own, alone and beside
