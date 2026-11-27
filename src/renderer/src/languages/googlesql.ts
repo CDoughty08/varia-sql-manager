@@ -112,7 +112,7 @@ export const googleSqlLanguage: Monaco.languages.IMonarchLanguage = {
 export const googleSqlConfiguration: Monaco.languages.LanguageConfiguration = {
   comments: { lineComment: '--', blockComment: ['/*', '*/'] },
   brackets: [['(', ')'], ['[', ']']],
-  wordPattern: /(?<![A-Za-z_`])(-?\d*\.\d\w*)|((?:[A-Za-z_][A-Za-z0-9_]*|\d+[A-Za-z_][A-Za-z0-9_]*)(?:-[A-Za-z0-9_]+)+)|([^\`\~\!\@\#\$\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+  wordPattern: /(?<![A-Za-z0-9_`])(-?\d*\.\d\w*)|((?:[A-Za-z_][A-Za-z0-9_]*|\d+[A-Za-z_][A-Za-z0-9_]*)(?:-[A-Za-z0-9_]+)+)|([^\`\~\!\@\#\$\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
   autoClosingPairs: [
     { open: '(', close: ')' },
     { open: '[', close: ']' },

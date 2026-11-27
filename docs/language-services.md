@@ -184,7 +184,7 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   read by name only has datasets and tables but no columns. The status bar's IntelliSense item says when the index is
   building, refreshing, unbuilt, unreachable or the tab is disconnected (keywords and functions only).
 - **Limits.** `language.lookup` takes 16 paths a request and answers 500 items a path by default (2,000 at most, 4,000
-  in all); the renderer keeps answers per connection for 15 seconds (256 at most) and sends at most 4 lookups at once.
+  items or 12 MiB estimated UTF-8/MessagePack bytes in all); the renderer keeps answers per connection for 15 seconds (256 at most) and sends at most 4 lookups at once.
   Documents over 250,000 characters get none, and subqueries nested (or `WITH` queries chained through `*`) more than 64
   deep give no columns. One completion merges at most a million `*` columns across its `WITH` queries and subqueries;
   past that the list is incomplete. A table wider than its share is asked again by what is typed (up to 4 prefixes, and

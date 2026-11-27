@@ -285,5 +285,36 @@ internal static partial class BigQueryIndexChecks
             && page1.Answers[0].Items[2].Partial is null && page1.Answers[0].Items[3].Partial == true && page1.Answers[0].Items[4].Partial == true
             && watch.ElapsedMilliseconds < 1000,
             $"5,000-project ProjectState and EditorLookup case 0 stay O(1) across 50,000 datasetSkips and 256 skips ({watch.ElapsedMilliseconds} ms)");
+
+        // Max-width 4,000-item case 2 details: true batch with shards and 3-byte UTF-8 strings stops cleanly with truncated: true below ProtocolLimits.ResponseBody.
+        var widePool = new StringPool(new IndexBudget(64 << 20));
+        var wideLimits = new ObjectIndexLimits { MemoryBytes = 64 << 20, NamesReserveBytes = 0 };
+        var wideReader = new BigQueryReader(wideLimits, widePool, null);
+        var partText = new string('あ', BigQueryIndexLimits.FactChars);
+        var clustText = new string('い', BigQueryIndexLimits.FactChars);
+        var sigText = new string('う', BigQueryIndexLimits.FactChars);
+        var descText = new string('え', BigQueryIndexLimits.FactChars);
+        var namePad = new string('お', 990);
+        List<BigQueryEntry> WideEntries(string tag) => [.. Enumerable.Range(0, EditorLookupLimits.Items).Select(i =>
+        {
+            var prefix = $"{tag}_{i:D4}_{namePad}_";
+            return new BigQueryEntry("bqTable", "bqTables", null, $"{prefix}20260102", 1, null,
+                Shards: new(prefix, 2, "20260101", "20260102"),
+                Detail: new BigQueryDetail(null, null, null, [], Rows: 123, Bytes: 456,
+                    Partitioning: partText, Clustering: clustText, Signature: sigText, Description: descText));
+        })];
+        var d1Read = wideReader.Read("p", "d1", WideEntries("a"), true, true)!;
+        var d2Read = wideReader.Read("p", "d2", WideEntries("b"), true, true)!;
+        var wideLookup = new BigQueryLookup("p", [], [d1Read, d2Read], null, [], building: false, built: true, new IndexBudget(64 << 20));
+        var wideRes = EditorLookup.Answer(wideLookup, new LanguageLookupArgs(id,
+        [
+            new(["p", "d1"], Limit: EditorLookupLimits.Items, Details: true),
+            new(["p", "d2"], Limit: EditorLookupLimits.Items, Details: true)
+        ]));
+        var wideEncoded = Varia.Backend.Protocol.JsonBridge.Encode(new { Result = wideRes }, HostChecks.Json);
+        check(wideRes.Answers[0].Items.Count > 0 && wideRes.Answers[0].Truncated && wideRes.Answers[1].Truncated
+            && wideRes.Answers.Sum(answer => answer.Items.Count) < EditorLookupLimits.TotalItems
+            && wideEncoded.Length <= Varia.Backend.Protocol.ProtocolLimits.ResponseBody,
+            $"EditorLookup byte budget truncates max-width 4,000-item case 2 details:true batches below ProtocolLimits.ResponseBody ({wideEncoded.Length} B)");
     }
 }

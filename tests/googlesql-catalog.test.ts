@@ -80,10 +80,15 @@ describe('GoogleSQL catalogue', () => {
     const words = (text: string) => text.match(googleSqlConfiguration.wordPattern!) ?? []
     expect(words('SELECT * FROM project-name.dataset.raw-events')).toEqual(['SELECT', 'FROM', 'project-name', 'dataset', 'raw-events'])
     expect(words('SELECT * FROM my-proj-2.ds')).toEqual(['SELECT', 'FROM', 'my-proj-2', 'ds'])
+    expect(words('SELECT * FROM ds1.2026q1')).toEqual(['SELECT', 'FROM', 'ds1', '2026q1'])
+    expect(words('SELECT * FROM `my-proj-2.2026q1`')).toEqual(['SELECT', 'FROM', 'my-proj-2', '2026q1'])
     expect(words('SELECT * FROM `my-proj.ds.2026q1-report`')).toEqual(['SELECT', 'FROM', 'my-proj', 'ds', '2026q1-report'])
     expect(words('SELECT 1-2')).toEqual(['SELECT', '1', '2'])
     expect(words('SELECT 10-2')).toEqual(['SELECT', '10', '2'])
     expect(words('SELECT 1.5, .5, -2.5')).toEqual(['SELECT', '1.5', '.5', '-2.5'])
+    expect(words('SELECT 1.5, .5, -2.5, 10-2')).toEqual(['SELECT', '1.5', '.5', '-2.5', '10', '2'])
+    expect(words('SELECT 10-2.5')).toEqual(['SELECT', '10', '2.5'])
+    expect(words('SELECT -2.5')).toEqual(['SELECT', '-2.5'])
     expect(words('SELECT a - b -- comment')).toEqual(['SELECT', 'a', 'b', 'comment'])
   })
 

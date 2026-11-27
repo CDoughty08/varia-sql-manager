@@ -314,6 +314,9 @@ const noHits = (index: ObjectIndexStatus | undefined): ObjectSearchResult => {
 /** The no-hits answers made up for servers that were not asked: they say nothing about whether the query itself is valid. */
 const unasked = new WeakSet<ObjectSearchResult>()
 
+/** Normalized key for a BigQuery refresh scope (`project\0dataset` or `project`). */
+const scopeKeyOf = (scope: BigQueryIndexScope) => scope.dataset !== undefined ? `${scope.project}\u0000${scope.dataset}` : scope.project
+
 /**
  * Search Objects: builds each connected server's object index in the backend (explorer.index: names, and module definitions
  * unless Options says not to), shows its progress in the status bar, and runs each Search Objects tab's searches
@@ -390,7 +393,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       this.indexedStarred.set(connectionId, new Set(starredProjects ?? []))
       this.indexedScopes.delete(connectionId)
     }
-    const scopeKeyOf = (scope: BigQueryIndexScope) => scope.dataset !== undefined ? `${scope.project}\u0000${scope.dataset}` : scope.project
+    if (!partial) this.inFlightFull.add(connectionId)
+    else this.inFlightFull.delete(connectionId)
     if (bigQuery && partial && 'scope' in partial) this.inFlightScope.set(connectionId, scopeKeyOf(partial.scope))
     else this.inFlightScope.delete(connectionId)
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
@@ -421,7 +425,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         const entry = this.getSnapshot().indexes[connectionId]
         const stopped = this.stopping.delete(requestId)
         if (this.disposed || entry?.requestId !== requestId) return
+        const wasFull = this.inFlightFull.delete(connectionId)
+        const scopeKey = this.inFlightScope.get(connectionId)
         this.inFlightScope.delete(connectionId)
+        let clearedQueue = false
         if (result.ok) {
           if (bigQuery && partial && 'scope' in partial && !scopeHasSkip(result.value.status.skipped, partial.scope)) {
             const scopes = this.indexedScopes.get(connectionId) ?? new Set<string>()
@@ -446,7 +453,10 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
           // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
           // they would otherwise hide.
-          if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
+          if (result.code === 'CANCELLED' || failed) {
+            this.refreshes.delete(connectionId)
+            clearedQueue = true
+          }
           // A stale-only build that did not run its course is asked again at the next hint, unless the user stopped it: Stop waits
           // for a newer mark. A refresh queued behind a build that ended this way is dropped, and so is its mark.
           if (!stopped && (result.code === 'CANCELLED' || failed || (partial && 'stale' in partial))) this.staleAsked.delete(connectionId)
@@ -454,13 +464,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           // part way would still say there is no index while the search finds what it read.
           if (result.code === 'CANCELLED') this.readStatus(connectionId)
         }
-        this.recordBuildOutcome(connectionId, result.ok)
+        this.recordBuildOutcome(connectionId, result.ok, wasFull, scopeKey, clearedQueue)
         this.nextRefresh(connectionId)
         if (!this.getSnapshot().indexes[connectionId]?.requestId) this.settleBuildWaiters(connectionId)
       }, error => {
         onUnexpectedError(error)
         const entry = this.getSnapshot().indexes[connectionId]
         if (!this.disposed && entry?.requestId === requestId) {
+          this.inFlightFull.delete(connectionId)
           this.inFlightScope.delete(connectionId)
           this.refreshes.delete(connectionId)
           this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
@@ -474,6 +485,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       if (this.disposed || entry?.requestId !== requestId) return
       if (answer === 'stopped') {
         // Stopped at the estimate or the prompt: nothing was sent, and the index stays as it was.
+        this.inFlightFull.delete(connectionId)
+        this.inFlightScope.delete(connectionId)
         this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
         this.refreshes.delete(connectionId)
         this.stopping.delete(requestId)
@@ -486,6 +499,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       onUnexpectedError(error)
       const entry = this.getSnapshot().indexes[connectionId]
       if (!this.disposed && entry?.requestId === requestId) {
+        this.inFlightFull.delete(connectionId)
+        this.inFlightScope.delete(connectionId)
         this.refreshes.delete(connectionId)
         this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
         this.settleBuildWaiters(connectionId, false)
@@ -523,13 +538,19 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly indexedScopes = new Map<string, Set<string>>()
   /** Currently running scoped refresh key per connection, kept separate from completed `indexedScopes`. */
   private readonly inFlightScope = new Map<string, string>()
-  /** Waiters awaiting completion of a connection's active build and queued refreshes. */
-  private readonly buildWaiters = new Map<string, Set<{ ok: boolean; readonly resolve: (ok: boolean) => void }>>()
+  /** Currently running full build per connection. */
+  private readonly inFlightFull = new Set<string>()
+  /** Waiters awaiting completion of a connection's active full build (if any) and their requested BigQuery scopes. */
+  private readonly buildWaiters = new Map<string, Set<{ ok: boolean; readonly awaitFull: boolean; readonly scopes: ReadonlySet<string>; readonly resolve: (ok: boolean) => void }>>()
 
-  private recordBuildOutcome(connectionId: string, ok: boolean): void {
+  private recordBuildOutcome(connectionId: string, ok: boolean, wasFull: boolean, scopeKey: string | undefined, clearedQueue: boolean): void {
     const waiters = this.buildWaiters.get(connectionId)
     if (!waiters || ok) return
-    for (const waiter of waiters) waiter.ok = false
+    for (const waiter of waiters) {
+      if (clearedQueue || (wasFull && waiter.awaitFull) || (scopeKey !== undefined && waiter.scopes.has(scopeKey))) {
+        waiter.ok = false
+      }
+    }
   }
 
   private settleBuildWaiters(connectionId: string, ok = true): void {
@@ -541,26 +562,31 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
 
   /**
    * Re-reads the named BigQuery scopes (or starts a full build if the connection has no ready index yet) and settles
-   * once the build and any queued refreshes complete, cancel, stop, or disconnect.
+   * once the active full build (if any) and its requested scopes complete, cancel, stop, or disconnect.
    */
   async refreshBigQueryScopes(connectionId: string, scopes: readonly BigQueryIndexScope[]): Promise<boolean> {
     const connection = this.o.connections.get(connectionId)
     if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
     const billing = connection.options.provider === 'bigquery' ? connection.options.project : undefined
     const entry = this.getSnapshot().indexes[connectionId]
+    const requestedScopes = new Set<string>()
     if (!entry?.requestId && (entry?.error || !entry?.status || entry.status.state === 'none')) {
       this.build(connectionId)
       for (const scope of scopes) {
-        if (scope.project !== billing) this.refreshBigQuery(connectionId, { scope })
+        if (scope.project !== billing && this.refreshBigQuery(connectionId, { scope })) requestedScopes.add(scopeKeyOf(scope))
       }
     } else {
-      for (const scope of scopes) this.refreshBigQuery(connectionId, { scope })
+      for (const scope of scopes) {
+        if (this.refreshBigQuery(connectionId, { scope })) requestedScopes.add(scopeKeyOf(scope))
+      }
     }
-    if (!this.getSnapshot().indexes[connectionId]?.requestId) return false
+    const active = this.getSnapshot().indexes[connectionId]
+    if (!active?.requestId) return false
+    const awaitFull = this.inFlightFull.has(connectionId) || active.status?.state === 'building'
     return new Promise<boolean>(resolve => {
       let set = this.buildWaiters.get(connectionId)
       if (!set) { set = new Set(); this.buildWaiters.set(connectionId, set) }
-      set.add({ ok: true, resolve })
+      set.add({ ok: true, awaitFull, scopes: requestedScopes, resolve })
     })
   }
 
@@ -655,6 +681,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Stops a running build: what it read so far stays searchable. */
   stopBuild(connectionId: string): void {
     this.refreshes.delete(connectionId)
+    for (const waiter of this.buildWaiters.get(connectionId) ?? []) waiter.ok = false
     const requestId = this.getSnapshot().indexes[connectionId]?.requestId
     if (requestId) this.stopping.add(requestId)
     if (requestId) this.estimating.get(requestId)?.abort()
@@ -664,6 +691,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Stops every running build (the status bar's Stop). */
   stopAll(): void {
     this.refreshes.clear()
+    for (const waiters of this.buildWaiters.values()) for (const waiter of waiters) waiter.ok = false
     for (const controller of this.estimating.values()) controller.abort()
     const ids = Object.values(this.getSnapshot().indexes).flatMap(entry => entry.requestId ? [entry.requestId] : [])
     for (const id of ids) this.stopping.add(id)
@@ -917,6 +945,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.indexedStarred.clear()
     this.indexedScopes.clear()
     this.inFlightScope.clear()
+    this.inFlightFull.clear()
     for (const controller of this.estimating.values()) controller.abort()
     this.estimating.clear()
     this.targetBindings.clear()
@@ -1159,6 +1188,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     for (const id of [...this.indexedStarred.keys()]) if (!ids.has(id)) this.indexedStarred.delete(id)
     for (const id of [...this.indexedScopes.keys()]) if (!ids.has(id)) this.indexedScopes.delete(id)
     for (const id of [...this.inFlightScope.keys()]) if (!ids.has(id)) this.inFlightScope.delete(id)
+    for (const id of [...this.inFlightFull]) if (!ids.has(id)) this.inFlightFull.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
       // A disconnect closes a bulk build's estimate or cost prompt.

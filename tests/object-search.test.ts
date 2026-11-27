@@ -2011,4 +2011,47 @@ describe('refreshBigQueryScopes', () => {
     expect(await laterCaller).toBe(true)
     service.dispose()
   })
+
+  it('isolates overlapping concurrent scope batches by requested scopes while reflecting shared scope failures', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    // Overlapping unrelated batches: Caller B starts [ds3] BEFORE ds1 settles.
+    const callerA = service.refreshBigQueryScopes('bq', [
+      { project: 'varia-alpha', dataset: 'ds1' },
+      { project: 'varia-alpha', dataset: 'ds2' }
+    ])
+    const callerB = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds1' } })
+
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds2' } })
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    expect(calls.index[3]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds3' } })
+    pendingIndex[3]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+
+    expect(await callerA).toBe(false)
+    expect(await callerB).toBe(true)
+
+    // Overlapping shared scope: [ds1] + [ds1] while ds1 is in flight and fails -> both resolve false.
+    const sharedA = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    const sharedB = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    expect(calls.index).toHaveLength(5)
+    pendingIndex[4]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(6)
+    pendingIndex[5]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+
+    expect(await sharedA).toBe(false)
+    expect(await sharedB).toBe(false)
+    service.dispose()
+  })
 })

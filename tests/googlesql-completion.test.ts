@@ -159,6 +159,15 @@ describe('GoogleSQL scope reader', () => {
     const dashedFirst = read('SELECT * FROM m|y-proj-2')
     expect(dashedFirst.site).toEqual({ kind: 'object', qualifier: [] })
     expect(dashedFirst.word).toEqual({ start: 14, end: 23, typed: 'm', quoted: false })
+    const dashedAfterFirstDash = read('SELECT * FROM my-|proj-2')
+    expect(dashedAfterFirstDash.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedAfterFirstDash.word).toEqual({ start: 14, end: 23, typed: 'my-', quoted: false })
+    const dashedAfterSecondDash = read('SELECT * FROM my-proj-|2')
+    expect(dashedAfterSecondDash.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedAfterSecondDash.word).toEqual({ start: 14, end: 23, typed: 'my-proj-', quoted: false })
+    const dashedSpaceAfterDash = read('SELECT * FROM my-| proj')
+    expect(dashedSpaceAfterDash.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedSpaceAfterDash.word).toEqual({ start: 14, end: 17, typed: 'my-', quoted: false })
     expect(read('SELECT * FROM sales.orders AS |').site).toEqual({ kind: 'none' })
     expect(read('SELECT x AS |').site).toEqual({ kind: 'none' })
     expect(read('SELECT CAST(x AS |').site).toEqual({ kind: 'castType' })
@@ -833,6 +842,7 @@ describe('language.lookup contract', () => {
     const declared = /class EditorLookupLimits\s*\{\s*public const int ([^;]+);/.exec(source)![1]
     const limits = Object.fromEntries(declared.split(',').map(entry => entry.split('=').map(part => part.trim())).map(([name, value]) => [name, Number(value)]))
     expect(limits).toEqual({ Requests: languageLookupLimits.requests, Segments: languageLookupLimits.segments, SegmentChars: languageLookupLimits.segmentChars,
-      PrefixChars: languageLookupLimits.prefixChars, Items: languageLookupLimits.items, DefaultItems: languageLookupLimits.defaultItems, TotalItems: languageLookupLimits.totalItems })
+      PrefixChars: languageLookupLimits.prefixChars, Items: languageLookupLimits.items, DefaultItems: languageLookupLimits.defaultItems, TotalItems: languageLookupLimits.totalItems,
+      TotalBytes: languageLookupLimits.totalBytes })
   })
 })

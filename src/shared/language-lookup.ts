@@ -6,7 +6,7 @@ import { z } from 'zod'
  * per level below it (BigQuery: project, dataset, object). `prefix` keeps names that start with it, case ignored; `exact`
  * keeps the one name it resolves to; `details` adds columns' descriptions. The backend's EditorLookupLimits mirror these.
  */
-export const languageLookupLimits = { requests: 16, segments: 3, segmentChars: 1024, prefixChars: 4608, items: 2000, defaultItems: 500, totalItems: 4000 } as const
+export const languageLookupLimits = { requests: 16, segments: 3, segmentChars: 1024, prefixChars: 4608, items: 2000, defaultItems: 500, totalItems: 4000, totalBytes: 12 * 1024 * 1024 } as const
 
 const segment = z.string().min(1).max(languageLookupLimits.segmentChars)
 export const languageLookupPathSchema = z.object({

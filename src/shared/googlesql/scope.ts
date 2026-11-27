@@ -723,7 +723,8 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
     const open = statement.parentAt(toks[lo].start)
     const chain = chainBefore(statement, lo)
     if (chain && placeOf(statement, chain.first, open) === 'object') {
-      const end = at >= 0 ? toks[dashedSpan(toks, at)[1]].end : offset
+      const right = at >= 0 ? at : (next < toks.length && isPiece(toks[next]) && toks[next].start === offset ? next : -1)
+      const end = right >= 0 ? toks[dashedSpan(toks, right)[1]].end : offset
       word = { start: toks[lo].start, end, typed: text.slice(toks[lo].start, offset), quoted: false }
       return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
     }
