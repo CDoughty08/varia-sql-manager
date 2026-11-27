@@ -16,6 +16,8 @@ const joinWords = new Set(['JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'N
 const setWords = new Set(['UNION', 'INTERSECT', 'EXCEPT'])
 /** Words that end a FROM clause at its block's level. */
 const fromEnd = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'PIVOT', 'UNPIVOT', ...setWords])
+/** Words that end a SELECT list at its block's level. */
+const selectEnd = new Set(['FROM', 'WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT'])
 const castCalls = new Set(['CAST', 'SAFE_CAST'])
 /** Zero-based argument index that takes a date/time granularity part in GoogleSQL date/time functions. */
 const datePartArgIndex: ReadonlyMap<string, number> = new Map([
@@ -68,8 +70,10 @@ function partsOf(token: Tok): string[] {
   return splitQuotedParts(body)
 }
 const isName = (token: Tok | undefined): token is Tok => !!token && (token.kind === 'word' || token.kind === 'quotedIdentifier')
-const isWord = (token: Tok | undefined, ...words: string[]) => !!token && token.kind === 'word' && words.includes(token.upper)
-const isPunct = (token: Tok | undefined, ...values: string[]) => !!token && token.kind === 'punctuation' && values.includes(token.text)
+const isWord = (token: Tok | undefined, a: string, b?: string, c?: string, d?: string) =>
+  !!token && token.kind === 'word' && (token.upper === a || (b !== undefined && token.upper === b) || (c !== undefined && token.upper === c) || (d !== undefined && token.upper === d))
+const isPunct = (token: Tok | undefined, a: string, b?: string, c?: string, d?: string) =>
+  !!token && token.kind === 'punctuation' && (token.text === a || (b !== undefined && token.text === b) || (c !== undefined && token.text === c) || (d !== undefined && token.text === d))
 /** A word an alias can be: an unreserved word, or a quoted identifier. */
 const isAlias = (token: Tok | undefined) => !!token && (token.kind === 'quotedIdentifier' || (token.kind === 'word' && !reserved.has(token.upper)))
 
@@ -184,9 +188,12 @@ class Statement {
   /** The innermost '(' around a text position, or -1. */
   parentAt(offset: number): number {
     let found = -1
-    this.toks.forEach((token, index) => {
-      if (isPunct(token, '(') && token.end <= offset && (this.match[index] >= this.toks.length || this.toks[this.match[index]].start >= offset)) found = index
-    })
+    const { toks, match } = this
+    for (let index = 0; index < toks.length; index++) {
+      const token = toks[index]
+      if (token.start >= offset) break
+      if (isPunct(token, '(') && token.end <= offset && (match[index] >= toks.length || toks[match[index]].start >= offset)) found = index
+    }
     return found
   }
 
@@ -483,7 +490,7 @@ class BlockReader {
     }
     for (; at < run.length; at++) {
       const token = toks[run[at]]
-      if (isWord(token, 'FROM', 'WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT')) break
+      if (token.kind === 'word' && selectEnd.has(token.upper)) break
       if (isPunct(token, ',')) { finish(); continue }
       item.push(token)
     }
@@ -853,7 +860,7 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   // The token the caret is in or at the end of, and the word it types.
   let word = empty, next = toks.findIndex(token => token.start >= offset), qualifier: string[] = []
   if (next < 0) next = toks.length
-  const current = toks.findIndex(token => token.start < offset && offset <= token.end)
+  const current = next > 0 && toks[next - 1].start < offset && offset <= toks[next - 1].end ? next - 1 : -1
   // System variables (`@@`, `@@project_id`, `@@script.`, `@@script.bytes_billed`) and single `@` parameter guard.
   if (current >= 0) {
     const token = toks[current]

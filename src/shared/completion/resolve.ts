@@ -239,14 +239,46 @@ export class ScopeResolver {
   /** Every source's columns, read one after another: a source read while another is still being read would meet it in `reading`
    *  and get no columns (UNNEST(o.items) beside o). */
   async all(sources: readonly ScopeSource[]): Promise<SourceColumns[]> {
-    const given: SourceColumns[] = []
-    for (const source of sources) given.push(await this.columns(source))
+    const given: SourceColumns[] = new Array(sources.length)
+    for (let i = 0; i < sources.length; i++) {
+      const source = sources[i]
+      given[i] = source.kind === 'object' ? this.objectColumns(source) : await this.columns(source)
+    }
     return given
+  }
+
+  /** Synchronously resolves an indexed object source's columns (cached per object path). */
+  private objectColumns(source: Extract<ScopeSource, { kind: 'object' }>): SourceColumns {
+    const path = this.dialect.objectPath(source.parts)
+    if (!path) return unread
+    const pathKey = key(path)
+    let shared = this.objects.get(pathKey)
+    if (!shared) {
+      const answer = this.answers.get(pathKey)
+      if (!answer?.object) {
+        shared = { columns: [], truncated: false, path }
+      } else {
+        const cols: ScopeColumn[] = answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description }))
+        const extras = this.dialect.pseudoColumns?.(answer.object, source.parts) ?? []
+        if (extras.length) {
+          const existing = new Set(cols.map(col => col.path.toLowerCase()))
+          for (const extra of extras) {
+            if (existing.has(extra.name.toLowerCase())) continue
+            existing.add(extra.name.toLowerCase())
+            cols.push({ path: extra.name, type: extra.type, description: extra.description, pseudo: extra.pseudo ?? true })
+          }
+        }
+        shared = { path: answer.path, object: answer.object, truncated: answer.truncated, columns: cols }
+      }
+      this.objects.set(pathKey, shared)
+    }
+    return shared
   }
 
   /** A source's columns: the index's for an object, the select list's (with `*` expanded) for a WITH query or subquery. The grammar
    *  has already said which names are WITH queries (kind cte); an object is always the index's. */
   columns(source: ScopeSource, hops = 0): Promise<SourceColumns> {
+    if (source.kind === 'object') return Promise.resolve(this.objectColumns(source))
     if (this.reading.has(source)) return Promise.resolve(unread)
     const kept = this.cache.get(source)
     if (serves(kept, hops)) return kept.found
@@ -265,27 +297,7 @@ export class ScopeResolver {
 
   private async read(source: ScopeSource, hops: number): Promise<SourceColumns> {
     switch (source.kind) {
-      case 'object': {
-        const path = this.dialect.objectPath(source.parts)
-        const answer = path ? this.answers.get(key(path)) : undefined
-        if (!path || !answer?.object) return { columns: [], truncated: false, path }
-        let shared = this.objects.get(key(path))
-        if (!shared) {
-          const cols: ScopeColumn[] = answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description }))
-          const extras = this.dialect.pseudoColumns?.(answer.object, source.parts) ?? []
-          if (extras.length) {
-            const existing = new Set(cols.map(col => col.path.toLowerCase()))
-            for (const extra of extras) {
-              if (existing.has(extra.name.toLowerCase())) continue
-              existing.add(extra.name.toLowerCase())
-              cols.push({ path: extra.name, type: extra.type, description: extra.description, pseudo: extra.pseudo ?? true })
-            }
-          }
-          shared = { path: answer.path, object: answer.object, truncated: answer.truncated, columns: cols }
-          this.objects.set(key(path), shared)
-        }
-        return shared
-      }
+      case 'object': return this.objectColumns(source)
       case 'cte': { const shape = source.shape ?? this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
       case 'derived': return this.shape(source.shape, hops)
       case 'unnest': {
@@ -327,12 +339,15 @@ export class ScopeResolver {
     let truncated = false
     let budget = false
     this.spent++
+    const seenGiven = new Set<SourceColumns>()
     for (const star of shape.stars) {
       if (this.spent > resolverLimits.work) { this.overBudget = true; return { columns, truncated: true, budget: true } }
-      const given = await this.columns(star, hops + 1)
+      const given = star.kind === 'object' ? this.objectColumns(star) : await this.columns(star, hops + 1)
       this.spent += given.columns.length
       truncated ||= given.truncated
       budget ||= given.budget === true
+      if (seenGiven.has(given)) continue
+      seenGiven.add(given)
       for (const column of given.columns) {
         if (column.pseudo) continue
         const name = column.path.toLowerCase()
@@ -386,4 +401,7 @@ function childrenAndBelow(columns: readonly ScopeColumn[], parent: readonly stri
   return columns.filter(column => column.path.toLowerCase().startsWith(prefix))
 }
 
-const key = (path: readonly string[]) => JSON.stringify(path)
+const key = (path: readonly string[]) => {
+  for (let i = 0; i < path.length; i++) if (path[i].includes('\0')) return `\0${JSON.stringify(path)}`
+  return `${path.length}\0${path.join('\0')}`
+}

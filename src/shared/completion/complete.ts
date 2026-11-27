@@ -237,7 +237,14 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
         if (emittedColumns >= maxExpressionColumns) break
       }
       // The nearest source of a name is the one it means (add keeps the first of a label).
-      for (const source of scope.sources) if (source.name) add({ label: source.name, kind: 'alias', insertText: insert(source.name), detail: aliasDetail(source), sortText: sortText('alias', 0, source.name) })
+      const seenAliases = new Set<string>()
+      for (const source of scope.sources) {
+        if (!source.name) continue
+        const lower = source.name.toLowerCase()
+        if (seenAliases.has(lower)) continue
+        seenAliases.add(lower)
+        add({ label: source.name, kind: 'alias', insertText: insert(source.name), detail: aliasDetail(source), sortText: sortText('alias', 0, source.name) })
+      }
       for (const entry of dialect.functions) if (!entry.name.includes('.')) add(functionItem(entry, entry.name, word.parenAhead))
       for (const keyword of dialect.keywords) add(keywordItem(keyword))
       break
