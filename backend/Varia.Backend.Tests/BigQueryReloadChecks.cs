@@ -18,7 +18,7 @@ internal static class BigQueryReloadChecks
     private static readonly byte[] Key = [.. Enumerable.Range(0, 32).Select(at => (byte)(at * 7 + 3))];
     private static readonly byte[] OtherKey = [.. Enumerable.Range(0, 32).Select(at => (byte)(at * 11 + 5))];
     private const string Principal = "bigquery:user:reload-checks@example.com";
-    private const string Billing = "varia-alpha";
+    internal const string Billing = "varia-alpha";
 
     public static async Task RunAsync(Action<bool, string> check)
     {
@@ -37,11 +37,11 @@ internal static class BigQueryReloadChecks
 
     // ---- The fake ----
 
-    private sealed record Item(string Kind, string Name, long Created, long? Modified = null, int Columns = 3);
+    internal sealed record Item(string Kind, string Name, long Created, long? Modified = null, int Columns = 3);
 
     /// <summary>Projects, their datasets and objects; counts every call by kind. The billing project is varia-alpha; discovery
     /// answers every other project.</summary>
-    private sealed class Source : IBigQueryIndexSource
+    internal sealed class Source : IBigQueryIndexSource
     {
         public ConcurrentDictionary<string, ConcurrentDictionary<string, List<Item>>> Projects { get; } = new(StringComparer.Ordinal);
         private int datasets, objects, tables, routines;
@@ -110,7 +110,7 @@ internal static class BigQueryReloadChecks
 
     // ---- Helpers ----
 
-    private sealed class Folder : IDisposable
+    internal sealed class Folder : IDisposable
     {
         public Folder()
         {
@@ -132,17 +132,17 @@ internal static class BigQueryReloadChecks
     private static IndexStoreScope Scope => IndexStoreScope.BigQuery(Principal)!;
 
     /// <summary>A new session's service on the folder, saving and reading under <paramref name="key"/>.</summary>
-    private static ObjectSearchService Session(Folder folder, byte[]? key = null, ObjectIndexLimits? limits = null)
+    internal static ObjectSearchService Session(Folder folder, byte[]? key = null, ObjectIndexLimits? limits = null)
     {
         var search = new ObjectSearchService(new BigQueryIndexChecks.UnusedHost(), limits);
         search.Store.Configure(new("encrypted", folder.Path, IndexStoreLimits.DefaultDiskMiB, Convert.ToBase64String(key ?? Key)));
         return search;
     }
 
-    private static Task<ObjectIndexResult> Build(ObjectSearchService search, Source source, string connectionId, CancellationToken token = default, Action<object>? progress = null) =>
+    internal static Task<ObjectIndexResult> Build(ObjectSearchService search, Source source, string connectionId, CancellationToken token = default, Action<object>? progress = null) =>
         search.IndexBigQueryAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString()), source, token, progress);
 
-    private static int Hits(ObjectSearchService search, string connectionId, string text) =>
+    internal static int Hits(ObjectSearchService search, string connectionId, string text) =>
         search.Search(new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, WholeWord: true, In: "names"), CancellationToken.None, bigQuery: true).Total;
 
     /// <summary>Whether a unit loads whole into an index of its own.</summary>
@@ -158,7 +158,7 @@ internal static class BigQueryReloadChecks
 
     private static SavedUnit? Unit(ObjectSearchService search, string project, string dataset) => search.Store.Find(Scope, IndexUnitKind.Dataset, project, dataset);
 
-    private static Source World()
+    internal static Source World()
     {
         var source = new Source();
         source.Add(Billing, "sales", new Item("TABLE", "orders", 1_700_000_000_000), new Item("TABLE", "customers", 1_700_000_000_000), new Item("VIEW", "v_orders", 1_700_000_000_000),

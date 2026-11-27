@@ -286,6 +286,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         explorer = new ExplorerService(this);
         definitions = new DefinitionService(this);
         search = new ObjectSearchService(this);
+        this.bigQuery.ObjectDetails = search;
         scripting = new ScriptingService(this);
         actions = new ActionService(this, catalog: actionsCatalog);
         ssis = new SsisService(this);
@@ -644,10 +645,19 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing), args);
     }
 
+    /// <summary>Marks the Search Objects index of a SQL Server connection stale in the database a script began in and the one it
+    /// ended in (a USE between them), when its text may have changed objects (<see cref="TsqlChanges"/>). Free: nothing is read.</summary>
+    private void MarkIndexStale(string connectionId, string sql, string? started, string? ended)
+    {
+        if (!TsqlChanges.MayChangeObjects(sql)) return;
+        if (started is { Length: > 0 }) search.MarkSqlStale(connectionId, started);
+        if (ended is { Length: > 0 } && ended != started) search.MarkSqlStale(connectionId, ended);
+    }
+
     /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
     private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) =>
-        args.StarredProjects is null && args.AllProjects is null && args.MaxProjects is null && args.Scope is null && args.MissingOnly is null && args.Stale is null && args.Bulk is null ? args
-        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: starredProjects, allProjects, maxProjects, scope, missingOnly, stale and bulk are BigQuery's.");
+        args.StarredProjects is null && args.AllProjects is null && args.MaxProjects is null && args.Scope is null && args.MissingOnly is null && args.Bulk is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: starredProjects, allProjects, maxProjects, scope, missingOnly and bulk are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
@@ -1905,10 +1915,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 : "Stopped at batch " + batchNumber + (repeated ? ", repetition " + iteration : "") + "; " + completed + " of " + totalBatches + " batch executions completed.");
         }
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
+        // DDL the script may have run marks the databases it ran in stale: the index checks them at its next use (docs/object-search.md, Freshness).
+        if (completed > 0 || batchNumber > 0) MarkIndexStale(args.ConnectionId, args.Sql, args.Database, database);
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, tally.Discarded, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
             totalBatches, database, messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
-            statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
+            statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null),
+            IndexStale: search.StaleMarkOf(args.ConnectionId));
     }
 
     private bool StoreActualPlans(string sessionId, List<ActualPlanCapture.CapturedPlan> captured, Dictionary<int, uint>? idsByEvent, List<ResultDescriptor> plans)

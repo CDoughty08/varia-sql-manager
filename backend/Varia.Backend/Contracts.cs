@@ -166,7 +166,7 @@ internal sealed record MessageEntry(string Text, string Kind, int? Line = null);
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
 /// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.
 /// Spid (SqlConnection.ServerProcessId) and Login (SUSER_SNAME(), read with the SET prologue) are the session's, read once when
-/// it opened; both are present while it is still open after the script. IndexStale (BigQuery) numbers the newest stale mark the
+/// it opened; both are present while it is still open after the script. IndexStale numbers the newest stale mark the
 /// connection's Search Objects index has not spent yet, so the renderer asks one stale-only build per new mark.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
@@ -465,10 +465,14 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// Scope re-reads one project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
 /// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
 /// bigquery.indexEstimate and the cost prompts).</summary>
+/// <summary>Stale (either engine): a check rather than a full build: BigQuery re-reads the datasets DDL marked and re-lists those a
+/// search found due; SQL Server verifies the databases DDL marked or a search found due, and with it Database (Object Explorer's
+/// Refresh on a database, at most 128 characters) or CheckAll (on the server) checks that database or every one, whatever its age.</summary>
 /// <summary>MemoryLimitMiB (either engine): the memory every connection's index shares, as Options sets it
 /// (ObjectIndexLimits.MinMemoryMiB..MaxMemoryMiB); it applies from this build on, and absent leaves the limit as it is.</summary>
 internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, List<string>? StarredProjects = null, bool? AllProjects = null,
-    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null, int? MemoryLimitMiB = null);
+    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null, int? MemoryLimitMiB = null,
+    string? Database = null, bool? CheckAll = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
 /// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and
@@ -494,11 +498,17 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left);
 /// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise);
 /// SavedAt (UTC) is when the oldest dataset loaded from the saved index that no listing has checked yet was read (absent when none is).</summary>
+/// <summary>Freshness (either engine, docs/object-search.md, Freshness): ReadAt (UTC) is when the oldest held database or dataset was
+/// read, and Saved true when that read came from the saved index; CheckedAt (UTC) is when the unit checked longest ago was last
+/// confirmed against its source; Checking is true while a check runs; Stale counts units marked (DDL, or due by age) and not yet
+/// checked, and Unverified those that cannot be checked yet (a SQL Server read with no fingerprint, a BigQuery dataset loaded and
+/// not yet listed). Each absent when there is nothing to say.</summary>
 /// <summary>LeftOut: the definitions (counted in Cut too) left out whole because the index's memory ran out, and LeftOutIn the
 /// databases (BigQuery: datasets) they belong to (the server's own and the system objects are in none); each absent when zero.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
     string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null,
-    int? LeftOut = null, int? LeftOutIn = null, string? SavedAt = null);
+    int? LeftOut = null, int? LeftOutIn = null, string? SavedAt = null, string? ReadAt = null, bool? Saved = null, string? CheckedAt = null, bool? Checking = null,
+    int? Stale = null, int? Unverified = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.indexStatus: what a connection's index holds now, without building or searching.</summary>
 internal sealed record ObjectIndexStatusArgs(string ConnectionId);

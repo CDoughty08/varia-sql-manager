@@ -67,7 +67,7 @@ internal static class ExplorerLiveChecks
                 // Fixtures stop at their first error, so a batch that failed cannot leave later ones to run in the wrong place.
                 var result = (QueryResult)await service.DispatchAsync("query.execute", JsonSerializer.SerializeToElement(
                     new QueryArgs(info.Id, session, database, sql, Guid.NewGuid().ToString(), 100_000, 300, StopOnError: true), json), json);
-                return new(result.Status, result.Error?.Message, [.. result.ResultSets.Select(set => LiveResultChecks.RowsOf(service.Results, set))]);
+                return new(result.Status, result.Error?.Message, [.. result.ResultSets.Select(set => LiveResultChecks.RowsOf(service.Results, set))], result.IndexStale);
             }
             finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
         }
@@ -75,9 +75,10 @@ internal static class ExplorerLiveChecks
         var major = int.Parse(info.ServerVersion.Split('.')[0]);
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SEARCH_RELOAD_ONLY") == "1" && Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") == "1")
         {
-            // Only the saved-index reload checks, on their own scratch database (docs/testing.md, Scratch).
-            await SearchReloadLiveChecks.RunAsync(check, service, info.Id, (text, database) => Sql(text, database),
-                "VariaScratch_" + DateTime.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture) + "_" + Guid.NewGuid().ToString("N")[..8]);
+            // Only the saved-index reload and freshness checks, on their own scratch databases (docs/testing.md, Scratch).
+            var only = "VariaScratch_" + DateTime.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture) + "_" + Guid.NewGuid().ToString("N")[..8];
+            await SearchReloadLiveChecks.RunAsync(check, service, info.Id, (text, database) => Sql(text, database), only);
+            await SearchFreshnessLiveChecks.RunAsync(check, service, info.Id, (text, database) => Sql(text, database), only, live);
             return;
         }
 
@@ -374,6 +375,7 @@ internal static class ExplorerLiveChecks
         Console.WriteLine("Created the Object Explorer scratch database in " + watch.ElapsedMilliseconds + " ms.");
         await SearchLiveChecks.RunAsync(check, service, client.ConnectionId, json, sql, scratch.Name, scratch.OwnLogin);
         await SearchReloadLiveChecks.RunAsync(check, service, client.ConnectionId, sql, scratch.Name);
+        await SearchFreshnessLiveChecks.RunAsync(check, service, client.ConnectionId, sql, scratch.Name, live);
         await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json, scratch.CreateMemoryOptimizedAsync, scratch.DropMemoryOptimizedAsync,
             scratch.OwnLogin);
         var major = scratch.Major;

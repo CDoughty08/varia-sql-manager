@@ -687,7 +687,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   `IndexFile.Replace` makes all or nothing. When a configuration starts the store saving (the first one, a new key, saving
   turned on again), `IndexStore.Opened` has `ObjectSearchService.SaveHeld` announce what every index holds, so a read held
   before main configured the store is not lost until its next build. What a builder will later compare with its source goes in
-  `DatabaseIndex.Sync` (BigQuery's `BigQuerySync`; SQL Server's is empty until a fingerprint is added), which a listing
+  `DatabaseIndex.Sync` (BigQuery's `BigQuerySync`; SQL Server's `SqlSync`, its fingerprint, empty when none was taken), which a listing
   of saved units reads from the headers alone. A BigQuery connection's first full build loads its principal's saved units
   (`ObjectSearchService.LoadSaved`) before any call, each through `IndexStore.Load` (charged as a read, under BigQuery's
   floors) and held only while `IndexStore.Settled` and the connection's own marks say nothing made it stale (no queued
@@ -695,6 +695,15 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   sync's listing digest, and a dataset found unchanged keeps the loaded read and is only marked used
   (`ObjectSearchService.Unchanged`), never written again. Every load failure is a value that leaves the dataset to the
   usual read.
+  Freshness while connected (`ObjectSearchService.Freshness`, `.BigQueryRefresh`; docs/object-search.md, Freshness) is
+  marks and checks, never timers in the window: DDL from Varia (`TsqlChanges` for query tabs, object actions, Table
+  Designer) marks a SQL Server database (`MarkSqlStale`), a search marks units due by age (`DueOnUseLocked`, on the
+  `UtcNow` seam), and each mark is one `stale` build: on SQL Server a check (`CheckSqlAsync`) that verifies the held read
+  by its fingerprint and re-reads selectively from it, never replacing a running full build, keeping the held read and
+  its mark when the fingerprint fails. BigQuery details read anyway are applied to the held read (`TableRead`,
+  `RoutineRead`), and the backend's one background re-read per connection (`SweepAsync`) gets details through the same
+  limited `IBigQueryIndexSource`, one at a time, paused while a build runs and stopped on `Forget`. A change to a held
+  read goes through `ConnectionIndex.Put` like any read, so it is saved.
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`
