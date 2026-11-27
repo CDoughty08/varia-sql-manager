@@ -475,14 +475,14 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     if (!results.removeEntry(tabId, key)) return
     const remaining = new Set(list.filter(entry => !gone.has(entry.key)).map(entry => entry.key))
     let moved = focusedNow !== undefined && gone.has(focusedNow) ? results.getSnapshot()[tabId]?.focused : undefined
-    if (moved !== undefined && !remaining.has(moved) && next) {
+    if (next && ((multi && focusedNow !== undefined && gone.has(focusedNow)) || (moved !== undefined && !remaining.has(moved)))) {
       results.focusEntry(tabId, next.key)
       setFocused(next.key)
       moved = next.key
     }
     if (!own || !next) return
     pendingFocus.current = { closed: key, next: moved ?? next.key }
-  }, [results, tabId, slots, sets])
+  }, [results, tabId, slots, sets, multi])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
   const focusRebuilt = useCallback((key: EntryKey) => {
     const stack = stackRef.current
@@ -515,6 +515,18 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const stack = stackRef.current, active = stack?.ownerDocument.activeElement
     if (went && was && stack && (!active || active === stack.ownerDocument.body)) stack.querySelector<HTMLElement>('[data-pane-focus]')?.focus({ preventScroll: true })
   }, [captionless])
+  const hadSummaryOnly = useRef(summaryOnly), summaryFocus = useRef(false)
+  useLayoutEffect(() => {
+    const went = hadSummaryOnly.current && !summaryOnly, was = summaryFocus.current
+    hadSummaryOnly.current = summaryOnly
+    if (went) summaryFocus.current = false
+    const stack = stackRef.current, active = stack?.ownerDocument.activeElement
+    if (went && was && stack && (!active || active === stack.ownerDocument.body)) {
+      const target = stack.closest('.rs-multi-root')?.querySelector<HTMLElement>('.rs-multi-summary-toggle')
+        ?? stack.querySelector<HTMLElement>('[data-result-grid], [data-pane-focus]')
+      target?.focus({ preventScroll: true })
+    }
+  }, [summaryOnly])
   const wide = useCallback((key: EntryKey, isWide: boolean) => {
     setNarrow(current => {
       if (current.has(key) === !isWide) return current
@@ -621,7 +633,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
 
   // Pure-DDL/DML multi-server run (0 result sets): render full MultiRunSummary so Stacked layout is never blank.
   if (summaryOnly) {
-    return <div ref={stackRef} className="rs-stack rs-stack-summary">
+    return <div ref={stackRef} className="rs-stack rs-stack-summary"
+      onFocus={() => { summaryFocus.current = true }}
+      onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) summaryFocus.current = false }}>
       <MultiRunSummary tabId={tabId} tab={tab} active />
     </div>
   }

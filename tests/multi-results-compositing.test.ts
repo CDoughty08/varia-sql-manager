@@ -4133,4 +4133,77 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
       { property: 'opacity', value: '1' }
     ]))
   })
+
+  it('R17 D4 #1–#4: inset focus rings on summary toggle & stmt select, forced-colors pressed error badge, summaryOnly->grid focus handoff, and visually adjacent close focus in Stacked', () => {
+    // #1 & #4: CSS inset focus rings & forced-colors pressed error badge.
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector === '.rs-multi-summary-toggle:focus-visible')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'outline-offset', value: '-2px' }
+    ]))
+    expect(rules.find(r => r.selector.includes('.rt-stmt-select:focus-visible'))?.declarations).toEqual(expect.arrayContaining([
+      { property: 'outline-offset', value: '-1px' }
+    ]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector === 'button.messages-filter-pill[aria-pressed="true"] .messages-filter-err')?.declarations)
+      .toEqual(expect.arrayContaining([
+        { property: 'background', value: 'HighlightText' },
+        { property: 'color', value: 'Highlight' }
+      ]))
+
+    // #2: In Stacked layout, focusing [data-multi-summary] while 0 sets exist and then streaming the first set moves focus to .rs-multi-summary-toggle (never document.body).
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 600 })
+    cleanups.add(() => {
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    })
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r17-stack-focus.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const render = () => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    render()
+    const summaryEl = host.querySelector<HTMLElement>('[data-multi-summary]')!
+    act(() => { summaryEl.focus() })
+    expect(document.activeElement).toBe(summaryEl)
+
+    // Finish with [s1, s2, s3, c0] (c0 is last in tab.sets, but visually FIRST in ResultsStack!).
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const c0 = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, c0]
+      )
+    })
+    render()
+    expect(document.activeElement).toBe(host.querySelector('.rs-multi-summary-toggle'))
+
+    // #3: Focusing Combined (visual top) and clicking its Close button moves focus to visually adjacent prod-east (s1), NOT dev-01 (s3 at bottom)!
+    const tabNow = f.results.getSnapshot()[doc.id]
+    const c0Key = tabNow.sets.find(e => e.descriptor.kind === 'combined')!.key
+    const s1Key = tabNow.sets.find(e => e.descriptor.targetKey === 'prod-east')!.key
+    act(() => { f.results.focusEntry(doc.id, c0Key) })
+    render()
+    const c0Caption = host.querySelector<HTMLElement>(`[data-caption-entry="${c0Key}"]`)!
+    const c0Close = c0Caption.closest('.rs-caption')!.querySelector<HTMLButtonElement>('button[aria-label^="Close"]')!
+    act(() => { c0Close.focus(); c0Close.click() })
+    render()
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(s1Key)
+    expect(document.activeElement).toBe(host.querySelector(`[data-caption-entry="${s1Key}"]`))
+  })
 })

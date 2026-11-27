@@ -1340,7 +1340,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rt-close, .rt-save { flex: none; }
 .rt-close { height: 18px; color: inherit; opacity: .75; }
 .rt-close:hover:not(:disabled) { opacity: 1; }
-.rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-stmt-tab:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-stmt-tab:focus-visible, .rt-stmt-select:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .rt-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 /* A short pane folds the rows of tabs (tabsFold): side by side in one row, without the facts; or none, the grid alone. */
 .rt-root[data-fold="one"] { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); grid-template-rows: auto minmax(0, 1fr); }
@@ -4641,6 +4641,7 @@ button.multi-grid-notice-btn[aria-disabled="true"], button.multi-grid-notice-btn
 .rs-multi-summary-band[data-open] { max-height: min(210px, 45%); overflow: hidden; }
 .rs-multi-summary-toggle { display: flex; flex: none; align-items: center; gap: var(--varia-space-2); width: 100%; height: 26px; padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: transparent; color: var(--varia-foreground); font-size: var(--varia-size-xs); font-weight: 600; text-align: left; overflow: hidden; white-space: nowrap; }
 .rs-multi-summary-toggle:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.rs-multi-summary-toggle:focus-visible { outline-offset: -2px; }
 .rs-multi-summary-facts { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-weight: 400; font-variant-numeric: tabular-nums; }
 .rs-stmt-strip { display: flex; flex: none; align-items: center; gap: var(--varia-space-1); min-height: 26px; padding: var(--varia-space-0) var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); font-size: var(--varia-size-xs); }
 .rs-stmt-buttons { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
@@ -4680,6 +4681,7 @@ button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[ar
   .multi-target-trigger, .multi-target-popover, .multi-target-row, .cross-engine-chip, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-phase-pill { border-color: CanvasText; }
   .multi-target-trigger[data-open], .multi-exec-mode-card.is-picked { border-color: Highlight; }
   button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cross-engine-stack-btn[aria-pressed="true"], button.ui-button.cross-engine-view-btn[aria-pressed="true"]:hover:not(:disabled), button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:hover:not(:disabled), button.rs-stmt-btn[aria-pressed="true"], button.rs-stmt-btn[aria-pressed="true"]:hover:not(:disabled), button.rt-stmt-tab[aria-selected="true"], button.rt-stmt-tab[aria-selected="true"]:hover:not(:disabled), button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  button.messages-filter-pill[aria-pressed="true"] .messages-filter-err { background: HighlightText; color: Highlight; }
   .rt-stmt-tab[aria-selected="true"]:focus-visible, button.ui-button.cross-engine-view-btn[aria-pressed="true"]:focus-visible, button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:focus-visible { outline-color: HighlightText; }
   .compare-search-row:focus-within { border-color: Highlight; outline: 2px solid Highlight; outline-offset: -1px; }
   .tab-swatch, .multi-swatch, .multi-target-swatch, .multi-target-dot, .rt-server-dot, .rs-server-dot, .cross-engine-chip-dot, .multi-exec-target-dot { forced-color-adjust: none; }
