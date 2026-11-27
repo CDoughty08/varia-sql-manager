@@ -1,4 +1,7 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { agentLimits } from '../src/shared/agent/catalog'
 import {
   agentAvailability, agentBanner, agentJobTiles, agentJobsArgsSchema, agentStatusOverride, bulkUnavailable, stampMinus, stampText, tileValue, viewCount, watchedGoneStatus, watchedServerNow, agentJobTextColumns, watchedPhase, watchedSlot, watchedText,
@@ -9,12 +12,17 @@ import { compileWhen, evaluateWhen } from '../src/shared/commands/when'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 import { liveProbes } from '../src/shared/live/catalog'
 import { limits } from '../src/shared/ipc/wire/protocol'
+import JobActivityMonitor from '../src/renderer/src/agent/JobActivityMonitor'
 import { SnapshotStore } from '../src/renderer/src/core/store'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import { stampOf } from '../src/renderer/src/agent/AgentJobStatusService'
 import { activeFilters, bulkLine, jobActivityArgs, jobActivityText, listProblems, pillNote, selectionRows } from '../src/renderer/src/agent/JobActivityService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
@@ -603,5 +611,217 @@ describe('Job Activity Monitor\'s Start Agent, F5 and row menu (AG-10)', () => {
     expect(refreshes).not.toHaveBeenCalled()
     run.dispose()
     expect(refreshes).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('JobActivityMonitor UI (AP-3)', () => {
+  it('renders 4 KPI tiles without duplicate View chips, a single grouped toolbar with portal menus, and a split Last Run drawer', async () => {
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(JobActivityMonitor, { documentId: id }) }))
+    })
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+    fixture.jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+
+    // No View ChipGroup; 4 KPI tiles act as view filters.
+    expect(host.querySelector('[role="group"][aria-label="View"]')).toBeNull()
+    const tiles = Array.from(host.querySelectorAll<HTMLButtonElement>('.agent-tiles .agent-tile'))
+    expect(tiles).toHaveLength(4)
+    const toolbar = host.querySelector('[role="toolbar"][aria-label="Job actions"]')!
+    expect(toolbar).not.toBeNull()
+    expect(toolbar.textContent).toContain('Select a job')
+
+    // Clicking Last run failed tile sets aria-pressed and Clear filters clears it.
+    await act(async () => { tiles[1]!.click() })
+    expect(tiles[1]!.getAttribute('aria-pressed')).toBe('true')
+    const clearBtn = toolbar.querySelector<HTMLButtonElement>('button[aria-label="Clear filters"]')!
+    expect(clearBtn.disabled).toBe(false)
+    await act(async () => { clearBtn.click() })
+    expect(tiles[1]!.getAttribute('aria-pressed')).toBe('false')
+
+    // 2 selected jobs: toolbar shows "2 jobs selected", Enable / Disable and More actions menus work via portals.
+    await act(async () => { grid.select([row(nightly, 'Nightly'), row(backup, 'Backup')]); await settled() })
+    expect(toolbar.textContent).toContain('2 jobs selected')
+    const enableTrigger = toolbar.querySelector<HTMLButtonElement>('button[aria-label="Enable / Disable"]')!
+    const moreTrigger = toolbar.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')!
+    const lastRunTrigger = Array.from(toolbar.querySelectorAll<HTMLButtonElement>('button')).find(b => b.textContent?.includes('Last run'))!
+    expect(enableTrigger.disabled).toBe(false)
+    expect(moreTrigger.disabled).toBe(false)
+    expect(lastRunTrigger.disabled).toBe(true)
+
+    await act(async () => { moreTrigger.click() })
+    const moreMenu = document.body.querySelector<HTMLElement>('[role="menu"][aria-label="More actions"]')!
+    expect(moreMenu).not.toBeNull()
+    const menuItems = Array.from(moreMenu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+    expect(menuItems.map(item => item.textContent)).toEqual(['Change owner…', 'Attach schedule…', 'View history', 'Create Job Like This…'])
+    expect(menuItems[3]!.disabled).toBe(true)
+    await act(async () => { moreMenu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(document.body.querySelector('[role="menu"][aria-label="More actions"]')).toBeNull()
+
+    // 1 selected job + expanded Last Run split drawer with truncated message -> agentHistoryMessage fetches full text,
+    // and Open Job / Log File Viewer open directly on state.expanded.
+    await act(async () => { grid.select([row(nightly, 'Nightly')]); await settled() })
+    const cutMessage = 'X'.repeat(agentLimits.gridMessageChars - 1) + '…'
+    const fullMessage = 'Full untruncated SQL Agent step failure message.'
+    fixture.api.agentHistoryMessage.mockResolvedValue({ ok: true, value: { message: fullMessage, elapsedMs: 1 } })
+    const lastRunTable = {
+      handle: {
+        getSnapshot: () => ({ state: 'ready', rowsAvailable: 2 }),
+        subscribe: () => () => {},
+        getWindow: async () => ({
+          first: 0, count: 2, colStart: 0, colEnd: 8,
+          text: [
+            '11', '1', 'Extract', 'Succeeded', '2026-11-15 02:30:00', '00:00:01', 'Step 1 ok.', '',
+            '12', '2', 'Load', 'Failed', '2026-11-15 02:30:01', '00:00:04', cutMessage, 'error'
+          ],
+          flags: new Uint8Array(16)
+        })
+      },
+      descriptor: {
+        rowsAvailable: 2, truncated: true,
+        columns: liveProbes['agent.jobs.list'].tables![1]!.columns.map(col => ({ name: col.name, dataType: col.dataType, wire: 'text', nullable: true, ...col.role ? { role: col.role } : {} }))
+      }
+    }
+    handle.tables.set('agent.jobs.list:1', lastRunTable as never)
+    await act(async () => {
+      lastRunTrigger.click()
+      handle.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, metrics: [0, 1, 0, 0, 0] }] } as never)
+      await settled()
+    })
+    const lastRunSection = host.querySelector('section.agent-last-run')!
+    expect(lastRunSection).not.toBeNull()
+    expect(lastRunSection.querySelector('[role="separator"][aria-label="Resize last run message"]')).not.toBeNull()
+    expect(lastRunSection.textContent).toContain("Only this run's newest steps are shown")
+    expect(fixture.api.agentHistoryMessage).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'c1', jobId: nightly, instanceId: 12 }))
+    const preview = lastRunSection.querySelector('[role="region"][aria-label="Step message preview"]')!
+    expect(preview.textContent).toContain('Step 2 · Load')
+    expect(preview.textContent).toContain(fullMessage)
+    // Only Hide the last run is a direct child button of .agent-last-run-head.
+    const headDirectButtons = lastRunSection.querySelectorAll('.agent-last-run-head > button')
+    expect(headDirectButtons).toHaveLength(1)
+    expect(headDirectButtons[0]!.getAttribute('aria-label')).toBe('Hide the last run')
+
+    // Direct Open Job and Log File Viewer buttons still work even if Jobs grid selection is cleared.
+    await act(async () => { grid.clear(); await settled() })
+    const openJobSpy = vi.spyOn(fixture.jobDocuments, 'openJob')
+    const logViewerSpy = vi.spyOn(fixture.logViewer, 'open')
+    const openJobBtn = Array.from(lastRunSection.querySelectorAll<HTMLButtonElement>('.agent-last-run-actions button')).find(b => b.textContent?.includes('Open Job'))!
+    const logViewerBtn = Array.from(lastRunSection.querySelectorAll<HTMLButtonElement>('.agent-last-run-actions button')).find(b => b.textContent?.includes('Log File Viewer'))!
+    await act(async () => { openJobBtn.click(); logViewerBtn.click() })
+    expect(openJobSpy).toHaveBeenCalledWith('c1', 'Nightly')
+    expect(logViewerSpy).toHaveBeenCalledWith('c1', { jobs: [nightly] })
+  })
+
+  it('moves focus to the first enabled menuitem when ArrowDown is pressed on a mouse-opened JamToolbarMenu trigger', async () => {
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const grid = new FakeGrid({ newRows: 0, following: true, lost: false })
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(JobActivityMonitor, { documentId: id }) }))
+    })
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+    fixture.jobActivity.attachGrid(id, grid as unknown as LiveGrid)
+
+    await act(async () => { grid.select([row(nightly, 'Nightly')]); await settled() })
+    const enableTrigger = host.querySelector<HTMLButtonElement>('[role="toolbar"][aria-label="Job actions"] button[aria-label="Enable / Disable"]')!
+    expect(enableTrigger.disabled).toBe(false)
+
+    await act(async () => {
+      enableTrigger.focus()
+      enableTrigger.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    })
+    const enableMenu = document.body.querySelector<HTMLElement>('[role="menu"][aria-label="Enable / Disable"]')!
+    expect(enableMenu).not.toBeNull()
+    expect(document.activeElement).toBe(enableTrigger)
+
+    await act(async () => {
+      enableTrigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    })
+    const firstEnabled = enableMenu.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')!
+    expect(firstEnabled.textContent).toBe('Enable')
+    expect(document.activeElement).toBe(firstEnabled)
+  })
+
+  it('clears LastRunDrawer rows and preview on a direct expanded job switch while lastRunPending is true', async () => {
+    const fixture = workbenchFixture({ windowsClient: true })
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.jobActivity.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.probes.some(probe => probe.probe === 'agent.jobs.list'))!
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(JobActivityMonitor, { documentId: id }) }))
+    })
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+
+    const makeLastRunTable = (generation: number, getWindow: () => Promise<unknown>) => ({
+      handle: { getSnapshot: () => ({ state: 'ready', rowsAvailable: 1 }), subscribe: () => () => {}, getWindow },
+      descriptor: {
+        generation, resultId: `r-${generation}`, rowsAvailable: 1, truncated: false,
+        columns: liveProbes['agent.jobs.list'].tables![1]!.columns.map(col => ({ name: col.name, dataType: col.dataType, wire: 'text', nullable: true, ...col.role ? { role: col.role } : {} }))
+      }
+    })
+
+    handle.tables.set('agent.jobs.list:1', makeLastRunTable(1, async () => ({
+      first: 0, count: 1, colStart: 0, colEnd: 8,
+      text: ['11', '1', 'Extract', 'Succeeded', '2026-11-15 02:30:00', '00:00:01', 'Nightly step 1 message.', ''],
+      flags: new Uint8Array(8)
+    })) as never)
+    await act(async () => {
+      fixture.jobActivity.toggleExpanded(id, { id: nightly, name: 'Nightly' })
+      handle.deliver({ type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, metrics: [0, 0, 0, 0, 0] }] } as never)
+      await settled()
+    })
+    expect(host.querySelector('[role="region"][aria-label="Step message preview"]')!.textContent).toContain('Nightly step 1 message.')
+
+    // Direct switch from Nightly to Backup sets lastRunPending = true; stale Nightly rows must clear and stay empty until Backup resolves.
+    let resolveBackupWindow!: (value: unknown) => void
+    const backupWindowPromise = new Promise(resolve => { resolveBackupWindow = resolve })
+    await act(async () => {
+      fixture.jobActivity.toggleExpanded(id, { id: backup, name: 'Backup' })
+      await settled()
+    })
+    expect(fixture.jobActivity.get(id)?.lastRunPending).toBe(true)
+    expect(host.querySelector('section.agent-last-run')!.textContent).toContain('Reading the last run…')
+
+    handle.tables.set('agent.jobs.list:1', makeLastRunTable(2, () => backupWindowPromise) as never)
+    await act(async () => {
+      handle.deliver({ type: 'live.tick', seq: 2, sampledAt: 2, samples: [{ probe: 'agent.jobs.list', costMs: 1, effectiveIntervalMs: 5000, metrics: [0, 0, 0, 0, 0] }] } as never)
+      await settled()
+    })
+    const previewBeforeResolve = host.querySelector('[role="region"][aria-label="Step message preview"]')!
+    expect(previewBeforeResolve.textContent).not.toContain('Nightly step 1 message.')
+    expect(previewBeforeResolve.textContent).toContain('No message recorded for this step.')
+
+    await act(async () => {
+      resolveBackupWindow({
+        first: 0, count: 1, colStart: 0, colEnd: 8,
+        text: ['21', '1', 'BackupStep', 'Succeeded', '2026-11-15 03:00:00', '00:00:02', 'Backup step 1 message.', ''],
+        flags: new Uint8Array(8)
+      })
+      await settled()
+    })
+    expect(host.querySelector('[role="region"][aria-label="Step message preview"]')!.textContent).toContain('Backup step 1 message.')
   })
 })

@@ -3,8 +3,9 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
 import {
-  connectDialogWindow, documentFrame, documentTab, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton
+  chooseJamMoreAction, connectDialogWindow, documentFrame, documentTab, gridPart, jamToolbar, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton
 } from './fixtures/ui.mjs'
+import { captureAp3 } from './capture-agent-polish-lanes/ap3.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import react from '@vitejs/plugin-react'
 import { existsSync } from 'node:fs'
@@ -166,7 +167,7 @@ async function captureAp1(outDir, profile) {
 
     // 1. Log File Viewer layout (.lfv-* namespace after collision split).
     await jobCell('Nightly').click()
-    await documentFrame(page, 'Job Activity Monitor').getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'View history', exact: true }).click()
+    await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'View history')
     await expect(documentTab(page, 'Log File Viewer - server-a')).toHaveAttribute('aria-selected', 'true')
     const viewer = documentFrame(page, 'Log File Viewer')
     const runs = liveGrid(page, 'Runs')
@@ -192,7 +193,7 @@ async function captureAp1(outDir, profile) {
     // 4. AgentJobStatus status bar item.
     await documentTab(page, 'Job Activity Monitor - server-a').click()
     await jobCell('Backup').click()
-    await documentFrame(page, 'Job Activity Monitor').getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Start', exact: true }).click()
+    await jamToolbar(documentFrame(page, 'Job Activity Monitor')).getByRole('button', { name: 'Start', exact: true }).click()
     await expect(statusBar(page).getByRole('button', { name: 'Dismiss Backup', exact: true })).toBeVisible()
     await captureMatrix(app, page, outDir, '04-status-bar-agent-job')
 
@@ -221,7 +222,8 @@ async function captureAp1(outDir, profile) {
 }
 
 const lanes = {
-  'ap-1': captureAp1
+  'ap-1': captureAp1,
+  'ap-3': (outDir, profile) => captureAp3(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix })
 }
 const implementedLanes = new Set(Object.keys(lanes))
 

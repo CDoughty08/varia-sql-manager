@@ -4497,6 +4497,83 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* === AP-2: Job Document === */
 
 /* === AP-3: JAM & Overview === */
+.agent-jobs .agent-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.agent-jobs .agent-tile .tile { min-height: 52px; padding: var(--varia-space-1) var(--varia-space-3); gap: 0; justify-content: center; }
+.agent-jobs .agent-tile .tile-value { font-size: var(--varia-size-lg); line-height: var(--varia-line-lg); }
+.agent-jobs .agent-tile[data-tone="accent"] .tile-value { color: var(--varia-focusBorder); }
+.agent-jobs .agent-tile[data-tone="error"] .tile-value { color: var(--varia-errorForeground); }
+.agent-jobs .agent-tile[data-tone="warning"] .tile-value { color: var(--varia-tile-warningBorder); }
+.agent-jobs .agent-tile[data-tone="muted"] .tile-value { color: var(--varia-descriptionForeground); }
+.agent-jobs .agent-tile[aria-pressed="true"] { transition: none; }
+.agent-jobs .agent-tile[aria-pressed="true"] .tile { border-color: var(--varia-chip-activeBorder); background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); box-shadow: inset 0 0 0 1px var(--varia-chip-activeBorder); }
+.agent-jobs-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-1) 0; border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); }
+.agent-jobs-toolbar .activity-filter-box { margin-left: 0; flex: 1 1 120px; max-width: 210px; min-width: 110px; }
+.agent-jobs-toolbar .agent-bulk-count { margin-right: var(--varia-space-1); white-space: nowrap; }
+.agent-jobs-toolbar-sep { flex: none; width: 1px; height: var(--varia-space-4); background: var(--varia-panel-border); }
+.agent-jobs-toolbar .activity-tool { border-color: var(--varia-button-border); background: transparent; color: var(--varia-foreground); }
+.agent-jobs-toolbar .activity-tool:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.agent-jobs-toolbar .activity-tool[aria-expanded="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
+.agent-jobs-toolbar .activity-tool:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-jobs-menu { position: fixed; z-index: 13000; display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 196px; max-width: calc(100vw - 16px); padding: var(--varia-space-1); background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); user-select: none; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.agent-jobs-menu-item { width: 100%; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-menu-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); text-align: left; }
+.agent-jobs-menu-item:hover:not(:disabled) { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.agent-jobs-menu-item:focus-visible { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-jobs-menu-item:disabled { color: var(--varia-disabledForeground); opacity: 0.6; cursor: default; }
+.agent-jobs-menu-sep { height: 1px; background: var(--varia-menu-separatorBackground); margin: var(--varia-space-1) var(--varia-space-0); }
+.agent-jobs .agent-last-run { flex: none; height: 184px; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; }
+.agent-jobs .agent-last-run-head { flex: none; padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-panel-background); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-jobs .agent-last-run-head > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-last-run-actions { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
+.agent-last-run-actions > button { border-color: var(--varia-button-border); font-size: var(--varia-size-xs); }
+.agent-last-run-split { flex: 1; min-height: 0; }
+.agent-last-run-grid { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.agent-last-run-preview { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--varia-input-background); }
+.agent-last-run-preview-head { flex: none; display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-panel-background); border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); }
+.agent-last-run-preview-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--varia-foreground); }
+.agent-last-run-preview-meta { flex: none; white-space: nowrap; }
+.agent-last-run-copy { padding: 0 var(--varia-space-1); border-color: var(--varia-button-border); font-size: var(--varia-size-xs); }
+.agent-last-run-message { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: var(--varia-space-2); color: var(--varia-input-foreground); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.agent-bulk-form { border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); background: var(--varia-panel-background); overflow: hidden; }
+.agent-bulk-form .agent-bulk-head { border-bottom: 1px solid var(--varia-panel-border); padding: var(--varia-space-2) var(--varia-space-3); }
+.agent-bulk-form .agent-bulk-form-body { padding: var(--varia-space-2) var(--varia-space-3); gap: var(--varia-space-2); }
+.agent-bulk-form .property-field { grid-template-columns: 160px minmax(0, 1fr); }
+.agent-bulk-owner-input { max-width: 360px; }
+.agent-bulk-schedules .agent-schedule-list { padding: var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); }
+.agent-bulk-schedules .agent-schedule-preview { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); }
+.agent-overview { max-width: 980px; gap: var(--varia-space-3); }
+.agent-overview-status { display: inline-flex; flex: none; align-self: center; }
+.document-frame[data-agent-overview] .document-facts dd { font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.agent-overview .agent-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.agent-overview-tile { display: flex; width: 100%; min-width: 0; cursor: pointer; }
+.agent-overview-tile > .tile { flex: 1; }
+.agent-overview-tile:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 1px; transition: none; }
+.ov-group { display: flex; flex-direction: column; gap: var(--varia-space-1); }
+.ov-group-head { display: flex; align-items: baseline; gap: var(--varia-space-2); }
+.ov-group-head .agent-eyebrow { margin: 0; }
+.ov-group-count { margin-left: auto; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.ov-check-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); overflow: hidden; background: var(--varia-panel-background); }
+.ov-check { display: grid; grid-template-columns: 20px minmax(0, 1fr) 156px; column-gap: var(--varia-space-2); row-gap: var(--varia-space-0); align-items: center; padding: var(--varia-space-2) var(--varia-space-3); border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ov-check:first-child { border-top: 0; }
+.ov-check-list.is-compact .ov-check { padding: var(--varia-space-1) var(--varia-space-3); }
+.ov-check-icon { grid-row: span 2; align-self: start; padding-top: 2px; }
+.ov-check[data-severity="error"] .ov-check-icon { color: var(--varia-errorForeground); }
+.ov-check[data-severity="warning"] .ov-check-icon { color: var(--varia-warningForeground); }
+.ov-check[data-severity="ok"] .ov-check-icon { color: var(--varia-successForeground); }
+.ov-check[data-severity="info"] .ov-check-icon, .ov-check[data-severity="unread"] .ov-check-icon { color: var(--varia-descriptionForeground); }
+.ov-check-title { font-weight: 600; color: var(--varia-foreground); }
+.ov-check-detail { grid-column: 2; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-sm); }
+.ov-check-objects { display: flex; flex-wrap: wrap; gap: var(--varia-space-1); margin-top: var(--varia-space-1); }
+.ov-check-fix { grid-column: 3; grid-row: 1 / 3; display: flex; justify-content: flex-end; min-width: 0; }
+.ov-check-fix > button { max-width: 100%; height: var(--varia-control); padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); font-size: var(--varia-size-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov-obj-chip { display: inline-flex; align-items: center; padding: 0 var(--varia-space-1); height: 18px; border-radius: var(--varia-radius-sm); background: var(--varia-chip-background); border: 1px solid var(--varia-panel-border); color: var(--varia-chip-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); vertical-align: baseline; }
+.ov-obj-chip:hover:not(:disabled) { border-color: var(--varia-chip-activeBorder); background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.ov-obj-chip:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+@media (forced-colors: active) {
+  .agent-jobs-menu { border-color: CanvasText; }
+  .agent-jobs-menu-item:hover:not(:disabled), .agent-jobs-menu-item:focus-visible { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .agent-jobs-menu-item:disabled { color: GrayText; opacity: 1; }
+  .ov-obj-chip { border-color: ButtonText; color: LinkText; }
+}
 
 /* === AP-4: LFV & Schedules === */
 
