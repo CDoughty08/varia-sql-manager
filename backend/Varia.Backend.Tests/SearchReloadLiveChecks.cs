@@ -182,6 +182,16 @@ internal static class SearchReloadLiveChecks
             check(outcomes.GetValueOrDefault(database) != "unchanged" && (await Names(marker + "_new")).Count == 1 && (await Names(marker + "_old")).Count == 0,
                 "a table type created again with other columns is not held as unchanged (" + outcomes.GetValueOrDefault(database) + ")");
 
+            // Two types trading names: an exclusive-or checksum would cancel out, a sum does not.
+            await Run("CREATE TYPE rl.ty_a FROM int; CREATE TYPE rl.ty_b FROM int;", "create two alias types");
+            await Session();
+            await Session();
+            check(outcomes.GetValueOrDefault(database) == "unchanged", "a database with two alias types is held from its file (" + outcomes.GetValueOrDefault(database) + ")");
+            await Run("EXEC sp_rename N'rl.ty_a', N'ty_swap', N'USERDATATYPE'; EXEC sp_rename N'rl.ty_b', N'ty_a', N'USERDATATYPE'; EXEC sp_rename N'rl.ty_swap', N'ty_b', N'USERDATATYPE';",
+                "swap the two types' names");
+            await Session();
+            check(outcomes.GetValueOrDefault(database) != "unchanged", "two types that swap names are not held as unchanged (" + outcomes.GetValueOrDefault(database) + ")");
+
             // The database's budget running out during the check after a read: the read is held (unverified), not a timeout.
             await Run("CREATE TABLE rl.Slow (id int);", "create a table");
             var budget = service.Search.Limits.DatabaseBudget;

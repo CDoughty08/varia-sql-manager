@@ -414,8 +414,8 @@ database's catalog can run:
   definition or column without changing which objects the login sees; a change to the `microsoft_database_tools_support`
   extended property (which hides an object); a foreign key's referenced table, or a history table's current table, that
   becomes visible to the login while the key's own table (or the history table) stays as it was; DDL that another session runs in a transaction while the
-  database is being read and rolls back before the read ends (the catalog is read uncommitted); and a change whose checksums collide (CHECKSUM_AGG and BINARY_CHECKSUM are weak
-  hashes). Each is seen when the database is refreshed. Checked live on SQL Server 2025 only; the SQL is written for 2016
+  database is being read and rolls back before the read ends (the catalog is read uncommitted); and a change whose hashes collide (the fingerprint sums the first four bytes of each
+  row's SHA-256; a listing row's checksum is BINARY_CHECKSUM, a weak hash). Each is seen when the database is refreshed. Checked live on SQL Server 2025 only; the SQL is written for 2016
   and later.
 
 | Limit | Value |

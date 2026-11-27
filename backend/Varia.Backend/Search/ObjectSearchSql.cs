@@ -199,24 +199,37 @@ internal static class ObjectSearchSql
     /// decides how names compare), its compatibility level (a selective re-read needs 130 for OPENJSON), then counts, latest dates
     /// and checksums of everything a database's batch reads: the indexed sys.objects rows (by id, parent, date, name, schema and
     /// type), the other named objects, the user-defined types, the database DDL triggers, the plan guides and the statistics the index keeps. Only what the login
-    /// may see is counted. No row where sys.databases does not show the database to the login.
+    /// may see is counted. No row where sys.databases does not show the database to the login. Each row is hashed on its own
+    /// (<see cref="RowHash"/>) and the hashes summed: BINARY_CHECKSUM and CHECKSUM_AGG are exclusive ors, under which two rows
+    /// trading a value (two types swapping names) cancel out.
     /// </summary>
     public static string Fingerprint(SqlRender r) =>
         "SELECT d.database_id, d.create_date, d.service_broker_guid, CHECKSUM(d.collation_name), d.compatibility_level,"
         + " ob.n, ob.m, ob.c, nm.n, nm.c, ty.n, ty.c, tr.n, tr.m, tr.c, pg.n, pg.m, pg.c, ss.n, ss.c FROM sys.databases AS d"
-        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(o.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(o.object_id, o.parent_object_id, o.modify_date, o.name, o.schema_id, o.type))"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(o.modify_date), SUM(" + RowHash("o.object_id", "o.parent_object_id", Date("o.modify_date"), "o.name", "o.schema_id", "o.type") + ")"
         + " FROM sys.objects AS o WHERE o.type IN (" + ObjectTypes + ")) AS ob (n, m, c)"
-        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(u.k, u.s, u.n, u.d, u.f)) FROM (" + NamedObjects(r) + ") AS u (k, s, n, d, f)) AS nm (n, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), SUM(" + RowHash("u.k", "u.s", "u.n", Date("u.d"), "u.f") + ") FROM (" + NamedObjects(r) + ") AS u (k, s, n, d, f)) AS nm (n, c)"
         // A type dropped and created again keeps its user_type_id: a table type's object id, and an alias type's base type and
         // size, tell the new one apart (no table type is in sys.objects' aggregate).
-        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(t.user_type_id, t.name, t.schema_id, t.is_table_type, t.is_assembly_type,"
-        + " tt.type_table_object_id, t.system_type_id, t.max_length, t.precision, t.scale))"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), SUM(" + RowHash("t.user_type_id", "t.name", "t.schema_id", "t.is_table_type", "t.is_assembly_type", "tt.type_table_object_id",
+            "t.system_type_id", "t.max_length", "t.precision", "t.scale") + ")"
         + " FROM sys.types AS t LEFT JOIN sys.table_types AS tt ON tt.user_type_id = t.user_type_id WHERE t.is_user_defined = 1) AS ty (n, c)"
-        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(tr.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped))"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(tr.modify_date), SUM(" + RowHash("tr.object_id", "tr.name", Date("tr.modify_date"), "tr.is_ms_shipped") + ")"
         + " FROM sys.triggers AS tr WHERE tr.parent_class = 0) AS tr (n, m, c)"
-        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(g.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(g.plan_guide_id, g.name, g.modify_date)) FROM sys.plan_guides AS g) AS pg (n, m, c)"
-        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(sx.object_id, sx.stats_id, sx.name)) FROM sys.stats AS sx WHERE sx.auto_created = 0) AS ss (n, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(g.modify_date), SUM(" + RowHash("g.plan_guide_id", "g.name", Date("g.modify_date")) + ") FROM sys.plan_guides AS g) AS pg (n, m, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), SUM(" + RowHash("sx.object_id", "sx.stats_id", "sx.name") + ") FROM sys.stats AS sx WHERE sx.auto_created = 0) AS ss (n, c)"
         + " WHERE d.database_id = DB_ID();\n";
+
+    /// <summary>One row's hash for <see cref="Fingerprint"/> to sum: the first four bytes of SHA-256 over its fields (text through
+    /// CONCAT, dates through <see cref="Date"/>), as a bigint.</summary>
+    private static string RowHash(params string[] fields) =>
+        "CONVERT(bigint, CONVERT(binary(4), HASHBYTES('SHA2_256', CONCAT(" + string.Join(", N'|', ", fields) + "))))";
+
+    /// <summary>A date as text in a form that no session language or date format changes (style 121).</summary>
+    private static string Date(string column) => "CONVERT(nvarchar(30), " + column + ", 121)";
+
+    /// <summary>The literals <see cref="RowHash"/> adds.</summary>
+    private static readonly IReadOnlySet<string> FingerprintLiterals = new HashSet<string>(StringComparer.Ordinal) { "'SHA2_256'", "N'|'" };
 
     /// <summary>The indexed sys.objects rows as a selective re-read compares them with a saved database's (<see cref="SqlListing"/>):
     /// id, parent, date and <see cref="RowChecksum"/>, in id order.</summary>
@@ -293,7 +306,7 @@ internal static class ObjectSearchSql
             }
             problems.AddRange(CatalogSql.Lint(ResourceFingerprint, render, list: false, mayCheckAccess: false).Select(problem => "fingerprint " + problem));
             texts.Add(Committed + Fingerprint(render));
-            problems.AddRange(CatalogSql.Lint(Fingerprint(render), render, list: false, mayCheckAccess: false).Select(problem => "database fingerprint " + band + " " + problem));
+            problems.AddRange(CatalogSql.Lint(Fingerprint(render), render, list: false, mayCheckAccess: false, FingerprintLiterals).Select(problem => "database fingerprint " + band + " " + problem));
             problems.AddRange(CatalogSql.Lint(Listing, render, list: false, mayCheckAccess: false).Select(problem => "listing " + problem));
             problems.AddRange(CatalogSql.Lint(Agent, render, list: false, mayCheckAccess: false, AgentLiterals).Select(problem => "agent " + problem));
         }
