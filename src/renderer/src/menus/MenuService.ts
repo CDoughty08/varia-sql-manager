@@ -345,8 +345,10 @@ export class MenuService implements Disposable {
     if (this.options.modalOpen() && (hit.target.kind !== 'input' || !this.options.modalContains?.(hit.element))) return false
     // A native menu does not replace the workbench's own, so those close first and return focus before the target takes it.
     if (this.native && this.ownsKeyboard()) this.close('command')
-    // Also undoes Monaco moving focus from its find widget's input to the editor on right-click.
-    hit.focus?.focus({ preventScroll: true })
+    // Also undoes Monaco moving focus from its find widget's input to the editor on right-click, and switches activePane
+    // synchronously before resolve() reads activeDocumentProvider.
+    if (hit.onFocus) hit.onFocus()
+    else hit.focus?.focus({ preventScroll: true })
     const target = targets.refresh(hit.target), menu = menuForTarget[target.kind]
     const items = this.resolve(menu, target)
     if (!hasItems(items)) return false

@@ -1,14 +1,16 @@
-import type { ConnectionInfo, QueryEvent, QueryResult, VariaApi } from '../../../shared/contracts'
+import type { ConnectionInfo, MessageEntry, MultiQueryMode, MultiQueryOptions, MultiQueryTarget, QueryEvent, QueryMultiResult, QueryResult, VariaApi } from '../../../shared/contracts'
 import type { JobsWithoutTabReview, RestoredJob } from '../../../shared/bigquery/jobs'
 import type { BigQueryPreviewTarget } from '../../../shared/bigquery/objects'
 import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
+import type { ProviderId } from '../../../shared/providers'
 import { cancelNotesText, sessionCloseNoteText, sessionPromptLimits, type SessionAction, type SessionCloseNote, type SessionJob, type SessionLocationSwitch, type SessionPlanEntry } from '../../../shared/sessions'
 import { defaultSettings, type SettingsValues } from '../../../shared/settings/catalog'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import type { OutputViewName, ResultsService } from '../results/ResultsService'
+import { applyMultiOutcomes, applyTargetStateEvent, initialMultiTargetStates, type MultiResultsSink, type MultiTargetIdentity, type MultiTargetLiveState } from '../results/multi-results-contract'
+import type { OutputViewName } from '../results/ResultsService'
 import { isQueryDocument, type SessionNotice } from '../documents'
 import { DocumentService } from './documents'
 import { ClientStatisticsService } from '../statistics/ClientStatisticsService'
@@ -16,7 +18,42 @@ import type { PlanExecutionContext, RetainedPlansService } from '../plans/Retain
 import { isLiveConnection, type ConnectionAvailability } from './connection-availability'
 
 /** `attach`: a re-attach to a BigQuery job (query.attach), which Stop cancels as it would the query. */
-export interface RunningQuery { readonly queryId: string; readonly connectionId: string; readonly startedAt: number; readonly kind?: 'estimate' | 'attach' | 'preview'; readonly estimateMode?: EstimatedPlanMode; readonly jobId?: string; /** A re-attach to a finished job, which only reads its results. */ readonly finished?: true; /** BigQuery: the dry run's estimate as the run started, which the job prompt names. */ readonly estimateBytes?: number }
+export interface RunningQuery {
+  readonly queryId: string
+  readonly connectionId: string
+  /** Multi-server runs list every participating connection handle so disconnect/rename/running checks cover all of them. */
+  readonly connectionIds?: readonly string[]
+  readonly multi?: true
+  readonly mode?: MultiQueryMode
+  readonly startedAt: number
+  readonly kind?: 'estimate' | 'attach' | 'preview'
+  readonly estimateMode?: EstimatedPlanMode
+  readonly jobId?: string
+  /** A re-attach to a finished job, which only reads its results. */
+  readonly finished?: true
+  /** BigQuery: the dry run's estimate as the run started, which the job prompt names. */
+  readonly estimateBytes?: number
+}
+/** Request parameters for `QueryService.executeMulti`. */
+export interface MultiExecuteRequest {
+  readonly mode: MultiQueryMode
+  readonly sequential?: boolean
+  readonly preflightDryRun?: boolean
+  readonly autoCombine?: boolean
+  readonly sql?: string
+  readonly startLine?: number
+  readonly startColumn?: number
+  readonly scripts?: { readonly sqlserver: string; readonly bigquery: string }
+  readonly startLines?: { readonly sqlserver?: number; readonly bigquery?: number }
+  readonly targets?: readonly MultiQueryTarget[]
+}
+/** A read-only violation refused locally before any IPC is sent (`QueryService.refuseReadOnly`). */
+export interface ReadOnlyRefusalItem {
+  readonly line: number
+  readonly column?: number
+  readonly message: string
+  readonly dialect?: ProviderId
+}
 /** A BigQuery job the tab holds but does not follow (docs/bigquery.md, Re-attaching to jobs): handed back by a restore, kept
  *  when the backend was lost mid-job, left running (`detached`, Leave it running on Close Results), or opened from Job History.
  *  `adopt` false (Job History's Open Results) attaches without taking over the session the job ran in, which another tab may
@@ -33,8 +70,8 @@ export interface QueryProvenance { readonly queryId: string; readonly connection
 export interface QueryState {
   /** The tab's BigQuery jobs it holds without following them, newest last: re-attached once its connection is live. */
   readonly jobs?: readonly TabJob[]
-  readonly running?: RunningQuery; readonly summary?: QueryResult; readonly error?: string; readonly session?: QuerySession; readonly provenance?: QueryProvenance; readonly estimated?: EstimatedPlanState; readonly livePlan?: { queryId: string; connectionId: string } }
-export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions' | 'querySessionState'> & Partial<Pick<VariaApi, 'estimatePlan' | 'attach' | 'dropJobRecords' | 'cancelRestoredJobs' | 'confirmRunningJob'>>
+  readonly running?: RunningQuery; readonly summary?: QueryResult; readonly multiSummary?: QueryMultiResult; readonly multiTargets?: readonly MultiTargetLiveState[]; readonly error?: string; readonly session?: QuerySession; readonly provenance?: QueryProvenance; readonly estimated?: EstimatedPlanState; readonly livePlan?: { queryId: string; connectionId: string } }
+export type QueryApi = Pick<VariaApi, 'execute' | 'cancel' | 'confirmSessions' | 'querySessionState'> & Partial<Pick<VariaApi, 'executeMulti' | 'estimatePlan' | 'attach' | 'dropJobRecords' | 'cancelRestoredJobs' | 'confirmRunningJob'>>
 export type QuerySnapshot = Readonly<Record<string, QueryState>>
 /** The last reported session only belongs to a tab while it is still on that live connection. */
 export function liveQuerySession(query: QueryState | undefined, connection: { readonly id: string; readonly lost?: true } | undefined): { spid: number; login?: string } | undefined {
@@ -60,7 +97,7 @@ const noticeMessages: Readonly<Record<SessionNotice, string>> = { restarted: new
 /** The `lost` notice for a BigQuery query: BigQuery ends a session itself (BigQueryService.ExpiredNotice says the same). */
 export const bigQueryLostSessionMessage = 'This query started a new BigQuery session. The previous session expired (BigQuery ends a session after 24 hours idle or 7 days), so its temp tables, variables and any open transaction are gone.'
 /** A live connection: its Advanced properties' command timeout, when the profile set one, wins over Tools › Options. */
-type QueryConnection = ConnectionInfo & ConnectionAvailability & { readonly targetId?: string; readonly options?: { readonly provider?: string; readonly advanced?: { readonly commandTimeout?: number } } }
+type QueryConnection = ConnectionInfo & ConnectionAvailability & { readonly targetId?: string; readonly options?: { readonly provider?: string; readonly maximumBytesBilled?: number; readonly advanced?: { readonly commandTimeout?: number } } }
 /** Failures after which the tab has no session, so no open transaction. */
 const sessionGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['SESSION_LOST', 'SESSION_CLOSED', 'NOT_CONNECTED', 'CONNECTION_LOST', 'BACKEND_LOST'])
 /** How long ending sessions waits for the queries it cancelled to stop; their sessions close (and roll back) either way. */
@@ -159,7 +196,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** BigQuery: the dry-run estimate in bytes of exactly `sql` (BigQueryCostService), kept with a run for the job prompt. */
   estimateOf?: (tabId: string, sql: string) => number | undefined
   constructor(private documents: DocumentService, private api: QueryApi, private getConnection: (id: string) => QueryConnection | undefined, private events: EventBus,
-    private results: Pick<ResultsService, 'begin' | 'finish'> & Partial<Pick<ResultsService, 'addMessage'>>, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
+    private results: MultiResultsSink, private now: () => number = () => Date.now(), private wait: (ms: number) => Promise<void> = ms => new Promise(resolve => { setTimeout(resolve, ms) }),
     private settings: () => SettingsValues = () => defaultSettings, private retainedPlans?: RetainedPlansService) {
     super({})
     this.subscription = events.subscribe(event => {
@@ -219,6 +256,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     return true
   }
   isRunning(id: string): boolean { return !!this.getSnapshot()[id]?.running }
+  /** Monotonic per-tab counter incremented on every execution start (stays constant across cancel and completion). */
+  executionVersion(id: string): number { return this.executionVersions.get(id) ?? 0 }
   /** The tab's job key, given now when it has none: main records its BigQuery jobs under it. */
   private jobKeyOf(tabId: string): string {
     const key = this.documents.get(tabId)?.jobKey ?? crypto.randomUUID()
@@ -393,7 +432,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    */
   async holdsJob(id: string): Promise<boolean> {
     const document = this.documents.get(id), connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
-    if (!isQueryDocument(document) || (connection ? connection.providerId !== 'bigquery' : document?.provider !== 'bigquery')) return false
+    // Multi-server and cross-engine runs never detach or hold persistent BigQuery jobs: Close/Disconnect/Quit always cancel via query.cancel.
+    if (!isQueryDocument(document) || document?.multiMode || (connection ? connection.providerId !== 'bigquery' : document?.provider !== 'bigquery')) return false
     const state = this.getSnapshot()[id]
     // A run still in its estimate or cost prompt sent nothing: the prompt stops it like any query.
     // Preview Rows reads a table without a job: it is stopped like any query.
@@ -429,16 +469,29 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
     return undefined
   }
-  isConnectionRunning(id: string): boolean { return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id) }
+  isConnectionRunning(id: string): boolean {
+    return Object.values(this.getSnapshot()).some(state => state.running?.connectionId === id || !!state.running?.connectionIds?.includes(id))
+  }
   /** A location from this exact execution while the submitted document is still unchanged. */
-  sourceLine(tabId: string, queryId: string, line: number | undefined): number | undefined {
-    const source = this.sources.get(tabId), model = this.documents.getModel(tabId)
-    return source?.queryId === queryId && model && source.revision === model.getVersionId() && Number.isSafeInteger(line) && line! > 0 && line! <= model.getLineCount() ? line : undefined
+  sourceLine(tabId: string, queryId: string, line: number | undefined, dialect?: ProviderId): number | undefined {
+    const source = this.sources.get(tabId), model = this.documents.modelFor(tabId, dialect)
+    return source?.queryId === queryId && model && source.revision === this.documents.revision(tabId) && Number.isSafeInteger(line) && line! > 0 && line! <= model.getLineCount() ? line : undefined
   }
   canExecute(id = this.documents.getSnapshot().activeId): boolean {
+    if (this.disposed || this.documents.getSnapshot().busy || this.isRunning(id)) return false
     const document = this.documents.get(id)
-    const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
-    return !this.disposed && !this.documents.getSnapshot().busy && isLiveConnection(connection) && !this.isRunning(id)
+    if (!document || !isQueryDocument(document)) return false
+    if (document.multiMode) {
+      const enabled = (document.multiTargets ?? []).filter(target => target.enabled)
+      const isLive = (connectionId: string | undefined) => !!connectionId && isLiveConnection(this.getConnection(connectionId))
+      if (document.multiMode === 'cross') {
+        return enabled.some(target => target.provider === 'sqlserver' && isLive(target.connectionId))
+          && enabled.some(target => target.provider === 'bigquery' && isLive(target.connectionId))
+      }
+      return enabled.some(target => isLive(target.connectionId))
+    }
+    const connection = document.connectionId ? this.getConnection(document.connectionId) : undefined
+    return isLiveConnection(connection)
   }
   /**
    * Reads the open transaction of an idle query's session from the backend (query.session.state), as SSMS asks its
@@ -471,9 +524,22 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    */
   async transactionTabs(connectionId: string, database: string): Promise<string[]> {
     const wanted = database.toLowerCase()
-    const tabs = this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId === connectionId && document.database.toLowerCase() === wanted)
-      .map(document => ({ id: document.id, name: document.name, open: this.isRunning(document.id) || this.connected(document.id) }))
-    const reads = tabs.filter(tab => tab.open && !this.isRunning(tab.id))
+    const snapshot = this.getSnapshot()
+    const tabs: { readonly id: string; readonly name: string; readonly multi: boolean; open: boolean }[] = []
+    for (const document of this.documents.getSnapshot().documents) {
+      if (!isQueryDocument(document)) continue
+      if (document.multiMode) {
+        const running = snapshot[document.id]?.running
+        if (!running?.connectionIds?.includes(connectionId)) continue
+        const matches = (document.multiTargets ?? []).some(target => target.connectionId === connectionId && target.database.toLowerCase() === wanted)
+        if (matches) tabs.push({ id: document.id, name: document.name, multi: true, open: true })
+        continue
+      }
+      if (document.connectionId === connectionId && document.database.toLowerCase() === wanted) {
+        tabs.push({ id: document.id, name: document.name, multi: false, open: this.isRunning(document.id) || this.connected(document.id) })
+      }
+    }
+    const reads = tabs.filter(tab => !tab.multi && tab.open && !this.isRunning(tab.id))
     if (reads.length) {
       let expired = false
       const reading = (async () => {
@@ -539,6 +605,194 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       sql, startLine, sqlScope: sqlScope ?? (sql === this.documents.getModel(tabId)?.getValue() ? 'document' : 'selection'), startedAt,
       includeActualPlan: !estimateMode && !!document.includeActualPlan, includeLivePlan: !estimateMode && !!document.includeLivePlan,
       ...estimateMode ? { estimateMode } : {} })
+  }
+  /** Refuses a Cross-Engine execution locally (zero IPC), logging clickable READ_ONLY_VIOLATION lines and focusing the first violation. */
+  refuseReadOnly(tabId: string, violations: readonly ReadOnlyRefusalItem[]): void {
+    if (this.disposed || !violations.length || !this.documents.get(tabId)) return
+    const queryId = crypto.randomUUID()
+    const revision = this.documents.revision(tabId)
+    this.sources.set(tabId, { queryId, revision })
+    const messages: MessageEntry[] = violations.map(violation => ({
+      text: `READ_ONLY_VIOLATION (Line ${violation.line}): ${violation.message}`,
+      kind: 'error',
+      line: violation.line,
+      ...violation.dialect ? { dialect: violation.dialect } : {}
+    }))
+    this.results.begin(tabId, queryId)
+    void this.results.finish(tabId, queryId, { error: messages[0]!.text, code: 'READ_ONLY_VIOLATION', messages })
+    const first = violations[0]!
+    this.documents.revealLine(tabId, first.line, revision, first.dialect)
+    this.events.emit({ type: 'query.outputSelected', tabId, view: 'messages' })
+  }
+  /** Runs a multi-server or cross-engine query via `window.varia.executeMulti` with a fresh ephemeral `jobKey` (never persisted). */
+  executeMulti(tabId: string, request: MultiExecuteRequest): Promise<void> {
+    if (this.disposed || this.documents.getSnapshot().busy || this.isRunning(tabId)) return Promise.resolve()
+    const document = this.documents.get(tabId)
+    if (!document || !isQueryDocument(document) || !document.multiMode) return Promise.resolve()
+    const run = this.runMulti(tabId, request)
+    this.runs.set(tabId, run)
+    return run.finally(() => { if (this.runs.get(tabId) === run) this.runs.delete(tabId) })
+  }
+  private async runMulti(tabId: string, request: MultiExecuteRequest): Promise<void> {
+    const document = this.documents.get(tabId)
+    if (!document || !document.multiMode) return
+    const settings = this.settings()
+    const defaultMaxBytes = settings['queryExecution.bigQuery.maximumBytesBilled'] > 0
+      ? settings['queryExecution.bigQuery.maximumBytesBilled'] * 2 ** 30 : undefined
+    const resolvedTargets: MultiQueryTarget[] = []
+    const identities: MultiTargetIdentity[] = []
+    let hasSqlServer = false, hasBigQuery = false
+    let maxCommandTimeout: number | undefined
+    if (request.targets?.length) {
+      for (const target of request.targets) {
+        const connection = this.getConnection(target.connectionId)
+        if (!isLiveConnection(connection)) return
+        const provider: ProviderId = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
+        if (provider === 'bigquery') hasBigQuery = true; else hasSqlServer = true
+        const timeout = connection.options?.advanced?.commandTimeout
+        if (timeout !== undefined) maxCommandTimeout = maxCommandTimeout === undefined ? timeout : Math.max(maxCommandTimeout, timeout)
+        resolvedTargets.push({ ...target })
+        identities.push({
+          targetKey: target.targetKey,
+          connectionId: target.connectionId,
+          provider,
+          label: target.label,
+          ...target.environment ? { environment: target.environment } : {},
+          ...target.database !== undefined ? { database: target.database } : target.dataset !== undefined ? { database: target.dataset } : {}
+        })
+      }
+    } else {
+      const seenKeys = new Set<string>(), seenConnections = new Set<string>()
+      for (const target of document.multiTargets ?? []) {
+        if (!target.enabled || !target.connectionId || seenConnections.has(target.connectionId)) continue
+        const connection = this.getConnection(target.connectionId)
+        if (!isLiveConnection(connection)) continue
+        seenConnections.add(connection.id)
+        const provider: ProviderId = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
+        if (provider === 'bigquery') hasBigQuery = true; else hasSqlServer = true
+        const timeout = connection.options?.advanced?.commandTimeout
+        if (timeout !== undefined) maxCommandTimeout = maxCommandTimeout === undefined ? timeout : Math.max(maxCommandTimeout, timeout)
+        let targetKey = target.targetId ?? connection.id
+        if (seenKeys.has(targetKey)) targetKey = connection.id
+        seenKeys.add(targetKey)
+        const label = connection.displayName || connection.server
+        const database = provider === 'sqlserver' ? (target.database || connection.database || 'master') : undefined
+        const dataset = provider === 'bigquery' && /^\w{1,1024}$/.test(target.database) ? target.database : undefined
+        const cap = provider === 'bigquery' ? (connection.options?.maximumBytesBilled ?? defaultMaxBytes) : undefined
+        resolvedTargets.push({
+          targetKey,
+          connectionId: connection.id,
+          label,
+          ...connection.environment ? { environment: connection.environment } : {},
+          ...database ? { database } : {},
+          ...dataset ? { dataset } : {},
+          ...cap !== undefined ? { maximumBytesBilled: cap } : {}
+        })
+        identities.push({
+          targetKey,
+          connectionId: connection.id,
+          provider,
+          label,
+          ...connection.environment ? { environment: connection.environment } : {},
+          database: target.database
+        })
+      }
+    }
+    if (!resolvedTargets.length) return
+    if (request.mode === 'crossEngineReadOnly' && (!hasSqlServer || !hasBigQuery)) return
+
+    let payload: Pick<MultiQueryOptions, 'sql' | 'startLine' | 'startColumn' | 'scripts' | 'startLines'>
+    if (request.mode === 'crossEngineReadOnly') {
+      const parsed = request.scripts
+        ? { ok: true as const, sqlserver: request.scripts.sqlserver, bigquery: request.scripts.bigquery, sqlServerStartLine: request.startLines?.sqlserver ?? 1, bigQueryStartLine: request.startLines?.bigquery ?? 1 }
+        : this.documents.getCrossEngineScripts(tabId)
+      if (!parsed.ok || !parsed.sqlserver.trim() || !parsed.bigquery.trim()) return
+      payload = {
+        scripts: { sqlserver: parsed.sqlserver, bigquery: parsed.bigquery },
+        ...parsed.sqlServerStartLine > 1 || parsed.bigQueryStartLine > 1
+          ? { startLines: { sqlserver: parsed.sqlServerStartLine, bigquery: parsed.bigQueryStartLine } } : {}
+      }
+    } else {
+      const source = request.sql !== undefined
+        ? { sql: request.sql, startLine: request.startLine ?? 1, startColumn: request.startColumn ?? 1 }
+        : this.documents.getExecuteText(tabId)
+      if (!source.sql.trim()) return
+      payload = {
+        sql: source.sql,
+        ...source.startLine > 1 ? { startLine: source.startLine } : {},
+        ...source.startColumn > 1 ? { startColumn: source.startColumn } : {}
+      }
+    }
+
+    const queryId = crypto.randomUUID()
+    // Bump executionVersion once the run commits to starting (stays constant across cancel and completion).
+    this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
+    // Fresh ephemeral jobKey per execution — never persisted on QueryDocument or stored in this.jobKeys.
+    const jobKey = hasBigQuery ? crypto.randomUUID() : undefined
+    const revision = this.documents.revision(tabId)
+    this.sources.set(tabId, { queryId, revision })
+    const connectionIds = resolvedTargets.map(target => target.connectionId)
+    const initialTargets = initialMultiTargetStates(identities)
+    this.update(tabId, {
+      running: { queryId, connectionId: connectionIds[0]!, connectionIds, multi: true, mode: request.mode, startedAt: this.now() },
+      multiTargets: initialTargets
+    })
+
+    const discardResults = settings['queryResults.grid.discardResults'] === true
+    const options: MultiQueryOptions = {
+      queryId,
+      sessionId: tabId,
+      ...jobKey ? { jobKey } : {},
+      mode: request.mode,
+      targets: resolvedTargets,
+      ...payload,
+      ...request.sequential && request.mode === 'fireAndForget' ? { sequential: true } : {},
+      ...request.preflightDryRun && hasBigQuery ? { preflightDryRun: true } : {},
+      ...request.autoCombine !== undefined ? { autoCombine: request.autoCombine } : { autoCombine: true },
+      ...request.mode === 'fireAndForget' && !hasBigQuery && settings['queryExecution.stopOnError'] ? { stopOnError: true } : {},
+      timeoutSeconds: maxCommandTimeout ?? settings['queryExecution.executionTimeout'],
+      maxRows: settings['queryResults.grid.maxRows'],
+      maxResultSets: settings['queryResults.grid.maxResultSets'],
+      ...discardResults ? { discardResults: true } : {},
+      ...hasBigQuery && settings['queryExecution.bigQuery.showCost'] === 'bytes' ? { prices: false } : {},
+      ...hasBigQuery ? { residence: settings['queryResults.bigQuery.residence'], windowCacheMiB: settings['queryResults.bigQuery.windowCacheMiB'] } : {}
+    }
+
+    let multiSummary: QueryMultiResult | undefined, error: string | undefined, code: ErrorCode | undefined
+    try {
+      this.results.begin(tabId, queryId, undefined, {
+        discard: discardResults,
+        multi: { mode: request.mode, targets: identities },
+        onTargetState: event => {
+          const current = this.getSnapshot()[tabId]
+          if (current?.running?.queryId !== queryId) return
+          const updated = applyTargetStateEvent(current.multiTargets ?? initialTargets, event)
+          this.update(tabId, { ...current, multiTargets: updated })
+          this.results.updateMultiTargetState?.(tabId, queryId, event)
+        },
+        onResultMeta: event => {
+          if (this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
+          this.results.updateResultMeta?.(tabId, queryId, event)
+        }
+      })
+      this.events.emit({ type: 'query.started', tabId, queryId })
+      if (!this.api.executeMulti) throw new Error('This SQL backend does not support multi-server query execution.')
+      const response = await this.api.executeMulti(options)
+      if (response.ok) multiSummary = response.value
+      else { error = response.error; code = response.code }
+    } catch (failure) { error = errorText(failure) }
+    if (this.disposed) return
+    if (!this.documents.get(tabId)) {
+      void this.results.finish(tabId, queryId, { multiSummary, error, code })
+      return
+    }
+    if (this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
+    await this.results.finish(tabId, queryId, { multiSummary, error, code })
+    if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
+    const currentTargets = this.getSnapshot()[tabId]?.multiTargets ?? initialTargets
+    const finalTargets = multiSummary ? applyMultiOutcomes(currentTargets, multiSummary.targets) : currentTargets
+    this.update(tabId, { multiSummary, multiTargets: finalTargets, error })
+    this.events.emit({ type: 'query.finished', tabId, queryId, error })
   }
   /** Runs the active query, or the query `tabId` names. `preview`: a BigQuery tab's Preview Rows, read with tabledata.list
    *  (free, no job, so no cost prompt) instead of running the text, which is the SELECT it stands for. `rerunOf`: the
@@ -770,10 +1024,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     if (jobs.length) this.reattach()
     this.events.emit({ type: 'query.finished', tabId, queryId, summary, error })
   }
-  /** Whether Close Results may ask about the tab's run: a BigQuery job it runs or follows (not an estimate or cost prompt). */
+  /** Whether Close Results may ask about the tab's run: a BigQuery job it runs or follows (not an estimate, cost prompt, or multi-target run). */
   canCloseRunningJob(tabId: string): boolean {
     const running = this.getSnapshot()[tabId]?.running
-    return !!running && running.kind !== 'estimate' && !running.finished && running.jobId !== undefined && !!this.api.confirmRunningJob && !this.disposed
+    return !!running && !running.multi && !this.documents.get(tabId)?.multiMode && running.kind !== 'estimate' && !running.finished && running.jobId !== undefined && !!this.api.confirmRunningJob && !this.disposed
   }
   /**
    * Close Results while a BigQuery job runs (docs/bigquery.md): asks Cancel the job, Leave it running or Don't Close. Cancel
@@ -837,19 +1091,24 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const candidates = tabIds.flatMap(id => {
       const document = this.documents.get(id), operation = this.getSnapshot()[id]?.running
       const estimating = operation?.kind === 'estimate' && operation.estimateMode !== 'session', running = !!operation && !estimating
-      // A session not read in time may hold a transaction; a query with no live connection has none to read.
-      // An isolated estimate leaves the ordinary session idle: ask about its transaction before cancelling the estimate.
-      const connection = document?.connectionId ? this.getConnection(document.connectionId) : undefined
+      const multi = !!document?.multiMode
+      // Multi-server tabs use ephemeral per-run sessions (no persistent idle transactions, no detachable BigQuery jobs):
+      // running multi-target tabs are always prompted as ordinary executing queries and cancelled via query.cancel.
+      const connection = !multi && document?.connectionId ? this.getConnection(document.connectionId) : undefined
+      const multiHandles = multi
+        ? [...new Set([...operation?.connectionIds ?? [], ...(document?.multiTargets ?? []).flatMap(target => target.connectionId ? [target.connectionId] : [])])]
+          .map(connectionId => ({ connectionId, generation: this.getConnection(connectionId)?.generation }))
+        : []
       // A BigQuery query holding a job is asked only about it, in the first box (docs/bigquery.md, The prompt): its query
       // runs, or it holds jobs it does not follow, which holdsJob confirms below.
-      const bigQuery = connection ? connection.providerId === 'bigquery' : isQueryDocument(document) && document?.provider === 'bigquery'
+      const bigQuery = !multi && (connection ? connection.providerId === 'bigquery' : isQueryDocument(document) && document?.provider === 'bigquery')
       // Connecting a tab with no live connection to BigQuery (a recovered tab, Change Connection) is how its jobs re-attach:
       // they go with it to the new connection and are not asked about. A SQL Server connection would re-attach nothing.
       const connecting = action === 'changeConnection' && !!connectingTo?.bigQuery && !running && !this.connected(id)
       const holding = bigQuery && (running || (!connecting && !!this.getSnapshot()[id]?.jobs?.length))
-      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), running, estimating, operation, bigQuery, holding, job: undefined as SessionJob | undefined, outside: undefined as TransactionState | undefined,
-        connectionId: document.connectionId, generation: connection?.generation, version: this.executionVersions.get(id),
-        state: !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
+      return document ? [{ id, name: document.name.slice(0, sessionPromptLimits.name), multi, running, estimating, operation, bigQuery, holding, job: undefined as SessionJob | undefined, outside: undefined as TransactionState | undefined,
+        connectionId: document.connectionId, generation: connection?.generation, multiHandles, version: this.executionVersions.get(id),
+        state: !multi && !running && this.connected(id) ? mayBeOpen : nothingOpen }] : []
     })
     // A detached job is asked about while the backend still sees it running; a read that fails keeps it asked about.
     const holders = candidates.filter(tab => tab.holding)
@@ -921,12 +1180,20 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     // A run still in its estimate or cost prompt is stopped even beside held jobs: it sent nothing.
     const stopping = [...running.filter(tab => !tab.job || this.isGated(tab.id)), ...estimates]
     return {
-      plan: new Map(tabs.map(tab => [tab.id, tab.job ? first === 'leave' ? leavingOutside.includes(tab) ? answer === 'commit' ? 'leaveCommit' : 'leaveRollback' : 'leave' : 'cancelJob' : !tab.running && answer === 'commit' ? 'commit' : 'rollback'])),
+      // Multi-target tabs have no persistent session to end via endSession; they are only cancelled via `stopping`.
+      plan: new Map(tabs.filter(tab => !tab.multi).map(tab => [tab.id, tab.job ? first === 'leave' ? leavingOutside.includes(tab) ? answer === 'commit' ? 'leaveCommit' : 'leaveRollback' : 'leave' : 'cancelJob' : !tab.running && answer === 'commit' ? 'commit' : 'rollback'])),
       stopping: stopping.map(tab => ({ id: tab.id, queryId: tab.operation!.queryId })),
       current: () => !this.disposed && candidates.every(tab => {
-        const document = this.documents.get(tab.id), connection = tab.connectionId ? this.getConnection(tab.connectionId) : undefined
-        return !!document && document.connectionId === tab.connectionId && this.executionVersions.get(tab.id) === tab.version &&
-          connection?.generation === tab.generation && !connection?.lost
+        const document = this.documents.get(tab.id)
+        if (!document || this.executionVersions.get(tab.id) !== tab.version) return false
+        if (tab.multi) {
+          return !!document.multiMode && tab.multiHandles.every(handle => {
+            const conn = this.getConnection(handle.connectionId)
+            return conn?.generation === handle.generation && !conn?.lost
+          })
+        }
+        const connection = tab.connectionId ? this.getConnection(tab.connectionId) : undefined
+        return document.connectionId === tab.connectionId && connection?.generation === tab.generation && !connection?.lost
       })
     }
   }

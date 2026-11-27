@@ -120,9 +120,11 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   availability(documentId: string): { label: string; detail: string } | undefined {
     const document = this.documents.get(documentId)
     if (!document || !isQueryDocument(document) || documentProvider(document) !== 'bigquery') return
-    if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
+    const model = this.documents.modelFor(documentId, 'bigquery')
+    if ((model?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString('en-US')} characters.` }
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
+    const ctx = model ? this.documents.languageContext(model, id => this.connections.isLive(id)) : undefined
+    const connection = ctx?.connectionId ? this.connections.get(ctx.connectionId) : undefined
     if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection))
       return { label: 'IntelliSense disconnected', detail: 'Keywords and functions complete. Connect this query to BigQuery for projects, datasets, tables and columns from its Search Objects index.' }
     const error = this.getSnapshot().errors.get(documentId)
@@ -136,13 +138,13 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   /** What a model's requests use: its BigQuery tab, the tab's live connection (if any) and the names it resolves unqualified names to. */
   private target(model: Monaco.editor.ITextModel): Target | undefined {
     if (this.disposed || model.getLanguageId() !== googleSqlLanguageId || model.getValueLength() > languageLimits.documentCharacters) return
-    const document = this.documents.getSnapshot().documents.find(entry => this.documents.getModel(entry.id) === model)
-    if (!document || !isQueryDocument(document)) return
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
-    if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return { documentId: document.id, dialect: googleSqlDialect({ project: '' }) }
+    const ctx = this.documents.languageContext(model, id => this.connections.isLive(id))
+    if (!ctx || ctx.suspended || ctx.provider !== 'bigquery') return
+    const connection = ctx.connectionId ? this.connections.get(ctx.connectionId) : undefined
+    if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return { documentId: ctx.documentId, dialect: googleSqlDialect({ project: '' }) }
     // The tab's default dataset, as Execute sends it (a dataset id: letters, digits and underscores).
-    const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
-    return { documentId: document.id, connectionId: connection.id, key: cacheKey(connection), dialect: googleSqlDialect({ project: connection.server, dataset }) }
+    const dataset = /^\w{1,1024}$/.test(ctx.database ?? '') ? ctx.database : undefined
+    return { documentId: ctx.documentId, connectionId: connection.id, key: cacheKey(connection), dialect: googleSqlDialect({ project: connection.server, dataset }) }
   }
 
   /** language.lookup for a target, through its connection's cache; a tab without a live connection has no index to ask. */
@@ -197,8 +199,9 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     for (const key of [...this.caches.keys()]) if (!live.has(key)) { this.caches.delete(key); this.ensured.delete(key) }
     const snapshot = this.getSnapshot()
     const errors = new Map([...snapshot.errors].filter(([id]) => {
-      const document = this.documents.get(id)
-      const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
+      const model = this.documents.modelFor(id, 'bigquery')
+      const ctx = model ? this.documents.languageContext(model, connectionId => this.connections.isLive(connectionId)) : undefined
+      const connection = ctx?.connectionId ? this.connections.get(ctx.connectionId) : undefined
       return !!connection && cacheKey(connection) === this.errorKeys.get(id)
     }))
     for (const id of [...this.errorKeys.keys()]) if (!errors.has(id)) this.errorKeys.delete(id)

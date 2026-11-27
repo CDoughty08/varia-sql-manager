@@ -1,5 +1,5 @@
 import type { ApiResult, ReloadPins, RestoredSession, SessionDocumentWrite, SessionWrite, SqlFile, VariaApi } from '../../../shared/contracts'
-import { sessionLimits } from '../../../shared/files/session'
+import { sessionLimits, type MultiTargetSessionEntry } from '../../../shared/files/session'
 import { withExplorerExpansion } from '../../../shared/connection-targets'
 import { isKeptAgentKind, keptAgentText } from '../../../shared/agent/kept'
 import { isCustomKind, type QueryDocument } from '../documents'
@@ -23,7 +23,9 @@ const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error
 const encoder = new TextEncoder()
 const bytes = (value: unknown) => encoder.encode(JSON.stringify(value)).length
 const associations = (documents: readonly QueryDocument[]) => JSON.stringify(documents.map(document => [
-  document.id, document.targetId, document.database, document.attachWanted, document.connectionId
+  document.id, document.targetId, document.database, document.attachWanted, document.connectionId,
+  document.multiMode, document.crossView,
+  document.multiTargets?.map(target => [target.targetId, target.database, target.attachWanted, target.connectionId, target.enabled, target.provider])
 ]))
 
 /**
@@ -33,7 +35,7 @@ const associations = (documents: readonly QueryDocument[]) => JSON.stringify(doc
  * designer with unsaved changes asks as before), and neither is a value still being appended or a tab past the caps.
  * With editor groups, the documents are in group order, and the groups they are in are kept by each one's place.
  */
-export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
+export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'getText' | 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
   { budget = sessionLimits.totalBytes - sessionLimits.slackBytes, pinnedOnly = false, groups, connectionTargets, explorerExpansion, assertConnectionsReady }: {
     budget?: number; pinnedOnly?: boolean; groups?: Pick<EditorGroupService, 'capture'>; connectionTargets?: Pick<ConnectionTargetService, 'exportWorkspace'>
     /** Object Explorer's expanded nodes per target (`ExplorerService.savedExpansion`), kept with the workspace for the next start. */
@@ -70,19 +72,60 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
       continue
     }
     if (!model || isCustomKind(document.kind) || documents.isFilling(document.id)) continue
-    const kind = document.kind && !isCustomKind(document.kind) ? document.kind : 'sql', connected = document.connectionId ? server(document.connectionId) : document.lastServer
-    const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
-    const targetId = kind === 'sql' && document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
-    if (kind === 'sql' && document.targetId && !targetId) throw new Error('A query connection target could not be kept. Try again after the connection workspace is ready.')
-    // A BigQuery query keeps its engine, and its dataset at BigQuery's length; SQL Server is the absence of one.
-    const bigQuery = kind === 'sql' && document.provider === 'bigquery'
-    const entry: SessionDocumentWrite = {
-      name: document.name.slice(0, sessionLimits.nameChars), ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {}, kind,
-      eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
-      ...document.pinned ? { pinned: true } : {},
-      ...at ? { server: at } : {}, ...(targetId || at) && document.database !== undefined ? { database: document.database.slice(0, bigQuery ? sessionLimits.datasetChars : sessionLimits.databaseChars) } : {},
-      ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {}, ...bigQuery ? { provider: 'bigquery' as const, ...document.jobKey ? { jobKey: document.jobKey } : {} } : {},
-      ...!document.file || document.dirty ? { text: model.getValue() } : {}
+    const kind = document.kind && !isCustomKind(document.kind) ? document.kind : 'sql'
+    const text = !document.file || document.dirty ? (documents.getText ? documents.getText(document.id) : model.getValue()) : undefined
+    let entry: SessionDocumentWrite
+    if (kind === 'sql' && document.multiMode) {
+      const seenTargetIds = new Set<string>()
+      const multiTargets: MultiTargetSessionEntry[] = []
+      for (const target of document.multiTargets ?? []) {
+        if (multiTargets.length >= sessionLimits.multiTargets) break
+        if (target.targetId !== undefined) {
+          if (!targetIds.has(target.targetId)) throw new Error('A query connection target could not be kept. Try again after the connection workspace is ready.')
+          if (seenTargetIds.has(target.targetId)) continue
+          seenTargetIds.add(target.targetId)
+        }
+        const serverName = target.connectionId ? server(target.connectionId) ?? target.lastServer : target.lastServer
+        const trimmedServer = serverName ? serverName.slice(0, sessionLimits.serverChars) : undefined
+        const dbLimit = target.provider === 'bigquery' ? sessionLimits.datasetChars : sessionLimits.databaseChars
+        multiTargets.push({
+          ...target.targetId !== undefined ? { targetId: target.targetId, attachWanted: target.attachWanted ?? !!target.connectionId } : {},
+          provider: target.provider,
+          database: target.database.slice(0, dbLimit),
+          enabled: target.enabled,
+          ...trimmedServer ? { lastServer: trimmedServer } : {}
+        })
+      }
+      const sameBigQuery = document.multiMode === 'same' && document.provider === 'bigquery'
+      entry = {
+        name: document.name.slice(0, sessionLimits.nameChars),
+        ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {},
+        kind,
+        eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf',
+        dirty: document.dirty,
+        ...document.file ? { fileId: document.file.id } : {},
+        ...document.pinned ? { pinned: true } : {},
+        ...sameBigQuery ? { provider: 'bigquery' as const } : {},
+        multiMode: document.multiMode,
+        multiTargets,
+        ...document.multiMode === 'cross' ? { crossView: document.crossView ?? 'split' } : {},
+        ...text !== undefined ? { text } : {}
+      }
+    } else {
+      const connected = document.connectionId ? server(document.connectionId) : document.lastServer
+      const at = kind === 'sql' && connected ? connected.slice(0, sessionLimits.serverChars) : undefined
+      const targetId = kind === 'sql' && document.targetId && targetIds.has(document.targetId) ? document.targetId : undefined
+      if (kind === 'sql' && document.targetId && !targetId) throw new Error('A query connection target could not be kept. Try again after the connection workspace is ready.')
+      // A BigQuery query keeps its engine, and its dataset at BigQuery's length; SQL Server is the absence of one.
+      const bigQuery = kind === 'sql' && document.provider === 'bigquery'
+      entry = {
+        name: document.name.slice(0, sessionLimits.nameChars), ...document.baseName ? { baseName: document.baseName.slice(0, sessionLimits.nameChars) } : {}, kind,
+        eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', dirty: document.dirty, ...document.file ? { fileId: document.file.id } : {},
+        ...document.pinned ? { pinned: true } : {},
+        ...at ? { server: at } : {}, ...(targetId || at) && document.database !== undefined ? { database: document.database.slice(0, bigQuery ? sessionLimits.datasetChars : sessionLimits.databaseChars) } : {},
+        ...targetId ? { targetId, attachWanted: document.attachWanted ?? !!document.connectionId } : {}, ...bigQuery ? { provider: 'bigquery' as const, ...document.jobKey ? { jobKey: document.jobKey } : {} } : {},
+        ...text !== undefined ? { text } : {}
+      }
     }
     const size = bytes(entry) + (document.file ? bytes(document.file.path) : 0) + 2
     if (used + size > budget) continue
@@ -101,7 +144,7 @@ export function keptSession(documents: Pick<DocumentService, 'getSnapshot' | 'ge
 }
 
 /** Reload uses the same eligibility as hot exit and takes its last checkpoint as the old page unloads. */
-export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
+export function reloadSession(documents: Pick<DocumentService, 'getSnapshot' | 'getModel' | 'isFilling'> & Partial<Pick<DocumentService, 'getText' | 'keepCustom' | 'closeRefusal'>>, server: (connectionId: string) => string | undefined,
   { restoreQueries, recoveryId, ...options }: Parameters<typeof keptSession>[2] & {
     restoreQueries: boolean; recoveryId: (tabId: string) => string | undefined
   }): ReloadPins | undefined {

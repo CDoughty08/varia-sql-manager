@@ -12,7 +12,7 @@ import type { QueryService } from './queries'
 export interface DisconnectWorkbenchOptions {
   readonly connectionTargets: ConnectionTargetService
   readonly documents: Pick<DocumentService, 'getSnapshot' | 'revision' | 'runTask' | 'connectionBusy' | 'endSession'>
-  readonly queries: Pick<QueryService, 'isRunning' | 'prepareSessions' | 'cancelPreparedSessions' | 'sessionNote'> & Partial<Pick<QueryService, 'failedAborts'>>
+  readonly queries: Pick<QueryService, 'isRunning' | 'prepareSessions' | 'cancelPreparedSessions' | 'sessionNote'> & Partial<Pick<QueryService, 'failedAborts' | 'executionVersion'>>
   readonly files: Pick<FileService, 'prepareQueryClose' | 'validateQueryClose'>
   readonly longRuns: Pick<LongRunService, 'disconnectRefusal'>
   readonly prompts: DisconnectPromptService
@@ -31,7 +31,10 @@ export function createDisconnectCoordinator(options: DisconnectWorkbenchOptions)
     documents: () => documents.getSnapshot().documents.map(document => ({
       id: document.id, name: document.name, targetId: (document as QueryDocument & { readonly targetId?: string }).targetId,
       connectionId: document.connectionId, database: document.database, revision: documents.revision(document.id),
-      dirty: document.dirty, query: isQueryDocument(document), running: queries.isRunning(document.id)
+      dirty: document.dirty, query: isQueryDocument(document), running: queries.isRunning(document.id),
+      ...document.multiMode ? { multiMode: document.multiMode } : {},
+      ...document.multiTargets ? { multiTargets: document.multiTargets } : {},
+      executionVersion: queries.executionVersion?.(document.id) ?? 0
     })),
     busy: () => documents.getSnapshot().busy,
     runTask: action => documents.runTask(action),

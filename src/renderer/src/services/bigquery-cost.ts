@@ -184,6 +184,8 @@ export interface BigQueryCostDeps {
   readonly ask: (request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void) => Promise<CostPromptAnswer>
   readonly optOut: CostOptOut
   readonly schedule?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
+  /** Multi-server BigQuery results: resolves a stored result's owning connection handle (`targetKey -> connectionId`). */
+  readonly connectionForResult?: (tabId: string, resultId: number) => string | undefined
 }
 
 /**
@@ -401,6 +403,17 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return { run, ...cap !== undefined && connection.options.provider === 'bigquery' && connection.options.maximumBytesBilled === undefined ? { maximumBytesBilled: cap } : {} }
   }
 
+  /** Resolves the live BigQuery connection for a remote operation: prefers injected per-result ownership for multi-target tabs. */
+  private connectionForRemote(tabId: string, remote: RemoteDryRun): LiveConnection | undefined {
+    const mappedId = this.deps.connectionForResult?.(tabId, remote.resultId)
+    if (mappedId) {
+      if (!this.deps.connections.isLive(mappedId)) return undefined
+      const connection = this.deps.connections.get(mappedId)
+      return connection && isBigQueryConnection(connection) ? connection : undefined
+    }
+    return this.connection(tabId)
+  }
+
   /**
    * Before a sort, filter or value list of a windowed result runs a billed query on tab `tabId`'s connection (docs/bigquery.md,
    * Sort and filter in BigQuery): its dry run (bigquery.dryRun of the remote request, free), then the same prompts as Execute.
@@ -408,17 +421,17 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
    * declined or the work was given up. A tab off BigQuery or a failed dry run rejects with why.
    */
   async beforeRemote(tabId: string, remote: RemoteDryRun, signal?: AbortSignal): Promise<BigQueryDryRunResult | undefined> {
-    const connection = this.connection(tabId)
+    const connection = this.connectionForRemote(tabId, remote)
     if (!connection) throw new Error('The tab is no longer connected to BigQuery.')
     const response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, remote })
     if (!response.ok) throw new RemoteEstimateError(response.error, response.code)
-    if (signal?.aborted || this.disposed || this.connection(tabId)?.id !== connection.id) return undefined
+    if (signal?.aborted || this.disposed || this.connectionForRemote(tabId, remote)?.id !== connection.id) return undefined
     return await this.prompts(connection, response.value, this.entries.get(tabId), signal) ? response.value : undefined
   }
 
   /** A results.remoteQuery request's estimate alone, with no prompt (Load sample's dialog shows it as its rows change). */
   async estimateRemote(tabId: string, remote: RemoteDryRun, signal?: AbortSignal): Promise<BigQueryDryRunResult | undefined> {
-    const connection = this.connection(tabId)
+    const connection = this.connectionForRemote(tabId, remote)
     if (!connection) throw new Error('The tab is no longer connected to BigQuery.')
     const response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, remote })
     if (!response.ok) throw new RemoteEstimateError(response.error, response.code)

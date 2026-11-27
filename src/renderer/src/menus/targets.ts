@@ -302,6 +302,8 @@ export interface TargetHit {
   readonly target: MenuTarget
   readonly element: Element
   readonly focus?: HTMLElement
+  /** Focus callback for targets whose focus owner is not a plain HTMLElement (e.g., a Monaco editor pane). */
+  readonly onFocus?: () => void
   readonly mark?: Element
   /** What a keyboard-opened menu opens below, when not `element`: the results grid's active cell. */
   readonly anchor?: Element
@@ -314,8 +316,8 @@ interface TargetRegistration {
   readonly focus?: () => HTMLElement | undefined
 }
 export interface MenuTargetOptions {
-  /** The bound query editor's container and the query it shows, when there is one. */
-  readonly editor?: () => { readonly container: Element; readonly tabId: string } | undefined
+  /** The query editor containing `element` (or the bound editor), its container, query id, and optional focus callback. */
+  readonly editor?: (element?: Element | null) => { readonly container: Element; readonly tabId: string; readonly focus?: () => void } | undefined
   readonly commandEnabled?: CommandEnabled
 }
 
@@ -405,8 +407,8 @@ export class MenuTargetService {
         const registration = this.providers.get(node)
         if (registration) return this.hit(registration, node, element)
       }
-      const editor = this.options.editor?.()
-      if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container }
+      const editor = this.options.editor?.(element)
+      if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container, ...editor.focus ? { onFocus: editor.focus } : {} }
       // Dockview's focusable tab element wraps the panel's own tab content (a workspace pane's, or a document's), which
       // registers the target.
       const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab], [data-tab-id]')

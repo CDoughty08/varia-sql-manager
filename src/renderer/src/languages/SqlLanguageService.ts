@@ -230,8 +230,10 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if (this.disposed || token.isCancellationRequested) return false
     const document = this.documents.get(documentId), model = this.documents.getModel(documentId)
     if (!document || !isQueryDocument(document) || !model) throw new Error('Open a SQL query to refresh IntelliSense.')
+    const langContext = this.documents.languageContext(model, id => this.connections.isLive(id))
+    if (langContext?.suspended) throw new Error('Switch to Split view for per-dialect IntelliSense and syntax checking.')
     if (model.getValueLength() > languageLimits.documentCharacters) throw new Error('This query is too large for SQL language support.')
-    if (!document.connectionId || !this.connections.isLive(document.connectionId)) throw new Error('Connect this query to a live database before refreshing IntelliSense.')
+    if (!langContext?.connectionId || !this.connections.isLive(langContext.connectionId)) throw new Error('Connect this query to a live database before refreshing IntelliSense.')
     const capture = this.capture(model, { lineNumber: 1, column: 1 } as Monaco.Position)
     if (!capture) throw new Error('The query is unavailable for SQL language support.')
     const previous = this.refreshing.get(documentId)
@@ -379,7 +381,10 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   }
   /** A small status-bar label with an actionable explanation in its tooltip. */
   availability(documentId: string): { label: string; detail: string } {
-    const document = this.documents.get(documentId), connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
+    const document = this.documents.get(documentId), langContext = this.documentLanguageContext(documentId)
+    if (langContext?.suspended) return { label: 'IntelliSense paused', detail: 'Switch to Split view for per-dialect IntelliSense and syntax checking.' }
+    const connectionId = langContext?.connectionId ?? (!document?.multiMode ? document?.connectionId : undefined)
+    const connection = connectionId ? this.connections.get(connectionId) : undefined
     const id: DatabaseProviderId = connection?.providerId ?? 'sqlserver', snapshot = this.getSnapshot()
     const activity = snapshot.activities.get(documentId)
     if (activity === 'refreshing') return { label: 'IntelliSense refreshing', detail: 'Refreshing schema suggestions for this query’s connection and database.' }
@@ -393,14 +398,24 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString()} characters.` }
     if (connection && !isLiveConnection(connection)) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
-    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
+    return { label: 'IntelliSense', detail: connectionId ? 'SQL completion and hover use this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
   }
-  /** The connection and database a served model's requests use: its query document's, or its Peek model's. */
+  private documentLanguageContext(documentId: string) {
+    const model = this.documents.getModel(documentId)
+    return model ? this.documents.languageContext(model, id => this.connections.isLive(id)) : undefined
+  }
+  /** The connection and database a served model's requests use: its query document's (via languageContext), or its Peek model's. */
   private source(documentId: string): { connectionId?: string; database?: string } | undefined {
     const peek = this.peekModels.get(documentId)
     if (peek) return peekModelContext(peek.model)
     const document = this.documents.get(documentId)
-    return isQueryDocument(document) && document ? document : undefined
+    if (!isQueryDocument(document) || !document) return undefined
+    const langContext = this.documentLanguageContext(documentId)
+    if (langContext) {
+      if (langContext.suspended || langContext.provider !== 'sqlserver') return undefined
+      return { connectionId: langContext.connectionId, database: langContext.database }
+    }
+    return document
   }
   private modelOf(documentId: string): Monaco.editor.ITextModel | undefined {
     return this.peekModels.get(documentId)?.model ?? this.documents.getModel(documentId)
@@ -436,13 +451,14 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   }
   private capture(model: Monaco.editor.ITextModel, position: Monaco.Position): Capture | undefined {
     if (this.disposed || model.getLanguageId() !== 'sql' || model.getValueLength() > languageLimits.documentCharacters) return
-    const document = this.documents.getSnapshot().documents.find(document => this.documents.getModel(document.id) === model)
-    const id = document?.id ?? this.peekId(model)
+    const langContext = this.documents.languageContext(model, id => this.connections.isLive(id))
+    if (langContext?.suspended) return
+    const id = langContext?.documentId ?? this.peekId(model)
     if (!id) return
     const context = this.context(id)
     if (!context) return
     this.contexts.set(id, context.key)
-    return { model, key: context.key, epoch: this.backendEpoch + (this.epochs.get(id) ?? 0), peek: !document && !peekModelContext(model)?.editable, request: {
+    return { model, key: context.key, epoch: this.backendEpoch + (this.epochs.get(id) ?? 0), peek: !langContext && !peekModelContext(model)?.editable, request: {
       documentId: id, version: model.getVersionId(), text: model.getValue(), context: context.context,
       position: { line: position.lineNumber - 1, character: position.column - 1 }
     } }
