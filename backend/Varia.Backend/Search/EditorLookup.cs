@@ -188,23 +188,15 @@ internal static class EditorLookup
                 var resolvedPath = new List<string> { dataset.Project, dataset.Dataset, entry.Name };
                 var baseOverhead = AnswerOverheadBytes(resolvedPath, dataset.Skip?.Code);
                 var availableForObject = Math.Max(0, bytesLeft - reserveForLater - baseOverhead);
-                LanguageLookupObject? shownOut = shown;
-                var shownOmitted = false;
-                if (ObjectBytes(shownOut) > availableForObject)
+                if (ObjectBytes(shown) > availableForObject)
                 {
-                    var compact = shown with { Partitioning = null, Clustering = null, Signature = null, Description = null };
-                    if (ObjectBytes(compact) <= availableForObject)
-                        shownOut = compact;
-                    else
-                    {
-                        shownOut = null;
-                        shownOmitted = true;
-                    }
+                    bytesLeft = Math.Max(0, bytesLeft - baseOverhead);
+                    return new(State(dataset.State), resolvedPath, [], true, null, dataset.Skip?.Code);
                 }
                 var (items, truncated) = Take(columns.Select(column => new LanguageLookupItem(column.Name, "bqColumn", column.Entry.Subtype, column.Type?.TypeName,
                     column.Type is { } type ? (type.Flags & TypedFlags.Nullable) != 0 : null, Description: details ? BigQueryLookup.Description(column) : null)),
-                    ref left, ref bytesLeft, baseOverhead + ObjectBytes(shownOut));
-                return new(State(dataset.State), resolvedPath, items, truncated || shownOmitted, shownOut, dataset.Skip?.Code);
+                    ref left, ref bytesLeft, baseOverhead + ObjectBytes(shown));
+                return new(State(dataset.State), resolvedPath, items, truncated, shown, dataset.Skip?.Code);
             }
         }
     }

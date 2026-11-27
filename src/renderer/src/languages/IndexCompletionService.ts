@@ -67,8 +67,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   private readonly bindings: Disposable[] = []
   private readonly caches = new Map<string, LookupCache>()
   private readonly ensured = new Set<string>()
-  /** The connection (and generation) each tab's error came from: it goes when the tab moves to another or reconnects. */
-  private readonly errorKeys = new Map<string, string>()
+  /** The connection (and generation) and origin each tab's error came from: it goes when the tab moves, reconnects, or a Search Objects build clears a refresh error. */
+  private readonly errorMeta = new Map<string, { readonly key: string; readonly source: 'lookup' | 'refresh' }>()
   private readonly indexSignatures = new Map<string, string>()
   private readonly refreshOps = new Map<string, {
     readonly key: string
@@ -230,15 +230,15 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
             cancelledPromise
           ])
           if (cancelled || this.disposed || !this.isCurrentTarget(document.id, key)) return false
-          if (result.ok) return true
+          if (result.ok) { this.failure(document.id, key, undefined); return true }
           if (result.cancelled) return false
           const message = result.error || 'The BigQuery index refresh failed.'
-          this.failure(document.id, key, message)
+          this.failure(document.id, key, message, 'refresh')
           throw new Error(message)
         } catch (error) {
           if (cancelled || this.disposed || !this.isCurrentTarget(document.id, key)) return false
           const message = error instanceof Error && error.message ? error.message : 'The BigQuery index refresh failed.'
-          this.failure(document.id, key, message)
+          this.failure(document.id, key, message, 'refresh')
           throw error instanceof Error ? error : new Error(message)
         } finally {
           if (this.refreshOps.get(document.id) === created) {
@@ -326,10 +326,10 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     try {
       const result = await this.api.languageLookup({ connectionId, requests })
       if (this.disposed) return undefined
-      this.failure(documentId, key, result.ok ? undefined : result.error)
+      this.failure(documentId, key, result.ok ? undefined : result.error, 'lookup')
       return result.ok ? result.value : undefined
     } catch (error) {
-      this.failure(documentId, key, error instanceof Error ? error.message : 'The index could not answer.')
+      this.failure(documentId, key, error instanceof Error ? error.message : 'The index could not answer.', 'lookup')
       return undefined
     } finally { this.inFlight-- }
   }
@@ -341,10 +341,10 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       && !!connection && isLiveConnection(connection) && isBigQueryConnection(connection) && cacheKey(connection) === key
   }
 
-  private failure(documentId: string | undefined, key: string, error?: string): void {
+  private failure(documentId: string | undefined, key: string, error?: string, source: 'lookup' | 'refresh' = 'lookup'): void {
     if (this.disposed || !documentId) return
     if (!this.isCurrentTarget(documentId, key)) return
-    if (error) this.errorKeys.set(documentId, key); else this.errorKeys.delete(documentId)
+    if (error) this.errorMeta.set(documentId, { key, source }); else this.errorMeta.delete(documentId)
     if (this.getSnapshot().errors.get(documentId) === error) return
     const errors = new Map(this.getSnapshot().errors)
     if (error) errors.set(documentId, error); else errors.delete(documentId)
@@ -366,9 +366,9 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const errors = new Map([...snapshot.errors].filter(([id]) => {
       const document = this.documents.get(id)
       const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
-      return !!connection && cacheKey(connection) === this.errorKeys.get(id)
+      return !!connection && cacheKey(connection) === this.errorMeta.get(id)?.key
     }))
-    for (const id of [...this.errorKeys.keys()]) if (!errors.has(id)) this.errorKeys.delete(id)
+    for (const id of [...this.errorMeta.keys()]) if (!errors.has(id)) this.errorMeta.delete(id)
     const indexErrors = new Map([...snapshot.indexErrors].filter(([key]) => live.has(key)))
     const indexes = new Map([...snapshot.indexes].filter(([key]) => live.has(key)))
     const refreshing = new Set(this.refreshOps.keys())
@@ -383,6 +383,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     if (this.disposed || !this.options.indexState) return
     const raw = this.options.indexState.getSnapshot().indexes
     const snapshot = this.getSnapshot()
+    const errors = new Map(snapshot.errors)
     const indexes = new Map(snapshot.indexes)
     const indexErrors = new Map(snapshot.indexErrors)
     let changed = false
@@ -418,9 +419,17 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       } else if (indexErrors.delete(key)) {
         changed = true
       }
+      if (sig !== prevSig && !indexError && (state === 'ready' || state === 'building')) {
+        for (const [id, meta] of [...this.errorMeta.entries()]) {
+          if (meta.key === key && meta.source === 'refresh') {
+            this.errorMeta.delete(id)
+            if (errors.delete(id)) changed = true
+          }
+        }
+      }
     }
     for (const id of [...this.indexSignatures.keys()]) if (!liveIds.has(id)) this.indexSignatures.delete(id)
-    if (changed) this.publish({ ...snapshot, indexes, indexErrors })
+    if (changed) this.publish({ ...snapshot, errors, indexes, indexErrors })
   }
 
   private publishSnapshot(patch: Partial<Pick<Snapshot, 'errors' | 'indexErrors' | 'indexes'>> = {}): void {

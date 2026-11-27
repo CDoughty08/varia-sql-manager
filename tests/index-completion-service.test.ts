@@ -606,4 +606,65 @@ describe('IndexCompletionService', () => {
     expect(await disconnectPromise).toBe(false)
     disconnected.resolve({ ok: false, code: 'CONNECTION_LOST', error: 'Disconnected' })
   })
+
+  it('clears stale refresh errors on Search Objects rebuild while preserving languageLookup errors until lookup succeeds', async () => {
+    const f = createFixture({ withSearch: true })
+    const tabRefresh = f.documents.create('q1.sql', 'SELECT * FROM orders', 'sales', bqConnId)
+    const tabLookup = f.documents.create('q2.sql', 'SELECT * FROM orders', 'sales', bqConnId)
+
+    // 1. Seed a ready index, then fail Ctrl+Shift+R (scoped refresh timeout) on tabRefresh.
+    f.explorerIndex.mockResolvedValueOnce({ ok: true, value: { elapsedMs: 1, status: makeStatus() } })
+    expect(await f.service.refreshCache(tabRefresh.id)).toBe(true)
+    f.explorerIndex.mockResolvedValueOnce({ ok: false, code: 'TIMEOUT', error: 'Dataset refresh timed out.' })
+    await expect(f.service.refreshCache(tabRefresh.id)).rejects.toThrow('Dataset refresh timed out.')
+    expect(f.service.availability(tabRefresh.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Dataset refresh timed out.' })
+
+    // Switching tabs must not drop the refresh error before recovery.
+    f.documents.activate(tabLookup.id)
+    expect(f.service.availability(tabRefresh.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Dataset refresh timed out.' })
+
+    // Also record a languageLookup-sourced error on tabLookup.
+    f.languageLookup.mockResolvedValueOnce({ ok: false, code: 'TIMEOUT', error: 'Lookup IPC timed out.' })
+    await f.completeAt(tabLookup.id, 'SELECT * FROM |')
+    expect(f.service.availability(tabLookup.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Lookup IPC timed out.' })
+
+    // 2. Subsequent Search Objects full rebuild starts and succeeds: tabRefresh flips to indexing -> IntelliSense immediately,
+    // while tabLookup's languageLookup-sourced error remains until languageLookup succeeds.
+    const rebuild = deferred<ApiResult<ObjectIndexResult>>()
+    f.explorerIndex.mockImplementationOnce(async () => rebuild.promise)
+    f.objectSearch!.build(bqConnId)
+    expect(f.service.availability(tabRefresh.id)?.label).toBe('IntelliSense indexing')
+    expect(f.service.availability(tabLookup.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Lookup IPC timed out.' })
+
+    rebuild.resolve({ ok: true, value: { elapsedMs: 1, status: makeStatus({ builtAt: '2026-11-27T01:00:00Z' }) } })
+    await vi.waitFor(() => expect(f.service.getSnapshot().indexes.get(`${bqConnId}:1`)).toBe('ready'))
+    expect(f.service.availability(tabRefresh.id)?.label).toBe('IntelliSense')
+    expect(f.service.availability(tabLookup.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Lookup IPC timed out.' })
+
+    // Initial-build Ctrl+Shift+R failure also clears cleanly on subsequent Search Objects rebuild.
+    const failedInitial = deferred<ApiResult<ObjectIndexResult>>()
+    // Simulate a fresh connection whose index has no ready state yet.
+    f.connections.add(
+      { id: bqConnId2, providerId: 'bigquery', generation: 1, server: 'varia-beta', database: 'census', serverVersion: 'BigQuery' },
+      { provider: 'bigquery', project: 'varia-beta', dataset: 'census', authentication: 'gcloud' }
+    )
+    const tabInitial = f.documents.create('q3.sql', 'SELECT * FROM pop', 'census', bqConnId2)
+    f.explorerIndex.mockImplementationOnce(async () => failedInitial.promise)
+    const initialRefresh = f.service.refreshCache(tabInitial.id)
+    failedInitial.resolve({ ok: false, code: 'TIMEOUT', error: 'Initial build timed out.' })
+    await expect(initialRefresh).rejects.toThrow('Initial build timed out.')
+    expect(f.service.availability(tabInitial.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Initial build timed out.' })
+
+    const recoveryBuild = deferred<ApiResult<ObjectIndexResult>>()
+    f.explorerIndex.mockImplementationOnce(async () => recoveryBuild.promise)
+    f.objectSearch!.build(bqConnId2)
+    expect(f.service.availability(tabInitial.id)?.label).toBe('IntelliSense indexing')
+    recoveryBuild.resolve({ ok: true, value: { elapsedMs: 1, status: makeStatus({ builtAt: '2026-11-27T02:00:00Z' }) } })
+    await vi.waitFor(() => expect(f.service.getSnapshot().indexes.get(`${bqConnId2}:1`)).toBe('ready'))
+    expect(f.service.availability(tabInitial.id)?.label).toBe('IntelliSense')
+
+    // Next successful languageLookup clears tabLookup's lookup-sourced error.
+    await f.completeAt(tabLookup.id, 'SELECT * FROM |')
+    expect(f.service.availability(tabLookup.id)?.label).toBe('IntelliSense')
+  })
 })

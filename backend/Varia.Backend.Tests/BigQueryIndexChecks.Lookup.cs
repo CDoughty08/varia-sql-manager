@@ -340,9 +340,38 @@ internal static partial class BigQueryIndexChecks
         var case3Requests = maxTableEntries.Select(e => new LanguageLookupPath([maxProj, maxDataset, e.Name], Limit: EditorLookupLimits.Items, Details: true)).ToList();
         var case3Res = EditorLookup.Answer(case3Lookup, new LanguageLookupArgs(id, case3Requests));
         var case3Encoded = Varia.Backend.Protocol.JsonBridge.Encode(new { Result = case3Res }, HostChecks.Json);
-        check(case3Res.Answers[0].Object is not null && case3Res.Answers[0].Items.Count > 0
+        check(case3Res.Answers[0].Object is { Partitioning: not null, Clustering: not null, Signature: not null, Description: not null }
+            && case3Res.Answers[0].Items.Count > 0
+            && case3Res.Answers.All(a => a.Object is null ? (a.Items.Count == 0 && a.Truncated) : (a.Object.Partitioning is not null && a.Object.Clustering is not null && a.Object.Signature is not null && a.Object.Description is not null))
             && case3Encoded.Length <= EditorLookupLimits.TotalBytes,
-            $"EditorLookup 16-request max-width case 3 batch stays <= EditorLookupLimits.TotalBytes ({case3Encoded.Length} B <= {EditorLookupLimits.TotalBytes} B)");
+            $"EditorLookup 16-request max-width case 3 batch preserves intact objects or omits them with empty items & truncated:true <= TotalBytes ({case3Encoded.Length} B <= {EditorLookupLimits.TotalBytes} B)");
+
+        // When Request 0 leaves availableForObject smaller than full shown (whether in the old compact band or below it),
+        // EditorLookup never emits a stripped Object with Truncated:false and never wastes Take on discarded Items.
+        var budgetDrainCols = Enumerable.Range(0, EditorLookupLimits.Items).Select(i =>
+            new BigQueryColumn($"c_{i:D4}_{new string('あ', 1500)}", false, "STRING", true, descText)).ToList();
+        var smallCols = Enumerable.Range(0, 5).Select(i => new BigQueryColumn($"col_{i}", false, "INT64", true, null)).ToList();
+        var compactBandEntries = new List<BigQueryEntry>
+        {
+            new("bqTable", "bqTables", null, "t_drain", 1, null,
+                Detail: new BigQueryDetail(null, null, null, budgetDrainCols, Rows: 1, Bytes: 2,
+                    Partitioning: partText, Clustering: clustText, Signature: sigText, Description: descText)),
+            new("bqTable", "bqTables", null, "t_target", 1, null,
+                Detail: new BigQueryDetail(null, null, null, smallCols, Rows: 10, Bytes: 20,
+                    Partitioning: partText, Clustering: clustText, Signature: sigText, Description: descText))
+        };
+        var compactPool = new StringPool(new IndexBudget(64 << 20));
+        var compactReader = new BigQueryReader(new ObjectIndexLimits { MemoryBytes = 64 << 20, NamesReserveBytes = 0 }, compactPool, null);
+        var compactRead = compactReader.Read("p", "d", compactBandEntries, true, true)!;
+        var compactLookup = new BigQueryLookup("p", [], [compactRead], null, [], building: false, built: true, new IndexBudget(64 << 20));
+        var compactRes = EditorLookup.Answer(compactLookup, new LanguageLookupArgs(id,
+        [
+            new(["p", "d", "t_drain"], Limit: EditorLookupLimits.Items, Details: true),
+            new(["p", "d", "t_target"], Limit: EditorLookupLimits.Items, Details: true)
+        ]));
+        check(compactRes.Answers[0].Object is { Description: not null, Partitioning: not null } && compactRes.Answers[0].Items.Count > 0 && compactRes.Answers[0].Truncated
+            && compactRes.Answers[1] is { Object: null, Items.Count: 0, Truncated: true },
+            "EditorLookup omits Object with Items.Count == 0 and Truncated == true (never stripping Object metadata or emitting discarded Items) when full shown cannot fit");
     }
 
     static bool wideReadModelCheck(string id, ObjectIndexLimits wideBaseLimits)
