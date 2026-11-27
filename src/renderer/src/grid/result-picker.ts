@@ -96,7 +96,7 @@ export function combinedTargetCount(tab: Partial<Pick<TabResults, 'sets' | 'mult
   return seen.size
 }
 
-type MultiTabShape = Pick<TabResults, 'groups' | 'comparisons'> & Partial<Pick<TabResults, 'multi' | 'sets' | 'focused' | 'activeSummary'>>
+type MultiTabShape = Pick<TabResults, 'groups' | 'comparisons'> & Partial<Pick<TabResults, 'multi' | 'sets' | 'focused' | 'activeSummary' | 'combinedCounts'>>
 
 /** The top row's items in the order drawn: for single-server, groups by ordinal then comparisons; for multi-server,
  *  Summary (when `includeSummary` is true) → Combined (k/N) → per-server tabs (in target order) → any extra groups → comparisons. */
@@ -119,7 +119,7 @@ export function topItems(tab: MultiTabShape, includeSummary = true): TopItem[] {
   if (combinedGroups.length > 0) {
     const picked = (activeGroup && combinedGroups.includes(activeGroup) ? activeGroup : combinedGroups[0])!
     const slot = picked.table.entry.descriptor.statementSlot ?? 0
-    const count = combinedTargetCount(tab, slot)
+    const count = tab.combinedCounts?.get(picked.table.key) ?? combinedTargetCount(tab, slot)
     items.push({
       key: picked.table.key,
       name: `Combined (${count}/${targets.length})`,
@@ -162,7 +162,7 @@ export function topItems(tab: MultiTabShape, includeSummary = true): TopItem[] {
 /** The view a group's tab selects: the one it last showed, its Pivot while it has one, else its Table. */
 export const groupView = (group: ResultGroup): EntryKey => group.selected === 'pivot' && group.pivot ? group.pivot.key : group.table.key
 
-type Run = Pick<TabResults, 'sets' | 'focused' | 'groups' | 'comparisons'> & Partial<Pick<TabResults, 'multi' | 'activeSummary'>>
+type Run = Pick<TabResults, 'sets' | 'focused' | 'groups' | 'comparisons'> & Partial<Pick<TabResults, 'multi' | 'activeSummary' | 'combinedCounts'>>
 /** The group whose view is selected, if a group's (not Summary or a comparison's). */
 export function selectedGroup(tab: Run): ResultGroup | undefined {
   const key = selectedEntry(tab)?.key

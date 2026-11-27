@@ -4,6 +4,7 @@ import type { MultiQueryMode, MultiQueryTargetPhase, QueryMultiStatus } from '..
 import type { IconId } from '../../../shared/icons'
 import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
 import type { MultiTargetLiveState, TabResults } from './ResultsService'
 import { formatCount, formatDuration, formatElapsed, plural } from './status'
@@ -68,15 +69,15 @@ export function hasRolledBackPreviewRows(tab: Pick<TabResults, 'sets' | 'multi'>
   return tab.sets.some(entry => entry.descriptor.rolledBackPreview === true || entry.handle?.getSnapshot().rolledBackPreview === true)
 }
 
-/** Semantic environment tone for Calm Pro pills (`PROD`, `STAGING`, `DEV`, or custom). */
-export function environmentTone(environment: string | undefined): string | undefined {
-  if (!environment) return undefined
-  const lower = environment.trim().toLowerCase()
-  if (!lower) return undefined
-  if (lower === 'prod' || lower === 'production') return 'prod'
-  if (lower === 'staging' || lower === 'stage' || lower === 'uat') return 'staging'
-  if (lower === 'dev' || lower === 'development') return 'dev'
-  return 'custom'
+/** Normalizes legacy short environment labels (`prod`, `stage`, `dev`) to canonical presets before `<EnvironmentTag>`. */
+export function normalizeMultiEnvironment(environment: string | undefined): string | undefined {
+  const trimmed = environment?.trim()
+  if (!trimmed) return undefined
+  const lower = trimmed.toLowerCase()
+  if (lower === 'prod') return 'Production'
+  if (lower === 'stage') return 'Staging'
+  if (lower === 'dev') return 'Development'
+  return trimmed
 }
 
 /** Aggregate bytes processed across all targets that reported BigQuery byte counts, or undefined if none did. */
@@ -134,6 +135,8 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
   const succeededCount = multi.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length
   const rolledBackPreview = hasRolledBackPreviewRows(tab)
   const warnings = multi.combineWarnings ?? []
+  const runError = tab.error && !multi.targets.some(target => target.errorMessage) ? tab.error : undefined
+  const discarded = tab.discard ? (tab.summary?.discardedResultSets ?? tab.multiSummary?.discardedResultSets ?? 0) : 0
 
   const setsByTarget = new Map<string, number>()
   const firstEntryByTarget = new Map<string, string>()
@@ -175,9 +178,22 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
       </span>
     </div>
 
+    {runError && <div className="multi-notice multi-notice-err" role="status" data-notice-kind="runError">
+      <Icon name="error" />
+      <span className="multi-notice-text">{runError}</span>
+      <button type="button" className="multi-target-link multi-notice-action" onClick={jumpToMessages}>
+        <Icon name="output" /><span>Messages</span>
+      </button>
+    </div>}
+
     {rolledBackPreview && <div className="multi-notice multi-notice-warn" role="status">
       <Icon name="warning" />
       <span><strong>Rolled back — preview only (not committed).</strong> Result rows remain inspectable below, but every server transaction was rolled back.</span>
+    </div>}
+
+    {discarded > 0 && <div className="multi-notice multi-notice-info" role="status" data-notice-kind="discarded">
+      <Icon name="circle-slash" />
+      <span><strong>Results were not kept.</strong> {formatCount(discarded)} {plural(discarded, 'result set')} {discarded === 1 ? 'was' : 'were'} read and not kept because Discard results after execution was on.</span>
     </div>}
 
     {warnings.length > 0 && <div className="multi-notice multi-notice-info" role="status">
@@ -190,7 +206,7 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
     <div className="multi-summary-cards" role="list" aria-label="Server execution status">
       {multi.targets.map((target, index) => {
         const phase = targetPhaseInfo(target.phase)
-        const envTone = environmentTone(target.environment)
+        const normalizedEnv = normalizeMultiEnvironment(target.environment)
         const setCount = setsByTarget.get(target.targetKey) ?? 0
         const canJumpLine = target.errorLine !== undefined && queries.sourceLine(tabId, tab.queryId, target.errorLine, target.provider) !== undefined
         const facts: string[] = []
@@ -208,7 +224,7 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
               <Icon name={target.provider === 'bigquery' ? 'bigquery' : 'server'} />
               <span>{target.provider === 'bigquery' ? 'BigQuery' : 'SQL Server'}</span>
             </span>
-            {target.environment && <span className="multi-env-pill" data-env={envTone}>{target.environment.toUpperCase()}</span>}
+            <EnvironmentTag environment={normalizedEnv} place="list" about={target.label} />
             <span className="multi-phase-pill" data-phase={target.phase} data-tone={phase.tone}>
               <Icon name={phase.icon} spin={phase.spin} />
               <span>{phase.label}</span>

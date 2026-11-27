@@ -370,6 +370,8 @@ export interface TabResults {
   readonly staleCombined?: ReadonlySet<EntryKey>
   /** Combine warnings tracked per Combined entry key so rebuilding one statement slot never wipes another slot's warnings. */
   readonly combineWarnings?: ReadonlyMap<EntryKey, readonly string[]>
+  /** Built source target count per Combined entry key, populated when Combined opens/settles and updated only on `rebuildCombined`. */
+  readonly combinedCounts?: ReadonlyMap<EntryKey, number>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -507,6 +509,8 @@ interface Run {
   baseCombineWarnings: readonly string[]
   /** Combine warnings tracked per Combined entry key. Replaced, never mutated in place: snapshots share it. */
   combineWarnings: ReadonlyMap<EntryKey, readonly string[]>
+  /** Built source target count per Combined entry key. Replaced, never mutated in place: snapshots share it. */
+  combinedCounts: ReadonlyMap<EntryKey, number>
   /** In-flight `results.combine` rebuilds per combined entry key, aborted on drop or run disposal. */
   readonly combining: Map<EntryKey, AbortController>
 }
@@ -734,7 +738,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: multi ? 'results' : 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: [], loads: new Map(),
-      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set(), baseCombineWarnings: [], combineWarnings: new Map(), combining: new Map()
+      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set(), baseCombineWarnings: [], combineWarnings: new Map(), combinedCounts: new Map(), combining: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -852,6 +856,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         this.settle(run, descriptor)
         if (descriptor.kind !== 'combined') run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
+      this.recordCombinedCounts(run)
       if (multiSummary.combineWarnings?.length) {
         const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
         if (combined.length > 0) {
@@ -1335,6 +1340,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.staleCombined = new Set()
     run.baseCombineWarnings = []
     run.combineWarnings = new Map()
+    run.combinedCounts = new Map()
     run.view = 'results'
     this.views.set(tabId, emptyView())
     this.publishNow(tabId)
@@ -1517,6 +1523,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         run.combineWarnings = nextWarnings
         this.syncCombineWarnings(run)
       }
+      const rebuiltTargets = new Set<string>()
+      for (const source of sources) if (source.descriptor.targetKey) rebuiltTargets.add(source.descriptor.targetKey)
+      const nextCounts = new Map(run.combinedCounts)
+      nextCounts.set(combinedKey, rebuiltTargets.size || sources.length)
+      run.combinedCounts = nextCounts
       const grids = this.views.get(tabId)?.grids, state = grids?.get(combinedKey)
       if (grids && state) grids.set(combinedKey, carriedState(state, moved, nextDescriptor.columns.length))
       this.settle(run, nextDescriptor)
@@ -1544,6 +1555,32 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       && entry.handle.getSnapshot().state === 'complete'
       && entry.handle.getSnapshot().residence !== 'remote'
     )
+  }
+
+  private combinedTargetCountFor(run: Run, combined: ResultSetEntry): number {
+    const slot = combined.descriptor.statementSlot ?? 0
+    const seen = new Set<string>()
+    for (const entry of run.sets) {
+      if (entry.sample || entry.descriptor.kind !== 'rows' || !entry.descriptor.targetKey) continue
+      if ((entry.descriptor.statementSlot ?? 0) !== slot) continue
+      if (entry.handle.getSnapshot().residence === 'remote') continue
+      seen.add(entry.descriptor.targetKey)
+    }
+    return seen.size
+  }
+
+  /** Records the built source server count per Combined entry while the run is opening/settling. */
+  private recordCombinedCounts(run: Run): void {
+    const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+    if (combined.length === 0) return
+    let next: Map<EntryKey, number> | undefined
+    for (const entry of combined) {
+      const count = this.combinedTargetCountFor(run, entry)
+      if (run.combinedCounts.get(entry.key) === count) continue
+      next ??= new Map(run.combinedCounts)
+      next.set(entry.key, count)
+    }
+    if (next) run.combinedCounts = next
   }
 
   private markCombinedStaleFor(run: Run, removed: readonly ResultSetEntry[]): void {
@@ -2314,6 +2351,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       case 'resultSet.opened': case 'resultSet.closed':
         this.opened(run, event.descriptor)
         this.settle(run, event.descriptor)
+        this.recordCombinedCounts(run)
         if (event.descriptor.kind !== 'combined') run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
@@ -2987,6 +3025,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         this.syncCombineWarnings(run)
       }
     }
+    if (run.combinedCounts.size) {
+      let changed = false
+      const remaining = new Map(run.combinedCounts)
+      for (const key of keys) if (remaining.delete(key)) changed = true
+      if (changed) run.combinedCounts = remaining
+    }
     if (plans.length) run.planSets = run.planSets.filter(entry => !keys.has(entry.key))
     if (this.copying && this.runs.get(this.copying.tabId) === run && keys.has(this.copying.job.entry)) this.cancelRunning(this.copying)
     this.releaseEntries(run, gone)
@@ -3161,7 +3205,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       ...run.multi ? { multi: run.multi } : {}, ...run.multiSummary ? { multiSummary: run.multiSummary } : {},
       ...run.activeSummary && hasMultiSummary(run) ? { activeSummary: true as const } : {},
       ...run.staleCombined.size ? { staleCombined: run.staleCombined } : {},
-      ...run.combineWarnings.size ? { combineWarnings: run.combineWarnings } : {}
+      ...run.combineWarnings.size ? { combineWarnings: run.combineWarnings } : {},
+      ...run.combinedCounts.size ? { combinedCounts: run.combinedCounts } : {}
     }
   }
 

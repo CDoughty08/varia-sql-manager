@@ -18,8 +18,8 @@ import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRequests, pi
 import { CompareService, isCrossEnginePair } from '../src/renderer/src/results/CompareService'
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
 import MessagesView from '../src/renderer/src/results/MessagesView'
-import MultiRunSummary from '../src/renderer/src/results/MultiRunSummary'
-import OutputPane, { hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
+import MultiRunSummary, { normalizeMultiEnvironment } from '../src/renderer/src/results/MultiRunSummary'
+import OutputPane, { discardNotice, hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
 import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
@@ -2034,17 +2034,14 @@ describe('Round 3 adversarial regression fixes (R3-1 through R3-12)', () => {
     expect(rows.map(row => row.number)).toEqual(['Result 1', 'Result 2', 'Result 3'])
   })
 
-  it('R3-12: .multi-env-pill and .multi-phase-pill declare transparent borders and CanvasText border-color under forced-colors', () => {
+  it('R3-12: .multi-phase-pill declares transparent borders and CanvasText border-color under forced-colors', () => {
     const rules = stylesheetRules()
-    const envPill = rules.find(rule => rule.at.length === 0 && rule.selector === '.multi-env-pill')
     const phasePill = rules.find(rule => rule.at.length === 0 && rule.selector === '.multi-phase-pill')
-    expect(envPill?.declarations).toContainEqual({ property: 'border', value: '1px solid transparent' })
     expect(phasePill?.declarations).toContainEqual({ property: 'border', value: '1px solid transparent' })
     const forcedBorders = rules.filter(rule =>
       rule.at.includes('@media (forced-colors: active)')
       && rule.declarations.some(decl => decl.property === 'border-color' && decl.value === 'CanvasText')
     )
-    expect(forcedBorders.some(rule => rule.selector.includes('.multi-env-pill'))).toBe(true)
     expect(forcedBorders.some(rule => rule.selector.includes('.multi-phase-pill'))).toBe(true)
   })
 })
@@ -2361,5 +2358,240 @@ describe('Round 4 adversarial regression checks (Domain 4: Results & CSS)', () =
     expect(client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 888 }])
     expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
     expect(notifySpy).not.toHaveBeenCalledWith('t1', expect.stringContaining('These results were closed'))
+  })
+})
+
+describe('Round 5 adversarial regression checks (Domain 4: Results & CSS)', () => {
+  it('R5-D4-1: MultiRunSummary renders a calm error notice banner with Messages jump for coordinator/IPC failures without target errorMessage', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('multi.sql', 'SELECT 1', 'master')
+    const setViewSpy = vi.spyOn(f.results, 'setView')
+    const selectPaneSpy = vi.spyOn(f.panes, 'select')
+
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(doc.id, 'q1', { error: 'IPC channel closed before targets responded.' })
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id], active: true })
+    }))
+
+    const banner = host.querySelector('.multi-summary-banner')!
+    const notice = host.querySelector<HTMLElement>('.multi-notice.multi-notice-err[role="status"]')
+    expect(notice).not.toBeNull()
+    expect(banner.nextElementSibling).toBe(notice)
+    expect(notice!.textContent).toContain('IPC channel closed before targets responded.')
+    const messagesBtn = notice!.querySelector<HTMLButtonElement>('button')!
+    expect(messagesBtn.textContent).toContain('Messages')
+    act(() => { messagesBtn.click() })
+    expect(setViewSpy).toHaveBeenCalledWith(doc.id, 'messages')
+    expect(selectPaneSpy).toHaveBeenCalledWith('messages')
+
+    // When a target already carries an errorMessage, do not duplicate a run-level error banner.
+    const withTargetError = {
+      ...f.results.getSnapshot()[doc.id],
+      multi: {
+        ...f.results.getSnapshot()[doc.id].multi!,
+        targets: f.results.getSnapshot()[doc.id].multi!.targets.map((target, idx) => idx === 0 ? { ...target, errorMessage: 'Login failed' } : target)
+      }
+    }
+    const host2 = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: withTargetError, active: true })
+    }))
+    expect(host2.querySelector('.multi-notice-err')).toBeNull()
+  })
+
+  it('R5-D4-2: MultiRunSummary and ResultsStack use EnvironmentTag (normalizing stage -> Staging), never .multi-env-pill', () => {
+    expect(normalizeMultiEnvironment('Production')).toBe('Production')
+    expect(normalizeMultiEnvironment('prod')).toBe('Production')
+    expect(normalizeMultiEnvironment('Staging')).toBe('Staging')
+    expect(normalizeMultiEnvironment('stage')).toBe('Staging')
+    expect(normalizeMultiEnvironment('Development')).toBe('Development')
+    expect(normalizeMultiEnvironment('dev')).toBe('Development')
+    expect(normalizeMultiEnvironment('   ')).toBeUndefined()
+
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('env.sql', 'SELECT 1', 'master')
+    const envTargets: MultiTargetIdentity[] = [
+      { targetKey: 't-prod', connectionId: 'c1', provider: 'sqlserver', label: 'srv-prod', environment: 'Production', database: 'DB' },
+      { targetKey: 't-dev', connectionId: 'c2', provider: 'sqlserver', label: 'srv-dev', environment: 'Development', database: 'DB' },
+      { targetKey: 't-stage', connectionId: 'c3', provider: 'sqlserver', label: 'srv-stage', environment: 'stage', database: 'DB' },
+      { targetKey: 't-blank', connectionId: 'c4', provider: 'sqlserver', label: 'srv-blank', environment: '   ', database: 'DB' }
+    ]
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: envTargets } })
+    const sets = envTargets.map((target, index) => descriptor(index + 1, { index, targetKey: target.targetKey, statementSlot: 0 }))
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(envTargets.map((target, index) => multiOutcome(target, { resultSetIds: [index + 1] })), sets)
+    })
+    const tab = f.results.getSnapshot()[doc.id]
+
+    const summaryHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab, active: true })
+    }))
+    expect(summaryHost.querySelectorAll('.multi-env-pill')).toHaveLength(0)
+    const tags = [...summaryHost.querySelectorAll<HTMLElement>('.environment-tag')]
+    expect(tags).toHaveLength(3)
+    expect(tags.map(tag => [tag.dataset.place, tag.dataset.tone, tag.textContent, tag.querySelector('.status-pill')?.getAttribute('title')])).toEqual([
+      ['list', 'critical', 'PROD', 'srv-prod: Production environment'],
+      ['list', 'neutral', 'DEV', 'srv-dev: Development environment'],
+      ['list', 'info', 'STAGING', 'srv-stage: Staging environment']
+    ])
+
+    // ResultsStack captions also use EnvironmentTag with no .multi-env-pill and no blank tag for whitespace environment.
+    const clientHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get(this: HTMLElement) { return this.classList.contains('rs-stack') ? 2000 : 0 } })
+    try {
+      const stackHost = mount(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsStack, { tabId: doc.id, tab })
+      }))
+      expect(stackHost.querySelectorAll('.multi-env-pill')).toHaveLength(0)
+      const captionTags = [...stackHost.querySelectorAll<HTMLElement>('.rs-caption .environment-tag')]
+      expect(captionTags).toHaveLength(3)
+      expect(captionTags.map(tag => [tag.dataset.tone, tag.textContent])).toEqual([
+        ['critical', 'PROD'],
+        ['neutral', 'DEV'],
+        ['info', 'STAGING']
+      ])
+    } finally {
+      if (clientHeightDesc) Object.defineProperty(HTMLElement.prototype, 'clientHeight', clientHeightDesc)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    }
+
+    // Unused .multi-env-pill rules are removed from styles.css.
+    const rules = stylesheetRules()
+    expect(rules.some(rule => rule.selector.includes('.multi-env-pill'))).toBe(false)
+  })
+
+  it('R5-D4-5: ResultsService records built combinedCounts per Combined entry and topItems uses it until rebuildCombined updates it', async () => {
+    const baseClient = fakeResultClient()
+    const combine = vi.fn<(...args: unknown[]) => Promise<ResultsCombineResult>>()
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+      remoteQuery: vi.fn<NonNullable<VariaApi['remoteQuery']>>()
+    }
+    const rerun = vi.fn(async () => descriptor(77, { index: 2, targetKey: 'dev-01', statementSlot: 0, residence: 'memory', rowsRead: 5, rowsStored: 5, rowsAvailable: 5 }))
+    const results = new ResultsService({ client, api, events, remote: { rerun } as unknown as RemoteViews, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb]
+      )
+    })
+
+    const initialTab = results.getSnapshot().t1
+    const combinedKey = initialTab.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const s3Key = initialTab.sets.find(entry => entry.descriptor.targetKey === 'dev-01')!.key
+    expect(initialTab.combinedCounts?.get(combinedKey)).toBe(3)
+    expect(topItems(initialTab).find(item => item.combined)?.name).toBe('Combined (3/3)')
+
+    // Close dev-01 without rebuilding: live combinedTargetCount drops to 2, but stale Combined still reports its built 3/3!
+    expect(results.removeEntry('t1', s3Key)).toBe(true)
+    const staleTab = results.getSnapshot().t1
+    expect(staleTab.staleCombined?.has(combinedKey)).toBe(true)
+    expect(combinedTargetCount(staleTab, 0)).toBe(2)
+    expect(staleTab.combinedCounts?.get(combinedKey)).toBe(3)
+    expect(topItems(staleTab).find(item => item.combined)?.name).toBe('Combined (3/3)')
+
+    // Rebuilding Combined updates its recorded built count to 2/3.
+    combine.mockResolvedValueOnce({ descriptor: descriptor(20, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    await results.rebuildCombined('t1', combinedKey)
+    const rebuiltTab = results.getSnapshot().t1
+    expect(rebuiltTab.staleCombined?.has(combinedKey)).toBeFalsy()
+    expect(rebuiltTab.combinedCounts?.get(combinedKey)).toBe(2)
+    expect(topItems(rebuiltTab).find(item => item.combined)?.name).toBe('Combined (2/3)')
+
+    // Fallback when combinedCounts is absent uses combinedTargetCount(tab, slot).
+    const { combinedCounts: _omitted, ...withoutCounts } = staleTab
+    expect(topItems(withoutCounts).find(item => item.combined)?.name).toBe('Combined (2/3)')
+
+    // Also verify loading a remote source into memory keeps built count at 2/3 until rebuilt.
+    results.begin('t2', 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const r1 = descriptor(31, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const r2 = descriptor(32, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const r3Remote = descriptor(33, { index: 2, targetKey: 'dev-01', statementSlot: 0, residence: 'remote', rowsRead: 5000, rowsStored: 0, rowsAvailable: 5000 })
+    const rComb = descriptor(40, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t2', 'q2', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [31] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [32] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [33] })
+        ],
+        [r1, r2, r3Remote, rComb]
+      )
+    })
+    const t2Initial = results.getSnapshot().t2
+    const t2CombKey = t2Initial.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const t2RemoteKey = t2Initial.sets.find(entry => entry.descriptor.targetKey === 'dev-01')!.key
+    expect(topItems(t2Initial).find(item => item.combined)?.name).toBe('Combined (2/3)')
+    await results.rerun('t2', t2RemoteKey)
+    const t2Stale = results.getSnapshot().t2
+    expect(combinedTargetCount(t2Stale, 0)).toBe(3)
+    expect(topItems(t2Stale).find(item => item.combined)?.name).toBe('Combined (2/3)')
+    combine.mockResolvedValueOnce({ descriptor: descriptor(50, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    await results.rebuildCombined('t2', t2CombKey)
+    expect(topItems(results.getSnapshot().t2).find(item => item.combined)?.name).toBe('Combined (3/3)')
+  })
+
+  it('R5-D4-7: discardNotice reads multiSummary.discardedResultSets and MultiRunSummary renders a discarded-results info notice', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('discard.sql', 'SELECT 1', 'master')
+    f.results.begin(doc.id, 'q1', undefined, { discard: true, multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0]), multiOutcome(sqlTargets[1])],
+        [],
+        { discardedResultSets: 3 }
+      )
+    })
+    const tab = f.results.getSnapshot()[doc.id]
+    expect(discardNotice(tab, true)).toMatchObject({
+      title: 'Results were not kept',
+      action: 'turnOff'
+    })
+    expect(discardNotice(tab, true)?.detail).toContain('3 result sets were read and not kept.')
+    expect(discardNotice(tab, false)).toMatchObject({
+      title: 'Results were not kept',
+      action: 'execute'
+    })
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab, active: true })
+    }))
+    const notice = host.querySelector<HTMLElement>('.multi-notice.multi-notice-info[role="status"][data-notice-kind="discarded"]')
+    expect(notice).not.toBeNull()
+    expect(notice!.textContent).toContain('3 result sets were read and not kept')
+
+    // Zero discarded sets renders no discarded notice.
+    const zeroTab = { ...tab, multiSummary: { ...tab.multiSummary!, discardedResultSets: 0 } }
+    expect(discardNotice(zeroTab, true)).toBeUndefined()
+    const host2 = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: zeroTab, active: true })
+    }))
+    expect(host2.querySelector('[data-notice-kind="discarded"]')).toBeNull()
   })
 })

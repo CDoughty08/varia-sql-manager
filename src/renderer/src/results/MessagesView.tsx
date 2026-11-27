@@ -171,9 +171,10 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
             {targets.map(target => {
               const errs = errorCounts.get(target.targetKey) ?? 0
               return <button key={target.targetKey} type="button" className="messages-filter-pill" aria-pressed={validFilter === target.targetKey} data-has-error={errs > 0 || undefined}
+                aria-label={errs > 0 ? `${target.label}, ${errs} ${errs === 1 ? 'error' : 'errors'}` : undefined}
                 onClick={() => setFilter(target.targetKey)}>
                 <span>{target.label}</span>
-                {errs > 0 && <span className="messages-filter-err" aria-label={`${errs} ${errs === 1 ? 'error' : 'errors'}`}>!</span>}
+                {errs > 0 && <span className="messages-filter-err" aria-hidden="true">!</span>}
               </button>
             })}
           </div>}

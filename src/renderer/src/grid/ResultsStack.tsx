@@ -3,8 +3,9 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
-import MultiRunSummary, { environmentTone, multiModeLabel, multiOutcomeInfo } from '../results/MultiRunSummary'
+import MultiRunSummary, { multiModeLabel, multiOutcomeInfo, normalizeMultiEnvironment } from '../results/MultiRunSummary'
 import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, hasMultiSummary, pivotOutOfDate, setKey, slotNamed, summaryEntryKey, targetOfEntry, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
@@ -32,7 +33,7 @@ export interface EntryNotice {
 }
 
 /** Notice strips shown directly above a grid (Rolled-back preview, Stale Combined, Partial-merge / Schema-drift). */
-export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings'>>, entry: ResultSetEntry): EntryNotice[] {
+export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, entry: ResultSetEntry): EntryNotice[] {
   const notices: EntryNotice[] = []
   if (entry.descriptor.rolledBackPreview || entry.handle?.getSnapshot().rolledBackPreview) {
     notices.push({ kind: 'rolledBack', tone: 'warn', text: 'Rolled back — preview only (not committed).' })
@@ -48,7 +49,7 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
         notices.push({ kind: 'combineWarning', tone: 'info', text: warnings.join(' ') })
       } else if (!stale) {
         const slot = entry.descriptor.statementSlot ?? 0
-        const k = combinedTargetCount(tab, slot), total = tab.multi!.targets.length
+        const k = tab.combinedCounts?.get(entry.key) ?? combinedTargetCount(tab, slot), total = tab.multi!.targets.length
         if (k < total) {
           notices.push({ kind: 'partialCombine', tone: 'info', text: `Combined from ${formatCount(k)} of ${formatCount(total)} servers — remaining servers returned no in-memory rows for this statement.` })
         }
@@ -59,7 +60,7 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
 }
 
 /** Exact total height (px) of notice strips rendered above `entry`'s grid (0 for ordinary single-server grids). */
-export function entryNoticesHeight(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings'>>, entry: ResultSetEntry | undefined): number {
+export function entryNoticesHeight(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, entry: ResultSetEntry | undefined): number {
   return entry ? entryNotices(tab, entry).length * multiNoticeHeight : 0
 }
 
@@ -140,7 +141,7 @@ function orderedMultiSets(tab: TabResults, selectedStmt: number | 'all'): readon
  * transposed (`turned`) is sized by the rows it draws, which are its columns, with the strip it shows past the cap.
  * Multi-server notice strips above a grid are included in its settled height.
  */
-export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>, entries: readonly ResultSetEntry[] = tab.sets): (number | undefined)[] {
+export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>, entries: readonly ResultSetEntry[] = tab.sets): (number | undefined)[] {
   return entries.map(entry => {
     const set = tab.settled.get(setKey(entry.descriptor))
     if (!set) return undefined
@@ -179,7 +180,7 @@ export function weightsOf(sets: readonly ResultSetEntry[], weights: ReadonlyMap<
 }
 /** The room a run's stack needs before it scrolls: every set at its floor (including multi-server summary/statement/notice
  *  strips, so short panes never starve grids). */
-export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
   const multi = hasMultiSummary(tab)
   const count = tab.sets.length
   if (count === 0) return multi ? multiSummaryMinHeight : 0
@@ -270,7 +271,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, tab, entry, collapsed
   const { descriptor } = entry, columns = visibleColumnCount(descriptor), name = entryName(entry), number = entrySecondary(entry)
   const target = targetOfEntry(tab, entry)
   const targetIndex = target && tab.multi ? tab.multi.targets.findIndex(item => item.targetKey === target.targetKey) : -1
-  const envTone = environmentTone(target?.environment)
+  const normalizedEnv = normalizeMultiEnvironment(target?.environment)
   // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
   const spoken = number ? `${name}, ${number}` : name
   // A named result's number leads its facts, so two results of one name are told apart.
@@ -292,7 +293,7 @@ const ResultCaption = memo(function ResultCaption({ tabId, tab, entry, collapsed
       {descriptor.kind === 'combined' && <Icon name="layers" />}
       <span className="rs-caption-name">{name}</span>
     </button>
-    {target?.environment && <span className="multi-env-pill" data-env={envTone}>{target.environment.toUpperCase()}</span>}
+    {target && <EnvironmentTag environment={normalizedEnv} place="list" about={target.label} />}
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
     <FilterChips tabId={tabId} entry={entry} name={spoken} sort={sort} refocus={refocus} />
@@ -354,7 +355,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const sorts = tab.sorts
-  const content = useMemo(() => settledContent({ sets: tab.sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined, combineWarnings: tab.combineWarnings }, narrow, turned, sets), [tab.sets, settled, sorts, tab.multi, tab.staleCombined, tab.combineWarnings, narrow, turned, sets])
+  const content = useMemo(() => settledContent({ sets: tab.sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined, combineWarnings: tab.combineWarnings, combinedCounts: tab.combinedCounts }, narrow, turned, sets), [tab.sets, settled, sorts, tab.multi, tab.staleCombined, tab.combineWarnings, tab.combinedCounts, narrow, turned, sets])
   // By place, for the layout: what the stack keeps by entry key, over the entries as they are drawn.
   const weights = useMemo(() => weightsOf(sets, entryWeights), [sets, entryWeights])
   const collapsed = useMemo(() => collapsedPlaces(sets, collapsedEntries), [sets, collapsedEntries])
@@ -422,7 +423,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   }, [count])
   const pendingFocus = useRef<{ readonly closed: EntryKey; readonly next: EntryKey } | undefined>(undefined)
   const close = useCallback((key: EntryKey) => {
-    const stack = stackRef.current, list = results.getSnapshot()[tabId]?.sets ?? []
+    const stack = stackRef.current, list = sets
     const gone = new Set(results.closing(tabId, key).map(entry => entry.key))
     const places = list.flatMap((entry, place) => gone.has(entry.key) ? [place] : [])
     const slot = slots.get(key), table = slot?.group !== undefined && slot.view !== 'table' && slot.view !== 'plan' ? list.find(entry => entry.ordinal === slot.group) : undefined
@@ -431,10 +432,17 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const own = !active || active === stack?.ownerDocument.body || gone.has(active.closest('.rs-item')?.querySelector('[data-caption-entry]')?.getAttribute('data-caption-entry') ?? '')
     if (own && !next) resultsTab()?.focus({ preventScroll: true })
     const focusedNow = results.getSnapshot()[tabId]?.focused
-    if (!results.removeEntry(tabId, key) || !own || !next) return
-    const moved = focusedNow !== undefined && gone.has(focusedNow) ? results.getSnapshot()[tabId]?.focused : undefined
+    if (!results.removeEntry(tabId, key)) return
+    const remaining = new Set(list.filter(entry => !gone.has(entry.key)).map(entry => entry.key))
+    let moved = focusedNow !== undefined && gone.has(focusedNow) ? results.getSnapshot()[tabId]?.focused : undefined
+    if (moved !== undefined && !remaining.has(moved) && next) {
+      results.focusEntry(tabId, next.key)
+      setFocused(next.key)
+      moved = next.key
+    }
+    if (!own || !next) return
     pendingFocus.current = { closed: key, next: moved ?? next.key }
-  }, [results, tabId, slots])
+  }, [results, tabId, slots, sets])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
   useLayoutEffect(() => {
     const pending = pendingFocus.current
