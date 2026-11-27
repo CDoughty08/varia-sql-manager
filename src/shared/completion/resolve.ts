@@ -14,8 +14,8 @@ export interface SourceColumns {
   readonly budget?: true
 }
 
-/** A source's or select list's columns as read `hops` stars deep; `budget` once known. */
-interface Kept { found: Promise<SourceColumns>; readonly hops: number; budget?: boolean }
+/** A source's or select list's columns as read `hops` stars deep; `budget` and `value` once settled. */
+interface Kept { found: Promise<SourceColumns>; readonly hops: number; budget?: boolean; value?: SourceColumns }
 /** Whether a kept read serves a reader `hops` deep: any whole read, and one the budget cut for readers at least as deep (which it
  *  would cut as much or more). Each item is read again at most once per smaller depth, so a WITH query met many times costs at
  *  most starHops reads of it. */
@@ -140,6 +140,8 @@ export class ScopeResolver {
   private readonly reading = new Set<ScopeSource>()
   /** An object's columns by index path, shared by every source that names it. */
   private readonly objects = new Map<string, SourceColumns>()
+  /** Cached top-level bare-name lookups (`field([name])`) when `except` was not inside the scanned prefix. */
+  private readonly bareFields = new Map<string, { readonly found?: { source: ScopeSource; path: string[]; columns: SourceColumns }; readonly passed: boolean; readonly scanned: ReadonlySet<ScopeSource> }>()
   private readonly lookup: IndexLookup
   failed = false
   /** Objects past the request cap went unasked, so the scope's columns are not all here. */
@@ -242,9 +244,25 @@ export class ScopeResolver {
     const given: SourceColumns[] = new Array(sources.length)
     for (let i = 0; i < sources.length; i++) {
       const source = sources[i]
-      given[i] = source.kind === 'object' ? this.objectColumns(source) : await this.columns(source)
+      given[i] = this.cachedColumns(source, 0) ?? await this.columns(source)
     }
     return given
+  }
+
+  /** Synchronously returns a source's columns when already resolved or directly readable (objects and settled CTEs/subqueries). */
+  private cachedColumns(source: ScopeSource, hops: number): SourceColumns | undefined {
+    if (this.reading.has(source)) return unread
+    const kept = this.cache.get(source)
+    if (serves(kept, hops) && kept.value !== undefined) return kept.value
+    if (hops > resolverLimits.starHops || this.depth >= resolverLimits.readDepth) return { columns: [], truncated: true, budget: true }
+    if (source.kind === 'object') return this.objectColumns(source)
+    if (source.kind === 'cte' || source.kind === 'derived') {
+      const shape = source.kind === 'cte' ? source.shape ?? this.cte(source.cte) : source.shape
+      if (!shape) return unread
+      const keptShape = this.shapes.get(shape)
+      if (serves(keptShape, hops) && keptShape.value !== undefined) return keptShape.value
+    }
+    return undefined
   }
 
   /** Synchronously resolves an indexed object source's columns (cached per object path). */
@@ -287,7 +305,7 @@ export class ScopeResolver {
     const entry: Kept = { hops, found: Promise.resolve(unread) }
     this.depth++
     entry.found = this.read(source, hops).finally(() => this.depth--).then(given => {
-      if (given !== unread) entry.budget = given.budget === true
+      if (given !== unread) { entry.budget = given.budget === true; entry.value = given }
       else if (this.cache.get(source) === entry) this.cache.delete(source)
       return given
     }).finally(() => this.reading.delete(source))
@@ -326,6 +344,7 @@ export class ScopeResolver {
     const entry: Kept = { hops, found: Promise.resolve(unread) }
     entry.found = this.readShape(shape, hops).then(given => {
       entry.budget = given.budget === true
+      entry.value = given
       return given
     }).finally(() => this.shaping.delete(shape))
     this.shapes.set(shape, entry)
@@ -343,11 +362,7 @@ export class ScopeResolver {
     for (const star of shape.stars) {
       if (this.spent > resolverLimits.work) { this.overBudget = true; return { columns, truncated: true, budget: true } }
       const nextHops = hops + 1
-      const given = star.kind === 'object'
-        ? (nextHops > resolverLimits.starHops || this.depth >= resolverLimits.readDepth
-            ? { columns: [], truncated: true, budget: true as const }
-            : this.objectColumns(star))
-        : await this.columns(star, nextHops)
+      const given = this.cachedColumns(star, nextHops) ?? await this.columns(star, nextHops)
       this.spent += given.columns.length
       truncated ||= given.truncated
       budget ||= given.budget === true
@@ -379,20 +394,38 @@ export class ScopeResolver {
       }
     }
     const named = this.named.get(parts[0].toLowerCase())?.find(source => source !== except)
-    if (named) return { source: named, path: parts.slice(1), columns: await this.columns(named) }
+    if (named) return { source: named, path: parts.slice(1), columns: this.cachedColumns(named, 0) ?? await this.columns(named) }
+    const headLower = parts[0].toLowerCase()
+    const canCacheBare = this.unnesting <= 1 && this.depth <= 1
+    if (canCacheBare) {
+      const cached = this.bareFields.get(headLower)
+      if (cached && cached.found?.source !== except && (!except || !cached.scanned.has(except))) {
+        this.passedCut = cached.passed
+        return cached.found ? { source: cached.found.source, path: [...parts], columns: cached.found.columns } : undefined
+      }
+    }
     const seen = new Set<SourceColumns>()
+    const scanned = new Set<ScopeSource>()
     let looked = 0
     let passed = false
+    let skippedExcept = false
     for (const source of this.scope.sources) {
-      if (source === except) continue
+      if (source === except) { skippedExcept = true; continue }
       if (looked++ >= resolverLimits.fieldSources) { passed = true; break }
-      const columns = await this.columns(source)
+      scanned.add(source)
+      const columns = this.cachedColumns(source, 0) ?? await this.columns(source)
       passed ||= columns.truncated
       if (seen.has(columns)) continue
       seen.add(columns)
       // By its top-level name: a narrowed answer holds a STRUCT's fields (zrec.a) without the STRUCT itself.
-      if (headsOf(columns).has(parts[0].toLowerCase())) { this.passedCut = false; return { source, path: [...parts], columns } }
+      if (headsOf(columns).has(headLower)) {
+        const found = { source, path: [...parts], columns }
+        if (canCacheBare && !skippedExcept && !this.overBudget) this.bareFields.set(headLower, { found, passed: false, scanned })
+        this.passedCut = false
+        return found
+      }
     }
+    if (canCacheBare && !skippedExcept && !this.overBudget) this.bareFields.set(headLower, { passed, scanned })
     this.passedCut = passed
   }
 
