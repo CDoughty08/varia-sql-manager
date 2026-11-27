@@ -5,7 +5,7 @@ import { DerivedJobs } from './derived-jobs'
 import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import type { DiffKindName, DiffLayout, DiffMatch, DiffMatchUsed, ResultColumn, ResultsDiffResult } from '../../../shared/contracts'
 import type { DiffGridControls, EntryKey, ResultSetEntry, ResultsService, SourceRef, TabResults } from './ResultsService'
-import { comparedNames, comparisonColumns, comparisonName, entryNumber, entryOf, resultLimits, setKey, slotOf } from './ResultsService'
+import { comparedNames, comparisonColumns, comparisonName, entryNumber, entryOf, hasMultiSummary, resultLimits, setKey, slotOf, summaryEntryKey, targetOfEntry } from './ResultsService'
 import { ResultError } from './ResultClient'
 import { formatCount } from './status'
 import { landingFor, noneShownText, noPartnerText, partnerHiddenText, partnerKind, positionText, rowUnits, stepWithin, type DiffUnit } from '../grid/diff-navigation'
@@ -180,10 +180,20 @@ const sameOptions = (a: CompareOptions, b: CompareOptions): boolean => a.exact =
 export const compareFullText = `This query's results already hold ${formatCount(resultLimits.sets)} results, comparisons and pivots included, the most a run keeps. Close some results to compare these.`
 
 /** A group's Table of rows that has every row in memory: the only results a comparison reads (never a Pivot, a comparison, a
- *  plan set, a live result or a result windowed in BigQuery, which the backend would refuse). */
+ *  plan set, a combined set, a live result or a result windowed in BigQuery, which the backend would refuse). */
 export function comparableTable(tab: TabResults | undefined, entry: ResultSetEntry | undefined): entry is ResultSetEntry {
   const snapshot = entry?.handle.getSnapshot()
   return !!tab && entry !== undefined && entry.descriptor.kind === 'rows' && slotOf(tab, entry.key)?.view === 'table' && snapshot?.state === 'complete' && snapshot.residence !== 'remote'
+}
+
+/** Whether two results come from different engines (e.g. SQL Server vs BigQuery), where Exact text defaults on so
+ *  swapping sides produces a symmetric diff regardless of engine collation rules. */
+export function isCrossEnginePair(tab: TabResults | undefined, a: ResultSetEntry | undefined, b: ResultSetEntry | undefined): boolean {
+  if (!tab?.multi || !a || !b) return false
+  const providerA = targetOfEntry(tab, a)?.provider
+  const providerB = targetOfEntry(tab, b)?.provider
+  if (providerA && providerB) return providerA !== providerB
+  return tab.multi.mode === 'crossEngineReadOnly'
 }
 
 /** What a tab's popover was last set to: per group (by number) the target's group and the way round, and exact text for all. */
@@ -398,28 +408,88 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     return this.targetsOf(tabId, key).filter(target => tab.sets.indexOf(target.entry) < place).at(-1)?.entry
   }
 
+  /** Default pair for opening Compare from a multi-server Summary or Combined view: Server 1 (−) → Server 2 (+) for
+   *  same-engine runs, or SQL Server (−) → BigQuery (+) for Cross-Engine runs, within the requested statement slot
+   *  (falling back to the first statement slot with at least two comparable targets). */
+  defaultMultiPair(tabId: string, statementSlot?: number): { readonly old: ResultSetEntry; readonly neu: ResultSetEntry } | undefined {
+    const tab = this.results.getSnapshot()[tabId]
+    if (!tab || tab.bare || tab.status === 'running' || tab.status === 'closed' || !hasMultiSummary(tab)) return undefined
+    const targetOrder = new Map(tab.multi!.targets.map((target, index) => [target.targetKey, index]))
+    const candidates = tab.groups
+      .map(group => group.table.entry)
+      .filter(entry => entry.descriptor.targetKey !== undefined && comparableTable(tab, entry))
+      .sort((a, b) => (targetOrder.get(a.descriptor.targetKey!) ?? Number.MAX_SAFE_INTEGER) - (targetOrder.get(b.descriptor.targetKey!) ?? Number.MAX_SAFE_INTEGER))
+    if (candidates.length < 2) return undefined
+    const slots = [...new Set(candidates.map(entry => entry.descriptor.statementSlot ?? 0))].sort((a, b) => a - b)
+    const orderedSlots = statementSlot !== undefined && slots.includes(statementSlot)
+      ? [statementSlot, ...slots.filter(slot => slot !== statementSlot)]
+      : slots
+    for (const slot of orderedSlots) {
+      const inSlot = candidates.filter(entry => (entry.descriptor.statementSlot ?? 0) === slot)
+      if (inSlot.length < 2) continue
+      if (tab.multi!.mode === 'crossEngineReadOnly') {
+        const sqlEntries = inSlot.filter(entry => targetOfEntry(tab, entry)?.provider === 'sqlserver')
+        const bqEntries = inSlot.filter(entry => targetOfEntry(tab, entry)?.provider === 'bigquery')
+        for (const old of sqlEntries) {
+          for (const neu of bqEntries) {
+            if (this.offers(tab, neu, old)) return { old, neu }
+          }
+        }
+      }
+      for (let i = 0; i < inSlot.length; i++) {
+        for (let j = i + 1; j < inSlot.length; j++) {
+          if (this.offers(tab, inSlot[j], inSlot[i])) return { old: inSlot[i], neu: inSlot[j] }
+        }
+      }
+    }
+    return undefined
+  }
+
   /** Whether Compare with Previous Result is offered for a grid's set: it has a previous Table. */
   canCompare(tabId: string, key: EntryKey): boolean { return this.previousOf(tabId, key) !== undefined }
-  /** Whether Compare… is offered for a grid's set: some Table can be compared with it. */
-  canPick(tabId: string, key: EntryKey): boolean { return this.targetsOf(tabId, key, { first: true }).length > 0 }
+  /** Whether Compare… is offered for a grid's set (or from Summary / Combined in a multi-server run). */
+  canPick(tabId: string, key?: EntryKey): boolean {
+    const tab = this.results.getSnapshot()[tabId]
+    if (!tab) return false
+    if (key === undefined || key === summaryEntryKey) return this.defaultMultiPair(tabId) !== undefined
+    const entry = entryOf(tab.sets, key)
+    if (entry?.descriptor.kind === 'combined') return this.defaultMultiPair(tabId, entry.descriptor.statementSlot ?? 0) !== undefined
+    return this.targetsOf(tabId, key, { first: true }).length > 0
+  }
 
-  /** Opens the popover on a Table, beside `anchor`. It offers again what was last chosen on that group in this tab (its
-   *  target and way round) while that target is offered, else picks the Table's previous Table (else the first offered);
-   *  the exact-text choice is the tab's last. */
-  open(tabId: string, key: EntryKey, anchor: CompareAnchor = 'grid'): void {
+  /** Opens the popover on a Table (or from Summary / Combined in a multi-server run, auto-selecting Server 1 → Server 2
+   *  or SQL Server → BigQuery for the active statement slot), beside `anchor`. Cross-engine pairs default `exact: true`
+   *  when no tab choice was saved yet so swapping SQL Server ↔ BigQuery sides is symmetric. */
+  open(tabId: string, key?: EntryKey, anchor: CompareAnchor = 'grid'): void {
     const tab = this.results.getSnapshot()[tabId]
     if (!tab || !this.canPick(tabId, key)) return
+    const memory = this.remembered.get(tabId)
+    const entry = key !== undefined && key !== summaryEntryKey ? entryOf(tab.sets, key) : undefined
+    if (key === undefined || key === summaryEntryKey || entry?.descriptor.kind === 'combined') {
+      const pair = this.defaultMultiPair(tabId, entry?.descriptor.statementSlot)
+      if (!pair) return
+      const ordinal = slotOf(tab, pair.neu.key)?.group
+      const targetOrdinal = slotOf(tab, pair.old.key)?.group
+      if (ordinal === undefined) return
+      this.setPicker(tabId, {
+        queryId: tab.queryId, anchor, ordinal, active: pair.neu.key,
+        target: pair.old.key, ...targetOrdinal === undefined ? {} : { targetOrdinal },
+        swapped: false, exact: memory?.exact ?? isCrossEnginePair(tab, pair.old, pair.neu)
+      })
+      return
+    }
     const ordinal = slotOf(tab, key)?.group
     if (ordinal === undefined) return
-    const memory = this.remembered.get(tabId), chosen = memory?.groups.get(ordinal)
+    const chosen = memory?.groups.get(ordinal)
     const targets = this.targetsOf(tabId, key)
     const again = chosen ? targets.find(target => slotOf(tab, target.entry.key)?.group === chosen.targetOrdinal)?.entry : undefined
     const target = again ?? this.previousOf(tabId, key) ?? targets[0]?.entry
     const targetOrdinal = target ? slotOf(tab, target.key)?.group : undefined
+    const exactDefault = isCrossEnginePair(tab, target, entry)
     this.setPicker(tabId, {
       queryId: tab.queryId, anchor, ordinal, active: key,
       ...target === undefined ? {} : { target: target.key }, ...targetOrdinal === undefined ? {} : { targetOrdinal },
-      swapped: again ? chosen!.swapped : false, exact: memory?.exact ?? false
+      swapped: again ? chosen!.swapped : false, exact: memory?.exact ?? exactDefault
     })
   }
   close(tabId: string): void {
@@ -568,15 +638,17 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   }
 
   /** Compare with Previous Result: a grid's set against its previous Table; a failure is said in the toolbar, or in the
-   *  popover while it shows that pair. */
+   *  popover while it shows that pair. Cross-engine pairs default to exact text when `exact` is omitted. */
   async compare(tabId: string, key: EntryKey, o: { exact?: boolean } = {}): Promise<void> {
     const from = this.previousOf(tabId, key)
     if (!from) return
+    const tab = this.results.getSnapshot()[tabId]
+    const exact = o.exact ?? isCrossEnginePair(tab, from, entryOf(tab?.sets, key))
     // The run's comparison of the pair is focused and never turned Exact text off; the Exact Text variant turns it on (D13).
     const shown = this.existing(tabId, from.key, key)
-    if (!shown) { await this.comparePair(tabId, from.key, key, { exact: o.exact ?? false, remember: true }); return }
+    if (!shown) { await this.comparePair(tabId, from.key, key, { exact, remember: true }); return }
     this.results.focusEntry(tabId, shown.key)
-    if (o.exact && !this.stateOf(tabId, shown)?.exact) await this.replace(tabId, shown.key, { exact: true })
+    if (exact && !this.stateOf(tabId, shown)?.exact) await this.replace(tabId, shown.key, { exact: true })
   }
 
   /**

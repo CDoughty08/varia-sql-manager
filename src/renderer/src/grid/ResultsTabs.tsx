@@ -1,15 +1,16 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type FocusEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from 'react'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { distinctName, entryName, entrySecondary, pivotOutOfDate, spokenName, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import MultiRunSummary, { targetPhaseInfo } from '../results/MultiRunSummary'
+import { distinctName, entryName, entrySecondary, hasMultiSummary, isSummaryActive, pivotOutOfDate, setKey, spokenName, summaryEntryKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { observeResize, windows } from '../core/windows'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
-import { batchText, FilterChips, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
+import { batchText, EntryNoticeBars, entryNoticesHeight, FilterChips, multiSummaryMinHeight, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
 import { minGridHeight } from './stack'
 import { visibleColumnCount } from './hidden-columns'
-import { groupView, pickerRequests, selectedEntry, selectedGroup, selectedItem, topItems } from './result-picker'
+import { groupView, pickerRequests, selectedEntry, selectedGroup, selectedItem, topItems, type TopItem } from './result-picker'
 import ResultsPicker from './ResultsPicker'
 
 export { groupView, selectedEntry, topItems, type TopItem } from './result-picker'
@@ -60,36 +61,57 @@ export function tabWindow(count: number, at: number, size: number = g.resultTabs
   return [first, first + size - 1]
 }
 
-/** Whether the Tabs layout renders the `.rt-views` sub-bar: hidden for a solo Table view with no Pivot and no active filters. */
-export function showsViewRow(group: ReturnType<typeof selectedGroup>, sort?: GridSort): boolean {
+/** Statement groups belonging to the active multi-server top tab (all Combined groups, or all groups of the active target). */
+function statementGroupsOf(tab: Pick<TabResults, 'groups'> & Partial<Pick<TabResults, 'multi'>>, group: ResultGroup | undefined): readonly ResultGroup[] {
+  if (!group || !hasMultiSummary(tab)) return []
+  const kind = group.table.entry.descriptor.kind
+  if (kind === 'combined') return tab.groups.filter(item => item.table.entry.descriptor.kind === 'combined')
+  const targetKey = group.table.entry.descriptor.targetKey
+  if (targetKey) return tab.groups.filter(item => item.table.entry.descriptor.targetKey === targetKey)
+  return []
+}
+
+/** Human-readable label for a statement sub-tab inside a multi-server Combined or per-server tab. */
+function statementLabel(group: ResultGroup, index: number): string {
+  const name = group.table.entry.descriptor.name
+  return name || `Statement ${(group.table.entry.descriptor.statementSlot ?? index) + 1}`
+}
+
+/** Whether the Tabs layout renders the `.rt-views` sub-bar: hidden for Summary or a solo Table view with no Pivot, no
+ *  statement sub-tabs, and no active filters. */
+export function showsViewRow(group: ReturnType<typeof selectedGroup>, sort?: GridSort, statements = 1): boolean {
   if (!group) return true
+  if (statements > 1) return true
   if (group.pivot) return true
   return (sort?.filters.length ?? 0) > 0
 }
 
-/** The room the Tabs layout needs before the Messages strip opens by itself: its tab row(s) and the selected grid at
- *  its minimum height, or at its rows' height when its result has them all and needs less. No caption. */
-export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+/** The room the Tabs layout needs before the Messages strip opens by itself: its tab row(s), any multi-server notice
+ *  strips, and the selected grid at its minimum height (or its rows' height when settled and shorter). */
+export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons' | 'multi' | 'activeSummary' | 'staleCombined'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+  if (isSummaryActive(tab)) return g.resultTabsHeight + multiSummaryMinHeight
   const entry = selectedEntry(tab)
   if (!entry) return 0
   const turned = transposedView(grids?.get(entry.key), entry.descriptor) ? new Set([entry.key]) : undefined
-  const content = settledContent({ sets: [entry], settled: tab.settled, ...tab.sorts ? { sorts: tab.sorts } : {} }, undefined, turned)[0]
-  const minHeight = minGridHeight(scrollbarSize())
+  const content = settledContent({ sets: [entry], settled: tab.settled, ...tab.sorts ? { sorts: tab.sorts } : {}, ...tab.multi ? { multi: tab.multi } : {}, ...tab.staleCombined ? { staleCombined: tab.staleCombined } : {} }, undefined, turned)[0]
+  const noticeHeight = entryNoticesHeight(tab, entry)
+  const minHeight = minGridHeight(scrollbarSize()) + noticeHeight
   const group = tab.groups ? selectedGroup({ ...tab, groups: tab.groups, comparisons: tab.comparisons ?? [] }) : undefined
-  const viewBar = tab.groups ? (showsViewRow(group, tab.sorts?.get(entry.key)) ? g.viewTabsHeight : 0) : g.viewTabsHeight
+  const statements = tab.groups ? statementGroupsOf({ groups: tab.groups, multi: tab.multi }, group).length : 1
+  const viewBar = tab.groups ? (showsViewRow(group, tab.sorts?.get(entry.key), statements) ? g.viewTabsHeight : 0) : g.viewTabsHeight
   return g.resultTabsHeight + viewBar + Math.min(minHeight, content ?? minHeight)
 }
 
 /**
- * How the Tabs layout folds its rows of tabs in a short pane, so the grid keeps room for its header and two rows (the
- * results pane can be dragged to 100 px, and a window made smaller takes its room first): undefined, every shown row;
- * `one` (only when `.rt-views` is shown), the result tabs and the selected view's row side by side in one row, without
- * the facts (the status line has them); `none`, the grid alone, as Stacked's one set gives up its caption. Next Result,
- * Go to Result N and Go to Result… still reach every view then. Undefined before the layout has a height.
+ * How the Tabs layout folds its rows of tabs in a short pane, so the grid keeps room for its header, two rows, and any
+ * multi-server notice strips (`noticeHeight`, e.g. Rolled-back preview + Partial-merge/Schema-drift/Stale-combined):
+ * undefined, every shown row; `one` (only when `.rt-views` is shown), the result tabs and the selected view's row side
+ * by side in one row, without the facts (the status line has them); `none`, the grid alone, as Stacked's one set gives
+ * up its caption. Undefined before the layout has a height.
  */
-export function tabsFold(height: number, scrollbar: number = scrollbarSize(), twoRows = true): 'one' | 'none' | undefined {
+export function tabsFold(height: number, scrollbar: number = scrollbarSize(), twoRows = true, noticeHeight = 0): 'one' | 'none' | undefined {
   if (height <= 0) return undefined
-  const need = g.headerHeight + 2 * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder
+  const need = g.headerHeight + 2 * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder + Math.max(0, noticeHeight)
   if (twoRows) {
     if (height - g.resultTabsHeight - g.viewTabsHeight >= need) return undefined
     return height - g.resultTabsHeight >= need ? 'one' : 'none'
@@ -128,16 +150,21 @@ function tabKey(event: KeyboardEvent, at: number, count: number): number {
     : event.key === 'Home' ? 0 : event.key === 'End' ? count - 1 : -1
 }
 
+/** Accessible spoken label for a top-level tab item (including multi-server status and statement count). */
+function spokenTopItem(item: TopItem): string {
+  if (item.summary) return 'Summary'
+  if (item.targetKey && item.targetPhase) {
+    const phase = targetPhaseInfo(item.targetPhase).label
+    const count = item.statementCount && item.statementCount > 1 ? `, ${formatCount(item.statementCount)} ${plural(item.statementCount, 'result set')}` : ''
+    return `${item.name}, ${phase}${count}`
+  }
+  return item.number ? `${item.name}, ${item.number}` : item.name
+}
+
 /**
- * A run's results one at a time: a row of tabs for its groups ("Result 3") and comparisons, the selected group's view tabs
- * beneath (Table, and Pivot once one is built), and the one grid of the selected view. The selection is the service's
- * focused entry (`focusEntry`), so commands, the toolbar, the Pivot builder and Column Profile act on the view shown, and a
- * group's tab returns to the view it last showed. Only the selected grid is mounted; switching unmounts the other, whose
- * scroll, widths, selection, sort and filters stay in its grid state, and releases nothing. Find Next onto a match in
- * another view selects it first. Each tab closes its view (a group's closes its Table and Pivot) once the query has ended;
- * the focus then goes to the tab selected next, else to the Results tab. A bare run (Peek) is never drawn here. When the
- * tabs do not all fit, a button at the row's end counts those without a tab in view and opens the overflow picker, which
- * lists every view (Go to Result… opens it too); Next and Previous Result and their view commands move the selection.
+ * A run's results one at a time: a row of tabs for its groups ("Result 3") and comparisons (or for multi-server runs:
+ * Summary → Combined (k/N) → per-server tabs → Differences), the selected group's view/statement sub-bar beneath, and
+ * the active Summary or grid panel.
  */
 export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabResults }) {
   const { results, resultsSearch, gestures } = useWorkbench()
@@ -145,52 +172,65 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const rootRef = useRef<HTMLDivElement>(null)
   const id = useId()
   const sets = tab.sets, running = tab.status === 'running'
+  const summaryActive = isSummaryActive(tab)
   const selected = selectedEntry(tab)
   const items = topItems(tab)
   const group = selectedGroup(tab)
+  const statementGroups = statementGroupsOf(tab, group)
   const sort = selected ? tab.sorts.get(selected.key) : undefined
-  const showViewRow = showsViewRow(group, sort)
+  const showViewRow = !summaryActive && showsViewRow(group, sort, statementGroups.length)
+  const noticeHeight = summaryActive ? 0 : entryNoticesHeight(tab, selected)
   const at = Math.max(0, selectedItem(tab, items))
   const [first, last] = tabWindow(items.length, at)
   const shown = items.slice(first, last + 1)
   const select = useCallback((key: EntryKey) => results.focusEntry(tabId, key), [results, tabId])
-  const tabIdOf = (key: EntryKey, row: 'result' | 'view') => `${id}${row}-${key}`
+  const tabIdOf = (key: EntryKey, row: 'result' | 'view' | 'stmt') => `${id}${row}-${key}`
 
   // Closing a view: when the focus was in what closes (or nowhere), it goes to the tab selected next, in the row the closed
   // tab was in, once that tab is drawn; with nothing left, to the Results tab. Only once, in the first layout without it.
   const pendingFocus = useRef<{ readonly closed: EntryKey; readonly row: 'result' | 'view' } | undefined>(undefined)
   const resultsTab = () => rootRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
-  const close = (key: EntryKey, row: 'result' | 'view', event: MouseEvent<HTMLButtonElement>) => {
+  const close = (key: EntryKey, row: 'result' | 'view', event: MouseEvent<HTMLButtonElement>, item?: TopItem) => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
-    // What closes: a result's whole group (its Pivot's view tab too), or one view. The view row and the panel belong to the
-    // selected view, so the focus there is in what closes when the selected view does.
+    if (item?.targetKey) {
+      const gone = new Set(results.closingTarget(tabId, item.targetKey).map(entry => entry.key))
+      const inSelected = !!selected && gone.has(selected.key) && !!active?.closest('.rt-views, .rt-panel')
+      const own = !active || active === root?.ownerDocument.body || active === event.currentTarget
+        || (!!root && root.contains(active) && (gone.has(active.closest('[data-tab-entry]')?.getAttribute('data-tab-entry') ?? '') || inSelected))
+      if (results.removeTargetEntries(tabId, item.targetKey) && own) pendingFocus.current = { closed: key, row }
+      return
+    }
+    if (item?.combined) {
+      // Closing Combined closes only the combined view(s), leaving all per-server result sets intact.
+      const combinedKeys = tab.groups.filter(gItem => gItem.table.entry.descriptor.kind === 'combined').map(gItem => gItem.table.key)
+      const gone = new Set(combinedKeys.flatMap(entryKey => results.closing(tabId, entryKey).map(entry => entry.key)))
+      const inSelected = !!selected && gone.has(selected.key) && !!active?.closest('.rt-views, .rt-panel')
+      const own = !active || active === root?.ownerDocument.body || active === event.currentTarget
+        || (!!root && root.contains(active) && (gone.has(active.closest('[data-tab-entry]')?.getAttribute('data-tab-entry') ?? '') || inSelected))
+      let removed = false
+      for (const entryKey of combinedKeys) if (results.removeEntry(tabId, entryKey)) removed = true
+      if (removed && own) pendingFocus.current = { closed: key, row }
+      return
+    }
     const gone = new Set(results.closing(tabId, key).map(entry => entry.key))
     const inSelected = !!selected && gone.has(selected.key) && !!active?.closest('.rt-views, .rt-panel')
     const own = !active || active === root?.ownerDocument.body || active === event.currentTarget
       || (!!root && root.contains(active) && (gone.has(active.closest('[data-tab-entry]')?.getAttribute('data-tab-entry') ?? '') || inSelected))
-    const last = gone.size === results.getSnapshot()[tabId]?.sets.length
-    if (own && last) resultsTab()?.focus({ preventScroll: true })
-    if (results.removeEntry(tabId, key) && own && !last) pendingFocus.current = { closed: key, row }
+    const lastSet = !hasMultiSummary(tab) && gone.size === results.getSnapshot()[tabId]?.sets.length
+    if (own && lastSet) resultsTab()?.focus({ preventScroll: true })
+    if (results.removeEntry(tabId, key) && own && !lastSet) pendingFocus.current = { closed: key, row }
   }
   useLayoutEffect(() => {
     const pending = pendingFocus.current
     if (!pending || sets.some(entry => entry.key === pending.closed)) return
     pendingFocus.current = undefined
     const root = rootRef.current, active = root?.ownerDocument.activeElement
-    // The user has moved on meanwhile: the focus is theirs.
     if (active && active !== root?.ownerDocument.body && !root?.contains(active)) return
     const target = root?.querySelector<HTMLElement>(`[data-tab-row="${pending.row}"] [role="tab"][aria-selected="true"]`) ?? root?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]') ?? resultsTab()
     target?.focus({ preventScroll: true })
   })
 
-  // A switch while the grid had the focus (F3 onto another view's match, Close Just This Result, a Pivot shown as it is
-  // built): the grid that held the focus unmounts, so the focus would fall to the page and the grid's keys with it. The
-  // grid shown instead takes it, before its own effects run (a reveal selects the match only while a grid has the focus).
-  // Close Just This Result first puts the focus on the Results tab, so that counts as the grid's too. A removed element
-  // gets no blur, so the mark stays set until the focus moves to something else.
   const gridFocus = useRef(false)
-  // The row of the tab that last had the focus, kept while the focus stays in the layout: a tab that unmounts (another
-  // result's view tabs, a tab the drawn window leaves behind) drops the focus to the page with no blur of its own.
   const tabRow = useRef<string | undefined>(undefined)
   const trackFocus = (event: FocusEvent<HTMLDivElement>) => {
     const target = event.target as Element
@@ -202,9 +242,6 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     if (to && !event.currentTarget.contains(to) && to !== resultsTab()) gridFocus.current = false
     if (to && !event.currentTarget.contains(to)) tabRow.current = undefined
   }
-  // A command (Next Result, Next Result View) moving the selection while a tab has the focus: the focus follows to the
-  // tab now selected in that row, as the arrow keys move it, once it is drawn; also when the tab that had it unmounted
-  // (another result's view tabs, the drawn window moving), which left the focus on the page.
   useLayoutEffect(() => {
     const root = rootRef.current, doc = root?.ownerDocument, active = doc?.activeElement
     const lost = !active || active === doc?.body
@@ -212,7 +249,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const view = row === 'view' ? root?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]') : undefined
     if (view) view.focus()
     else if (row) { focusTab.current = items[at]?.key; focusResultTab() }
-  }, [selected?.key, first, showViewRow])
+  }, [selected?.key, summaryActive, first, showViewRow])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!gridFocus.current || !root || (active && active !== root.ownerDocument.body && active !== resultsTab() && !root.contains(active))) return
@@ -220,37 +257,23 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     root.querySelector<HTMLElement>('.rt-panel [data-result-grid]')?.focus({ preventScroll: true })
   }, [selected?.key])
 
-  // Find Next onto a match in a view not shown selects that view (and its group's tab); the grid mounted for it then
-  // reveals the match itself, as a grid the stack scrolls to does (ResultGrid).
   const revealSeq = search?.reveal ?? 0, revealEntry = search?.revealEntry
   useLayoutEffect(() => {
     if (revealEntry === undefined || revealEntry === selected?.key || !sets.some(entry => entry.key === revealEntry) || !resultsSearch.pendingReveal(tabId, revealEntry)) return
     select(revealEntry)
   }, [revealSeq, revealEntry])
 
-  // A Pivot built for the selected group shows at once: Tabs draws one view, and the builder works on this group, so a
-  // Pivot that stayed behind its Table's tab would be built out of sight. A rebuilt Pivot keeps its entry key and swaps in
-  // a new result, so a build is told by the Pivot's result, not its key. (A rebuilt grid takes the focus its old one had in ResultGrid.)
-  // While a comparison or a plan set is selected the builder works on a group it can pivot, so a Pivot built for any group
-  // shows. Only a Pivot that appears while the layout is drawn: one there at mount, or another group's while a group that
-  // can be pivoted is selected, selects nothing. Nor does one that arrives while a grid of the layout has the focus: the
-  // Build button is in the builder, so the user went back to a grid while it was built, and PivotService leaves the focus
-  // with them then too. (The focus itself, not the hand-off mark, which a trip through the Results tab can leave set.)
   const pivots = useRef<ReadonlyMap<number, string | undefined> | undefined>(undefined)
   useLayoutEffect(() => {
     const seen = pivots.current
     pivots.current = new Map(tab.groups.map(item => [item.ordinal, item.pivot && setKey(item.pivot.entry.descriptor)]))
     if (!seen) return
-    // A Pivot that rebuilt by itself was shown when it started, and the user may have gone back to its Table since: it
-    // selects nothing.
     const built = tab.groups.filter(item => item.pivot && !item.pivot.pivot?.followed && seen.has(item.ordinal) && seen.get(item.ordinal) !== setKey(item.pivot.entry.descriptor))
-    const shown = group && !group.planSet ? built.find(item => item === group) : built[0]
+    const shownGroup = group && !group.planSet ? built.find(item => item === group) : built[0]
     const root = rootRef.current, active = root?.ownerDocument.activeElement
-    if (!shown?.pivot || (active && root?.contains(active) && active.closest('[data-result-grid]'))) return
-    if (selected?.key !== shown.pivot.key) select(shown.pivot.key)
+    if (!shownGroup?.pivot || (active && root?.contains(active) && active.closest('[data-result-grid]'))) return
+    if (selected?.key !== shownGroup.pivot.key) select(shownGroup.pivot.key)
   }, [tab.groups])
-  // A comparison made while the layout is drawn shows at once too, for the same reason: it is the last tab of the row,
-  // often past the strip's edge. One there at mount selects nothing.
   const comparisons = useRef<ReadonlySet<EntryKey> | undefined>(undefined)
   useLayoutEffect(() => {
     const seen = comparisons.current
@@ -259,18 +282,19 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     if (made && selected?.key !== made.key) select(made.key)
   }, [tab.comparisons])
 
-  // The arrow keys, Home and End move over every result, not only the drawn window; the tab they reach may be drawn only
-  // once the window has moved, so it takes the focus after that render.
   const focusTab = useRef<EntryKey | undefined>(undefined)
+  const selectTopItem = (item: TopItem) => {
+    if (item.summary) { select(summaryEntryKey); return }
+    select(item.group ? groupView(item.group) : item.key)
+  }
   const resultKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    // Only on a tab: the overflow button beside them keeps its own keys.
     if (!(event.target as Element).matches('[role="tab"]')) return
     const next = tabKey(event, at, items.length)
     if (next < 0) return
     event.preventDefault()
     const item = items[next]
     focusTab.current = item.key
-    select(item.group ? groupView(item.group) : item.key)
+    selectTopItem(item)
     focusResultTab()
   }
   const focusResultTab = () => {
@@ -288,10 +312,15 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     select(views[next].key)
     rootRef.current?.querySelector<HTMLElement>(`[data-tab-row="view"] [data-tab-entry="${views[next].key}"] [role="tab"]`)?.focus()
   }
-  // Fewer tabs fit than the window draws: the strip scrolls (the wheel scrolls it sideways) and fades an edge that hides
-  // tabs. It brings the selected tab into view, clear of the fade, when the selection or the window moves and when the
-  // strip is resized, not on every render (OutputPane draws often), so a strip the user scrolled stays where they left it.
-  // Each time it marks its edges it counts the items without a tab in view, for the overflow button.
+  const stmtKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const next = tabKey(event, Math.max(0, statementGroups.findIndex(item => item === group)), statementGroups.length)
+    if (next < 0) return
+    event.preventDefault()
+    const targetGroup = statementGroups[next]
+    select(groupView(targetGroup))
+    rootRef.current?.querySelector<HTMLElement>(`[data-tab-row="stmt"] [data-tab-entry="${targetGroup.table.key}"]`)?.focus()
+  }
+
   const stripRef = useRef<HTMLDivElement>(null)
   const [hidden, setHidden] = useState(0)
   const count = useRef(items.length)
@@ -302,40 +331,37 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     else clipStrip(strip)
     setHidden(hiddenTabs(strip, count.current))
   }
-  useLayoutEffect(() => { measureStrip(true) }, [group?.table.key ?? selected?.key, first, !selected, showViewRow])
-  useLayoutEffect(() => { measureStrip(false) }, [items.length, last, !selected])
+  const hasActiveView = !!selected || summaryActive
+  useLayoutEffect(() => { measureStrip(true) }, [group?.table.key ?? selected?.key ?? (summaryActive ? summaryEntryKey : undefined), first, !hasActiveView, showViewRow])
+  useLayoutEffect(() => { measureStrip(false) }, [items.length, last, !hasActiveView])
   useEffect(() => {
     const strip = stripRef.current
     if (!strip) return
     const observer = observeResize(strip, () => measureStrip(true))
     return () => observer.dispose()
-  }, [!selected])
+  }, [!hasActiveView])
 
-  // A short pane folds the rows of tabs (`tabsFold`); a tab that had the focus when its row went gives it to the grid.
+  // A short pane folds the rows of tabs (`tabsFold`, accounting for exact notice strip height so grids are never starved).
   const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
   const foldRef = useRef(fold)
   foldRef.current = fold
-  // Measured before the first paint too: each run draws a new layout, which would show both rows for a frame, then fold.
   useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
-    setFold(tabsFold(root.clientHeight, undefined, showViewRow))
-    const observer = observeResize(root, () => setFold(tabsFold(root.clientHeight, undefined, showViewRow)))
+    const measure = () => setFold(summaryActive ? undefined : tabsFold(root.clientHeight, undefined, showViewRow, noticeHeight))
+    measure()
+    const observer = observeResize(root, measure)
     return () => observer.dispose()
-  }, [!selected, showViewRow])
+  }, [!hasActiveView, summaryActive, showViewRow, noticeHeight])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (fold !== 'none' || !root || !active || ![...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))) return
     root.querySelector<HTMLElement>('.rt-panel [data-result-grid]')?.focus({ preventScroll: true })
   }, [fold])
 
-  // The overflow picker: from the button, or Go to Result… (a request made before this layout was drawn waits for it).
   const [picking, setPicking] = useState(false)
   const pickerFrom = useRef<HTMLElement | undefined>(undefined)
   useEffect(() => {
-    // Opened by a request (Go to Result…), Escape gives the focus back to where it was, the editor or a grid.
-    // Asked again while it is open (the focus is in it), it keeps where it was opened from.
-    // Read in the window the user is in, which may not be this layout's (the pane popped out, the editor in the main one).
     const open = () => {
       const active = windows.activeElement()
       if (!(active instanceof HTMLElement && active.closest('[data-results-picker]'))) pickerFrom.current = active instanceof HTMLElement ? active : undefined
@@ -346,7 +372,6 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     return () => requests.dispose()
   }, [tabId])
   const overflowRef = useRef<HTMLButtonElement>(null)
-  // With no rows of tabs (a very short pane) the picker is placed under the top of the layout.
   const pickerAnchor = () => foldRef.current === 'none' ? rootRef.current : overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('.rt-results')
   const closePicker = (restore: boolean) => {
     setPicking(false)
@@ -354,28 +379,32 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     pickerFrom.current = undefined
     if (!restore) return
     if (from?.isConnected && from !== from.ownerDocument.body) {
-      // In another window (the editor, with the pane popped out): that window comes forward first.
       if (from.ownerDocument !== rootRef.current?.ownerDocument) from.ownerDocument.defaultView?.focus()
       from.focus({ preventScroll: true })
     }
-    // Where it was opened from may be hidden now (the pane folded while it was open): then as if it had gone.
     if (from && from.ownerDocument.activeElement === from) return
     if (foldRef.current === 'none') panelGrid()?.focus({ preventScroll: true })
     else (overflowRef.current ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
   }
-  // With no rows of tabs drawn (the shortest pane), the grid shown takes the focus in a tab's place.
   const panelGrid = () => rootRef.current?.querySelector<HTMLElement>('.rt-panel [data-result-grid]')
-  // A view picked: shown, and the focus goes to its result's tab once the window drawn has moved to it.
   const pick = (key: EntryKey) => {
     setPicking(false)
+    if (key === summaryEntryKey) {
+      select(summaryEntryKey)
+      focusTab.current = summaryEntryKey
+      focusResultTab()
+      return
+    }
     if (foldRef.current === 'none') {
-      // The grid of the view picked takes the focus: at once when it is the one shown, else once it is drawn.
       if (key === selected?.key) panelGrid()?.focus({ preventScroll: true })
       else { gridFocus.current = true; select(key) }
       return
     }
     select(key)
-    const item = topItems(results.getSnapshot()[tabId] ?? tab).find(top => top.key === key || top.group?.pivot?.key === key)
+    const snapshotTab = results.getSnapshot()[tabId] ?? tab
+    const item = topItems(snapshotTab).find(top => top.key === key || top.group?.pivot?.key === key
+      || (top.combined && snapshotTab.groups.some(gItem => gItem.table.entry.descriptor.kind === 'combined' && (gItem.table.key === key || gItem.pivot?.key === key)))
+      || (top.targetKey && snapshotTab.groups.some(gItem => gItem.table.entry.descriptor.targetKey === top.targetKey && (gItem.table.key === key || gItem.pivot?.key === key))))
     focusTab.current = item?.key
     focusResultTab()
   }
@@ -387,46 +416,74 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const closeTitle = (name: string, others = '') => running ? `Close ${name} (unavailable while the query runs)` : `Close ${name}${others}`
   const refocusView = () => (rootRef.current?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]')
     ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))?.focus()
-  if (!selected) return null
-  const selectedSlot = group ? (group.pivot?.key === selected.key ? group.pivot : group.table) : tab.comparisons.find(slot => slot.key === selected.key)
-  const selectedName = entryName(selected)
-  // The selected group's Pivot is out of date: a dot on its view tab, and its mark with Update while it is shown.
+
+  // Do NOT return null when Summary is active (including pure-DDL/DML multi-server runs with 0 result sets).
+  if (!selected && !summaryActive) return null
+
+  const selectedSlot = selected ? (group ? (group.pivot?.key === selected.key ? group.pivot : group.table) : tab.comparisons.find(slot => slot.key === selected.key)) : undefined
+  const selectedName = selected ? entryName(selected) : 'Summary'
   const stale = !!group && pivotOutOfDate(tab, group)
-  const labelledBy = group && showViewRow ? tabIdOf(selected.key, 'view') : tabIdOf(selected.key, 'result')
+  const labelledBy = summaryActive
+    ? tabIdOf(summaryEntryKey, 'result')
+    : group && showViewRow && (views.length > 1 || statementGroups.length <= 1)
+      ? tabIdOf(selected!.key, 'view')
+      : tabIdOf(items[at]?.key ?? selected!.key, 'result')
   const cached = tab.summary?.job?.cacheHit === true
-  return <div ref={rootRef} className="rt-root" data-fold={fold} data-compact={!showViewRow || undefined} onFocus={trackFocus} onBlur={trackBlur}>
+  const budget = tab.summary?.budget ?? tab.multiSummary?.budget
+  const collapseStatements = fold === 'one' || statementGroups.length > 3
+
+  return <div ref={rootRef} className="rt-root" data-fold={fold} data-compact={!showViewRow || undefined} data-summary={summaryActive || undefined} onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" data-tab-row="result" onKeyDown={resultKey}>
       <div className="rt-strip" ref={stripRef} role="tablist" aria-label="Results and comparisons" onScroll={() => measureStrip(false)} onWheel={wheel}>
-      {shown.map((item, place) => {
-        const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
-        const batch = item.group ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
-        // A named result's tooltip has its whole name (the tab may cut it short) and its number; a comparison's, its full name
-        // ("Differences: Result 1 → Result 3"), as its tab shows only "old → new".
-        const tip = [item.number ? `${item.name} · ${item.number}` : item.short ? item.name : '', batch].filter(Boolean).join(' · ')
-        // A named result's accessible name carries its number too, so a screen reader tells two of one name apart; a
-        // comparison's is its full name.
-        const spoken = item.number ? `${item.name}, ${item.number}` : item.name
-        return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}>
-          <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...item.number || item.short ? { 'aria-label': spoken } : {}}
-            aria-setsize={items.length} aria-posinset={first + place + 1} {...on ? { 'aria-controls': id + 'panel' } : {}} onClick={() => select(item.group ? groupView(item.group) : item.key)}>
-            {item.group?.planSet && <Icon name="execution-plan" />}{item.comparison && <Icon name="git-compare" />}<span className="rt-name">{item.short ?? item.name}</span>
-          </button>
-          {!tab.bare && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${spoken}`} title={closeTitle(spoken, others)} disabled={running}
-            onClick={event => close(item.key, 'result', event)}><Icon name="close" /></button>}
-        </div>
-      })}
+        {shown.map((item, place) => {
+          const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
+          const batch = item.group && !item.targetKey && !item.combined ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
+          const tip = [item.number ? `${item.name} · ${item.number}` : item.short ? item.name : item.targetPhase ? `${item.name} · ${targetPhaseInfo(item.targetPhase).label}` : '', batch].filter(Boolean).join(' · ')
+          const spoken = spokenTopItem(item)
+          const phase = item.targetPhase ? targetPhaseInfo(item.targetPhase) : undefined
+          const needsAriaLabel = !!(item.number || item.short || item.targetKey)
+          return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}
+            data-summary={item.summary || undefined} data-combined={item.combined || undefined} data-target-key={item.targetKey}>
+            <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...needsAriaLabel ? { 'aria-label': spoken } : {}}
+              aria-setsize={items.length} aria-posinset={first + place + 1} {...on ? { 'aria-controls': id + 'panel' } : {}} onClick={() => selectTopItem(item)}>
+              {item.summary && <Icon name="layers" />}
+              {item.combined && <Icon name="table" />}
+              {item.targetKey && <span className="rt-server-dot" data-target-color={(item.targetIndex ?? 0) % 6} aria-hidden="true" />}
+              {item.group?.planSet && <Icon name="execution-plan" />}
+              {item.comparison && <Icon name="git-compare" />}
+              <span className="rt-name">{item.short ?? item.name}</span>
+              {phase && <span className="rt-server-status" data-tone={phase.tone} aria-hidden="true"><Icon name={phase.icon} spin={phase.spin} /></span>}
+              {item.statementCount && item.statementCount > 1 && <span className="rt-stmt-count" aria-hidden="true">{item.statementCount}</span>}
+            </button>
+            {!tab.bare && !item.summary && <button type="button" className="icon-button rt-close" tabIndex={-1} aria-label={`Close ${spoken}`} title={closeTitle(spoken, others)} disabled={running}
+              onClick={event => close(item.key, 'result', event, item)}><Icon name="close" /></button>}
+          </div>
+        })}
       </div>
       {hidden > 0 && <button ref={overflowRef} type="button" className="rt-overflow" aria-haspopup="dialog" aria-expanded={picking}
         aria-label={`All results, views and comparisons; ${formatCount(hidden)} not shown as tabs`} title="All results, views and comparisons (Go to Result…)"
         onClick={() => { pickerFrom.current = undefined; setPicking(open => !open) }}>+{formatCount(hidden)}<Icon name="chevron-down" /></button>}
-      {!showViewRow && <div className="rt-inline-right">
+      {!showViewRow && selected && <div className="rt-inline-right">
         <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={cached} />
         <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />
       </div>}
-      {picking && <ResultsPicker tab={tab} anchor={pickerAnchor} selected={selected?.key} onPick={pick} onClose={closePicker} />}
+      {picking && <ResultsPicker tab={tab} anchor={pickerAnchor} selected={summaryActive ? summaryEntryKey : selected?.key} onPick={pick} onClose={closePicker} />}
     </div>
-    {showViewRow && <div className="rt-views">
-      {group ? <div className="rt-view-tabs" role="tablist" aria-label={`Views of ${distinctName(group.table.entry, tab.sets)}`} data-tab-row="view" onKeyDown={viewKey}>
+    {showViewRow && selected && <div className="rt-views">
+      {statementGroups.length > 1 && (collapseStatements
+        ? <select className="rt-stmt-select" aria-label="Statement" value={group?.table.key ?? statementGroups[0].table.key}
+            onChange={event => { const target = statementGroups.find(item => item.table.key === event.target.value); if (target) select(groupView(target)) }}>
+            {statementGroups.map((stmtGroup, index) => <option key={stmtGroup.table.key} value={stmtGroup.table.key}>{statementLabel(stmtGroup, index)}</option>)}
+          </select>
+        : <div className="rt-stmt-tabs" role="tablist" aria-label="Statements" data-tab-row="stmt" onKeyDown={stmtKey}>
+            {statementGroups.map((stmtGroup, index) => {
+              const on = stmtGroup === group
+              return <button key={stmtGroup.table.key} type="button" role="tab" className="rt-stmt-tab" id={tabIdOf(stmtGroup.table.key, 'stmt')}
+                data-tab-entry={stmtGroup.table.key} data-selected={on || undefined} aria-selected={on} tabIndex={on ? 0 : -1}
+                onClick={() => select(groupView(stmtGroup))}>{statementLabel(stmtGroup, index)}</button>
+            })}
+          </div>)}
+      {group ? (statementGroups.length <= 1 || views.length > 1) && <div className="rt-view-tabs" role="tablist" aria-label={`Views of ${distinctName(group.table.entry, tab.sets)}`} data-tab-row="view" onKeyDown={viewKey}>
         {views.map(view => {
           const on = view.key === selected.key, pivot = view.view === 'pivot', marked = pivot && stale
           return <div key={view.key} className="rt-view" data-tab-entry={view.key} data-selected={on || undefined}>
@@ -445,10 +502,16 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />
     </div>}
     <div className="rt-panel" role="tabpanel" id={id + 'panel'} aria-labelledby={labelledBy}>
-      {/* Keyed by result: another view is another grid, and the one it replaces unmounts and gives back its pool; so is a
-          rebuilt Pivot, which keeps its entry key but is drawn over its new result. */}
-      <ResultGrid key={setKey(selected.descriptor)} tabId={tabId} entry={selected} count={tab.numbered} focused budget={tab.summary?.budget} sort={sort}
-        view={group?.planSet ? 'plan' : selectedSlot?.view} group={group?.ordinal} onFocus={select} />
+      {summaryActive
+        ? <MultiRunSummary tabId={tabId} tab={tab} active onSelectTarget={targetKey => {
+            const firstSet = tab.sets.find(entry => entry.descriptor.targetKey === targetKey && entry.descriptor.kind !== 'pivot')
+            if (firstSet) select(firstSet.key)
+          }} />
+        : selected && <>
+            <EntryNoticeBars tabId={tabId} tab={tab} entry={selected} running={running} />
+            <ResultGrid key={setKey(selected.descriptor)} tabId={tabId} entry={selected} count={tab.numbered} focused budget={budget} sort={sort}
+              view={group?.planSet ? 'plan' : selectedSlot?.view} group={group?.ordinal} onFocus={select} />
+          </>}
     </div>
   </div>
 }

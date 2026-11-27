@@ -22,7 +22,10 @@ import MessagesView from './MessagesView'
 import ResultsToolbar from './ResultsToolbar'
 import OperationStrip from './OperationStrip'
 import type { OutputViewName, ResultJob, ResultSetEntry, TabResults } from './ResultsService'
-import { formatCount, messagesSummary, plural, runSummary } from './status'
+import { hasMultiSummary, isSummaryActive } from './ResultsService'
+import { aggregateBytesProcessed, multiOutcomeInfo } from './MultiRunSummary'
+import { formatCount, formatDuration, formatElapsed, messagesSummary, plural, runSummary, timeOfDay } from './status'
+import { processedFact } from '../../../shared/bigquery/cost'
 
 /** `query` is false for a value's document (XML, JSON, plan), which has no results of its own. */
 interface Props { pane: OutputPaneId; tabId: string; query: boolean; connected: boolean; hint?: string }
@@ -40,7 +43,23 @@ export function jobText(job: ResultJob): { readonly what: string; readonly done:
 function RunSummaryView({ tab, now }: { tab: TabResults; now: number }) {
   const { settings } = useWorkbench()
   const prices = useServiceSnapshot(settings).values['queryExecution.bigQuery.showCost'] !== 'bytes'
-  const elapsedMs = tab.status === 'running' ? now - tab.startedAt : tab.summary?.elapsedMs ?? Math.max(0, (tab.endedAt ?? tab.startedAt) - tab.startedAt)
+  const elapsedMs = tab.status === 'running' ? now - tab.startedAt : tab.summary?.elapsedMs ?? tab.multiSummary?.elapsedMs ?? Math.max(0, (tab.endedAt ?? tab.startedAt) - tab.startedAt)
+  if (hasMultiSummary(tab)) {
+    const outcome = multiOutcomeInfo(tab)
+    const tone = outcome.tone === 'ok' ? 'success' : outcome.tone === 'warn' ? 'warning' : outcome.tone === 'err' ? 'error' : 'running'
+    const targets = tab.multi!.targets
+    const okCount = targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length
+    const bytes = aggregateBytesProcessed(targets)
+    const facts = [`${formatCount(okCount)}/${formatCount(targets.length)} ${plural(targets.length, 'server')}`, `${formatCount(tab.rowsRead)} ${plural(tab.rowsRead, 'row')}`]
+    if (bytes !== undefined) facts.push(processedFact(bytes, prices))
+    facts.push(tab.status === 'running' ? formatElapsed(elapsedMs) : formatDuration(elapsedMs))
+    const time = tab.status === 'running' ? '' : timeOfDay(tab.multiSummary?.completedAt)
+    if (time) facts.push(time)
+    const sentence = [outcome.label, ...facts].join(' · ')
+    return <span className="output-status" data-status={tab.status} data-tone={tone} title={sentence}>
+      <Icon name={outcome.icon} spin={outcome.icon === 'loading'} /><strong>{outcome.label}</strong>{facts.map((fact, index) => <span key={index}> · {fact}</span>)}
+    </span>
+  }
   const summary = runSummary({
     status: tab.status, closedFrom: tab.closedFrom, elapsedMs, rows: tab.rowsRead, completedBatches: tab.completedBatches, totalBatches: tab.totalBatches, completedAt: tab.summary?.completedAt,
     bytesProcessed: tab.summary?.job?.bytesProcessed, prices
@@ -73,11 +92,11 @@ export function OutputAnnouncer({ tabId }: { tabId: string }) {
 function plansOf(tab: TabResults | undefined): readonly ResultSetEntry[] {
   return tab && tab.status !== 'closed' ? [...tab.planSets, ...tab.sets.filter(set => set.descriptor.kind === 'executionPlan')] : []
 }
-/** Whether the run has a Results view: it has sets, or had them until they were closed (all at once, or one at a time
- *  down to the last, `emptied`), which the view then says; or it was made with Discard results after execution and is
- *  running or read sets it did not keep, which the view says too. */
-export const hasResultsView = (tab: TabResults | undefined): boolean => !!tab && (tab.sets.length > 0 || tab.status === 'closed' || !!tab.emptied
-  || !!tab.discard && (tab.status === 'running' || (tab.summary?.discardedResultSets ?? 0) > 0))
+/** Whether the run has a Results view: it has sets, multi-server summary cards (even on pure-DDL/DML with 0 sets), or had
+ *  them until they were closed (all at once, or one at a time down to the last, `emptied`), which the view then says; or
+ *  it was made with Discard results after execution and is running or read sets it did not keep, which the view says too. */
+export const hasResultsView = (tab: TabResults | undefined): boolean => !!tab && (tab.sets.length > 0 || hasMultiSummary(tab) || tab.status === 'closed' || !!tab.emptied
+  || !!tab.discard && (tab.status === 'running' || (tab.summary?.discardedResultSets ?? tab.multiSummary?.discardedResultSets ?? 0) > 0))
 
 export const discardSetting = 'queryResults.grid.discardResults'
 /** What the Results view shows in place of grids for a run made with Discard results after execution, which kept none:
@@ -268,10 +287,12 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
   const leader = outputPaneIds.find(id => visible[id]) === pane
   const now = useTicker(leader && tab?.status === 'running')
   const hasSets = hasResultsView(tab)
-  // Grids to show: not when the results were closed, all at once or down to the last.
-  const shown = !!tab && tab.status !== 'closed' && tab.sets.length > 0
+  const multiSummary = hasMultiSummary(tab)
+  // Grids or multi-server Summary to show: not when the results were closed, all at once or down to the last.
+  const shown = !!tab && tab.status !== 'closed' && (tab.sets.length > 0 || multiSummary)
   // One view at a time under tabs, or every view stacked (queryResults.grid.layout). Peek's bare runs are never drawn here.
   const tabs = values['queryResults.grid.layout'] === 'tabs' && !tab?.bare
+  const summaryActive = isSummaryActive(tab)
   const layoutFocus = useLayoutFocus(tabs, () => tabId ? results.focusedEntry(tabId)?.key : undefined)
   const plans = plansOf(tab)
   const planCount = estimated ? estimated.result?.plans.length ?? 0 : plans.length
@@ -367,10 +388,10 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
             {shown ? tabs ? <ResultsTabs key={'tabs:' + tab.queryId} tabId={tabId} tab={tab} /> : <ResultsStack key={'stack:' + tab.queryId} tabId={tabId} tab={tab} revealFocused={layoutFocus.switching} />
               : discardNotice(tab, true) ? <DiscardNotice tab={tab} />
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
-            {profileOpen && shown && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
+            {profileOpen && shown && tab.sets.length > 0 && (!tabs || !summaryActive) && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={tabs ? selectedEntry(tab)?.key : profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
-            {pivotOpen && shown && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
-            {compareOpen && shown && visible[pane] && <ComparePopover key={'compare:' + tab.queryId} tabId={tabId} tab={tab} />}
+            {pivotOpen && shown && tab.sets.length > 0 && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
+            {compareOpen && shown && tab.sets.length > 0 && visible[pane] && <ComparePopover key={'compare:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : pane === 'plan' ? plans.length > 0 || livePlan ? visible.plan && <ResultPlans tabId={tabId} queryId={tab.queryId} plans={plans} visible={visible.plan} order={tab.summary?.planOrder} live={livePlan} />

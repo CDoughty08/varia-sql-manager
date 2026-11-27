@@ -6,12 +6,12 @@ import Icon from '../Icon'
 import { windows } from '../core/windows'
 import { trapFocus } from '../trap-focus'
 import type { UnpairedColumn } from './compare-pairing'
-import type { CompareAnchor } from './CompareService'
-import { comparedNames, comparisonName, distinctName, entryName, entryOf, entrySecondary, numberedName, type ResultSetEntry, type TabResults } from './ResultsService'
+import { isCrossEnginePair, type CompareAnchor } from './CompareService'
+import { comparedNames, comparisonName, distinctName, entryName, entryOf, entrySecondary, numberedName, targetOfEntry, type ResultSetEntry, type TabResults } from './ResultsService'
 import { formatCount, resultRows } from './status'
 
 const nameOf = (column: UnpairedColumn) => column.name || '(No column name)'
-const width = 300
+const width = 380
 /** The pairing rule, said where a column was left out (the ⓘ beside "Not compared"). */
 export const pairingRule = 'Columns pair by name, ignoring case, and by both holding text or both binary data; a repeated name pairs in order. There is no manual mapping.'
 
@@ -94,6 +94,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const ids = useId()
   const home = useRef<HTMLSpanElement>(null), card = useRef<HTMLFormElement>(null), button = useRef<HTMLButtonElement>(null)
   const [place, setPlace] = useState<CSSProperties | undefined>()
+  const [filter, setFilter] = useState('')
   // The window it opens in: the one its results are drawn in (the main window, or a popout's).
   const [host, setHost] = useState<HTMLElement | undefined>()
   useLayoutEffect(() => { setHost(home.current?.ownerDocument.body) }, [])
@@ -102,11 +103,20 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   // With its number when another result of the run has its name, so the heading says which of them is compared.
   const name = active ? distinctName(active, tab.sets) : ''
   const targets = active ? compare.targetsOf(tabId, active.key) : []
+  const queryText = filter.trim().toLowerCase()
+  const shownTargets = targets.length > 8 && queryText
+    ? targets.filter(target => {
+      const tMeta = targetOfEntry(tab, target.entry)
+      const haystack = [entryName(target.entry), entrySecondary(target.entry) ?? '', tMeta?.label ?? '', tMeta?.environment ?? '', tMeta?.database ?? ''].join(' ').toLowerCase()
+      return haystack.includes(queryText)
+    })
+    : targets
   const sides = compare.sidesOf(tabId)
   const running = !!sides && !!picker && compare.isRunning(tabId, sides.old.key, sides.neu.key)
   const shown = sides && picker ? compare.existing(tabId, sides.old.key, sides.neu.key) : undefined
   // Show It on the run's comparison of the pair applies Exact text (D13): Update when that would change it.
   const update = !!shown && !!picker && compare.stateOf(tabId, shown)?.exact !== picker.exact
+  const crossEngine = !!sides && isCrossEnginePair(tab, sides.old, sides.neu)
 
   // Placed under its anchor when it fits, else above it; clamped to the window, scrolling inside when short. Measured
   // after every render (any of its content can change its height; an unchanged place is not set again) and on resize and
@@ -132,7 +142,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   }, [host, !!picker])
 
   // Closed, it is placed afresh (and takes the focus again) when it next opens.
-  useLayoutEffect(() => { if (!picker) setPlace(undefined) }, [!!picker])
+  useLayoutEffect(() => { if (!picker) { setPlace(undefined); setFilter('') } }, [!!picker])
   // The focus goes in once it is placed, and again when it opens on another Table: to the picked target when there is a
   // list, else to Compare.
   const placed = !!place
@@ -226,8 +236,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss() }
     // Enter on a target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first,
-    // where a failure is said and from where Escape returns it.
-    else if (event.key === 'Enter' && (event.target as Element).matches('input')) { event.preventDefault(); button.current?.focus(); void start() }
+    // where a failure is said and from where Escape returns it. Never auto-submit while typing in the quick search box.
+    else if (event.key === 'Enter' && (event.target as Element).matches('input:not(.compare-search)')) { event.preventDefault(); button.current?.focus(); void start() }
   }
 
   const list = targets.length > 1 || (targets.length === 1 && !sides)
@@ -254,19 +264,29 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
       </div>
       <div className="compare-body">
         {targets.length === 0 && <p className="compare-note">No other result of this run shares a column with {name}.</p>}
+        {list && targets.length > 8 && <label className="compare-search-row">
+          <Icon name="search" />
+          <input type="search" className="compare-search" value={filter} placeholder="Filter results…" aria-label="Filter results to compare"
+            spellCheck={false} autoComplete="off" onChange={event => setFilter(event.target.value)} />
+        </label>}
         {list && <fieldset className="compare-targets">
           <legend className="visually-hidden">Compare {name} with</legend>
-          {targets.map(target => {
+          {shownTargets.length === 0 ? <p className="compare-note">No matching results.</p>
+            : shownTargets.map(target => {
             // Columns of either result left out: "2 of 3 columns" counts both results' columns, a pair once.
             const paired = target.pairing.pairs.length, all = paired + target.pairing.oldOnly.length + target.pairing.newOnly.length
             // A named result's number follows its name, so two results of one name are told apart.
             const number = entrySecondary(target.entry)
             return <label key={target.entry.key} className={picker.target === target.entry.key ? 'compare-target picked' : 'compare-target'}>
               <input type="radio" name={ids + 'target'} checked={picker.target === target.entry.key} onChange={() => compare.pick(tabId, target.entry.key)} />
-              <span className="compare-target-name" {...number ? { title: `${entryName(target.entry)} · ${number}` } : {}}>{entryName(target.entry)}</span>
-              {number && <small className="compare-target-number">{number}</small>}
-              {paired < all && <span className="compare-chip" title={`${formatCount(paired)} of ${formatCount(all)} columns pair; the rest are not compared`}>{formatCount(paired)} of {formatCount(all)} columns</span>}
-              <small>{rows(target.entry)}</small>
+              <span className="compare-target-body">
+                <span className="compare-target-name" {...number ? { title: `${entryName(target.entry)} · ${number}` } : {}}>{entryName(target.entry)}</span>
+                <span className="compare-target-meta">
+                  {number && <small className="compare-target-number">{number}</small>}
+                  {paired < all && <span className="compare-chip" title={`${formatCount(paired)} of ${formatCount(all)} columns pair; the rest are not compared`}>{formatCount(paired)} of {formatCount(all)} columns</span>}
+                  <small>{rows(target.entry)}</small>
+                </span>
+              </span>
             </label>
           })}
         </fieldset>}
@@ -275,6 +295,12 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
           <button type="button" className="icon-button" aria-label="Swap old and new" title="Swap old and new" onClick={() => compare.swap(tabId)}><Icon name="arrow-swap" /></button>
           {side(sides.neu, false)}
         </div>}
+        {crossEngine && <p className="compare-note compare-cross-collation">
+          <Icon name="info" />
+          <span>{picker.exact
+            ? 'Cross-engine comparison defaults to Exact text so SQL Server and BigQuery compare symmetrically.'
+            : 'Collation comparison follows the left (−) engine; enable Exact text for symmetric SQL Server ↔ BigQuery comparison.'}</span>
+        </p>}
         {sides && matching && <p className="compare-note compare-matching">Match rows by: {matching.text}{matching.remembered && <span className="compare-remembered"> (remembered)</span>}</p>}
         {left.length > 0 && <section className="compare-unpaired" aria-labelledby={ids + 'unpaired'}>
           <h3 id={ids + 'unpaired'}>Not compared <span className="compare-info" title={pairingRule} aria-label={pairingRule} role="img"><Icon name="info" /></span></h3>
