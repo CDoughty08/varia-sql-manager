@@ -69,9 +69,10 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     if (event.key === 'Escape') { event.preventDefault(); onCancel() }
     else if (event.key === 'Enter') {
       // A button presses itself and a drop-down list opens; a list box (Select Database Owner's) chooses, as OK does.
-      // A destructive OK runs only from its own button.
-      if (isElement(event.target) && (event.target.tagName === 'BUTTON' || (event.target.tagName === 'SELECT' && (event.target as HTMLSelectElement).size <= 1)) || destructive || alert) return
+      // A destructive or alert OK runs only from its own button: prevent implicit form submission from inputs/checkboxes.
+      if (isElement(event.target) && (event.target.tagName === 'BUTTON' || (event.target.tagName === 'SELECT' && (event.target as HTMLSelectElement).size <= 1))) return
       event.preventDefault()
+      if (destructive || alert) return
       if (!okDisabled) onOk()
     }
   }

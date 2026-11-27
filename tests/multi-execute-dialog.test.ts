@@ -1513,4 +1513,72 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     await expect(queuedCost).resolves.toEqual({ run: true, moot: true })
     expect(document.body.querySelector('form.bigquery-cost-prompt')).toBeNull()
   })
+
+  it('R11 D3 #1 & #2: SubDialog blocks stray Enter on alert checkbox, and BigQueryCostPrompt updates live on Options changes', async () => {
+    const listeners = new Set<() => void>()
+    let values = {
+      'queryExecution.bigQuery.showCost': 'onDemand' as 'onDemand' | 'bytes',
+      'queryExecution.bigQuery.maximumBytesBilled': 50 as number | null,
+      'queryExecution.bigQuery.costPrompt': true,
+      'queryExecution.bigQuery.costThreshold': 10,
+      'queryExecution.bigQuery.incompleteEstimateWarning': true
+    }
+    let settingsSnap = { values }
+    const settingsStub = {
+      subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
+      getSnapshot: () => settingsSnap,
+      get: <K extends keyof typeof values>(k: K) => values[k]
+    }
+    const publishSettings = (patch: Partial<typeof values>) => {
+      values = { ...values, ...patch }
+      settingsSnap = { values }
+      for (const l of listeners) l()
+    }
+    const costPrompts = new CostPromptService()
+    const wb = { settings: settingsStub, costPrompts, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose() })
+
+    let promptPromise!: ReturnType<CostPromptService['askMulti']>
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench: wb, children: createElement(BigQueryCostPrompt) }))
+      promptPromise = costPrompts.askMulti({
+        kind: 'multi',
+        projects: [{
+          connectionId: 'bq-1',
+          label: 'bq-analytics',
+          prompt: { kind: 'threshold', bytes: 25 * GiB },
+          thresholdBytes: 10 * GiB,
+          cap: 50 * GiB
+        }],
+        prices: true,
+        totalBytes: 25 * GiB,
+        totalProjectCount: 1
+      })
+    })
+
+    const form = document.body.querySelector<HTMLFormElement>('form.bigquery-cost-prompt')!
+    expect(form.querySelector('.bigquery-cost-project-cap.is-exceeded')).toBeNull()
+    expect(form.textContent).toContain('on demand')
+
+    // #1: Stray Enter on the Don't ask again checkbox MUST be default-prevented and must NOT submit the alert dialog!
+    const checkbox = form.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    checkbox.focus()
+    const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => { checkbox.dispatchEvent(enterEvent) })
+    expect(enterEvent.defaultPrevented).toBe(true)
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).toBe(form)
+
+    // #2: Lower maximumBytesBilled to 5 GiB & switch showCost to bytes -> open prompt updates live!
+    act(() => {
+      publishSettings({ 'queryExecution.bigQuery.maximumBytesBilled': 5, 'queryExecution.bigQuery.showCost': 'bytes' })
+    })
+    expect(form.querySelector('.bigquery-cost-project-cap.is-exceeded')).not.toBeNull()
+    expect(form.textContent).not.toContain('on demand')
+
+    const cancelBtn = [...form.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelBtn.click() })
+    await expect(promptPromise).resolves.toEqual({ run: false })
+  })
 })

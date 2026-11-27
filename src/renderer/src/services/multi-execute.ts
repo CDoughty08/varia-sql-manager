@@ -310,7 +310,7 @@ function validateBeforeDispatch(
   expectedMode: 'same' | 'cross',
   targets: readonly ResolvedTarget[],
   deps: Pick<MultiExecuteDeps, 'documents' | 'connections' | 'queries' | 'settings' | 'optOut' | 'notify'>,
-  options: { readonly signal?: AbortSignal; readonly expectedProvider?: ProviderId; readonly capturedRevision?: number } = {}
+  options: { readonly signal?: AbortSignal; readonly expectedProvider?: ProviderId; readonly capturedRevision?: number; readonly silent?: boolean } = {}
 ): DispatchValidation {
   if (options.signal?.aborted) return { ok: false, outcome: { status: 'cancelled' } }
   const current = deps.documents.get(tabId)
@@ -318,7 +318,7 @@ function validateBeforeDispatch(
   const runningNonGated = deps.queries.isRunning(tabId) && !deps.queries.isGated?.(tabId)
   if (deps.documents.getSnapshot().busy || runningNonGated) return { ok: false, outcome: { status: 'refused', reason: 'busy' } }
   if (options.capturedRevision !== undefined && deps.documents.revision?.(tabId) !== options.capturedRevision) {
-    deps.notify('Execution cancelled because the query text changed before dispatch. Review the query and try again.', 'warning')
+    if (!options.silent) deps.notify('Execution cancelled because the query text changed before dispatch. Review the query and try again.', 'warning')
     return { ok: false, outcome: { status: 'refused', reason: 'sqlChanged' } }
   }
   const allLive = resolveLiveTargets(tabId, deps)
@@ -327,9 +327,11 @@ function validateBeforeDispatch(
     : allLive.filter(target => !options.expectedProvider || target.item.provider === options.expectedProvider)
   const dropped = targets.filter(planned => !currentResolved.some(live => live.connection.id === planned.connection.id))
   if (dropped.length) {
-    const names = dropped.slice(0, 3).map(target => target.item.label).join(', ')
-    const suffix = dropped.length > 3 ? ` and ${dropped.length - 3} more` : ''
-    deps.notify(`Execution cancelled because target state changed (${names}${suffix} disconnected or disabled). Review the selected targets and try again.`, 'warning')
+    if (!options.silent) {
+      const names = dropped.slice(0, 3).map(target => target.item.label).join(', ')
+      const suffix = dropped.length > 3 ? ` and ${dropped.length - 3} more` : ''
+      deps.notify(`Execution cancelled because target state changed (${names}${suffix} disconnected or disabled). Review the selected targets and try again.`, 'warning')
+    }
     return { ok: false, outcome: { status: 'refused', reason: 'targetsChanged' } }
   }
   const unchanged = currentResolved.length === targets.length && currentResolved.every((live, index) => {
@@ -339,7 +341,7 @@ function validateBeforeDispatch(
       && live.item.dataset === planned.item.dataset
   })
   if (!unchanged) {
-    deps.notify('Execution cancelled because the selected targets, databases, or datasets changed before dispatch. Review the selected targets and try again.', 'warning')
+    if (!options.silent) deps.notify('Execution cancelled because the selected targets, databases, or datasets changed before dispatch. Review the selected targets and try again.', 'warning')
     return { ok: false, outcome: { status: 'refused', reason: 'targetsChanged' } }
   }
   return { ok: true, targets: currentResolved }
@@ -411,6 +413,7 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
           thresholdBytes: thresholdBytes(),
           warnIncomplete: isIncompleteWarningEnabled(deps.settings)
         })
+        const isStillValid = () => validateBeforeDispatch(tabId, 'same', [only], deps, { signal, expectedProvider: provider, capturedRevision, silent: true }).ok
         let prompt = currentPrompt()
         for (let turns = 0; prompt && turns < 16; turns++) {
           const kind = prompt.kind
@@ -422,23 +425,30 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
           const answer = await deps.costPrompts.ask({
             prompt,
             connection: only.item.label,
+            connectionId: only.connection.id,
             thresholdBytes: threshold,
             ...ownThreshold ? { ownThreshold: true as const } : {},
             prices: showPrices,
             ...cap !== undefined ? { cap } : {}
-          }, signal, () => currentPrompt()?.kind === kind
+          }, signal, () => isStillValid()
+            && currentPrompt()?.kind === kind
             && thresholdBytes() === threshold
             && (deps.optOut.threshold(only.connection) !== undefined) === ownThreshold
             && liveBigQueryCap(only.connection, deps.settings) === cap
             && (deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes') === showPrices,
           given => {
-            if (signal?.aborted || !given.dontAskAgain) return
+            if (signal?.aborted || !given.run || !given.dontAskAgain || !isStillValid()) return
             if (kind === 'threshold') applied = deps.optOut.dontAsk(only.connection)
             else if (deps.disableIncompleteWarning) applied = disableIncompleteWarning(deps.settings, deps.disableIncompleteWarning)
           })
           await applied?.catch(() => {})
           if (signal?.aborted) return { status: 'cancelled' }
-          if (answer.moot) { prompt = currentPrompt(); continue }
+          if (answer.moot) {
+            const check = validateBeforeDispatch(tabId, 'same', [only], deps, { signal, expectedProvider: provider, capturedRevision })
+            if (!check.ok) return check.outcome
+            prompt = currentPrompt()
+            continue
+          }
           if (!answer.run) return { status: 'cancelled' }
           prompt = undefined
           break
@@ -603,6 +613,7 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
     return list
   }
 
+  const isCrossStillValid = () => validateBeforeDispatch(tabId, 'cross', plannedTargets, deps, { signal, capturedRevision, silent: true }).ok
   let flagged = buildFlagged()
   for (let turns = 0; flagged.length > 0 && turns < 16; turns++) {
     const snapshotFlagged = flagged
@@ -616,6 +627,7 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
       totalBytes,
       totalProjectCount: bqTargets.length
     }, signal, () => {
+      if (!isCrossStillValid()) return false
       if ((deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes') !== showPrices) return false
       const latest = buildFlagged()
       return latest.length === snapshotFlagged.length && latest.every((item, index) => {
@@ -627,7 +639,7 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
       })
     },
     given => {
-      if (signal?.aborted || !given.dontAskAgain) return
+      if (signal?.aborted || !given.run || !given.dontAskAgain || !isCrossStillValid()) return
       const thresholdTargets = snapshotFlagged.filter(item => item.entry.prompt.kind === 'threshold')
       if (thresholdTargets.length) {
         applied = Promise.all(thresholdTargets.map(item => deps.optOut.dontAsk(item.target.connection)))
@@ -637,7 +649,12 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
     })
     await applied?.catch(() => {})
     if (signal?.aborted) return { status: 'cancelled' }
-    if (answer.moot) { flagged = buildFlagged(); continue }
+    if (answer.moot) {
+      const check = validateBeforeDispatch(tabId, 'cross', plannedTargets, deps, { signal, capturedRevision })
+      if (!check.ok) return check.outcome
+      flagged = buildFlagged()
+      continue
+    }
     if (!answer.run) return { status: 'cancelled' }
     flagged = []
     break

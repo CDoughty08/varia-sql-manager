@@ -1176,12 +1176,22 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     )
 
     // R10 D3 #4: GoogleSQL pane of Cross-Engine Split & solo BigQuery tab report accurate SQL-Server-only reasons.
+    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: crossDoc.id })).toBe(false)
+    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: bqDoc.id })).toBe(false)
     expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: crossDoc.id }))
       .toBe('Focus the Transact-SQL pane to refresh SQL Server IntelliSense cache.')
     expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: bqDoc.id }))
       .toBe('Refresh Local Cache is available for SQL Server queries only.')
 
-    // R10 D3 #5: Explorer multi-select commands report selection/provider-count reasons when servers are already connected.
+    // R11 D3 #5: With 1 SQL Server + 1 BigQuery (canMultiSelect === false), newMultiServerQuery says to connect two of the same engine.
+    wb.connections.disconnected(sql2.info.id)
+    wb.explorer.settle()
+    expect(commands.unavailableReason('explorer.newMultiServerQuery'))
+      .toBe('Connect two or more servers of the same engine first.')
+
+    // Reconnect a 2nd SQL Server -> canMultiSelect === true -> says to select two or more in Object Explorer.
+    connectSql(wb, 'prod-sql-03', 'SalesDB')
+    wb.explorer.settle()
     expect(commands.unavailableReason('explorer.newMultiServerQuery'))
       .toBe('Select two or more servers of the same engine in Object Explorer.')
     expect(commands.unavailableReason('explorer.refreshSelected'))

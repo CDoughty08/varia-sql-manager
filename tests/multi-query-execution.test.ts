@@ -138,6 +138,7 @@ function createHarness(options: {
     singleAskSpy,
     multiAskSpy,
     dialogAskSpy,
+    live,
     setSetting: <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => {
       (settingValues as unknown as Record<string, unknown>)[key] = value
     },
@@ -1455,5 +1456,37 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     })
     expect(await executeMultiTab(crossTab.id, h.deps)).toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly' })
     expect(multiPrices).toEqual([false, true])
+  })
+
+  it('R11 D3 #3: does not persist dontAskAgain when targets or SQL changed before dispatch, and invalidates queued prompts on target disconnect', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const h = createHarness({
+      connections: [s1, b1],
+      dryRuns: { [b1.id]: { ok: true, value: { bytesProcessed: 25 * GiB } } }
+    })
+
+    const crossTab = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT * FROM analytics.events;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+
+    // While BigQueryCostPrompt is open, SQL Server target disconnects -> stillAsks turns false AND answering Run+dontAskAgain must NOT persist opt-out!
+    h.multiAskSpy.mockImplementationOnce(async (_req, _sig, stillAsks, onAnswer) => {
+      expect(stillAsks?.()).toBe(true)
+      h.live.delete(s1.id)
+      expect(stillAsks?.()).toBe(false)
+      const answer = { run: true, dontAskAgain: true }
+      onAnswer?.(answer)
+      return answer
+    })
+    expect(await executeMultiTab(crossTab.id, h.deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.dontAskCalls).toHaveLength(0)
+    expect(h.executeMultiCalls).toHaveLength(0)
   })
 })

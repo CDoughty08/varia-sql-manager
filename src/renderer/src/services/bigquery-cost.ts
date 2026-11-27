@@ -40,6 +40,8 @@ export interface CostPromptRequest {
   readonly prompt: CostPrompt
   /** The connection's name, for "Don't ask again for this connection". */
   readonly connection: string
+  /** Optional connection id so an open prompt can reflect live Options/connection changes. */
+  readonly connectionId?: string
   /** The cap the job will carry (the connection's, else Options'), in bytes. */
   readonly cap?: number
   readonly thresholdBytes: number

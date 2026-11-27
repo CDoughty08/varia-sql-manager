@@ -28,11 +28,15 @@ export function languagesContribution({ commands, documents, connections, sqlLan
       const document = target(args?.tabId)
       if (!document || !isQueryDocument(document)) return false
       if (document.multiMode) {
-        const model = documents.getModel(document.id)
+        if (document.multiMode === 'cross' && document.crossView !== 'file' && document.activePane === 'secondary') return false
+        const model = documents.activeModel?.(document.id) ?? documents.getModel(document.id)
         const langContext = model && documents.languageContext?.(model, id => connections.isLive(id))
         return !!langContext?.connectionId && !langContext.suspended && langContext.provider === 'sqlserver' && connections.isLive(langContext.connectionId)
       }
-      return !!document.connectionId && connections.isLive(document.connectionId)
+      return !!document.connectionId
+        && connections.isLive(document.connectionId)
+        && document.provider !== 'bigquery'
+        && connections.get(document.connectionId)?.providerId !== 'bigquery'
     },
     unavailable: args => {
       const document = target(args?.tabId)

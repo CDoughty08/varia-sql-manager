@@ -373,7 +373,7 @@ export function explorerContribution({ commands, documents, connections, explore
     }),
     commands.register('explorer.newMultiServerQuery', {
       when: () => explorer.multiSelectedTargets().length >= 2,
-      unavailable: () => connections.live().length < 2
+      unavailable: () => !explorer.getSnapshot().canMultiSelect
         ? 'Connect two or more servers of the same engine first.'
         : 'Select two or more servers of the same engine in Object Explorer.',
       run: () => {
