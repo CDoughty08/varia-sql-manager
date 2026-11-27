@@ -96,14 +96,14 @@ const cancelledText = (group: Pick<ResultGroup, 'table' | 'pivot'>) => `Building
 /** "Pivot of Result 2", "Pivot of Open orders": how the builder names a group's Pivot. */
 const groupPivotName = (group: Pick<ResultGroup, 'table' | 'pivot'>) => group.pivot ? entryName(group.pivot.entry) : pivotName(entryName(group.table.entry))
 
-/** A set a pivot can read: a query's rows that have all loaded, in memory. Never a pivot, a comparison, a plan set or a
- *  result windowed in BigQuery (the backend would refuse it, REMOTE_RESULT). */
+/** A set a pivot can read: a query's rows (or a combined multi-server set) that have all loaded, in memory. Never a pivot,
+ *  a comparison, a plan set or a result windowed in BigQuery (the backend would refuse it, REMOTE_RESULT). */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
-  entry !== undefined && entry.descriptor.kind === 'rows' && entry.handle.getSnapshot().state === 'complete' && entry.handle.getSnapshot().residence !== 'remote'
+  entry !== undefined && (entry.descriptor.kind === 'rows' || entry.descriptor.kind === 'combined') && entry.handle.getSnapshot().state === 'complete' && entry.handle.getSnapshot().residence !== 'remote'
 /** The builder's note on a result windowed in BigQuery. */
 export const windowedPivotText = 'This result is windowed in BigQuery: its rows are not in memory, so it cannot be pivoted yet.'
-/** A group a builder can belong to: one whose Table holds a query's rows (not a SQL-returned plan set). */
-const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && group.table.entry.descriptor.kind === 'rows'
+/** A group a builder can belong to: one whose Table holds a query's rows or a combined multi-server set (not a SQL-returned plan set). */
+const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && (group.table.entry.descriptor.kind === 'rows' || group.table.entry.descriptor.kind === 'combined')
 /** A tab's results are gone, with nothing to show the builder beside: Close Results, or a finished run with no result left
  *  (none returned, or the last one closed). The Compare popover closes by the same rule. A running run is not gone: a re-run
  *  releases the old results before its first set arrives. */

@@ -9,7 +9,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { columnTitle } from '../grid/selection'
 import type { WhitespaceMode } from '../grid/whitespace'
 import Icon from '../Icon'
-import { entryOf } from './ResultsService'
+import { entryOf, isSummaryActive } from './ResultsService'
 import { searchBoxKeyAction, searchCount, skippedText, type SearchMode } from './search'
 import { formatCount } from './status'
 
@@ -39,15 +39,16 @@ const searchModes: readonly { readonly mode: SearchMode; readonly label: string;
  * matches, Escape clears it and, in an empty box, returns to the grid. It is its own Tab stop, so Left and Right stay with
  * its text.
  */
-function ResultsSearchBox({ tabId }: { tabId: string }) {
+function ResultsSearchBox({ tabId, disabled = false }: { tabId: string; disabled?: boolean }) {
   const { resultsSearch } = useWorkbench()
   const search = useServiceSnapshot(resultsSearch)[tabId] ?? resultsSearch.of(tabId)
   const inputRef = useRef<HTMLInputElement>(null)
   const focus = search.focus
   // Find in Results (Ctrl+F in a grid) puts the focus here with the text selected, so typing replaces it; once, even when
   // the box is shown only after it (the Messages view), and not again each time the box is shown.
-  useEffect(() => { if (resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [focus, resultsSearch, tabId])
+  useEffect(() => { if (!disabled && resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [disabled, focus, resultsSearch, tabId])
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (disabled) return
     const action = searchBoxKeyAction(event.nativeEvent, !!search.text)
     if (!action) return
     event.preventDefault()
@@ -62,23 +63,23 @@ function ResultsSearchBox({ tabId }: { tabId: string }) {
   const count = searchCount(search, formatCount)
   const columns = search.mode === 'columns'
   const placeholder = columns ? 'Search column names' : 'Search all results'
-  return <div className="results-search" data-mode={search.mode}>
+  return <div className="results-search" data-mode={search.mode} data-disabled={disabled || undefined}>
     <Icon name="search" className="results-search-icon" />
     {/* The field is at least as wide as its placeholder, drawn unseen beside the input (data-placeholder), so the whole
         placeholder shows in every font; the toolbar folds its groups rather than narrow it, until none is left to fold. */}
     <span className="results-search-field" data-placeholder={placeholder}>
-      <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={placeholder}
-        value={search.text} title={search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
+      <input ref={inputRef} type="text" spellCheck={false} maxLength={1024} disabled={disabled} aria-label={columns ? 'Search column names' : 'Search results'} placeholder={placeholder}
+        value={search.text} title={disabled ? 'Select a result grid to search' : search.approximate ? 'Some long values were searched only as far as they were stored.' : undefined}
         onChange={event => resultsSearch.setText(tabId, event.target.value)} onKeyDown={keyDown} />
     </span>
     {/* The count follows each keystroke and grid; the live region says only the settled count (TabSearch.announcement). */}
     <span className="results-search-count" title={search.error || (search.skipped ? [count, skippedText].filter(Boolean).join('. ') : count) || undefined}>{count}</span>
     <span className="visually-hidden" role="status" aria-live="polite">{search.announcement}</span>
-    <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
-    <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>
+    <button type="button" tabIndex={-1} aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={disabled || search.total === 0} onClick={() => resultsSearch.step(tabId, -1)}><Icon name="arrow-up" /></button>
+    <button type="button" tabIndex={-1} aria-label="Next match" title="Next match (Enter)" disabled={disabled || search.total === 0} onClick={() => resultsSearch.step(tabId, 1)}><Icon name="arrow-down" /></button>
     <div className="results-segments" role="group" aria-label="Search in">
       {/* Icons only, as the Show toggles: the toolbar must still fit the output pane of a 1024 px window. */}
-      {searchModes.map(choice => <button key={choice.mode} type="button" className="results-icon-toggle" tabIndex={-1} aria-label={choice.label} aria-pressed={choice.mode === search.mode} title={choice.title}
+      {searchModes.map(choice => <button key={choice.mode} type="button" className="results-icon-toggle" tabIndex={-1} disabled={disabled} aria-label={choice.label} aria-pressed={choice.mode === search.mode} title={choice.title}
         onClick={() => resultsSearch.setMode(tabId, choice.mode)}><Icon name={choice.icon} /></button>)}
     </div>
   </div>
@@ -104,6 +105,21 @@ export const foldWords = (fold: number): string => toolbarFolds.slice(0, fold).j
 /** Whether ⋯ is the toolbar's Tab stop: once folding that far hides White space, whose chosen button is the stop. */
 export const moreIsTabStop = (fold: number): boolean => fold > toolbarFolds.indexOf('space')
 
+/** Computes the `.results-more` button's roving `tabIndex`: `0` whenever folding hid White space OR no earlier visible,
+ *  enabled toolbar button holds `tabIndex = 0` (preventing zero-tab-stop states on Summary / pure-DDL runs). */
+export function resolveMoreTabIndex(toolbar: HTMLElement, fold: number): 0 | -1 {
+  if (moreIsTabStop(fold)) return 0
+  const more = toolbar.querySelector<HTMLButtonElement>('.results-more')
+  const view = toolbar.ownerDocument.defaultView
+  for (const button of toolbar.querySelectorAll<HTMLButtonElement>('button')) {
+    if (button === more || button.disabled || button.tabIndex !== 0 || button.closest('.results-search')) continue
+    const style = view?.getComputedStyle(button)
+    if (style && (style.display === 'none' || style.visibility === 'hidden')) continue
+    return -1
+  }
+  return 0
+}
+
 /**
  * Folds the toolbar to its width (`fitFold`) whenever it, one of its groups, its head or what shares the head changes size: the pane resized,
  * the status line or a job strip came or went, a font arrived, Headers appeared. Written to the element, not React state, so
@@ -118,10 +134,10 @@ function useToolbarFold(): (element: HTMLDivElement | null) => void {
     const fit = () => {
       const fold = fitFold(trial => { element.dataset.fold = foldWords(trial); return element.scrollWidth > element.clientWidth + 0.5 })
       element.dataset.fold = foldWords(fold)
-      // Once White space folds away its chosen button, the toolbar's Tab stop, goes with it: ⋯ takes the stop. React
-      // never sets the button's tabIndex again (its prop does not change), so this stays until the next fold.
+      // Whenever White space folds away or is disabled (e.g. Summary active / pure-DDL run), ⋯ takes the roving Tab stop.
+      // React never sets the button's tabIndex again (its prop does not change), so this stays until the next fold or disable toggle.
       const more = element.querySelector<HTMLButtonElement>('.results-more')
-      if (more) more.tabIndex = moreIsTabStop(fold) ? 0 : -1
+      if (more) more.tabIndex = resolveMoreTabIndex(element, fold)
     }
     fit()
     let watched: { dispose(): void } | undefined
@@ -135,9 +151,9 @@ function useToolbarFold(): (element: HTMLDivElement | null) => void {
     const view = head.ownerDocument.defaultView
     const added = view ? new view.MutationObserver(() => { watch(); fit() }) : undefined
     added?.observe(head, { childList: true })
-    // A tool coming or going, or a choice pressed/expanded, anywhere in the toolbar: a group folded away has no size to
-    // watch, so Headers leaving the Show group it folded must still unfold it. fit writes only data-fold and tabIndex, never these.
-    added?.observe(element, { childList: true, subtree: true, attributeFilter: ['aria-pressed', 'data-active'] })
+    // A tool coming or going, becoming disabled (e.g. switching between grid and Summary without resizing), or a choice
+    // pressed/expanded, anywhere in the toolbar. fit writes only data-fold and tabIndex, never these.
+    added?.observe(element, { childList: true, subtree: true, attributeFilter: ['aria-pressed', 'data-active', 'disabled'] })
     return () => { added?.disconnect(); watched?.dispose() }
   }, [])
   return useCallback((element: HTMLDivElement | null) => { toolbar.current = element }, [])
@@ -151,7 +167,7 @@ const popoverMargin = 8
  * navigable `role="menu"` popover anchored below the button (in the button's own window for popouts), returning focus to
  * the trigger on Escape or selection.
  */
-function ToolbarChoiceMenu<T extends string>({ label, icon, choices, current, defaultMode, first, foldClass, held = false, open, onOpenChange, onChoose }: {
+function ToolbarChoiceMenu<T extends string>({ label, icon, choices, current, defaultMode, first, foldClass, held = false, disabled = false, open, onOpenChange, onChoose }: {
   readonly label: string
   readonly icon: 'whitespace' | 'symbol-ruler'
   readonly choices: readonly Choice<T>[]
@@ -160,6 +176,7 @@ function ToolbarChoiceMenu<T extends string>({ label, icon, choices, current, de
   readonly first: boolean
   readonly foldClass: string
   readonly held?: boolean
+  readonly disabled?: boolean
   readonly open: boolean
   onOpenChange(open: boolean): void
   onChoose(mode: T): void
@@ -249,7 +266,7 @@ function ToolbarChoiceMenu<T extends string>({ label, icon, choices, current, de
   }
 
   const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+    if (disabled || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       event.stopPropagation()
@@ -282,19 +299,22 @@ function ToolbarChoiceMenu<T extends string>({ label, icon, choices, current, de
     }
   }
 
-  const triggerTitle = held
-    ? `${label}: ${activeChoice.label} — Waits until the sort or filter being built finishes`
-    : `${label}: ${activeChoice.label} — ${activeChoice.title}`
+  const effectiveOpen = open && !disabled
+  const triggerTitle = disabled
+    ? `${label}: unavailable on Summary`
+    : held
+      ? `${label}: ${activeChoice.label} — Waits until the sort or filter being built finishes`
+      : `${label}: ${activeChoice.label} — ${activeChoice.title}`
 
   return <>
     <button ref={triggerRef} type="button" className={`results-choice-trigger ${foldClass}`} data-active={nonDefault ? 'true' : undefined}
-      aria-label={`${label}: ${activeChoice.label}`} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
-      aria-disabled={held || undefined} tabIndex={first ? 0 : -1} title={triggerTitle}
+      disabled={disabled} aria-label={`${label}: ${activeChoice.label}`} aria-haspopup="menu" aria-expanded={effectiveOpen} aria-controls={effectiveOpen ? menuId : undefined}
+      aria-disabled={held || undefined} tabIndex={first && !disabled ? 0 : -1} title={triggerTitle}
       onKeyDown={onTriggerKeyDown}
-      onClick={() => { focusOnOpen.current = 'checked'; onOpenChange(!open) }}>
+      onClick={() => { if (disabled) return; focusOnOpen.current = 'checked'; onOpenChange(!open) }}>
       <Icon name={icon} />{nonDefault && <span>{activeChoice.label}</span>}
     </button>
-    {open && host && createPortal(
+    {effectiveOpen && host && createPortal(
       <div ref={menuRef} id={menuId} className="results-choice-menu" role="menu" aria-label={label} style={place ?? { visibility: 'hidden' }} onKeyDown={onMenuKeyDown}>
         <div className="results-choice-head" aria-hidden="true">{label}</div>
         {choices.map((choice, index) => {
@@ -342,7 +362,7 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   const values = useServiceSnapshot(settings).values
   const [openMenu, setOpenMenu] = useState<'space' | 'sort' | null>(null)
   // The addressed query can update while another query is active; the command hook also follows global busy state.
-  useServiceSnapshot(results)
+  const tab = useServiceSnapshot(results)[tabId]
   const canClose = useCommandEnabled('output.closeResults', { tabId })
   const canPivot = useCommandEnabled('output.pivot', { tabId })
   const canTranspose = useCommandEnabled('output.transpose', { tabId })
@@ -352,13 +372,16 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   // The grid the toolbar's commands act on (the one that last had the focus), while it is drawn transposed: the button is
   // pressed, and Headers beside it names the column that heads the drawn columns.
   const turned = useServiceSnapshot(results.turned)[tabId]
-  const headerColumn = turned?.headerColumn === undefined ? undefined : entryOf(results.getSnapshot()[tabId]?.sets, turned.entry)?.descriptor.columns[turned.headerColumn]
+  const headerColumn = turned?.headerColumn === undefined ? undefined : entryOf(tab?.sets, turned.entry)?.descriptor.columns[turned.headerColumn]
   const headers = headerColumn ? columnTitle(headerColumn.name) : 'Row number'
   const whitespace = values['queryResults.grid.whitespace'], sortText = values['queryResults.grid.sortText']
   // A sort or filter being built in any tab holds Sort text by off (it would sort every text-sorted grid again); it is
   // marked so once that operation shows, so a quick one never flashes it.
   const sortHeld = useSyncExternalStore(results.operations.subscribe, () => results.operations.anyBuilding(true))
   const profile = values['queryResults.grid.columnProfile'], rowSize = values['queryResults.grid.rowSize'], tabs = values['queryResults.grid.layout'] === 'tabs'
+  // Grid-only controls disable while Summary is active (or on pure-DDL/DML runs with 0 result sets).
+  const gridDisabled = !tab || tab.sets.length === 0 || (tabs && isSummaryActive(tab))
+  useEffect(() => { if (gridDisabled && openMenu !== null) setOpenMenu(null) }, [gridDisabled, openMenu])
   // Off (or Value) runs the command of the choice that is on, which turns it off.
   const choose = <T,>(choices: readonly Choice<T>[], current: T, mode: T) => {
     if (mode === current) return
@@ -381,28 +404,28 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
   }
   const fold = useToolbarFold()
   return <div ref={fold} className="results-toolbar" role="toolbar" aria-label="Results tools" onKeyDown={keyDown}>
-    <ResultsSearchBox tabId={tabId} />
-    <ToolbarChoiceMenu label="White space" icon="whitespace" choices={whitespaceChoices} current={whitespace} defaultMode="none" first foldClass="results-space"
+    <ResultsSearchBox tabId={tabId} disabled={gridDisabled} />
+    <ToolbarChoiceMenu label="White space" icon="whitespace" choices={whitespaceChoices} current={whitespace} defaultMode="none" first foldClass="results-space" disabled={gridDisabled}
       open={openMenu === 'space'} onOpenChange={next => setOpenMenu(next ? 'space' : null)} onChoose={mode => choose(whitespaceChoices, whitespace, mode)} />
-    <ToolbarChoiceMenu label="Sort text by" icon="symbol-ruler" choices={sortTextChoices} current={sortText} defaultMode="value" first={false} foldClass="results-sort" held={sortHeld}
+    <ToolbarChoiceMenu label="Sort text by" icon="symbol-ruler" choices={sortTextChoices} current={sortText} defaultMode="value" first={false} foldClass="results-sort" held={sortHeld} disabled={gridDisabled}
       open={openMenu === 'sort'} onOpenChange={next => setOpenMenu(next ? 'sort' : null)} onChoose={mode => choose(sortTextChoices, sortText, mode)} />
     <span className="results-divider results-show" aria-hidden="true" />
     {/* Icons only, so the toolbar folds as little as it can in a narrow pane (the Show group folds last). */}
     <div className="results-segments results-show" role="group" aria-label="Show">
-      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
+      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} disabled={gridDisabled} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
-      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} title="Row size: a bar behind each row number; hover it for the exact bytes"
+      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} disabled={gridDisabled} title="Row size: a bar behind each row number; hover it for the exact bytes"
         onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
-      <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={!pivotOpen && !canPivot}
+      <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={gridDisabled || (!pivotOpen && !canPivot)}
         title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
         onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
       <button type="button" className="results-icon-toggle results-compare" aria-label="Compare" aria-haspopup="dialog" aria-expanded={compareOpen} tabIndex={-1} disabled={!compareOpen && !canCompare}
         title="Compare: compare the focused grid's result with another result of this run"
         onClick={event => { if (compareOpen) compare.close(tabId); else void commands.execute('output.compare', { tabId, anchor: event.currentTarget }, 'toolbar') }}><Icon name="git-compare" /></button>
-      <button type="button" className="results-icon-toggle results-transpose" aria-label="Transposed" aria-pressed={!!turned} tabIndex={-1} disabled={!canTranspose}
+      <button type="button" className="results-icon-toggle results-transpose" aria-label="Transposed" aria-pressed={!!turned} tabIndex={-1} disabled={gridDisabled || !canTranspose}
         title="Transposed: draw the focused grid's columns as rows and its rows as columns. Nothing is copied; the grid follows its sort and filters"
         onClick={() => void commands.execute('output.transpose', { tabId }, 'toolbar')}><Icon name="transpose" /></button>
-      {turned && <button type="button" className="results-transpose results-headers" aria-haspopup="listbox" tabIndex={-1} disabled={!canTranspose}
+      {turned && <button type="button" className="results-transpose results-headers" aria-haspopup="listbox" tabIndex={-1} disabled={gridDisabled || !canTranspose}
         title={`Using Column as Headers: the drawn columns are headed by ${headerColumn ? `the values of ${headers}` : 'row numbers'}. Choose another column`}
         onClick={event => void commands.execute('output.transposeChooseHeaders', { tabId, anchor: event.currentTarget }, 'toolbar')}><span>Headers: {headers}</span><Icon name="chevron-down" /></button>}
     </div>
