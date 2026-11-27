@@ -870,17 +870,45 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         if (descriptor.kind !== 'combined') run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
       this.recordCombinedCounts(run)
-      if (multiSummary.combineWarnings?.length) {
-        const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
-        const isRunLevel = (warning: string) => warning.startsWith('Combined view ') || warning.startsWith('Skipped Combined view')
-        const runLevel = multiSummary.combineWarnings.filter(isRunLevel)
-        const perEntry = multiSummary.combineWarnings.filter(warning => !isRunLevel(warning))
-        if (combined.length > 0) {
-          run.combineWarnings = new Map(combined.map(entry => [entry.key, [...perEntry]]))
-          run.baseCombineWarnings = [...runLevel]
-        } else {
-          run.baseCombineWarnings = [...multiSummary.combineWarnings]
+      const combinedEntries = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+      if (combinedEntries.length > 0) {
+        const perEntryMap = new Map<EntryKey, string[]>(combinedEntries.map(entry => [entry.key, []]))
+        const baseWarnings: string[] = []
+        for (const warning of multiSummary.combineWarnings ?? []) {
+          if (warning.startsWith('Combined view ') || warning.startsWith('Skipped Combined view')) {
+            baseWarnings.push(warning)
+            continue
+          }
+          const skippedMatch = /^Skipped (.+?):/.exec(warning)
+          if (skippedMatch) {
+            const label = skippedMatch[1]!
+            const target = run.multi?.targets.find(item => item.label === label || item.targetKey === label)
+            const matched = target
+              ? combinedEntries.filter(entry => {
+                  const slot = entry.descriptor.statementSlot ?? 0
+                  return run.sets.some(set =>
+                    !set.sample
+                    && set.descriptor.kind === 'rows'
+                    && set.descriptor.targetKey === target.targetKey
+                    && (set.descriptor.statementSlot ?? 0) === slot
+                    && set.handle.getSnapshot().residence === 'remote'
+                  )
+                })
+              : []
+            if (matched.length > 0) {
+              for (const entry of matched) perEntryMap.get(entry.key)!.push(warning)
+            } else {
+              baseWarnings.push(warning)
+            }
+            continue
+          }
+          for (const entry of combinedEntries) perEntryMap.get(entry.key)!.push(warning)
         }
+        run.combineWarnings = perEntryMap
+        run.baseCombineWarnings = baseWarnings
+        this.syncCombineWarnings(run)
+      } else if (multiSummary.combineWarnings?.length) {
+        run.baseCombineWarnings = [...multiSummary.combineWarnings]
         this.syncCombineWarnings(run)
       }
       this.refreshSorts(tabId, run)
@@ -1493,9 +1521,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         this.discard(result.descriptor)
         return undefined
       }
+      const anyRolledBack = sources.some(source => source.descriptor.rolledBackPreview || source.handle.getSnapshot().rolledBackPreview)
       const nextDescriptor: ResultDescriptor = {
         ...result.descriptor,
         kind: 'combined',
+        ...anyRolledBack && !result.descriptor.rolledBackPreview ? { rolledBackPreview: true } : {},
         ...old.descriptor.statementSlot !== undefined && result.descriptor.statementSlot === undefined ? { statementSlot: old.descriptor.statementSlot } : {},
         ...old.descriptor.name !== undefined && result.descriptor.name === undefined ? { name: old.descriptor.name } : {}
       }
@@ -1535,6 +1565,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       if (run.multi) {
         const nextWarnings = new Map(run.combineWarnings)
+        for (const item of run.sets) {
+          if (item.descriptor.kind === 'combined' && !nextWarnings.has(item.key)) nextWarnings.set(item.key, [])
+        }
         nextWarnings.set(combinedKey, Array.isArray(result.warnings) ? [...result.warnings] : [])
         run.combineWarnings = nextWarnings
         this.syncCombineWarnings(run)
@@ -1565,26 +1598,32 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
   }
 
+  /** True when `entry` is a non-sample rows result in `combined`'s statement slot whose transaction outcome is compatible
+   *  with `combined` (never mixing `commitInDoubt`, or committed/live rows with `rolledBackPreview` rows). */
+  private isEligibleForCombined(run: Run, entry: ResultSetEntry, combined: ResultSetEntry): boolean {
+    if (entry.sample || entry.descriptor.kind !== 'rows' || entry.descriptor.targetKey === undefined) return false
+    if ((entry.descriptor.statementSlot ?? 0) !== (combined.descriptor.statementSlot ?? 0)) return false
+    const target = run.multi?.targets.find(item => item.targetKey === entry.descriptor.targetKey)
+    if (target?.phase === 'commitInDoubt') return false
+    const entryRolledBack = !!(entry.descriptor.rolledBackPreview || entry.handle.getSnapshot().rolledBackPreview)
+    const combinedRolledBack = !!(combined.descriptor.rolledBackPreview || combined.handle.getSnapshot().rolledBackPreview)
+    return entryRolledBack === combinedRolledBack
+  }
+
   private combinedSourcesOf(run: Run, combined: ResultSetEntry): ResultSetEntry[] {
-    const slot = combined.descriptor.statementSlot ?? 0
     return run.sets.filter(entry =>
-      !entry.sample
-      && entry.descriptor.kind === 'rows'
-      && entry.descriptor.targetKey !== undefined
-      && (entry.descriptor.statementSlot ?? 0) === slot
+      this.isEligibleForCombined(run, entry, combined)
       && entry.handle.getSnapshot().state === 'complete'
       && entry.handle.getSnapshot().residence !== 'remote'
     )
   }
 
   private combinedTargetCountFor(run: Run, combined: ResultSetEntry): number {
-    const slot = combined.descriptor.statementSlot ?? 0
     const seen = new Set<string>()
     for (const entry of run.sets) {
-      if (entry.sample || entry.descriptor.kind !== 'rows' || !entry.descriptor.targetKey) continue
-      if ((entry.descriptor.statementSlot ?? 0) !== slot) continue
+      if (!this.isEligibleForCombined(run, entry, combined)) continue
       if (entry.handle.getSnapshot().residence === 'remote') continue
-      seen.add(entry.descriptor.targetKey)
+      seen.add(entry.descriptor.targetKey!)
     }
     return seen.size
   }
@@ -1604,15 +1643,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }
 
   private markCombinedStaleFor(run: Run, removed: readonly ResultSetEntry[]): void {
-    const slots = new Set<number>()
-    for (const entry of removed) {
-      if (!entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined) slots.add(entry.descriptor.statementSlot ?? 0)
-    }
-    if (slots.size === 0) return
+    const candidates = removed.filter(entry => !entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined)
+    if (candidates.length === 0) return
     let stale: Set<EntryKey> | undefined
     for (const entry of run.sets) {
       if (entry.descriptor.kind !== 'combined') continue
-      if (!slots.has(entry.descriptor.statementSlot ?? 0)) continue
+      if (!candidates.some(changed => this.isEligibleForCombined(run, changed, entry))) continue
       const combining = run.combining.get(entry.key)
       if (combining) {
         combining.abort()

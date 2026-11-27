@@ -3751,4 +3751,109 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.multi-target-swatch'))?.declarations)
       .toEqual(expect.arrayContaining([{ property: 'forced-color-adjust', value: 'none' }]))
   })
+
+  it('R12 D4 #1–#4: prevents mixed-transaction rebuilds, isolates per-statement combine warnings, keeps uncombined Skipped warnings in Summary, and bounds summary card grid', async () => {
+    // #1: Loading a windowed commitInDoubt or mismatched rolledBackPreview server must NOT mark committed Combined stale or include it in rebuildCombined.
+    const { results, client, combine } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0, residence: 'remote', rolledBackPreview: true })
+    const c0 = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { status: 'committed', resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { status: 'committed', resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { status: 'commitInDoubt', resultSetIds: [3] })
+        ],
+        [s1, s2, s3, c0],
+        { mode: 'transaction', status: 'commitInDoubt' }
+      )
+    })
+    const c0Key = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    // Simulate dev-01 loading into memory: Combined (committed) must NOT be marked stale and rebuild excludes dev-01!
+    ;(results as unknown as { loaded(tabId: string, run: unknown, summary: unknown): void }).loaded(
+      't1',
+      (results as unknown as { runs: Map<string, unknown> }).runs.get('t1'),
+      {
+        resultSets: [descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0, residence: 'memory', rolledBackPreview: true, revision: 2 })],
+        messages: [],
+        planSets: []
+      }
+    )
+    expect(results.getSnapshot().t1.staleCombined?.has(c0Key) ?? false).toBe(false)
+    let combinedSourceIds: number[] = []
+    combine.mockImplementationOnce(async (handles: unknown) => {
+      combinedSourceIds = (handles as readonly { key: { resultId: number } }[]).map(h => h.key.resultId)
+      return { descriptor: descriptor(601, { kind: 'combined', index: 3, statementSlot: 0 }) }
+    })
+    expect(await results.rebuildCombined('t1', c0Key)).toBe(c0Key)
+    expect(combinedSourceIds).toEqual([1, 2])
+    void client
+
+    // #2: Rebuilding c1 with warnings when initial run had no combineWarnings must NOT leak onto sibling c2!
+    const fx2 = serviceFixture()
+    fx2.results.begin('t2', 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const a1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const a2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const ca = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    const b1 = descriptor(3, { index: 3, targetKey: 'prod-east', statementSlot: 1 })
+    const b2 = descriptor(4, { index: 4, targetKey: 'prod-west', statementSlot: 1 })
+    const cb = descriptor(11, { index: 5, kind: 'combined', statementSlot: 1 })
+    void fx2.results.finish('t2', 'q2', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 3] }), multiOutcome(sqlTargets[1], { resultSetIds: [2, 4] })],
+        [a1, a2, ca, b1, b2, cb]
+      )
+    })
+    const caKey = fx2.results.getSnapshot().t2.sets.find(e => e.descriptor.resultId === 10)!.key
+    const cbKey = fx2.results.getSnapshot().t2.sets.find(e => e.descriptor.resultId === 11)!.key
+    fx2.combine.mockResolvedValueOnce({
+      descriptor: descriptor(610, { kind: 'combined', index: 2, statementSlot: 0 }),
+      warnings: ['Schema drift on slot 0.']
+    })
+    expect(await fx2.results.rebuildCombined('t2', caKey)).toBe(caKey)
+    const tab2 = fx2.results.getSnapshot().t2
+    const caAfter = tab2.sets.find(e => e.key === caKey)!
+    const cbAfter = tab2.sets.find(e => e.key === cbKey)!
+    expect(entryNotices(tab2, caAfter).map(n => n.kind)).toEqual(['combineWarning'])
+    expect(entryNotices(tab2, cbAfter)).toEqual([])
+
+    // #3: "Skipped <server>: ..." for an uncombined statement slot stays in baseCombineWarnings, never pollutes Combined 1.
+    const fx3 = serviceFixture()
+    fx3.results.begin('t3', 'q3', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const p1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const p2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const cp = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    const q1 = descriptor(3, { index: 3, targetKey: 'prod-east', statementSlot: 1 })
+    const q2 = descriptor(4, { index: 4, targetKey: 'prod-west', statementSlot: 1, residence: 'remote' })
+    const skippedMsg = 'Skipped prod-sql-west-01: result is windowed in BigQuery. Load it into memory to include it in Combined.'
+    void fx3.results.finish('t3', 'q3', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1, 3] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2, 4] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [] })
+        ],
+        [p1, p2, cp, q1, q2],
+        { combineWarnings: [skippedMsg] }
+      )
+    })
+    const tab3 = fx3.results.getSnapshot().t3
+    const cpEntry = tab3.sets.find(e => e.descriptor.kind === 'combined')!
+    expect(tab3.multi?.combineWarnings).toEqual([skippedMsg])
+    expect(entryNotices(tab3, cpEntry).map(n => n.kind)).toEqual(['partialCombine'])
+    expect(fx3.results.removeEntry('t3', cpEntry.key)).toBe(true)
+    expect(fx3.results.getSnapshot().t3.multi?.combineWarnings).toEqual([skippedMsg])
+
+    // #4: .multi-summary-cards uses minmax(min(260px, 100%), 1fr) and .multi-target-card sets min-width: 0.
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector === '.multi-summary-cards')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'grid-template-columns', value: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))' }
+    ]))
+    expect(rules.find(r => r.selector === '.multi-target-card')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'min-width', value: '0' }
+    ]))
+  })
 })

@@ -4597,8 +4597,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-notice-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .multi-notice-action { margin-left: auto; flex: none; }
 .multi-notice-list { display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 0; }
-.multi-summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--varia-space-2); }
-.multi-target-card { display: flex; flex-direction: column; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); color: var(--varia-foreground); }
+.multi-summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: var(--varia-space-2); }
+.multi-target-card { display: flex; flex-direction: column; min-width: 0; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); color: var(--varia-foreground); }
 .multi-target-card[data-tone="err"] { border-color: var(--varia-tile-criticalBorder); }
 .multi-target-card[data-tone="warn"] { border-color: var(--varia-tile-warningBorder); }
 .multi-target-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }

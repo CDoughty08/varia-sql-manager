@@ -44,7 +44,7 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
       notices.push({ kind: 'staleCombined', tone: 'warn', text: 'Source server results changed. Rebuild Combined from the current in-memory servers or close this view.' })
     }
     if (hasMultiSummary(tab)) {
-      const warnings = tab.combineWarnings?.has(entry.key) ? tab.combineWarnings.get(entry.key) : tab.multi!.combineWarnings
+      const warnings = tab.combineWarnings && tab.combineWarnings.size > 0 ? tab.combineWarnings.get(entry.key) : tab.multi!.combineWarnings
       if (warnings && warnings.length > 0) {
         notices.push({ kind: 'combineWarning', tone: 'info', text: warnings.join(' ') })
       }
