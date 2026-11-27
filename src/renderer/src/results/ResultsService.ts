@@ -882,14 +882,19 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
           const skippedMatch = /^Skipped (.+): (?:result is windowed in BigQuery\.|source result was closed\.)/.exec(warning)
           if (skippedMatch) {
             const label = skippedMatch[1]!
-            const target = run.multi?.targets.find(item => item.label === label || item.targetKey === label)
-            const matched = target
+            const matchingKeys = new Set(
+              (run.multi?.targets ?? [])
+                .filter(item => item.label === label || item.targetKey === label)
+                .map(item => item.targetKey)
+            )
+            const matched = matchingKeys.size > 0
               ? combinedEntries.filter(entry => {
                   const slot = entry.descriptor.statementSlot ?? 0
                   return run.sets.some(set =>
                     !set.sample
                     && set.descriptor.kind === 'rows'
-                    && set.descriptor.targetKey === target.targetKey
+                    && set.descriptor.targetKey !== undefined
+                    && matchingKeys.has(set.descriptor.targetKey)
                     && (set.descriptor.statementSlot ?? 0) === slot
                     && set.handle.getSnapshot().residence === 'remote'
                   )

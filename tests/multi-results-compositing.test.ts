@@ -3746,7 +3746,7 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
       { property: 'overflow', value: 'hidden' },
       { property: 'text-overflow', value: 'ellipsis' }
     ]))
-    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector === '.rt-stmt-tab[aria-selected="true"]:focus-visible')?.declarations)
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.rt-stmt-tab[aria-selected="true"]:focus-visible'))?.declarations)
       .toEqual(expect.arrayContaining([{ property: 'outline-color', value: 'HighlightText' }]))
     expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.multi-target-swatch'))?.declarations)
       .toEqual(expect.arrayContaining([{ property: 'forced-color-adjust', value: 'none' }]))
@@ -3946,5 +3946,75 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     const noticeText = host.querySelector('.multi-notice-warn')?.textContent ?? ''
     expect(noticeText).toContain('while remaining servers finish settling')
     expect(noticeText).not.toContain('every server transaction was rolled back')
+  })
+
+  it('R14 D4 #1–#7: failed/timedOut rolledBackPreview shows full rollback copy, duplicate target labels route Skipped warnings, and CSS collation/forced-colors/min-height/disabled-hover rules hold', async () => {
+    // #1: All targets failed/timedOut with rolledBackPreview (zero committed/commitInDoubt) -> does NOT falsely claim committed or in doubt!
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r14-failed-rb.sql', 'UPDATE t SET a = 1; SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, rolledBackPreview: true })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { status: 'failed', resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { status: 'timedOut' })
+        ],
+        [s1],
+        { mode: 'transaction', status: 'failed' }
+      )
+    })
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id], active: true })
+    }))
+    const banner = host.querySelector('.multi-notice-warn')?.textContent ?? ''
+    expect(banner).toContain('every server transaction was rolled back')
+    expect(banner).not.toContain('committed or are in doubt')
+
+    // #2: Duplicate display labels ("Analytics") where 2nd target is remote routes Skipped warning to Combined and clears on rebuild.
+    const fx2 = serviceFixture()
+    const dupTargets: MultiTargetIdentity[] = [
+      { targetKey: 'bq-1', connectionId: 'c-1', provider: 'bigquery', label: 'Analytics' },
+      { targetKey: 'bq-2', connectionId: 'c-2', provider: 'bigquery', label: 'Analytics' },
+      { targetKey: 'bq-3', connectionId: 'c-3', provider: 'bigquery', label: 'Warehouse' }
+    ]
+    fx2.results.begin('t2', 'q2', undefined, { multi: { mode: 'fireAndForget', targets: dupTargets } })
+    const d1 = descriptor(1, { index: 0, targetKey: 'bq-1', statementSlot: 0 })
+    const d2 = descriptor(2, { index: 1, targetKey: 'bq-2', statementSlot: 0, residence: 'remote' })
+    const d3 = descriptor(3, { index: 2, targetKey: 'bq-3', statementSlot: 0 })
+    const dc = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    const skipMsg = 'Skipped Analytics: result is windowed in BigQuery. Load it into memory to include it in Combined.'
+    void fx2.results.finish('t2', 'q2', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(dupTargets[0], { resultSetIds: [1] }),
+          multiOutcome(dupTargets[1], { resultSetIds: [2] }),
+          multiOutcome(dupTargets[2], { resultSetIds: [3] })
+        ],
+        [d1, d2, d3, dc],
+        { combineWarnings: [skipMsg] }
+      )
+    })
+    const dcKey = fx2.results.getSnapshot().t2.sets.find(e => e.descriptor.kind === 'combined')!.key
+    expect(fx2.results.getSnapshot().t2.combineWarnings?.get(dcKey)).toEqual([skipMsg])
+    fx2.combine.mockResolvedValueOnce({ descriptor: descriptor(700, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    expect(await fx2.results.rebuildCombined('t2', dcKey)).toBe(dcKey)
+    expect(fx2.results.getSnapshot().t2.multi?.combineWarnings).toBeUndefined()
+
+    // #3, #4, #5, #6, #7: CSS collation specificity, forced-colors focus indicators, compact button min-height, disabled search hover.
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector === '.compare-note.compare-cross-collation')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'color', value: 'var(--varia-statusPill-infoForeground)' }
+    ]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('button.ui-button.cross-engine-view-btn[aria-pressed="true"]:focus-visible'))?.declarations)
+      .toEqual(expect.arrayContaining([{ property: 'outline-color', value: 'HighlightText' }]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector === '.compare-search-row:focus-within')?.declarations)
+      .toEqual(expect.arrayContaining([{ property: 'border-color', value: 'Highlight' }]))
+    for (const sel of ['.multi-target-reconnect', '.multi-target-apply-btn', '.cross-engine-view-btn, .cross-engine-stack-btn']) {
+      expect(rules.find(r => r.selector === sel)?.declarations).toEqual(expect.arrayContaining([{ property: 'min-height', value: '0' }]))
+    }
+    expect(rules.find(r => r.selector === '.results-search:hover:not(:focus-within, [data-disabled])')).toBeDefined()
   })
 })

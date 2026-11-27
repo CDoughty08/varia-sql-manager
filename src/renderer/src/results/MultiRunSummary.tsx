@@ -134,10 +134,10 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
   const totalRows = aggregateRows(multi.targets, tab.rowsRead)
   const succeededCount = multi.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length
   const rolledBackPreview = hasRolledBackPreviewRows(tab)
-  const allRolledBack = tab.status !== 'running' && (
-    multi.status === 'rolledBack'
-    || multi.targets.every(target => target.phase === 'rolledBack' || target.phase === 'cancelled' || target.phase === 'skipped')
-  )
+  const hasCommittedOrInDoubt = multi.status === 'partialFailure'
+    || multi.status === 'commitInDoubt'
+    || multi.targets.some(target => target.phase === 'committed' || target.phase === 'succeeded' || target.phase === 'commitInDoubt')
+  const allRolledBack = tab.status !== 'running' && tab.status !== 'lost' && !hasCommittedOrInDoubt
   const warnings = multi.combineWarnings ?? []
   const runError = tab.error && (tab.status === 'lost' || !multi.targets.some(target => target.errorMessage)) ? tab.error : undefined
   const discarded = tab.discard ? (tab.summary?.discardedResultSets ?? tab.multiSummary?.discardedResultSets ?? 0) : 0
