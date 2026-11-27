@@ -438,6 +438,8 @@ const explorerRows = {
   // SQL Server Agent's Proxies (AG-8b): the Proxies folder (list agentProxies, as its folder is named) lists a folder per subsystem,
   // and each subsystem (whose kind lists agentProxies too) the proxies active to it; Security › Credentials.
   agentProxies: owner => owner.kind !== 'agentProxySubsystem' ? proxySubsystems.map(subsystem => explorerObject({ kind: 'agentProxySubsystem', name: subsystem.name }, subsystem.label, { hasChildren: true })) : fakeProxies.filter(proxy => proxy.subsystems.includes(proxySubsystems.find(subsystem => subsystem.name === owner.name)?.id)).map(proxy => explorerObject({ kind: 'agentProxy', name: proxy.name }, proxy.name)),
+  agentAlerts: () => agentAlertRows.map(alert => explorerObject({ kind: 'agentAlert', name: alert.name }, alert.name, { ...alert.enabled ? {} : { status: 'disabled' } })),
+  agentOperators: () => agentOperatorRows.map(operator => explorerObject({ kind: 'agentOperator', name: operator.name }, operator.name, { ...operator.enabled ? {} : { status: 'disabled' } })),
   credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name)),
   // The Jobs folder in name order, with each job's id and a disabled job's status, as CatalogSql lists them (AG-12's chips).
   agentJobs: (_, listedEnabled = !!controlDirectory && existsSync(join(controlDirectory, 'agent-listed-enabled'))) => agentTreeJobs().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
@@ -445,7 +447,7 @@ const explorerRows = {
     // live read can dim it.
     .map(job => explorerObject({ kind: 'agentJob', name: job.name }, job.name, { jobId: job.id.toUpperCase(), ...job.enabled || listedEnabled ? {} : { status: 'disabled' } }))
 }
-const agentListings = new Set(['agentProxies', 'credentials', 'agentJobs'])
+const agentListings = new Set(['agentProxies', 'agentAlerts', 'agentOperators', 'credentials', 'agentJobs'])
 // The control file agent-extra-job: a job created elsewhere (another session's sp_add_job), which only the Jobs folder lists.
 const agentExtraJob = { id: 'a1b2c3d4-0000-4000-8000-0000000000ee', name: 'Archive', enabled: true }
 const agentTreeJobs = () => [...agentJobs, ...controlDirectory && existsSync(join(controlDirectory, 'agent-extra-job')) ? [agentExtraJob] : []]
@@ -2881,6 +2883,18 @@ async function workbench(id, method, params, credit) {
         case 'agentSchedules': return respond(id, agentSchedulesDescribe(params))
         case 'agentProxy': return respond(id, agentProxyDocument(params))
         case 'credential': return respond(id, credentialDocument(params))
+        case 'agentProperties': return respond(id, {
+          agentProperties: {
+            settings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\\SQLSERVERAGENT', errorLogFile: 'D:\\MSSQL\\Log\\SQLAGENT.OUT', errorLoggingLevel: 3 },
+            serverNow: '2026-11-26T14:30:00', serverOffsetMinutes: 0,
+            history: {
+              total: 984, recent: 700, jobsTruncated: false,
+              jobs: [{ name: 'Backup', rows: 600, recent: 672 }, { name: 'Nightly', rows: 360, recent: 28 }, { name: 'Purge', rows: 24, recent: 0 }],
+              ages: [{ days: 0, rows: 120 }, { days: 3, rows: 350 }, { days: 30, rows: 400 }, { days: 90, rows: 114 }]
+            }
+          },
+          elapsedMs: 1
+        })
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         case 'tableProperties': return respond(id, {
           tableProperties: {
@@ -2916,6 +2930,7 @@ GO
         // The proxy and Credential documents' scripts write <secret>; the request never carries one.
         case 'agentProxy': return respond(id, { text: `USE [msdb]\nGO\nEXEC msdb.dbo.sp_${params.target.kind === 'agent' ? 'add' : 'update'}_proxy @proxy_name=N'${params.agentProxy.name ?? params.target.name}'\nGO\n`, database: 'msdb', warnings: [] })
         case 'credential': return respond(id, { text: `USE [master]\nGO\n${params.target.kind === 'server' ? 'CREATE' : 'ALTER'} CREDENTIAL [${params.credential.name ?? params.target.name}] WITH IDENTITY = N'${params.credential.identity}', SECRET = <secret>\nGO\n`, database: 'master', warnings: [] })
+        case 'agentProperties': return respond(id, { text: "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties @monitor_autostart = 1\nGO\n", database: 'msdb', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
@@ -2926,6 +2941,7 @@ GO
       if (params.action === 'agentSchedule') return respond(id, agentScheduleSave(params))
       if (params.action === 'agentProxy') return respond(id, agentProxySave(params))
       if (params.action === 'credential') return respond(id, credentialSave(params))
+      if (params.action === 'agentProperties') return respond(id, { steps: [{ status: 'done', title: params.agentPurge ? 'Delete old job history' : 'Save SQL Server Agent properties' }], messages: params.agentPurge ? ['400 history entries purged.'] : [], elapsedMs: 1 })
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
       if (params.action === 'recycleAgentErrorLog') return respond(id, agentRecycleErrorLog())

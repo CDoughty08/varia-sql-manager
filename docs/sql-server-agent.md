@@ -395,16 +395,16 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   severity, a database and a "Message contains" text; or a performance condition: object, counter, instance, comparison and value,
   with the counter's current values read through `agent.counterValues`; msdb wants a value that starts with a digit, and an instance for a counter that has them), **Then** (a job to run, and the operators to notify as chips
   with E-mail, Pager and Net send toggles, an "Add an operator" pick and an inline New operator created in the same save) and
-  **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message). The header shows
-  the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** has General (name, enabled,
-  e-mail, pager and net send addresses, Send test e-mail), Pager duty (the days and each day kind's hours) and Notifications (the
+  **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message) and **Activity** timestamps. The header shows
+  the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** uses three inspector tabs: **General** (name, enabled,
+  e-mail, pager and net send addresses, Send test e-mail, and **Activity** timestamps), **Pager duty** (the days and each day kind's hours) and **Notifications** (the
   alerts that notify it, each a method toggle, and the jobs that notify it, read-only). Save sends only what changed as one batch
   in one transaction (`AgentSql.ObjectBatch`): an existing object's opens with its identity guard (name and id; 50010 `NOT_FOUND`
   when the object was replaced), every call checks its return code, and a refusal names the call that failed with the document's
   edits kept. The Script drawer shows the same calls with literal values. **Operators and Notifications…** (the Alerts and Operators folders'
-  menus or the palette) opens the grid (read-only past the notifications it reads at once): one row per alert, one column per operator, each cell cycling none, E-mail, E-mail and Pager,
-  Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its side pane opens
-  the selected operator, sends a test e-mail or deletes it (not while the grid is read-only, when it cannot count what notifies the operator), and a table below the grid lists the jobs that notify operators. **Add recommended alerts…**
+  menus or the palette) opens a two-tab inspector (**Alerts Matrix** and **Jobs Notifying Operators**, read-only past the notifications it reads at once): one row per alert, one column per operator, each pill cell cycling none, E-mail, E-mail and Pager,
+  Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its resizable side pane opens
+  the selected operator, sends a test e-mail or deletes and reassigns it (not while the grid is read-only, when it cannot count what notifies the operator), and the **Jobs Notifying Operators** tab lists the jobs that notify operators. **Add recommended alerts…**
   creates any of severity 17 and 19 to 25 and errors 823 to 825 the server has no alert for (any name), each with an operator if
   one is picked. **Send test e-mail** runs `sp_notify_operator` through Agent's own Database Mail profile, refused before anything
   is sent when Agent has none, the operator is disabled or Database Mail XPs is off; the Agent mail check (Database Mail XPs, a profile, Agent using it) shows on the operator document
@@ -416,8 +416,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Account Properties - FileShareWriter") opens from a proxy's node (Enter, double-click or Properties); **New Proxy…** from the
   Proxies folder, a subsystem's folder (the proxy starts active to it), Unassigned Proxies or a proxy, and **Proxy…** from the
   SQL Server Agent node's New submenu (SQL Server only: Managed Instance has no proxies). Only sysadmin reads or changes
-  proxies; below it the describe answers `PERMISSION_DENIED`. One screen: **Proxy** (name, the credential, description,
-  enabled), **Subsystems** (every subsystem but T-SQL), **Principals** (logins, msdb roles and server roles that may use it
+  proxies; below it the describe answers `PERMISSION_DENIED`. Three inspector tabs: **Proxy & Subsystems** (name, credential, description,
+  enabled switch, and every subsystem but T-SQL), **Principals** (logins, msdb roles and server roles that may use it
   besides sysadmin, picked or typed) and **References** (the job steps that run as it). The credential is picked, or created
   in place (name, identity, password and its confirmation) for a login with ALTER ANY CREDENTIAL. **Save** sends only what
   changed under the `proxy_id` the describe read (a proxy renamed or replaced since is `NOT_FOUND`) in two batches: first, in
@@ -427,9 +427,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   keeps the draft; a refused second batch leaves the rest saved, so the document reads the proxy again and shows which
   principal was refused. msdb ignores a grant to a sysadmin member, who may use every proxy anyway. A **credential's
   document** ("Credential Properties - …", Security › Credentials, on SQL Server and Managed Instance; New Credential… on the
-  folder or a credential) shows its name, identity, creation and modification dates, and **Used by** (the proxies that run as
-  it with their subsystems, then their job steps; sysadmin only). SQL Server never returns a secret, so the password starts
-  empty behind **Change identity and password**, and Save sends the identity and the password together (ALTER CREDENTIAL sets
+  folder or a credential) has **Credential** (name, identity, creation and modification dates) and **Used by** (the proxies that run as
+  it with their subsystems, then their job steps; sysadmin only) tabs. SQL Server never returns a secret, so the password starts
+  empty behind the **Change identity and password** switch, and Save sends the identity and the password together (ALTER CREDENTIAL sets
   both) behind a STALE guard on the credential's id, name and `modify_date`. Without ALTER ANY CREDENTIAL it opens read-only.
   New Credential lists the server's enabled cryptographic providers when it has any. **Secrets**: the password fields are
   uncontrolled; what is typed lives only in the renderer's per-document secret slot (a snapshot learns only whether it is
@@ -490,11 +490,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Job Activity Monitor (with several such servers, a pick of them; a monitor whose connection is gone does not count); after a followed job ends that way, the service probe alone keeps reading Agent's state until it
   runs again. The connection item is unchanged.
 - **SQL Server Agent Properties** (the Agent node's Properties, a modal dialog; object actions, docs/object-actions.md). General
-  shows the service account and whether it starts automatically, SSMS's "Auto restart SQL Server if it stops unexpectedly"
+  shows the service account and whether it starts automatically, switches for SSMS's "Auto restart SQL Server if it stops unexpectedly"
   and "Auto restart SQL Server Agent if it stops unexpectedly", and the error log, read-only for now; Advanced, Alert System,
-  Job System and Connection come later. History has SSMS's "Limit size of job history log", "Maximum job history log size"
+  Job System and Connection come later. History shows a **Current log usage** meter above SSMS's "Limit size of job history log" switch, "Maximum job history log size"
   (2 to `historyMaxRows`, or no limit) and "Maximum job history rows per job" (1 to the log's size). Below them, **What this
-  keeps** lists the jobs with the most history, each with the rows it wrote over the last `retentionDays` days and how long
+  keeps** lists the jobs with the most history, each with right-aligned rates written over the last `retentionDays` days and how long
   its history lasts under the limits now, and under the ones being typed when they differ: rows per job over the job's rate,
   or the log's size over every job's rate where that is less, which a note points out, since Agent then removes the oldest
   rows of any job. Reading every job's history needs sysadmin; below it the table says why it is missing.

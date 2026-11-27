@@ -6,6 +6,7 @@ import {
   connectDialogWindow, documentFrame, documentTab, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { captureAp5 } from './capture-agent-polish-lanes/ap5.mjs'
 import react from '@vitejs/plugin-react'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -221,7 +222,8 @@ async function captureAp1(outDir, profile) {
 }
 
 const lanes = {
-  'ap-1': captureAp1
+  'ap-1': captureAp1,
+  'ap-5': (outDir, profile) => captureAp5(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix })
 }
 const implementedLanes = new Set(Object.keys(lanes))
 
