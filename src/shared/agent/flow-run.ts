@@ -151,7 +151,9 @@ export function liveRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], cur
   const { hot, sequence } = runPath(flow, current && current.at >= 0 ? [...shown, { at: current.at } as FlowPass] : shown, false)
   const lit = new Set<string>()
   if (current && current.at >= 0) for (const which of ['success', 'fail'] as const) lit.add(flowEdgeKey(current.at, which))
-  const bySuccess = successReach(flow)
+  const origin = current && current.at >= 0 && current.at < flow.count ? current.at : shown.length === 0 ? flow.start : -1
+  const bySuccess = reach(flow, origin, false)
+  const byAny = reach(flow, origin, true)
   const steps = Array.from({ length: flow.count }, (_, at) => {
     if (current?.at === at) {
       // A step a loop runs again keeps its finished passes before the running one.
@@ -164,22 +166,26 @@ export function liveRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], cur
     }
     const own = shown.filter(pass => pass.at === at)
     if (own.length) return { fade: false, right: stepWords(own), spoken: stepSpoken(own) }
-    if (!known) return { fade: true, right: [{ text: '—', tone: 'muted' as const }], spoken: 'not known yet' }
-    return bySuccess[at] ? { fade: true, right: [{ text: 'Waiting', tone: 'muted' as const }], spoken: 'waiting' }
-      : { fade: true, right: [{ text: 'On failure only', tone: 'muted' as const }], spoken: 'runs only after a failure' }
+    if (!known || origin < 0) return { fade: true, right: [{ text: '—', tone: 'muted' as const }], spoken: 'not known yet' }
+    if (bySuccess[at]) return { fade: true, right: [{ text: 'Waiting', tone: 'muted' as const }], spoken: 'waiting' }
+    if (byAny[at]) return { fade: true, right: [{ text: 'On failure only', tone: 'muted' as const }], spoken: 'runs only after a failure' }
+    return { fade: true, right: [{ text: 'Not run', tone: 'muted' as const }], spoken: 'not run' }
   })
   return { steps, hot, lit, sequence, unplaced: shown.filter(pass => pass.at < 0).length }
 }
 
-/** The steps the Start step reaches through success edges only: a step outside it runs only after a failure. */
-function successReach(flow: StepsFlow): boolean[] {
+/** The steps reachable from `origin` through success edges only (`includeFail` false) or through either edge (`includeFail` true). */
+function reach(flow: StepsFlow, origin: number, includeFail: boolean): boolean[] {
   const seen = Array.from({ length: flow.count }, () => false)
-  if (flow.start < 0) return seen
-  const queue = [flow.start]
-  seen[flow.start] = true
+  if (origin < 0 || origin >= flow.count) return seen
+  const queue = [origin]
+  seen[origin] = true
   while (queue.length) {
-    const at = queue.shift()!, target = flow.edges[at * 2]?.target
-    if (target?.kind === 'step' && !seen[target.index]) { seen[target.index] = true; queue.push(target.index) }
+    const at = queue.shift()!
+    for (let offset = 0; offset < (includeFail ? 2 : 1); offset++) {
+      const target = flow.edges[at * 2 + offset]?.target
+      if (target?.kind === 'step' && !seen[target.index]) { seen[target.index] = true; queue.push(target.index) }
+    }
   }
   return seen
 }

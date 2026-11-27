@@ -198,7 +198,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     comparisonExactText: !!active && !!inputs.comparisonToggles?.[active.id]?.exact, comparisonOneRow: !!active && !!inputs.comparisonToggles?.[active.id]?.oneRow, comparisonChangesOnly: !!active && !!inputs.comparisonToggles?.[active.id]?.changesOnly,
     comparisonRowHasPartner: !!active && !!inputs.comparisonToggles?.[active.id]?.partner,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
-    anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
+    anyDocumentDirty: !!documents.unsavedFill || documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     // A query's engine follows its connection; every other document is SQL Server's.
     hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,

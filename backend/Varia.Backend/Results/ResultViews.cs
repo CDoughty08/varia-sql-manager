@@ -822,7 +822,7 @@ internal static partial class ViewSorter
             Kind.Approximate => new NumberKey(capacity, kept, source, column, exact: false),
             Kind.Ticks => new TicksKey(capacity),
             Kind.Guid => new GuidKey(capacity),
-            Kind.Collated when Culture(meta.Collation) is { } culture => new CollatedKey(capacity, kept, source, column, culture.Info, culture.Options, memory),
+            Kind.Collated => BuildTextKey(meta, capacity, kept, source, column, memory),
             _ => new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null)
         };
         // The date and time types' text is fixed-width, so its byte order is its instants': read as ticks, 8 bytes are the
@@ -953,6 +953,129 @@ internal static partial class ViewSorter
         if ((collation.Options & 8) != 0) options |= CompareOptions.IgnoreKanaType;
         if ((collation.Options & 16) != 0) options |= CompareOptions.IgnoreWidth;
         return (info, options);
+    }
+
+    /// <summary>Non-Unicode SQL Server character types (char, varchar, text), which follow SQL sort-order rules under SQL_*
+    /// collations (SortId != 0) and code-point/byte order rather than legacy Unicode _BIN under binary collations.</summary>
+    internal static bool IsNonUnicodeText(ResultColumn column) =>
+        column.DataType.StartsWith("char", StringComparison.OrdinalIgnoreCase)
+        || column.DataType.StartsWith("varchar", StringComparison.OrdinalIgnoreCase)
+        || column.DataType.Equals("text", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether SQL Server applies word sort (hyphen and apostrophe as special weights: ab &lt; a-c) rather than
+    /// SQL string sort (a-c &lt; ab): always for Unicode types and Windows collations (SortId == 0); non-Unicode SQL_*
+    /// collations (SortId != 0) use string sort.</summary>
+    internal static bool UseWordSort(ResultColumn column) => column.Collation is { SortId: 0 } || !IsNonUnicodeText(column);
+
+    /// <summary>Whether SQL Server applies legacy Unicode _BIN order (SqlCompareOptions.BinarySort, not _BIN2).</summary>
+    internal static bool UseLegacyBinarySort(ResultColumn column) =>
+        column.Collation is { } collation && (collation.Options & 32768) != 0 && (collation.Options & 16384) == 0 && !IsNonUnicodeText(column);
+
+    /// <summary>Builds a collated sort key matching <see cref="CollatedKey"/> (including word-sort punctuation weighting).</summary>
+    internal static int WriteCollatedSortKey(CompareInfo info, CompareOptions options, bool wordSort, ReadOnlySpan<char> text,
+        ref char[]? strippedBuffer, ref byte[] buffer, Action<int>? onGrow = null)
+    {
+        if (!wordSort || text.IndexOfAny('-', '\'') < 0)
+        {
+            var written = SortKey(info, options, text, ref buffer, onGrow);
+            if (wordSort)
+                while (written > 0 && buffer[written - 1] == 0) written--;
+            return written;
+        }
+        var stripped = StripWordPunctuation(text, ref strippedBuffer, out var specials, onGrow);
+        var baseLen = SortKey(info, options, stripped, ref buffer, onGrow);
+        while (baseLen > 0 && buffer[baseLen - 1] == 0) baseLen--;
+        var needed = baseLen + 1 + specials * 5;
+        if (buffer.Length < needed)
+        {
+            var grown = Math.Max(needed, buffer.Length * 2);
+            onGrow?.Invoke(grown - buffer.Length);
+            Array.Resize(ref buffer, grown);
+        }
+        buffer[baseLen] = 0;
+        var at = baseLen + 1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch is not ('-' or '\'')) continue;
+            var inv = uint.MaxValue - (uint)i;
+            buffer[at++] = (byte)(inv >> 24);
+            buffer[at++] = (byte)(inv >> 16);
+            buffer[at++] = (byte)(inv >> 8);
+            buffer[at++] = (byte)inv;
+            buffer[at++] = (byte)ch;
+        }
+        return at;
+    }
+
+    /// <summary>Builds a legacy Unicode _BIN key matching <see cref="LegacyBinaryKey"/>: first UTF-16 unit big-endian,
+    /// remaining units UTF-16LE byte-by-byte.</summary>
+    internal static int WriteLegacyBinaryKey(ReadOnlySpan<char> chars, ref byte[] buffer, Action<int>? onGrow = null)
+    {
+        var needed = chars.Length * 2;
+        if (buffer.Length < needed)
+        {
+            var grown = Math.Max(needed, buffer.Length * 2);
+            onGrow?.Invoke(grown - buffer.Length);
+            buffer = new byte[grown];
+        }
+        for (var i = 0; i < chars.Length; i++)
+        {
+            var unit = (ushort)chars[i];
+            if (i == 0)
+            {
+                buffer[0] = (byte)(unit >> 8);
+                buffer[1] = (byte)unit;
+            }
+            else
+            {
+                buffer[i * 2] = (byte)unit;
+                buffer[i * 2 + 1] = (byte)(unit >> 8);
+            }
+        }
+        return needed;
+    }
+
+    private static ReadOnlySpan<char> StripWordPunctuation(ReadOnlySpan<char> text, ref char[]? buffer, out int specials, Action<int>? onGrow = null)
+    {
+        if (buffer is null || buffer.Length < text.Length)
+        {
+            var grown = Math.Max(Math.Max(text.Length, 256), 2 * (buffer?.Length ?? 0));
+            onGrow?.Invoke(2 * (grown - (buffer?.Length ?? 0)));
+            buffer = new char[grown];
+        }
+        int length = 0;
+        specials = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch is '-' or '\'') specials++;
+            else buffer[length++] = ch;
+        }
+        return buffer.AsSpan(0, length);
+    }
+
+    private static Key BuildTextKey(ResultColumn meta, int capacity, int[]? kept, PageSource source, int column, KeyMemory? memory)
+    {
+        var collation = meta.Collation;
+        if (collation is not null)
+        {
+            var bin2 = (collation.Options & 16384) != 0;
+            var bin = (collation.Options & 32768) != 0;
+            if (bin || bin2)
+            {
+                if (bin && !bin2 && !IsNonUnicodeText(meta))
+                    return new LegacyBinaryKey(capacity, kept, source, column, memory);
+                return new OrdinalKey(capacity, kept, source, column, memory, trim: true);
+            }
+            if (Culture(collation) is { } culture)
+            {
+                var wordSort = UseWordSort(meta);
+                var options = wordSort ? culture.Options : culture.Options | CompareOptions.StringSort;
+                return new CollatedKey(capacity, kept, source, column, culture.Info, options, wordSort, memory);
+            }
+        }
+        return new OrdinalKey(capacity, kept, source, column, memory, trim: collation is not null);
     }
 
     /// <summary>A UTF-8 cell without its trailing spaces (U+0020), which SQL Server's comparisons ignore.</summary>
@@ -1537,7 +1660,9 @@ internal static partial class ViewSorter
         public override string Layout => "ticks";
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            var first = Interlocked.CompareExchange(ref width, cell.Length, 0);
+            if (Volatile.Read(ref declined) != 0) return;
+            var first = Volatile.Read(ref width);
+            if (first == 0) first = Interlocked.CompareExchange(ref width, cell.Length, 0);
             if ((first != 0 && first != cell.Length) || !TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
             {
                 Volatile.Write(ref declined, 1);
@@ -1583,6 +1708,7 @@ internal static partial class ViewSorter
             room = null;
         }
         public char[] Chars = new char[256];
+        public char[]? Stripped = new char[256];
         public byte[] SortKey = new byte[512];
         /// <summary>The page's sort keys end to end, <see cref="Used"/> bytes of them.</summary>
         public byte[] Keys = [];
@@ -1885,17 +2011,22 @@ internal static partial class ViewSorter
         }
     }
 
-    /// <summary>A collation's order: by each value's sort key, and by the collation itself where cells are read again.</summary>
-    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options, KeyMemory? memory)
+    /// <summary>A collation's order: by each value's sort key, and by the collation itself where cells are read again.
+    /// Under .NET's ICU runtime, CompareOptions.None treats hyphen and apostrophe as non-ignorable (string sort); when
+    /// <paramref name="wordSort"/> is true (SQL Server Unicode columns and Windows collations), '-' and '\'' are weighted
+    /// after base characters so words like ab and a-c order as SQL Server orders them.</summary>
+    private sealed class CollatedKey(int rows, int[]? map, PageSource source, int column, CompareInfo info, CompareOptions options, bool wordSort, KeyMemory? memory)
         : BytesKey(rows, map, source, column, memory)
     {
         [ThreadStatic] private static char[]? left;
         [ThreadStatic] private static char[]? right;
+        [ThreadStatic] private static char[]? leftStripped;
+        [ThreadStatic] private static char[]? rightStripped;
 
         protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            // The key may grow the buffer: its length first, then the buffer it is in.
-            var written = SortKey(info, options, Decode(TrimEnd(cell), ref scratch.Chars!), ref scratch.SortKey);
+            var text = Decode(TrimEnd(cell), ref scratch.Chars!);
+            var written = WriteCollatedSortKey(info, options, wordSort, text, ref scratch.Stripped, ref scratch.SortKey);
             return scratch.SortKey.AsSpan(0, written);
         }
 
@@ -1904,7 +2035,66 @@ internal static partial class ViewSorter
         {
             var x = Decode(TrimEnd(Source.Cell(Row(a), Column)), ref left);
             var y = Decode(TrimEnd(Source.Cell(Row(b), Column)), ref right);
-            return Math.Sign(info.Compare(x, y, options));
+            if (!wordSort || (x.IndexOfAny('-', '\'') < 0 && y.IndexOfAny('-', '\'') < 0))
+                return Math.Sign(info.Compare(x, y, options));
+            var sx = StripWordPunctuation(x, ref leftStripped, out var countX);
+            var sy = StripWordPunctuation(y, ref rightStripped, out var countY);
+            var primary = info.Compare(sx, sy, options);
+            if (primary != 0) return Math.Sign(primary);
+            if (countX == 0 && countY == 0) return 0;
+            int ix = 0, iy = 0;
+            while (true)
+            {
+                while (ix < x.Length && x[ix] is not ('-' or '\'')) ix++;
+                while (iy < y.Length && y[iy] is not ('-' or '\'')) iy++;
+                bool hasX = ix < x.Length, hasY = iy < y.Length;
+                if (!hasX || !hasY) return hasX == hasY ? 0 : hasX ? 1 : -1;
+                if (ix != iy) return ix > iy ? -1 : 1;
+                if (x[ix] != y[iy]) return x[ix] < y[iy] ? -1 : 1;
+                ix++;
+                iy++;
+            }
+        }
+
+        private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[]? buffer)
+        {
+            if (buffer is null || buffer.Length < utf8.Length) buffer = new char[Math.Max(Math.Max(utf8.Length, 256), 2 * (buffer?.Length ?? 0))];
+            return buffer.AsSpan(0, Encoding.UTF8.GetChars(utf8, buffer));
+        }
+    }
+
+    /// <summary>SQL Server legacy Unicode _BIN order (SqlCompareOptions.BinarySort): the first UTF-16 code unit compares as
+    /// an unsigned 16-bit WCHAR (big-endian), and remaining code units compare byte-by-byte in UTF-16LE order.</summary>
+    private sealed class LegacyBinaryKey(int rows, int[]? map, PageSource source, int column, KeyMemory? memory)
+        : BytesKey(rows, map, source, column, memory)
+    {
+        [ThreadStatic] private static char[]? left;
+        [ThreadStatic] private static char[]? right;
+
+        protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch)
+        {
+            var trimmed = TrimEnd(cell);
+            if (scratch.Chars.Length < trimmed.Length) scratch.Chars = new char[Math.Max(Math.Max(trimmed.Length, 256), scratch.Chars.Length * 2)];
+            var chars = scratch.Chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, scratch.Chars));
+            var written = WriteLegacyBinaryKey(chars, ref scratch.SortKey);
+            return scratch.SortKey.AsSpan(0, written);
+        }
+
+        protected override int Cells(int a, int b)
+        {
+            var x = Decode(TrimEnd(Source.Cell(Row(a), Column)), ref left);
+            var y = Decode(TrimEnd(Source.Cell(Row(b), Column)), ref right);
+            var min = Math.Min(x.Length, y.Length);
+            for (var i = 0; i < min; i++)
+            {
+                if (x[i] == y[i]) continue;
+                if (i == 0) return x[0] < y[0] ? -1 : 1;
+                var loX = (byte)x[i];
+                var loY = (byte)y[i];
+                if (loX != loY) return loX < loY ? -1 : 1;
+                return (x[i] >> 8) < (y[i] >> 8) ? -1 : 1;
+            }
+            return x.Length.CompareTo(y.Length);
         }
 
         private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[]? buffer)
@@ -2026,6 +2216,7 @@ internal static class ViewPages
             var packedSource = set.HasPacked;
             var grouping = packedSource;
             var columns = set.Wires.Count;
+            var exactColumns = set.Columns.Any(ColumnTypes.HoldsExact);
             var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
             var start = firstRow;
             for (var position = firstRow; position < end; position++)
@@ -2085,10 +2276,11 @@ internal static class ViewPages
                         parsed[index] = layout;
                     }
                 }
-                Copy(builder, PageView.At(layout.Body.AsSpan(0, page.Length), layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
+                Copy(builder, PageView.At(layout.Body.AsSpan(0, page.Length), layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires, exactColumns ? set.Columns : null, page.Lengths);
                 if (builder.IsFull)
                 {
-                    var full = new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
+                    var (sealedBody, sealedLengths) = SealViewPage(builder, exactColumns);
+                    var full = new StoredPage(start, (int)(position + 1 - start), sealedBody, sealedLengths);
                     // A read may wait for credit while it holds the page, so it keeps no unpacked group's working memory
                     // across the wait; Copy and Save (no wait, a lease) keep the group for the next page.
                     if (!grouping || endOnRelease)
@@ -2107,7 +2299,8 @@ internal static class ViewPages
             }
             if (builder.HasRows)
             {
-                var last = new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
+                var (sealedBody, sealedLengths) = SealViewPage(builder, exactColumns);
+                var last = new StoredPage(start, (int)(end - start), sealedBody, sealedLengths);
                 set.ReturnWork(held);
                 held = 0;
                 set.ReturnRooms(rooms);
@@ -2123,14 +2316,26 @@ internal static class ViewPages
         }
     }
 
-    private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires)
+    private static (byte[] Body, PageLengths Lengths) SealViewPage(PageBuilder builder, bool exactColumns)
+    {
+        if (!exactColumns) return (builder.Seal(), PageLengths.Empty);
+        var body = builder.Seal(out var built);
+        return (body, built.HasExacts ? new PageLengths([], [], [], [.. built.Exacts]) : PageLengths.Empty);
+    }
+
+    private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires, IReadOnlyList<ResultColumn>? exactColumns, PageLengths sourceLengths)
     {
         builder.BeginRow();
         for (var c = 0; c < wires.Count; c++)
         {
             if (source.IsNull(c, row)) builder.AppendNull(source.IsError(c, row));
             else if (wires[c] == WireKind.Binary) builder.AppendBinary(source.Span(c, row), source.IsTruncated(c, row));
-            else builder.AppendUtf8(source.Span(c, row), source.IsTruncated(c, row));
+            else
+            {
+                builder.AppendUtf8(source.Span(c, row), source.IsTruncated(c, row));
+                if (exactColumns is not null && ColumnTypes.HoldsExact(exactColumns[c]) && sourceLengths.TryExact(row, c, out var exact))
+                    builder.KeepExact(exact);
+            }
         }
         builder.CommitRow();
     }

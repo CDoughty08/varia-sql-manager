@@ -312,6 +312,8 @@ export interface SsisExecutionModel {
   readonly runs: readonly SsisPackageRun[]
   /** The package's next run after this one, for Newer run. */
   readonly newer?: number
+  /** The execution's earliest error message across all messages, regardless of message filters or truncation. */
+  readonly firstError?: SsisExecutionMessage
 }
 export interface SsisPackageRunsModel {
   readonly folder: string

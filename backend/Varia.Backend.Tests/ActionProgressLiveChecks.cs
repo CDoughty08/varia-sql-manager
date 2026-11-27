@@ -172,7 +172,10 @@ internal static class ActionProgressLiveChecks
                 }),
                 new("Clean up", async context =>
                 {
-                    await using var command = new SqlCommand("WAITFOR DELAY '00:00:02'; SELECT N'cleaned';", connection) { CommandTimeout = 0 };
+                    // Hold the cleanup step on the host clock (not SQL Server WAITFOR, which can complete early when SQLPAL
+                    // ms_ticks jumps forward on a contended Linux container) while still running SQL on the action connection.
+                    await Task.Delay(2_000, context.Token);
+                    await using var command = new SqlCommand("SELECT N'cleaned';", connection) { CommandTimeout = 0 };
                     if ((await ActionService.ReadAllAsync(command, context.Token)) is ["cleaned"]) Interlocked.Exchange(ref cleaned, 1);
                 }, StepKind.Cleanup)
             ];

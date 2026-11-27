@@ -9,7 +9,7 @@ import {
 import { fileBaseSets, fileRestoreLogs } from '../../../shared/actions/restore-plan.ts'
 import { restoreFilesOptionsProblems, type RestoreFilesRequest } from '../../../shared/actions/restore-schema.ts'
 import type { RestoredDatabase } from '../../../shared/actions/schema.ts'
-import { sameServerPath, serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
+import { serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { destinationOf, sourceSets, type RestoreDraft, type RestoreFacts } from './model'
 import { setWhere, type PlannedStep } from './run'
@@ -72,11 +72,11 @@ export function filesBaseSets(draft: RestoreDraft, facts: RestoreFacts): BackupS
 /** The set the checked rows restore from: the one chosen, else the newest whose files are read. */
 export function filesBase(draft: RestoreDraft, facts: RestoreFacts): BackupSetRow | undefined {
   const sets = filesBaseSets(draft, facts)
-  return sets.find(set => set.id === draft.files?.set) ?? sets.find(set => facts.setFiles?.[set.id])
+  return sets.find(set => set.id === draft.files?.set) ?? sets.find(set => facts.setFiles && Object.hasOwn(facts.setFiles, set.id))
 }
 /** A base set's files a restore can name: the ones it holds, no log file (the log backups after it restore the log). */
 export function restorableFiles(facts: RestoreFacts, set: BackupSetRow): BackupFileRow[] {
-  return (facts.setFiles?.[set.id] ?? []).filter(file => !file.absent && file.type !== 'log')
+  return (facts.setFiles && Object.hasOwn(facts.setFiles, set.id) ? facts.setFiles[set.id] : []).filter(file => !file.absent && file.type !== 'log')
 }
 
 /** A row of Select the backup sets to restore: a file (or filegroup) of a base set, or a log backup that follows the chosen one. */
@@ -155,16 +155,41 @@ export interface FilesMoveRow { readonly file: BackupFileRow; readonly restoreAs
 export function filesMoveRows(draft: RestoreDraft, facts: RestoreFacts): FilesMoveRow[] {
   const separator = facts.server?.separator ?? '\\'
   const key = (path: string) => serverPathKey(path, separator) ?? path
+  const base = filesBase(draft, facts)
+  const restored = restoredFiles(draft, facts)
+  const restoredLogicals = new Set(restored.map(file => file.logical.toLowerCase()))
   const taken = new Map<string, string>()
-  for (const file of facts.server?.files ?? []) if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(key(file.path), file.database)
-  const rows = restoredFiles(draft, facts).map(file => {
-    const typed = draft.restoreAs[file.logical]
+  const ownUnrestored = new Set<string>()
+  const seenOwnLogicals = new Set<string>()
+  for (const file of facts.server?.files ?? []) {
+    const fileKey = key(file.path)
+    if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(fileKey, file.database)
+    else if (file.logical !== undefined) {
+      const logicalKey = file.logical.toLowerCase()
+      seenOwnLogicals.add(logicalKey)
+      if (!restoredLogicals.has(logicalKey)) ownUnrestored.add(fileKey)
+    }
+  }
+  if (seenOwnLogicals.size === 0 || facts.server?.filesTruncated) {
+    const baseFiles = base && facts.setFiles && Object.hasOwn(facts.setFiles, base.id) ? facts.setFiles[base.id] : []
+    for (const file of baseFiles) {
+      const logicalKey = file.logical.toLowerCase()
+      if (!restoredLogicals.has(logicalKey) && !seenOwnLogicals.has(logicalKey)) ownUnrestored.add(key(file.physical))
+    }
+  }
+  const counts = new Map<string, number>()
+  const rows = restored.map(file => {
+    const typed = Object.hasOwn(draft.restoreAs, file.logical) ? draft.restoreAs[file.logical] : undefined
     const restoreAs = typed ?? file.physical
-    const other = taken.get(key(restoreAs))
-    const problem = serverPathProblem(restoreAs) ?? (other ? `The file is in use by the database ${other}.` : undefined)
-    return { file, restoreAs, typed: typed !== undefined, ...problem ? { problem } : {} }
+    const targetKey = key(restoreAs)
+    counts.set(targetKey, (counts.get(targetKey) ?? 0) + 1)
+    const other = taken.get(targetKey)
+    const problem = serverPathProblem(restoreAs)
+      ?? (other ? `The file is in use by the database ${other}.` : undefined)
+      ?? (ownUnrestored.has(targetKey) ? `The file is in use by another file of ${draft.destination}.` : undefined)
+    return { file, restoreAs, typed: typed !== undefined, targetKey, ...problem ? { problem } : {} }
   })
-  return rows.map(row => !row.problem && rows.some(other => other !== row && sameServerPath(other.restoreAs, row.restoreAs, separator)) ? { ...row, problem: 'Another file is restored to this path.' } : row)
+  return rows.map(({ targetKey, ...row }) => !row.problem && (counts.get(targetKey) ?? 0) > 1 ? { ...row, problem: 'Another file is restored to this path.' } : row)
 }
 
 /** Why a file the restore writes (the rollback undo file, the log backup) cannot go where the draft says. */
@@ -191,7 +216,7 @@ export function filesProblems(draft: RestoreDraft, facts: RestoreFacts): FilesPr
   if (facts.sets.length > 0 && filesBaseSets(draft, facts).length === 0) general.push(restoreMessages.noFileBase)
   else if (facts.sets.length > 0 && !draft.files?.chosen.length) general.push(restoreMessages.noFiles)
   const base = filesBase(draft, facts)
-  if (base && draft.files?.set === base.id && !facts.setFiles?.[base.id]) general.push(restoreMessages.filesNotRead)
+  if (base && draft.files?.set === base.id && !(facts.setFiles && Object.hasOwn(facts.setFiles, base.id))) general.push(restoreMessages.filesNotRead)
   if (primaryRefused(draft, facts) && restoredFiles(draft, facts).some(primary)) general.push(restoreMessages.primaryOnline)
   const chosen = draft.files?.chosen.length ?? 0
   if (chosen > restoreLimits.restoreFiles) general.push(`A restore names at most ${restoreLimits.restoreFiles} files or filegroups.`)
@@ -220,7 +245,8 @@ export function restoreFilesRequest(draft: RestoreDraft, facts: RestoreFacts, id
   const set = (row: BackupSetRow, type: RestoreFilesSet['type']): RestoreFilesSet => ({ id: row.id, devices: row.devices, file: row.position, type, ...row.name ? { name: row.name.slice(0, restoreLimits.setName) } : {}, ...row.backupSetGuid ? { guid: row.backupSetGuid } : {} })
   const sets: RestoreFilesSet[] = [set(base, base.type === 'file' ? 'file' : 'full'), ...fileRestoreLogs(sourceSets(draft, facts), base).map(log => set(log, 'log'))]
   const separator = facts.server?.separator ?? '\\'
-  const relocate: RestoreMove[] = filesMoveRows(draft, facts).filter(row => !sameServerPath(row.restoreAs, row.file.physical, separator)).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
+  const pathKey = (path: string) => serverPathKey(path, separator) ?? path
+  const relocate: RestoreMove[] = filesMoveRows(draft, facts).filter(row => pathKey(row.restoreAs) !== pathKey(row.file.physical)).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
   const options: RestoreFilesOptions = {
     sets, files: files.asFilegroup ? [] : files.chosen, filegroups: files.asFilegroup ? files.chosen : [], relocate, replace: draft.replace, restrictedUser: draft.restrictedUser, recovery: draft.recovery,
     ...draft.recovery === 'standby' ? { standbyFile: draft.standbyFile } : {}, ...files.logBackup && logBackupPossible(draft, facts) ? { logBackup: { file: files.logBackupFile } } : {}

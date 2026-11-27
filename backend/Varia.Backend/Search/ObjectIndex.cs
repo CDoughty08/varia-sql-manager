@@ -526,6 +526,11 @@ internal sealed class SearchMatcher
         if (!regex)
         {
             var literal = wholeWord ? text : text.Trim('*');
+            if (!wholeWord && literal.Length == 0 && text.Length > 0)
+            {
+                // All-star wildcard (*, **): matches any non-empty name or line, matching Whole Word's * behaviour.
+                return (new SearchMatcher(text, caseSensitive, false, new Regex(".+", options, timeout), true), null);
+            }
             if (literal.IndexOfAny(['*', '?']) < 0) return (new SearchMatcher(literal, caseSensitive, wholeWord, null, true), null);
             var pattern = Wildcard(literal);
             if (wholeWord)
@@ -674,7 +679,7 @@ internal sealed class SearchMatcher
                 (index, length) = (start + at, text.Length);
             }
             if (!wholeWord || Bounded(value, index, length)) return true;
-            start = index + Math.Max(1, length);
+            start = index + 1;
         }
         (index, length) = (-1, 0);
         return false;

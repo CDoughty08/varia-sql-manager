@@ -274,8 +274,8 @@ try {
   await events.getByRole('button', { name: /^All/ }).click()
   await execution.getByRole('table', { name: 'Tasks', exact: true }).getByRole('button', { name: 'Load facts' }).click()
   await expect(events.getByRole('button', { name: 'Task: Load facts' })).toBeVisible()
-  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, source: 'Load facts' })
   await expect(messages).toHaveAttribute('aria-label', /^Messages, 4 rows, 7 columns$/)
+  expect((await calls('ssis.execution')).at(-1)).toMatchObject({ executionId: 103, source: 'Load facts' })
   // Details shows the run's facts and the parameters it used in place of the messages, without reading again.
   const runView = execution.getByRole('tablist', { name: 'Run view', exact: true })
   const readsBefore = (await calls('ssis.execution')).length

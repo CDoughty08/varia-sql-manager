@@ -95,12 +95,13 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
   const order = { log: 0, differential: 1, full: 2 } as const
   const placed = sets.flatMap(set => { const ms = timeMs(set.finish); return ms === undefined || ms < span.from || ms > span.to ? [] : [{ set, x: at(position(ms, span)) }] })
     .sort((a, b) => order[kind(a.set)] - order[kind(b.set)])
+  const skippedCopyOnly = !manual && !!lastBackup && sets.some(set => set.type === 'log' && set.copyOnly && !set.problem && !set.damaged && set.finish > lastBackup)
   return <SubDialog title="Backup Timeline" okDisabled={specific && !allowed} onCancel={() => service.openDialog(state.id, undefined)} className="restore-timeline"
     onOk={() => { service.openDialog(state.id, undefined); service.updateDraft(state.id, { stopAt: specific ? text : undefined }) }}
     status={specific && !allowed ? manual ? 'The checked backup sets do not stop at this point in time.' : 'No backup reaches this point in time.' : undefined}>
     <fieldset className="restore-timeline-mode">
       <legend>Restore to:</legend>
-      <label className="checkbox-label"><input type="radio" name={id('mode')} checked={!specific} onChange={() => setSpecific(false)} />Last backup taken{lastBackup ? ` (${lastBackup.replace('T', ' ')})` : ''}</label>
+      <label className="checkbox-label"><input type="radio" name={id('mode')} checked={!specific} onChange={() => setSpecific(false)} />{skippedCopyOnly ? `Latest supported recovery point (${lastBackup!.replace('T', ' ')}; skips later copy-only log)` : `Last backup taken${lastBackup ? ` (${lastBackup.replace('T', ' ')})` : ''}`}</label>
       <label className="checkbox-label"><input type="radio" name={id('mode')} checked={specific} onChange={() => setSpecific(true)} />Specific date and time</label>
     </fieldset>
     <div className="property-row"><label htmlFor={id('date')}>Date:</label><input id={id('date')} type="date" value={text.slice(0, 10)} disabled={!specific}

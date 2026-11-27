@@ -96,13 +96,13 @@ internal static class HostChecks
             // The answer comes at the deadline while the handler is still running: test.park ends only when Release lets it, so
             // an answer that waited for the handler would never come. CancelAfter never fires early, so a deadline rounded to
             // whole seconds answers at 1000 ms or later every time, while a starved CI runner fires the 100 ms timer that late
-            // only now and then (2,973 ms under the stress harness): a late answer is asked for again, twice at most.
+            // only now and then (2,973 ms under the stress harness): a late answer is asked for again, four times at most.
             // test.park takes no lane: a metadata request whose deadline passes before its task reaches the slot wait (the
             // thread pool late on a starved runner) is rightly never dispatched, and would leave no late result to discard.
             var watch = new Stopwatch();
             var deadlines = new List<(uint Id, uint? Answered, string? Code, long Ms)>();
             Frame? timedOut = null;
-            foreach (var id in new uint[] { 3, 70, 71 })
+            foreach (var id in new uint[] { 3, 70, 71, 72, 73 })
             {
                 watch.Restart();
                 host.Request(id, "test.park", new { }, deadline: 100);

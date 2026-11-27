@@ -58,7 +58,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
     long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null,
-    string? JobKey = null);
+    string? JobKey = null, bool NoDefaultDataset = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
@@ -613,7 +613,7 @@ internal sealed record BackupSetDto(string Id, string Name, string Type, string 
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null, bool? Absent = null);
 /// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
 internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null, int? WithTransaction = null, string? FamilyGuid = null);
-internal sealed record RestoreServerFileDto(string Database, string Path);
+internal sealed record RestoreServerFileDto(string Database, string Path, string? Logical = null);
 internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
     string? DataPath = null, string? LogPath = null, string? BackupPath = null);
 internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<string>? HistoryDatabases = null, bool? HistoryTruncated = null, List<BackupSetDto>? Sets = null,
@@ -1190,7 +1190,7 @@ internal sealed record SsisExecutionParameterDto(int ObjectType, string Name, st
 /// <summary>SsisPackageRun in src/shared/ssis/schema.ts.</summary>
 internal sealed record SsisPackageRunDto(long Id, int Status, string? Created, string? Started, string? Ended, string? Caller = null, long? Errors = null, long? Warnings = null);
 internal sealed record SsisExecutionModel(SsisExecutionOverviewDto Overview, List<SsisMessageCountDto> Counts, List<int>? Types, string? Source, List<SsisExecutionMessageDto> Messages, bool Truncated,
-    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer);
+    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer, SsisExecutionMessageDto? FirstError = null);
 internal sealed record SsisExecutionResult(SsisExecutionModel? Model, long ElapsedMs, SsisError? Error = null);
 /// <summary>ssis.packageRuns (src/shared/ssis/schema.ts SsisPackageRunsRequest): one package's newest runs.</summary>
 internal sealed record SsisPackageRunsArgs(string ConnectionId, string RequestId, string Folder, string Project, string Package);

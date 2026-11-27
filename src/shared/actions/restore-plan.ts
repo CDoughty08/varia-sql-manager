@@ -247,13 +247,40 @@ export function fileBaseSets(sets: readonly BackupSetRow[], limit: number): Back
  * is, so the person does not choose them (SSMS's grid checks them); copy-only and damaged logs never chain.
  */
 export function fileRestoreLogs(sets: readonly BackupSetRow[], base: BackupSetRow): BackupSetRow[] {
-  const logs = sets.filter(set => set.type === 'log' && usableSet(set))
+  const byFirst: { readonly set: BackupSetRow; readonly first: bigint; readonly last: bigint; readonly forks: boolean; readonly forkPoint?: bigint; readonly order: number; used: boolean }[] = []
+  for (let i = 0; i < sets.length; i++) {
+    const set = sets[i]
+    if (set.type !== 'log' || !usableSet(set)) continue
+    const first = lsn(set.firstLsn), last = lsn(set.lastLsn)
+    const forks = !!set.firstForkGuid && !!set.forkGuid && set.firstForkGuid !== set.forkGuid
+    byFirst.push({ set, first, last, forks, forkPoint: forks && set.forkPointLsn ? lsn(set.forkPointLsn) : undefined, order: i, used: false })
+  }
+  byFirst.sort((a, b) => a.first < b.first ? -1 : a.first > b.first ? 1 : a.order - b.order)
   const chain: BackupSetRow[] = []
-  let previous = base
+  const active: typeof byFirst = []
+  let previous = base, prevLast = lsn(base.lastLsn), cursor = 0
   for (;;) {
-    const next = logs.filter(log => !chain.includes(log) && continues(log, previous)).sort(latest)[0]
-    if (!next) return chain
-    chain.push(next)
-    previous = next
+    while (cursor < byFirst.length && byFirst[cursor].first <= prevLast) {
+      if (byFirst[cursor].last > prevLast) active.push(byFirst[cursor])
+      cursor++
+    }
+    let best: (typeof byFirst)[number] | undefined
+    let keep = 0
+    for (let i = 0; i < active.length; i++) {
+      const entry = active[i]
+      if (entry.used || entry.last <= prevLast) continue
+      active[keep++] = entry
+      const log = entry.set
+      if (!sameFamily(log, previous)) continue
+      if (log.firstForkGuid && previous.forkGuid && log.firstForkGuid !== previous.forkGuid) continue
+      if (entry.forkPoint !== undefined && entry.forkPoint < prevLast) continue
+      if (!best || log.finish > best.set.finish || (log.finish === best.set.finish && (entry.last > best.last || (entry.last === best.last && entry.order < best.order)))) best = entry
+    }
+    active.length = keep
+    if (!best) return chain
+    best.used = true
+    chain.push(best.set)
+    previous = best.set
+    prevLast = best.last
   }
 }

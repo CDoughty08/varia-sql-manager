@@ -10,8 +10,11 @@ describe('BigQuery query.execute', () => {
 
   it('takes a dataset, and no database, for a BigQuery query', () => {
     expect(validateRequest('query.execute', { ...base, dataset: 'sales_2026' })).toEqual({ ...base, dataset: 'sales_2026' })
+    expect(validateRequest('query.execute', { ...base, noDefaultDataset: true })).toEqual({ ...base, noDefaultDataset: true })
     expect(validateRequest('query.execute', base)).toEqual(base)
     expect(validateRequest('query.execute', { ...base, dataset: 'd'.repeat(1024) })).toMatchObject({ dataset: 'd'.repeat(1024) })
+    expect(() => validateRequest('query.execute', { ...base, dataset: 'sales_2026', noDefaultDataset: true })).toThrow('Invalid request')
+    expect(() => validateRequest('query.execute', { ...base, noDefaultDataset: false })).toThrow('Invalid request')
     for (const dataset of ['', 'd'.repeat(1025), 'sales-2026', 'a.b', 7]) expect(() => validateRequest('query.execute', { ...base, dataset }), String(dataset)).toThrow('Invalid request')
   })
 
@@ -23,6 +26,7 @@ describe('BigQuery query.execute', () => {
       expect(optionsAllow('query.execute', 'bigquery', { ...base, [option]: true }), option).toBe(false)
     expect(optionsAllow('query.execute', 'sqlserver', { ...base, database: 'master', includeActualPlan: true })).toBe(true)
     expect(optionsAllow('query.execute', 'sqlserver', { ...base, database: 'master', dataset: 'd' })).toBe(false)
+    expect(optionsAllow('query.execute', 'sqlserver', { ...base, database: 'master', noDefaultDataset: true })).toBe(false)
     // An unknown handle is the backend's to answer; other methods are not checked.
     expect(optionsAllow('query.execute', undefined, { ...base, dataset: 'd', stopOnError: true })).toBe(true)
     expect(optionsAllow('results.read', 'bigquery', { stopOnError: true })).toBe(true)

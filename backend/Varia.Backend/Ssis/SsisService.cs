@@ -389,11 +389,20 @@ internal sealed class SsisService : IDisposable
             if (historyRows++ >= rows || reader.IsDBNull(0) || reader.IsDBNull(1)) continue;
             var key = Clip(reader.GetString(0), chars);
             if (!history.TryGetValue(key, out var durations)) history[key] = durations = [];
-            durations.Add(reader.GetInt32(1));
+            durations.Add(reader.GetInt64(1));
+        }
+        await reader.NextResultAsync(token);
+        SsisExecutionMessageDto? firstError = null;
+        if (await reader.ReadAsync(token))
+        {
+            var path = reader.IsDBNull(7) ? null : Clip(reader.GetString(7), chars);
+            var message = reader.IsDBNull(9) ? "" : Clip(reader.GetString(9), chars);
+            firstError = new(reader.IsDBNull(0) ? null : reader.GetInt64(0), Iso(reader.GetDateTimeOffset(1)), reader.GetInt16(2), reader.IsDBNull(3) ? null : reader.GetInt16(3),
+                Text(reader, 4), Text(reader, 5), Text(reader, 6), path, reader.IsDBNull(8) ? null : reader.GetInt32(8), message);
         }
         var tasks = read.Select(task => new SsisExecutionTaskDto(task.Path, task.Name, task.Started, task.Ended, task.Duration, task.Runs, task.Failed,
             history.TryGetValue(task.Path, out var durations) ? Median(durations) : null)).ToList();
-        return (new SsisExecutionModel(overview, counts, types, args.Source, messages, truncated, tasks, tasksTruncated, parameters, runs, newer), null);
+        return (new SsisExecutionModel(overview, counts, types, args.Source, messages, truncated, tasks, tasksTruncated, parameters, runs, newer, firstError), null);
     }
 
     /// <summary>The middle duration (the lower of the two middle ones for an even count), so one slow or fast run does not move it.</summary>

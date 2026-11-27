@@ -146,10 +146,13 @@ internal static partial class SsisSql
             ("SELECT TOP (@take) r.execution_id, r.status, r.start_time, r.end_time FROM (SELECT TOP (@runs) e.execution_id, e.status, e.start_time, e.end_time FROM [catalog].[executions] AS e "
                 + "WHERE " + SamePackage + " AND e.execution_id <= @execution_id ORDER BY e.execution_id DESC) AS r ORDER BY r.execution_id DESC;", true),
             ("SELECT TOP (1) e.execution_id FROM [catalog].[executions] AS e WHERE " + SamePackage + " AND e.execution_id > @execution_id ORDER BY e.execution_id;", false),
-            ("SELECT TOP (@take) LEFT(x.package_path, @chars + 1), s.execution_duration FROM [catalog].[executable_statistics] AS s "
+            ("SELECT TOP (@take) LEFT(x.package_path, @chars + 1), SUM(CAST(s.execution_duration AS bigint)) FROM [catalog].[executable_statistics] AS s "
                 + "JOIN [catalog].[executables] AS x ON x.executable_id = s.executable_id AND x.execution_id = s.execution_id "
                 + "WHERE s.execution_result = 0 AND s.execution_id IN (SELECT TOP (@runs) e.execution_id FROM [catalog].[executions] AS e WHERE " + SamePackage + " AND e.status = @succeeded "
-                + "AND e.execution_id < @execution_id ORDER BY e.execution_id DESC) ORDER BY s.execution_id DESC, s.statistics_id;", true)
+                + "AND e.execution_id < @execution_id ORDER BY e.execution_id DESC) GROUP BY s.execution_id, x.executable_id, LEFT(x.package_path, @chars + 1) ORDER BY s.execution_id DESC, x.executable_id;", true),
+            ("SELECT TOP (1) m.event_message_id, m.message_time, m.message_type, m.message_source_type, m.message_source_name, m.package_name, m.event_name, "
+                + "LEFT(m.execution_path, @chars + 1), m.message_code, LEFT(m.message, @chars + 1) FROM [catalog].[event_messages] AS m "
+                + "WHERE m.operation_id = @execution_id AND m.message_type IN (" + string.Join(", ", catalog.ErrorMessageTypes) + ") ORDER BY m.message_time ASC, m.event_message_id ASC;", false)
         ];
     }
 
