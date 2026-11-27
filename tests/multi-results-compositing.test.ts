@@ -11,6 +11,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
+import { minGridHeight, setFloors, stackLayout } from '../src/renderer/src/grid/stack'
 import ResultsTabs, { tabsFold, tabsNeed } from '../src/renderer/src/grid/ResultsTabs'
 import ResultsStack, { entryNoticesHeight, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
 import { comparisonTabLabel, jumpResult, pickerRows, shortenDistinct, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
@@ -22,7 +23,9 @@ import OutputPane, { hasResultsView, outputViewOf } from '../src/renderer/src/re
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
 import { isSummaryActive, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
+import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
+import { stylesheetRules } from './fixtures/css-rules'
 import { descriptor, fakeResultClient } from './fixtures/results'
 import { workbenchFixture } from './fixtures/workbench'
 
@@ -630,5 +633,427 @@ describe('MessagesView multi-server filtering, Ctrl+A boundary, dialect line rev
       children: createElement(MessagesView, { tabId: 'seven', tab: f.results.getSnapshot().seven })
     }))
     expect(sevenHost.querySelector('select.messages-filter-select')).not.toBeNull()
+  })
+})
+
+describe('Round 1 adversarial regression checks (Domain 4: Results & CSS)', () => {
+  it('R1-1: places multi summary band and statement strip outside .rs-stack, defaults collapsed once sets exist, and enforces extraMin floors', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('stack-layout.sql', 'SELECT 1; SELECT 2', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, name: 'S1', rolledBackPreview: true, rowsRead: 200, rowsStored: 200, rowsAvailable: 200 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-east', statementSlot: 1, name: 'S2', rowsRead: 200, rowsStored: 200, rowsAvailable: 200 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0, name: 'S1', rolledBackPreview: true, rowsRead: 200, rowsStored: 200, rowsAvailable: 200 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { status: 'rolledBack', resultSetIds: [1, 2] }),
+          multiOutcome(sqlTargets[1], { status: 'failed' }),
+          multiOutcome(sqlTargets[2], { status: 'skipped' })
+        ],
+        [comb, s1, s2],
+        { mode: 'transaction', status: 'rolledBack', combineWarnings: ['Schema drift detected.'] }
+      )
+    })
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    const multiRoot = host.querySelector<HTMLElement>('.rs-multi-root')!
+    const summaryBand = multiRoot.querySelector<HTMLElement>('.rs-multi-summary-band')!
+    const stmtStrip = multiRoot.querySelector<HTMLElement>('.rs-stmt-strip')!
+    const stack = multiRoot.querySelector<HTMLElement>('.rs-stack')!
+    const content = stack.querySelector<HTMLElement>('.rs-content')!
+    expect(multiRoot).not.toBeNull()
+    expect(stack.contains(summaryBand)).toBe(false)
+    expect(stack.contains(stmtStrip)).toBe(false)
+    expect([...stack.children]).toEqual([content])
+    // Even with failed/rolled-back targets, summary band defaults collapsed once sets exist.
+    expect(summaryBand.querySelector('.rs-multi-summary-toggle')?.getAttribute('aria-expanded')).toBe('false')
+    expect(summaryBand.querySelector('[data-multi-summary]')).toBeNull()
+
+    // setFloors / stackLayout enforce per-item extraMin so short panes (140-200px) never starve grids under notice strips.
+    const min = minGridHeight(15)
+    const extra = 2 * multiNoticeHeight
+    expect(setFloors(2, min, { extraMin: [extra, 0] })).toEqual([min + extra, min])
+    expect(setFloors(2, min, { extraMin: [extra, 0], content: [min + 10, min + 500] })).toEqual([min + 10, min])
+    const singleShort = stackLayout(150, 1, undefined, min, { extraMin: [extra] })
+    expect(singleShort.heights[0]).toBe(min + extra)
+    expect(singleShort.total).toBe(min + extra)
+    const pairShort = stackLayout(180, 2, undefined, min, { extraMin: [extra, 0] })
+    expect(pairShort.heights).toEqual([min + extra, min])
+    expect(pairShort.total).toBe(min + extra + g.splitter + min)
+
+    // CSS bounds .multi-summary-compact with scrollable max-height.
+    const compactRule = stylesheetRules().find(rule => rule.selector === '.multi-summary-compact')
+    expect(compactRule?.declarations.some(d => d.property === 'max-height')).toBe(true)
+    expect(compactRule?.declarations.some(d => d.property === 'overflow-y' && d.value === 'auto')).toBe(true)
+  })
+
+  it('R1-2: never double-counts derived combined sets in tab.rowsRead during streaming or finish', () => {
+    const { results, client } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, rowsRead: 10, rowsStored: 10, rowsAvailable: 10 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, rowsRead: 15, rowsStored: 15, rowsAvailable: 15 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0, rowsRead: 25, rowsStored: 25, rowsAvailable: 25 })
+
+    client.emit('q1', { type: 'resultSet.opened', descriptor: s1 })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: s2 })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: comb })
+    expect(results.getSnapshot().t1.rowsRead).toBe(25)
+
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s1, s2, comb]
+      )
+    })
+    expect(results.getSnapshot().t1.rowsRead).toBe(25)
+  })
+
+  it('R1-3: dedupes concurrent rebuildCombined, passes abort signal, discards stale/mismatched results, and applies warnings', async () => {
+    const { results, client, combine } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0, name: 'Orders' })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb],
+        { combineWarnings: ['Old warning'] }
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    results.removeTargetEntries('t1', 'dev-01')
+
+    // 1. Dedupe concurrent rebuilds + pass signal + apply warnings.
+    let resolveFirst!: (res: ResultsCombineResult & { warnings?: string[] }) => void
+    let capturedSignal: AbortSignal | undefined
+    combine.mockImplementationOnce((_handles, opts) => {
+      capturedSignal = (opts as { signal?: AbortSignal } | undefined)?.signal
+      return new Promise(resolve => { resolveFirst = resolve })
+    })
+    const p1 = results.rebuildCombined('t1', combinedKey)
+    const p2 = results.rebuildCombined('t1', combinedKey)
+    expect(combine).toHaveBeenCalledTimes(1)
+    expect(capturedSignal).toBeInstanceOf(AbortSignal)
+    expect(results.canRebuildCombined('t1', combinedKey)).toBe(false)
+    expect(await p2).toBeUndefined()
+    resolveFirst({
+      descriptor: descriptor(501, { kind: 'combined', index: 3, statementSlot: 0, rowsRead: 4, rowsStored: 4, rowsAvailable: 4 }),
+      warnings: ['Updated schema drift warning.']
+    })
+    expect(await p1).toBe(combinedKey)
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toEqual(['Updated schema drift warning.'])
+
+    // 2. Generation mismatch discards returned descriptor and returns undefined.
+    combine.mockResolvedValueOnce({
+      descriptor: descriptor(502, { generation: 99, kind: 'combined', index: 3, statementSlot: 0 })
+    })
+    expect(await results.rebuildCombined('t1', combinedKey)).toBeUndefined()
+    expect(client.release).toHaveBeenCalledWith([{ generation: 99, resultId: 502 }])
+
+    // 3. Dropping a source while combine is in flight aborts signal and discards late response.
+    let resolveDropped!: (res: ResultsCombineResult) => void
+    let droppedSignal: AbortSignal | undefined
+    combine.mockImplementationOnce((_handles, opts) => {
+      droppedSignal = (opts as { signal?: AbortSignal } | undefined)?.signal
+      return new Promise(resolve => { resolveDropped = resolve })
+    })
+    const p3 = results.rebuildCombined('t1', combinedKey)
+    expect(droppedSignal?.aborted).toBe(false)
+    results.removeTargetEntries('t1', 'prod-west')
+    expect(droppedSignal?.aborted).toBe(true)
+    resolveDropped({ descriptor: descriptor(503, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    expect(await p3).toBeUndefined()
+    expect(client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 503 }])
+  })
+
+  it('R1-4: guards connectionForResult by run/handle state and preserves targetKey + statementSlot in rerunInPlace', async () => {
+    const baseClient = fakeResultClient()
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+      remoteQuery: vi.fn<VariaApi['remoteQuery']>()
+    }
+    const rerun = vi.fn(async () => descriptor(77, { index: 1, residence: 'remote', rowsAvailable: 5, rowsStored: 0, rowsRead: 5 }))
+    const results = new ResultsService({ client: baseClient, api, events, remote: { rerun } as unknown as RemoteViews, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets: crossTargets } })
+    const sqlSet = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const bqSet = descriptor(2, { index: 1, targetKey: 'bq-1', statementSlot: 2, name: 'Warehouse', residence: 'remote' })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(crossTargets[0], { resultSetIds: [1] }), multiOutcome(crossTargets[1], { resultSetIds: [2] })],
+        [sqlSet, bqSet],
+        { mode: 'crossEngineReadOnly', status: 'completed' }
+      )
+    })
+
+    // rerunInPlace preserves targetKey, statementSlot, and name from old.descriptor.
+    const bqKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.resultId === 2)!.key
+    expect(await results.rerun('t1', bqKey)).toBeUndefined()
+    const rerunEntry = results.getSnapshot().t1.sets.find(entry => entry.key === bqKey)!
+    expect(rerunEntry.descriptor.resultId).toBe(77)
+    expect(rerunEntry.descriptor.targetKey).toBe('bq-1')
+    expect(rerunEntry.descriptor.statementSlot).toBe(2)
+    expect(rerunEntry.descriptor.name).toBe('Warehouse')
+    expect(results.connectionForResult('t1', 77)).toBe('conn-bq')
+
+    // Removed result on a completed run does NOT fall back to stale resultSetIds.
+    const sqlKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.resultId === 1)!.key
+    results.removeEntry('t1', sqlKey)
+    expect(results.connectionForResult('t1', 1)).toBeUndefined()
+
+    // Lost/released handle returns undefined.
+    baseClient.handle(77)!.snapshot = { ...baseClient.handle(77)!.snapshot, state: 'lost' }
+    expect(results.connectionForResult('t1', 77)).toBeUndefined()
+
+    // Closed run returns undefined.
+    results.closeResults('t1')
+    expect(results.connectionForResult('t1', 77)).toBeUndefined()
+  })
+
+  it('R1-5 & R1-12: ComparePopover blocks Enter submit in .compare-search and falls back to Summary/active grid on dismiss', () => {
+    const { results } = serviceFixture()
+    const compare = new CompareService(results)
+    cleanups.add(() => compare.dispose())
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    const manyTargets: MultiTargetIdentity[] = Array.from({ length: 10 }, (_, index) => ({
+      targetKey: `srv-${index + 1}`, connectionId: `c-${index + 1}`, provider: 'sqlserver', label: `node-${index + 1}`
+    }))
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: manyTargets } })
+    const manySets = manyTargets.map((target, index) => descriptor(index + 1, { index, targetKey: target.targetKey, statementSlot: 0, columns: cols }))
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(manyTargets.map((target, index) => multiOutcome(target, { resultSetIds: [index + 1] })), manySets)
+    })
+
+    const runSpy = vi.spyOn(compare, 'run')
+    compare.open('t1', summaryEntryKey, 'grid')
+    const workbench = { results, compare } as unknown as Workbench
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench,
+      children: createElement('div', { 'data-pane': 'results' },
+        createElement('div', { 'data-multi-summary': '', 'data-tab-id': 't1', 'data-pane-focus': 'selected', tabIndex: 0 }),
+        createElement(ComparePopover, { tabId: 't1', tab: results.getSnapshot().t1 })
+      )
+    }))
+
+    // R1-5: Enter in .compare-search prevents submit and moves focus to first visible radio.
+    const search = document.querySelector<HTMLInputElement>('input.compare-search')!
+    search.focus()
+    const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => { search.dispatchEvent(enterEvent) })
+    expect(enterEvent.defaultPrevented).toBe(true)
+    expect(runSpy).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(document.querySelector('.compare-targets input[type="radio"]'))
+
+    // R1-12: Dismissing when picker.active grid is not mounted falls back to [data-multi-summary].
+    const summaryEl = host.querySelector<HTMLElement>('[data-multi-summary]')!
+    act(() => { document.querySelector<HTMLFormElement>('.compare-popover')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+    expect(compare.getSnapshot().pickers.t1).toBeUndefined()
+    expect(document.activeElement).toBe(summaryEl)
+  })
+
+  it('R1-6: MessagesView requires hasCoordinatorLines for coordinatorFilter and resets filter on queryId/tabId change', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('msg.sql', 'SELECT 1', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0]), multiOutcome(sqlTargets[1])],
+        [],
+        { messages: [{ text: 'Coordinator note', kind: 'info' }, { text: 'East output', kind: 'info', targetKey: 'prod-east' }] }
+      )
+    })
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const renderView = (tabId: string) => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(MessagesView, { tabId, tab: f.results.getSnapshot()[tabId], firstError: false })
+      }))
+    })
+    renderView(doc.id)
+
+    // Pick Coordinator filter.
+    const coordPill = [...host.querySelectorAll<HTMLButtonElement>('.messages-filter-pill')].find(btn => btn.textContent === 'Coordinator')!
+    act(() => { coordPill.click() })
+    expect(host.querySelector('[data-output-view="messages"]')?.textContent).toContain('Coordinator note')
+    expect(host.querySelector('[data-output-view="messages"]')?.textContent).not.toContain('East output')
+
+    // Re-render same queryId without coordinator lines: falls back to 'all'.
+    const withoutCoord = { ...f.results.getSnapshot()[doc.id], messages: [{ text: 'East output', kind: 'info' as const, targetKey: 'prod-east' }] }
+    act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(MessagesView, { tabId: doc.id, tab: withoutCoord })
+      }))
+    })
+    expect(host.querySelector('[data-output-view="messages"]')?.textContent).toContain('East output')
+
+    // Pick prod-east filter, then start a new run (new queryId): filter resets to 'all'.
+    renderView(doc.id)
+    const eastPill = [...host.querySelectorAll<HTMLButtonElement>('.messages-filter-pill')].find(btn => btn.textContent?.includes('prod-sql-east-01'))!
+    act(() => { eastPill.click() })
+    expect(eastPill.getAttribute('aria-pressed')).toBe('true')
+
+    f.results.begin(doc.id, 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(doc.id, 'q2', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0]), multiOutcome(sqlTargets[1])],
+        [],
+        { messages: [{ text: 'West output', kind: 'info', targetKey: 'prod-west' }] }
+      )
+    })
+    renderView(doc.id)
+    const allPill = [...host.querySelectorAll<HTMLButtonElement>('.messages-filter-pill')].find(btn => btn.textContent === 'All')!
+    expect(allPill.getAttribute('aria-pressed')).toBe('true')
+    expect(host.querySelector('[data-output-view="messages"]')?.textContent).toContain('West output')
+  })
+
+  it('R1-7: ResultsStack clears activeSummary when sets exist so Transpose/Save act on sets[0], while Tabs starts on Summary', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('stacked.sql', 'SELECT 1', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf([multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })], [s1, s2])
+    })
+
+    // Before ResultsStack mounts (Tabs layout default), Summary is active.
+    expect(isSummaryActive(f.results.getSnapshot()[doc.id])).toBe(true)
+    expect(f.results.focusedEntry(doc.id)).toBeUndefined()
+
+    // Mounting ResultsStack with sets moves focus to the first displayed set immediately.
+    mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    const focused = f.results.focusedEntry(doc.id)
+    expect(focused).toBeDefined()
+    expect(focused!.key).toBe(f.results.getSnapshot()[doc.id].sets[0].key)
+    expect(isSummaryActive(f.results.getSnapshot()[doc.id])).toBe(false)
+    expect(f.results.canTranspose(doc.id, focused!.key)).toBe(true)
+  })
+
+  it('R1-8: MultiRunSummary disables Line N error button immediately when the editor text changes', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('edit.sql', 'SELECT 1\nSELECT 2', 'SalesDB')
+    let valid = true
+    vi.spyOn(f.queries, 'sourceLine').mockImplementation(() => valid ? 2 : undefined)
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 1) } })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { status: 'failed', error: { code: '102', message: 'Syntax error', line: 2 } })],
+        [],
+        { status: 'failed' }
+      )
+    })
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id], active: true })
+    }))
+    const lineBtn = [...host.querySelectorAll<HTMLButtonElement>('.multi-target-link')].find(btn => btn.textContent?.includes('Line 2'))!
+    expect(lineBtn.disabled).toBe(false)
+
+    // Edit document: revision bumps and MultiRunSummary re-renders immediately, disabling Line 2.
+    act(() => {
+      valid = false
+      f.documents.getModel(doc.id)!.pushEditOperations([], [{ range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 2 }, text: 'X' }], () => null)
+    })
+    expect(lineBtn.disabled).toBe(true)
+  })
+
+  it('R1-9: transitions non-terminal multi-server targets to failed when finish() fails without multiSummary', () => {
+    const { results, client } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    client.emit('q1', {
+      type: 'multiQuery.targetState', targetKey: 'prod-east', phase: 'succeeded',
+      batchesCompleted: 1, batchesTotal: 1, rowsAffected: 1, resultSetCount: 0, elapsedMs: 10
+    })
+    client.emit('q1', {
+      type: 'multiQuery.targetState', targetKey: 'prod-west', phase: 'running',
+      batchesCompleted: 0, batchesTotal: 1, rowsAffected: 0, resultSetCount: 0, elapsedMs: 12
+    })
+    void results.finish('t1', 'q1', { error: 'IPC transport failed.' })
+    const multi = results.getSnapshot().t1.multi!
+    expect(multi.status).toBe('failed')
+    expect(multi.targets.map(t => t.phase)).toEqual(['succeeded', 'failed', 'failed'])
+  })
+
+  it('R1-10: CompareService recalculates exact on pick() until user explicitly sets exact or runs a comparison', () => {
+    const { results } = serviceFixture()
+    const compare = new CompareService(results)
+    cleanups.add(() => compare.dispose())
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    const targets: MultiTargetIdentity[] = [
+      { targetKey: 'sql-1', connectionId: 'c1', provider: 'sqlserver', label: 'sql-1' },
+      { targetKey: 'sql-2', connectionId: 'c2', provider: 'sqlserver', label: 'sql-2' },
+      { targetKey: 'bq-1', connectionId: 'c3', provider: 'bigquery', label: 'bq-1' }
+    ]
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets } })
+    const sets = targets.map((target, index) => descriptor(index + 1, { index, targetKey: target.targetKey, statementSlot: 0, columns: cols }))
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(targets.map((target, index) => multiOutcome(target, { resultSetIds: [index + 1] })), sets, { mode: 'crossEngineReadOnly' })
+    })
+    const [sql1Key, sql2Key, bqKey] = results.getSnapshot().t1.sets.map(entry => entry.key)
+
+    // Open on sql-2 (previous target sql-1 -> same engine -> exact: false).
+    compare.open('t1', sql2Key)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(false)
+
+    // Pick BigQuery target: recalculates exact -> true without locking memory.exact.
+    compare.pick('t1', bqKey)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(true)
+
+    // Swap does not lock memory.exact; picking sql-1 again recalculates exact -> false.
+    compare.swap('t1')
+    compare.pick('t1', sql1Key)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(false)
+
+    // Explicit setExact(false) persists memory.exact so picking BigQuery stays false.
+    compare.setExact('t1', false)
+    compare.pick('t1', bqKey)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(false)
+  })
+
+  it('R1-11 & R1-13: styles.css includes forced-colors selected tab indicators and vertical-wrapping compare targets', () => {
+    const rules = stylesheetRules()
+    const forcedStatus = rules.find(rule => rule.at.includes('@media (forced-colors: active)') && rule.selector === '.rt-tab[data-selected] .rt-server-status')
+    const forcedCount = rules.find(rule => rule.at.includes('@media (forced-colors: active)') && rule.selector === '.rt-tab[data-selected] .rt-stmt-count')
+    expect(forcedStatus?.declarations).toContainEqual({ property: 'color', value: 'HighlightText' })
+    expect(forcedCount?.declarations).toEqual(expect.arrayContaining([
+      { property: 'background', value: 'HighlightText' },
+      { property: 'color', value: 'Highlight' }
+    ]))
+
+    const targetRule = rules.find(rule => rule.selector === '.compare-target')
+    const bodyRule = rules.find(rule => rule.selector === '.compare-target-body')
+    expect(targetRule?.declarations).toContainEqual({ property: 'min-height', value: 'var(--varia-row)' })
+    expect(bodyRule?.declarations).toEqual(expect.arrayContaining([
+      { property: 'flex-direction', value: 'column' },
+      { property: 'align-items', value: 'stretch' },
+      { property: 'gap', value: '1px' }
+    ]))
   })
 })

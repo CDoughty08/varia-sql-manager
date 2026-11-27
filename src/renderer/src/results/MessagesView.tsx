@@ -76,8 +76,16 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
 
   const multi = hasMultiSummary(tab)
   const targets = multi ? tab.multi!.targets : []
-  const [filter, setFilter] = useState<string>('all')
-  const validFilter = filter === 'all' || filter === coordinatorFilter || targets.some(target => target.targetKey === filter) ? filter : 'all'
+  const runKey = `${tabId}\u0000${tab.queryId}`
+  const [filterState, setFilterState] = useState<{ readonly runKey: string; readonly value: string }>({ runKey, value: 'all' })
+  const setFilter = useCallback((value: string) => setFilterState({ runKey, value }), [runKey])
+  const filter = filterState.runKey === runKey ? filterState.value : 'all'
+  const hasCoordinatorLines = useMemo(() => multi && tab.messages.some(entry => entry.targetKey === undefined), [multi, tab.messages])
+  const validFilter = filter === 'all'
+    || (filter === coordinatorFilter && hasCoordinatorLines)
+    || targets.some(target => target.targetKey === filter)
+    ? filter
+    : 'all'
 
   const targetLabels = useMemo(() => new Map(targets.map(target => [target.targetKey, target.label])), [targets])
   const errorCounts = useMemo(() => {
@@ -89,7 +97,6 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
     }
     return counts
   }, [tab.messages])
-  const hasCoordinatorLines = useMemo(() => multi && tab.messages.some(entry => entry.targetKey === undefined), [multi, tab.messages])
   const filtered = useMemo(() => {
     const indexed = tab.messages.map((entry, originalIndex) => ({ entry, originalIndex }))
     if (!multi || validFilter === 'all') return indexed
@@ -105,10 +112,19 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
   const ref = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const shownError = useRef(-1)
+  const lastRun = useRef(runKey)
   const lastFilter = useRef(validFilter)
-  if (lastFilter.current !== validFilter) { lastFilter.current = validFilter; shownError.current = -1 }
   const tail = messageTail(tab)
   useLayoutEffect(() => {
+    if (lastRun.current !== runKey) {
+      lastRun.current = runKey
+      shownError.current = -1
+      atBottom.current = true
+    }
+    if (lastFilter.current !== validFilter) {
+      lastFilter.current = validFilter
+      shownError.current = -1
+    }
     const element = ref.current
     if (!element) return
     const error = firstError ? filtered.findIndex(item => item.entry.kind === 'error') : -1
@@ -120,7 +136,7 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
       return
     }
     if (atBottom.current) element.scrollTop = element.scrollHeight
-  }, [filtered, tail.length, firstError])
+  }, [filtered, tail.length, firstError, runKey, validFilter])
 
   const log = <div ref={ref} id={id} className="messages" role="log" aria-label="Messages" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-pane-focus="messages"
     onScroll={event => { const element = event.currentTarget; atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 4 }}>

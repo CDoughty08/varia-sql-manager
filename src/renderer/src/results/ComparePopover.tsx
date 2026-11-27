@@ -209,13 +209,22 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
     compare.close(tabId)
   }
 
-  /** Escape, Close and the head's close button: the focus goes back to what opened it. */
+  /** Escape, Close and the head's close button: the focus goes back to what opened it (or Summary / active grid / selected result tab when opened from Summary or Combined). */
   const dismiss = () => {
     const element = home.current
     const trigger = element ? anchorOf(element, picker.anchor, tabId, picker.active).button : undefined
     const owner = element?.ownerDocument
+    const pane = element?.closest<HTMLElement>('[data-pane]') ?? owner
     compare.close(tabId)
-    if (trigger) trigger.focus()
+    if (trigger) { trigger.focus(); return }
+    const targetGrid = owner?.querySelector<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"][data-result-entry="${CSS.escape(picker.active)}"]`)
+    if (targetGrid) { targetGrid.focus(); return }
+    const fallback = pane?.querySelector<HTMLElement>(`[data-multi-summary][data-tab-id="${CSS.escape(tabId)}"][data-pane-focus="selected"]`)
+      ?? pane?.querySelector<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"][data-pane-focus="selected"]`)
+      ?? pane?.querySelector<HTMLElement>(`[data-result-grid][data-tab-id="${CSS.escape(tabId)}"]`)
+      ?? pane?.querySelector<HTMLElement>(`[data-multi-summary][data-tab-id="${CSS.escape(tabId)}"]`)
+      ?? pane?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]')
+    if (fallback) fallback.focus()
     else focusResultGrid(owner, tabId, picker.active)
   }
   // Compare (or Show It) shows the comparison and closes the popover: the keyboard focus goes to the comparison's grid,
@@ -235,8 +244,13 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss() }
+    // Never let Enter in the quick search box trigger native HTML form submission; move focus to the first visible target instead.
+    else if (event.key === 'Enter' && (event.target as Element).matches('.compare-search')) {
+      event.preventDefault()
+      card.current?.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]')?.focus({ preventScroll: true })
+    }
     // Enter on a target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first,
-    // where a failure is said and from where Escape returns it. Never auto-submit while typing in the quick search box.
+    // where a failure is said and from where Escape returns it.
     else if (event.key === 'Enter' && (event.target as Element).matches('input:not(.compare-search)')) { event.preventDefault(); button.current?.focus(); void start() }
   }
 

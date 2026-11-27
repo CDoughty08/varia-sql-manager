@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useCallback, useSyncExternalStore } from 'react'
 import { processedFact } from '../../../shared/bigquery/cost'
 import type { MultiQueryMode, MultiQueryTargetPhase, QueryMultiStatus } from '../../../shared/contracts'
 import type { IconId } from '../../../shared/icons'
@@ -113,6 +113,13 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
   const { results, panes, queries, documents, settings } = useWorkbench()
   const prices = useServiceSnapshot(settings).values['queryExecution.bigQuery.showCost'] !== 'bytes'
   const now = useTicker(tab.status === 'running')
+  const subscribe = useCallback((listener: () => void) => {
+    const content = documents.onDidChangeContent?.(tabId, listener) ?? documents.getModel?.(tabId)?.onDidChangeContent(listener)
+    const changed = documents.subscribe?.(listener)
+    return () => { content?.dispose(); changed?.() }
+  }, [documents, tabId])
+  const revision = () => documents.revision?.(tabId) ?? 0
+  useSyncExternalStore(subscribe, revision, revision)
   const multi = tab.multi
   if (!multi || multi.targets.length === 0) return null
 

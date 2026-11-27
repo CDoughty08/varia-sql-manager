@@ -1,6 +1,6 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
-import type { DiffKindName, MessageEntry, QueryEvent, QueryMultiResult, QueryMultiStatus, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, ResultsRemoteQueryParams, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import { multiQueryTargetStatuses, type DiffKindName, type MessageEntry, type QueryEvent, type QueryMultiResult, type QueryMultiStatus, type QueryResult, type QueryStatus, type ResolvedGroupsFilter, type ResolvedViewFilter, type ResultColumn, type ResultDescriptor, type ResultsJobProgress, type ResultsRemoteQueryParams, type VariaApi, type ViewFilter, type ViewSortKey, type ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -493,6 +493,8 @@ interface Run {
   readonly rolledBackIds: Map<string, boolean>
   /** Combined entries whose underlying per-server result sets were closed, so UI shows Rebuild/Close. */
   staleCombined: ReadonlySet<EntryKey>
+  /** In-flight `results.combine` rebuilds per combined entry key, aborted on drop or run disposal. */
+  readonly combining: Map<EntryKey, AbortController>
 }
 /** A Load into memory: its own query id (query.cancel stops it) and the subscription to its events. */
 /** A query over a windowed result its grid shows running: Load into memory (no kind), Load sample or Re-run, which `abort`
@@ -537,6 +539,7 @@ const multiRunStatus = (status: QueryMultiStatus): RunStatus => {
     case 'rolledBack': case 'commitInDoubt': case 'failed': return 'failed'
   }
 }
+const terminalMultiTargetPhases: ReadonlySet<string> = new Set(multiQueryTargetStatuses)
 /** What Copy and Save read: the result, or its view by id. A sort or filter in BigQuery is a result of its own (viewId 0),
  *  which they read as itself. */
 const jobSource = (handle: ResultHandle, view: ResultView | undefined): { generation: number; resultId: number; viewId?: number } =>
@@ -717,7 +720,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: multi ? 'results' : 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: [], loads: new Map(),
-      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set()
+      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set(), combining: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -787,12 +790,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Resolves the live `connectionId` for a result set inside a multi-server run (used by `BigQueryCostService`). */
   connectionForResult(tabId: string, resultId: number): string | undefined {
     const run = this.runs.get(tabId)
-    if (!run?.multi) return undefined
+    if (!run?.multi || run.status === 'closed' || run.status === 'lost') return undefined
     const entry = run.sets.find(set => set.descriptor.resultId === resultId)
-    if (entry?.descriptor.targetKey) {
+    if (entry) {
+      if (!held(entry) || !entry.descriptor.targetKey) return undefined
       const target = run.multi.targets.find(item => item.targetKey === entry.descriptor.targetKey)
-      if (target?.connectionId) return target.connectionId
+      return target?.connectionId || undefined
     }
+    if (run.status !== 'running') return undefined
     const byId = run.multi.targets.find(item => item.resultSetIds.includes(resultId))
     return byId?.connectionId || undefined
   }
@@ -831,7 +836,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       for (const descriptor of multiSummary.resultSets) {
         this.opened(run, descriptor)
         this.settle(run, descriptor)
-        run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
+        if (descriptor.kind !== 'combined') run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
       this.refreshSorts(tabId, run)
       if (!sameMessages(run.messages, multiSummary.messages)) run.messages = multiSummary.messages.slice(0, resultLimits.messages)
@@ -873,6 +878,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     } else {
       run.status = end.code === 'BACKEND_LOST' ? 'lost' : 'failed'
       run.error = end.error ?? 'The query failed.'
+      if (run.multi) {
+        const targets = run.multi.targets.map(target => terminalMultiTargetPhases.has(target.phase) ? target : { ...target, phase: 'failed' as const })
+        run.multi = { ...run.multi, status: 'failed', targets }
+      }
       if (end.messages?.length) run.messages = [...run.messages, ...end.messages].slice(-resultLimits.messages)
       else run.messages = [...run.messages, { text: run.error, kind: 'error' as const }].slice(-resultLimits.messages)
     }
@@ -1236,9 +1245,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.settled.delete(setKey(old.descriptor))
     }
     run.setKeys.add(setKey(descriptor))
-    // A name the query gave its result stays with it (the backend opens the rerun's set unnamed).
-    const named = old.descriptor.name !== undefined && descriptor.name === undefined ? { ...descriptor, name: old.descriptor.name } : descriptor
-    const entry: ResultSetEntry = { ...old, descriptor: named, handle: this.client.open(descriptor) }
+    // A name the query gave its result (and multi-server target/statement metadata) stays with it (the backend opens the rerun's set without them).
+    const carried: ResultDescriptor = {
+      ...descriptor,
+      ...old.descriptor.name !== undefined && descriptor.name === undefined ? { name: old.descriptor.name } : {},
+      ...old.descriptor.targetKey !== undefined && descriptor.targetKey === undefined ? { targetKey: old.descriptor.targetKey } : {},
+      ...old.descriptor.statementSlot !== undefined && descriptor.statementSlot === undefined ? { statementSlot: old.descriptor.statementSlot } : {}
+    }
+    const label = this.entryLabel(run, carried)
+    const entry: ResultSetEntry = { ...old, descriptor: carried, handle: this.client.open(descriptor), ...label === undefined ? {} : { label } }
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     run.sets[run.sets.indexOf(old)] = entry
     run.entries.set(key, entry)
@@ -1390,7 +1405,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Whether a stale Combined entry has at least two complete in-memory server source sets left to rebuild from. */
   canRebuildCombined(tabId: string, combinedKey: EntryKey): boolean {
     const run = this.runs.get(tabId), entry = run?.entries.get(combinedKey)
-    if (!run || !entry || entry.descriptor.kind !== 'combined' || run.status === 'running' || run.status === 'closed' || !this.client.combine) return false
+    if (!run || !entry || entry.descriptor.kind !== 'combined' || run.status === 'running' || run.status === 'closed' || run.status === 'lost' || !this.client.combine || run.combining.has(combinedKey)) return false
     return this.combinedSourcesOf(run, entry).length >= 2
   }
 
@@ -1398,16 +1413,29 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
    *  for its statement slot, replacing it in place and releasing the old combined buffer. */
   async rebuildCombined(tabId: string, combinedKey: EntryKey): Promise<EntryKey | undefined> {
     const run = this.runs.get(tabId), old = run?.entries.get(combinedKey)
-    if (!run || !old || old.descriptor.kind !== 'combined' || run.status === 'running' || run.status === 'closed' || !this.client.combine) return undefined
+    if (!run || !old || old.descriptor.kind !== 'combined' || run.status === 'running' || run.status === 'closed' || run.status === 'lost' || !this.client.combine) return undefined
+    if (run.combining.has(combinedKey)) return undefined
     const sources = this.combinedSourcesOf(run, old)
     if (sources.length < 2) {
       this.notify(tabId, 'At least two server result sets are needed to rebuild Combined.')
       return undefined
     }
+    const abort = new AbortController()
+    run.combining.set(combinedKey, abort)
     try {
-      const result = await this.client.combine(sources.map(source => source.handle), { ...old.descriptor.name ? { statementName: old.descriptor.name } : {} })
+      const result = await this.client.combine(sources.map(source => source.handle), { ...old.descriptor.name ? { statementName: old.descriptor.name } : {}, signal: abort.signal })
       const current = this.runs.get(tabId)
-      if (this.disposed || current !== run || current.entries.get(combinedKey) !== old || current.status === 'closed') {
+      if (
+        this.disposed
+        || abort.signal.aborted
+        || current !== run
+        || current.entries.get(combinedKey) !== old
+        || current.status === 'closed'
+        || current.status === 'running'
+        || current.status === 'lost'
+        || result.descriptor.generation !== old.descriptor.generation
+        || !sources.every(source => current.entries.get(source.key) === source && held(source))
+      ) {
         this.discard(result.descriptor)
         return undefined
       }
@@ -1451,6 +1479,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         nextStale.delete(combinedKey)
         run.staleCombined = nextStale
       }
+      const warnings = (result as { readonly warnings?: readonly string[] }).warnings
+      if (run.multi && Array.isArray(warnings)) {
+        if (warnings.length > 0) run.multi = { ...run.multi, combineWarnings: [...warnings] }
+        else {
+          const { combineWarnings: _dropped, ...rest } = run.multi
+          run.multi = rest
+        }
+      }
       const grids = this.views.get(tabId)?.grids, state = grids?.get(combinedKey)
       if (grids && state) grids.set(combinedKey, carriedState(state, moved, nextDescriptor.columns.length))
       this.settle(run, nextDescriptor)
@@ -1458,10 +1494,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
       return combinedKey
     } catch (error) {
-      if (!this.disposed && this.runs.get(tabId) === run) {
+      const current = this.runs.get(tabId)
+      if (!abort.signal.aborted && !this.disposed && current === run && current.status !== 'closed' && current.status !== 'lost') {
         this.notify(tabId, `Could not rebuild Combined: ${error instanceof Error ? error.message : String(error)}`)
       }
       return undefined
+    } finally {
+      if (run.combining.get(combinedKey) === abort) run.combining.delete(combinedKey)
     }
   }
 
@@ -2222,7 +2261,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       case 'resultSet.opened': case 'resultSet.closed':
         this.opened(run, event.descriptor)
         this.settle(run, event.descriptor)
-        run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
+        if (event.descriptor.kind !== 'combined') run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
         break
@@ -2834,6 +2873,18 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const key = entry.key
       run.sorting.get(key)?.abort()
       run.sorting.delete(key)
+      run.combining.get(key)?.abort()
+      run.combining.delete(key)
+      if (entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined && run.combining.size > 0) {
+        const slot = entry.descriptor.statementSlot ?? 0
+        for (const [combinedKey, controller] of [...run.combining]) {
+          const combined = run.entries.get(combinedKey)
+          if (combined && (combined.descriptor.statementSlot ?? 0) === slot) {
+            controller.abort()
+            run.combining.delete(combinedKey)
+          }
+        }
+      }
       // A sample or re-run over the result is given up with it (no reason: its lines are not wanted now). The backend also
       // cancels it on the release, but an estimate or a cost prompt still open would otherwise go on to send it.
       const load = run.loads.get(key)
@@ -2930,6 +2981,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A load ends with its result, which the backend stops on release: its events concern no one now.
     // A sample or re-run is given up too (no reason: its lines are not this tab's now), and its result, if one comes, released.
     for (const load of run.loads.values()) { load.subscription?.dispose(); load.abort?.abort() }
+    for (const abort of run.combining.values()) abort.abort()
+    run.combining.clear()
     this.drop(tabId, run, run.sets, run.planSets)
     this.runs.delete(tabId)
     this.operations.forget(tabId)

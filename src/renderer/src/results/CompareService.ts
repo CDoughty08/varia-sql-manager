@@ -196,8 +196,8 @@ export function isCrossEnginePair(tab: TabResults | undefined, a: ResultSetEntry
   return tab.multi.mode === 'crossEngineReadOnly'
 }
 
-/** What a tab's popover was last set to: per group (by number) the target's group and the way round, and exact text for all. */
-interface Remembered { exact: boolean; readonly groups: Map<number, { readonly targetOrdinal: number; readonly swapped: boolean }> }
+/** What a tab's popover was last set to: per group (by number) the target's group and the way round, and exact text when explicitly chosen. */
+interface Remembered { exact?: boolean; readonly groups: Map<number, { readonly targetOrdinal: number; readonly swapped: boolean }> }
 
 /** A comparison in flight: a first run of a pair (`replaces` absent), or a change replacing the comparison `replaces`. */
 /** What a change of a comparison builds on: its sides and options, with the names of the key columns it asked for. A
@@ -500,11 +500,16 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     this.publish({ ...this.getSnapshot(), pickers: next })
   }
   pick(tabId: string, target: EntryKey): void {
+    const picker = this.getSnapshot().pickers[tabId]
     const tab = this.results.getSnapshot()[tabId], entry = entryOf(tab?.sets, target)
-    if (tab && entry) this.choose(tabId, { target, targetOrdinal: slotOf(tab, entry.key)?.group, error: undefined, cancelled: false, refusedRows: false })
+    if (!picker || !tab || !entry) return
+    const memory = this.remembered.get(tabId)
+    const active = entryOf(tab.sets, picker.active)
+    const exactPatch = memory?.exact === undefined ? { exact: isCrossEnginePair(tab, entry, active) } : {}
+    this.choose(tabId, { target, targetOrdinal: slotOf(tab, entry.key)?.group, ...exactPatch, error: undefined, cancelled: false, refusedRows: false }, false)
   }
-  swap(tabId: string): void { const picker = this.getSnapshot().pickers[tabId]; if (picker) this.choose(tabId, { swapped: !picker.swapped, error: undefined, cancelled: false, refusedRows: false }) }
-  setExact(tabId: string, exact: boolean): void { this.choose(tabId, { exact, error: undefined, cancelled: false, refusedRows: false }) }
+  swap(tabId: string): void { const picker = this.getSnapshot().pickers[tabId]; if (picker) this.choose(tabId, { swapped: !picker.swapped, error: undefined, cancelled: false, refusedRows: false }, false) }
+  setExact(tabId: string, exact: boolean): void { this.choose(tabId, { exact, error: undefined, cancelled: false, refusedRows: false }, true) }
 
   /** The picker's two sides, old (−) then new (+), and how their columns pair; undefined while it has no target. */
   sidesOf(tabId: string): { readonly old: ResultSetEntry; readonly neu: ResultSetEntry; readonly pairing: ColumnPairing } | undefined {
@@ -587,8 +592,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const shown = this.existing(tabId, sides.old.key, sides.neu.key)
     // Show It on a pair the run has applies the popover's Exact text (D13): it only focuses the comparison when that
     // matches, else Update replaces it, with its progress, Cancel and failure in the popover as a first run's are.
-    if (shown && this.stateOf(tabId, shown)?.exact === picker.exact && o.context === undefined) { this.remember(tabId, picker); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
-    this.choose(tabId, { error: undefined, cancelled: false, refusedRows: false })
+    if (shown && this.stateOf(tabId, shown)?.exact === picker.exact && o.context === undefined) { this.remember(tabId, picker, true); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
+    this.choose(tabId, { error: undefined, cancelled: false, refusedRows: false }, true)
     const context = o.context === undefined ? {} : { context: o.context }
     // A first run from the popover takes the match remembered for its pair of names.
     const outcome = shown ? await this.replace(tabId, shown.key, { exact: picker.exact, ...context }, { quiet: true })
@@ -1175,11 +1180,12 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     }
     this.publish({ ...this.getSnapshot(), running })
   }
-  /** Keeps the popover's choice for the next open on its group (a target that closed is not one). */
-  private remember(tabId: string, picker: ComparePicker): void {
+  /** Keeps the popover's choice for the next open on its group (a target that closed is not one); `persistExact` records
+   *  `memory.exact` only when the user explicitly toggled Exact text or ran a comparison. */
+  private remember(tabId: string, picker: ComparePicker, persistExact = false): void {
     let memory = this.remembered.get(tabId)
-    if (!memory) this.remembered.set(tabId, memory = { exact: picker.exact, groups: new Map() })
-    memory.exact = picker.exact
+    if (!memory) this.remembered.set(tabId, memory = { groups: new Map() })
+    if (persistExact) memory.exact = picker.exact
     if (picker.target !== undefined && picker.targetOrdinal !== undefined) memory.groups.set(picker.ordinal, { targetOrdinal: picker.targetOrdinal, swapped: picker.swapped })
   }
   private setPicker(tabId: string, picker: ComparePicker): void {
@@ -1197,10 +1203,10 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
   }
   /** A choice made in the popover (a pick, a swap, Exact text, Compare): applied and remembered. What it is told of a
    *  comparison (a failure, a cancel, a new attempt from elsewhere) goes through `update` and is not a choice. */
-  private choose(tabId: string, change: Partial<ComparePicker>): void {
+  private choose(tabId: string, change: Partial<ComparePicker>, persistExact = false): void {
     this.update(tabId, change)
     const picker = this.getSnapshot().pickers[tabId]
-    if (picker) this.remember(tabId, picker)
+    if (picker) this.remember(tabId, picker, persistExact)
   }
 
   dispose(): void {
