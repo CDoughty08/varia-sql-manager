@@ -510,7 +510,8 @@ describe('IPC validation', () => {
       connectionId,
       targets: [
         { project: 'varia-alpha', dataset: 'sales', name: 'orders' },
-        { project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', kind: 'table', allowExternal: true }
+        { project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', kind: 'table', allowExternal: true },
+        { project: 'varia-alpha', dataset: 'sales', name: 'to_cents', kind: 'routine' }
       ]
     }
     expect(validateRequest('language.hydrate', validHydrate)).toEqual(validHydrate)
@@ -524,6 +525,8 @@ describe('IPC validation', () => {
       { connectionId, targets: [{ project: 'Bad Project!', dataset: 'sales', name: 'orders' }] },
       { connectionId, targets: [{ project: 'varia-alpha', dataset: 'bad-dataset', name: 'orders' }] },
       { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'bad`table' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'bad-routine name', kind: 'routine' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'a'.repeat(300), kind: 'routine' }] },
       { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders', kind: 'view' }] },
       { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders', extra: 1 }] }
     ]) expect(() => validateRequest('language.hydrate', bad), JSON.stringify(bad).slice(0, 80)).toThrow('Invalid request')

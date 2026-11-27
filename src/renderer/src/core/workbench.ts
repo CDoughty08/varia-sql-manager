@@ -674,6 +674,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes),
     indexState: objectSearch,
     jitHydrateEnabled: () => settings.get('textEditor.googleSql.jitHydrate'),
+    reportError: message => commands.reportError(message),
     starProject: async (connectionId, project) => {
       const connection = connections.get(connectionId)
       const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId

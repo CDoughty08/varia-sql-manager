@@ -146,13 +146,28 @@ internal sealed class BigQueryLookup
     /// <summary>Whether a discovered project was recently queried in this connection.</summary>
     public bool IsRecent(string project) => recent.Contains(project);
 
-    /// <summary>Whether a non-billing project is waiting for Wave 3 details while a build is still running.</summary>
+    /// <summary>Whether a non-billing project is waiting for Wave 3 details while a full build is still running.</summary>
     public bool Wave3Pending(string project)
     {
-        if (!building || string.Equals(project, billing, StringComparison.Ordinal) || namesOnly.Contains(project)) return false;
+        if (!building || phase is not ("projects" or "names" or "details") || string.Equals(project, billing, StringComparison.Ordinal) || namesOnly.Contains(project)) return false;
         if (reads.TryGetValue(project, out var datasets))
             return datasets.Values.Any(read => !read.Detailed && read.Table.Count > 1);
         return !projectsWithListingSkip.Contains(project);
+    }
+
+    /// <summary>Whether a dataset currently holds only individual JIT-hydrated objects rather than a full dataset listing.</summary>
+    public bool IsHydratedOnly(string project, string dataset) => hydratedOnlyDatasets.Contains((project, dataset));
+
+    /// <summary>Whether the index holds at least one top-level object in any tracked project (O(datasets), zero allocation).</summary>
+    public bool HasAnyHeldObject()
+    {
+        foreach (var project in Projects)
+        {
+            if (!reads.TryGetValue(project, out var datasets)) continue;
+            foreach (var read in datasets.Values)
+                if (read.Facts is { Objects.Count: > 0 } || read.Table.Count > 1) return true;
+        }
+        return false;
     }
 
     /// <summary>The project's discovery tier: billing, starred, or discovered.</summary>
@@ -223,128 +238,200 @@ internal sealed class BigQueryLookup
 
     /// <summary>Bounded cross-project fuzzy table/object jump across RAM-indexed datasets, ranked
     /// Default dataset → Billing → ★ Starred → Recently Queried → Discovered. Strictly capped at <paramref name="limit"/>
-    /// (at most <see cref="JumpLookupLimits.Items"/>) and <see cref="JumpLookupLimits.MaxScanObjects"/> scanned entries.</summary>
+    /// (at most <see cref="JumpLookupLimits.Items"/>) and <see cref="JumpLookupLimits.MaxScanObjects"/> scanned entries.
+    /// Lazily visits tiers and keeps a bounded top-K list (&lt;= 50) per tier so large 5,000-project orgs stay fast and low-allocation.</summary>
     public IReadOnlyList<BigQueryJumpHit> JumpObjects(string query, string? defaultDataset, int limit, out bool truncated)
     {
         truncated = false;
-        var cap = Math.Clamp(limit, 1, JumpLookupLimits.Items);
         if (string.IsNullOrWhiteSpace(query) || reads.Count == 0) return [];
         var needle = query.Trim();
         if (needle.Length < JumpLookupLimits.MinPrefixChars) return [];
+        if (limit <= 0)
+        {
+            truncated = HasAnyHeldObject();
+            return [];
+        }
+        var cap = Math.Clamp(limit, 1, JumpLookupLimits.Items);
 
         var results = new List<BigQueryJumpHit>(cap);
         var scanned = 0;
+        var anyTruncated = false;
 
-        // Partition projects into strict priority tiers without copying datasets.
         var billingRead = reads.GetValueOrDefault(billing);
         string? resolvedDefault = null;
         if (billingRead is not null && !string.IsNullOrEmpty(defaultDataset))
             resolvedDefault = Resolve(billingRead.Keys, defaultDataset);
 
-        var tierProjects = new List<List<(string Project, string Dataset, DatabaseIndex Read, int ProjectOrder)>>
-        {
-            new(), // 0: Default dataset
-            new(), // 1: Billing (other datasets)
-            new(), // 2: ★ Starred
-            new(), // 3: Recently Queried
-            new()  // 4: Discovered
-        };
+        var tierHits = new List<(BigQueryJumpHit Hit, int ProjectOrder)>(cap);
 
-        if (billingRead is not null)
+        bool CompareBetter(int score, int pIdx, string dsName, string name, in (BigQueryJumpHit Hit, int ProjectOrder) other)
         {
-            if (resolvedDefault is not null && billingRead.TryGetValue(resolvedDefault, out var defRead))
-                tierProjects[0].Add((billing, resolvedDefault, defRead, 0));
-            foreach (var dsName in billingRead.Keys.Order(StringComparer.Ordinal))
-                if (dsName != resolvedDefault)
-                    tierProjects[1].Add((billing, dsName, billingRead[dsName], 0));
+            var cmp = score.CompareTo(other.Hit.MatchRank);
+            if (cmp != 0) return cmp < 0;
+            cmp = pIdx.CompareTo(other.ProjectOrder);
+            if (cmp != 0) return cmp < 0;
+            cmp = StringComparer.OrdinalIgnoreCase.Compare(dsName, other.Hit.Dataset);
+            if (cmp != 0) return cmp < 0;
+            cmp = StringComparer.OrdinalIgnoreCase.Compare(name, other.Hit.Entry.Name);
+            return cmp != 0 ? cmp < 0 : StringComparer.Ordinal.Compare(name, other.Hit.Entry.Name) < 0;
         }
 
-        for (var pIdx = 1; pIdx < Projects.Count; pIdx++)
+        bool ScanDataset(int tierRank, int remaining, string project, string dsName, DatabaseIndex read, int pIdx, bool alreadyTruncated)
         {
-            var project = Projects[pIdx];
-            if (!reads.TryGetValue(project, out var datasets) || datasets.Count == 0) continue;
-            var tierIdx = starred.Contains(project) ? 2 : recent.Contains(project) ? 3 : 4;
-            foreach (var dsName in datasets.Keys.Order(StringComparer.Ordinal))
-                tierProjects[tierIdx].Add((project, dsName, datasets[dsName], pIdx));
+            var table = read.Table;
+            var tierLabel = ProjectTier(project);
+            var isRecent = recent.Contains(project);
+            var isNamesOnly = namesOnly.Contains(project);
+            var dsTruncated = alreadyTruncated;
+
+            void Consider(int at)
+            {
+                var kind = table.Kind(at);
+                if (kind is "bqDataset" or "bqColumn") return;
+                var name = table.Name(at);
+                var full = tierHits.Count >= remaining;
+                var worstScore = full ? tierHits[^1].Hit.MatchRank : 4;
+                // Only skip subsequence checks once the tier is both full with better-than-subsequence hits AND already marked truncated.
+                var allowSubsequence = !full || worstScore >= 4 || !dsTruncated;
+                var score = JumpMatchScore(name, needle, allowSubsequence);
+                if (score < 0) return;
+                if (full)
+                {
+                    dsTruncated = true;
+                    if (score > worstScore || !CompareBetter(score, pIdx, dsName, name, tierHits[^1])) return;
+                }
+                var candidate = (new BigQueryJumpHit(project, dsName, new LookupObject(project, table, at, read), tierLabel, isRecent, isNamesOnly, tierRank, score), pIdx);
+                var insertAt = tierHits.Count;
+                while (insertAt > 0 && CompareBetter(score, pIdx, dsName, name, tierHits[insertAt - 1])) insertAt--;
+                if (full)
+                {
+                    tierHits.RemoveAt(tierHits.Count - 1);
+                    tierHits.Insert(insertAt, candidate);
+                }
+                else
+                {
+                    tierHits.Insert(insertAt, candidate);
+                }
+            }
+
+            if (read.Facts?.Objects is Dictionary<int, BigQueryObjectFacts> objDict && objDict.Count > 0)
+            {
+                // Concrete Dictionary<int, T>.KeyCollection enumerator avoids boxing.
+                foreach (var at in objDict.Keys)
+                {
+                    if (++scanned > JumpLookupLimits.MaxScanObjects) { dsTruncated = true; return dsTruncated; }
+                    Consider(at);
+                }
+            }
+            else if (read.Facts is { Objects.Count: > 0 } facts)
+            {
+                foreach (var pair in facts.Objects)
+                {
+                    if (++scanned > JumpLookupLimits.MaxScanObjects) { dsTruncated = true; return dsTruncated; }
+                    Consider(pair.Key);
+                }
+            }
+            else
+            {
+                for (var at = 0; at < table.Count; at++)
+                {
+                    if (table.Parent(at) >= 0 || table.Kind(at) == "bqDataset") continue;
+                    if (++scanned > JumpLookupLimits.MaxScanObjects) { dsTruncated = true; return dsTruncated; }
+                    Consider(at);
+                }
+            }
+            return dsTruncated;
         }
 
-        for (var tierRank = 0; tierRank < tierProjects.Count; tierRank++)
+        void FlushTier(bool tierTruncated)
         {
-            var bucket = tierProjects[tierRank];
-            if (bucket.Count == 0) continue;
+            if (tierTruncated) anyTruncated = true;
+            for (var i = 0; i < tierHits.Count; i++) results.Add(tierHits[i].Hit);
+            tierHits.Clear();
+        }
+
+        // Lazy tier walk: lower tiers are never sorted or enumerated when higher tiers fill the cap.
+        for (var tierRank = 0; tierRank < 5; tierRank++)
+        {
             var remaining = cap - results.Count;
             if (remaining <= 0)
             {
-                // Higher tiers already filled the cap; report truncation if any lower tier holds objects.
-                if (HasAnyObject(bucket)) { truncated = true; break; }
+                if (TierHasAnyObject(tierRank, billingRead, resolvedDefault)) { anyTruncated = true; break; }
                 continue;
             }
-
-            var tierHits = new List<(BigQueryJumpHit Hit, int ProjectOrder)>();
-            var exactOrPrefix = 0;
-            var allowSubsequence = true;
-            foreach (var (project, dsName, read, pIdx) in bucket)
+            var tierTruncated = false;
+            switch (tierRank)
             {
-                var table = read.Table;
-                var tierLabel = ProjectTier(project);
-                var isRecent = recent.Contains(project);
-                var isNamesOnly = namesOnly.Contains(project);
-                IEnumerable<int> indices = read.Facts is { Objects.Count: > 0 } facts
-                    ? facts.Objects.Keys
-                    : TopLevelIndices(table);
-                foreach (var at in indices)
-                {
-                    if (++scanned > JumpLookupLimits.MaxScanObjects)
+                case 0:
+                    if (billingRead is not null && resolvedDefault is not null && billingRead.TryGetValue(resolvedDefault, out var defRead))
+                        tierTruncated = ScanDataset(0, remaining, billing, resolvedDefault, defRead, 0, tierTruncated);
+                    break;
+                case 1:
+                    if (billingRead is not null)
                     {
-                        truncated = true;
-                        break;
+                        var billingDatasets = billingRead.Keys.Where(ds => ds != resolvedDefault).Order(StringComparer.Ordinal).ToList();
+                        foreach (var dsName in billingDatasets)
+                        {
+                            tierTruncated = ScanDataset(1, remaining, billing, dsName, billingRead[dsName], 0, tierTruncated);
+                            if (scanned > JumpLookupLimits.MaxScanObjects) break;
+                        }
                     }
-                    var kind = table.Kind(at);
-                    if (kind is "bqDataset" or "bqColumn") continue;
-                    var name = table.Name(at);
-                    var score = JumpMatchScore(name, needle, allowSubsequence);
-                    if (score < 0) continue;
-                    if (score <= 2 && ++exactOrPrefix >= remaining) allowSubsequence = false;
-                    tierHits.Add((new BigQueryJumpHit(project, dsName, new LookupObject(project, table, at, read), tierLabel, isRecent, isNamesOnly, tierRank, score), pIdx));
-                }
-                if (scanned > JumpLookupLimits.MaxScanObjects) break;
+                    break;
+                default:
+                    for (var pIdx = 1; pIdx < Projects.Count; pIdx++)
+                    {
+                        var project = Projects[pIdx];
+                        var pTier = starred.Contains(project) ? 2 : recent.Contains(project) ? 3 : 4;
+                        if (pTier != tierRank || !reads.TryGetValue(project, out var datasets) || datasets.Count == 0) continue;
+                        var orderedDatasets = datasets.Count == 1 ? null : datasets.Keys.Order(StringComparer.Ordinal).ToList();
+                        if (orderedDatasets is null)
+                        {
+                            foreach (var pair in datasets)
+                                tierTruncated = ScanDataset(tierRank, remaining, project, pair.Key, pair.Value, pIdx, tierTruncated);
+                        }
+                        else
+                        {
+                            foreach (var dsName in orderedDatasets)
+                            {
+                                tierTruncated = ScanDataset(tierRank, remaining, project, dsName, datasets[dsName], pIdx, tierTruncated);
+                                if (scanned > JumpLookupLimits.MaxScanObjects) break;
+                            }
+                        }
+                        if (scanned > JumpLookupLimits.MaxScanObjects) break;
+                    }
+                    break;
             }
-
-            if (tierHits.Count > 0)
-            {
-                tierHits.Sort(static (a, b) =>
-                {
-                    var cmp = a.Hit.MatchRank.CompareTo(b.Hit.MatchRank);
-                    if (cmp != 0) return cmp;
-                    cmp = a.ProjectOrder.CompareTo(b.ProjectOrder);
-                    if (cmp != 0) return cmp;
-                    cmp = StringComparer.OrdinalIgnoreCase.Compare(a.Hit.Dataset, b.Hit.Dataset);
-                    if (cmp != 0) return cmp;
-                    cmp = StringComparer.OrdinalIgnoreCase.Compare(a.Hit.Entry.Name, b.Hit.Entry.Name);
-                    return cmp != 0 ? cmp : StringComparer.Ordinal.Compare(a.Hit.Entry.Name, b.Hit.Entry.Name);
-                });
-                if (tierHits.Count > remaining) truncated = true;
-                var take = Math.Min(remaining, tierHits.Count);
-                for (var i = 0; i < take; i++) results.Add(tierHits[i].Hit);
-            }
-
+            FlushTier(tierTruncated);
             if (scanned > JumpLookupLimits.MaxScanObjects) break;
         }
 
+        truncated = anyTruncated;
         return results;
     }
 
-    private static bool HasAnyObject(List<(string Project, string Dataset, DatabaseIndex Read, int ProjectOrder)> bucket)
+    private bool TierHasAnyObject(int tierRank, Dictionary<string, DatabaseIndex>? billingRead, string? resolvedDefault)
     {
-        foreach (var (_, _, read, _) in bucket)
-            if (read.Facts is { Objects.Count: > 0 } || read.Table.Count > 1) return true;
-        return false;
-    }
-
-    private static IEnumerable<int> TopLevelIndices(ObjectTable table)
-    {
-        for (var at = 0; at < table.Count; at++)
-            if (table.Parent(at) < 0 && table.Kind(at) != "bqDataset") yield return at;
+        static bool ReadHasObject(DatabaseIndex read) => read.Facts is { Objects.Count: > 0 } || read.Table.Count > 1;
+        switch (tierRank)
+        {
+            case 0:
+                return billingRead is not null && resolvedDefault is not null && billingRead.TryGetValue(resolvedDefault, out var defRead) && ReadHasObject(defRead);
+            case 1:
+                if (billingRead is null) return false;
+                foreach (var pair in billingRead)
+                    if (pair.Key != resolvedDefault && ReadHasObject(pair.Value)) return true;
+                return false;
+            default:
+                for (var pIdx = 1; pIdx < Projects.Count; pIdx++)
+                {
+                    var project = Projects[pIdx];
+                    var pTier = starred.Contains(project) ? 2 : recent.Contains(project) ? 3 : 4;
+                    if (pTier != tierRank || !reads.TryGetValue(project, out var datasets)) continue;
+                    foreach (var read in datasets.Values)
+                        if (ReadHasObject(read)) return true;
+                }
+                return false;
+        }
     }
 
     /// <summary>Allocation-free fuzzy score for cross-project jump: 0 exact, 1 prefix, 2 word-boundary substring, 3 substring, 4 subsequence, -1 no match.</summary>

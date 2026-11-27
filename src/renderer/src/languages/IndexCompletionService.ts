@@ -12,7 +12,7 @@ import { googleSqlDialect, quoteGoogleSqlName } from '../../../shared/googlesql/
 import { scanGoogleSql } from '../../../shared/googlesql/lexer'
 import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../../../shared/googlesql/scope'
 import { languageLimits } from '../../../shared/language-service'
-import { jumpLookupLimits, languageHydrateLimits, languageLookupLimits, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath } from '../../../shared/language-lookup'
+import { jumpLookupLimits, languageHydrateLimits, languageLookupLimits, type LanguageHydrateOutcome, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath } from '../../../shared/language-lookup'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { documentProvider, isQueryDocument } from '../documents'
@@ -54,6 +54,8 @@ export interface IndexCompletionOptions {
   readonly jitHydrateEnabled?: () => boolean
   /** Stars an external BigQuery project via PR #738's BigQueryStarredService and starts indexing it. */
   readonly starProject?: (connectionId: string, project: string) => Promise<boolean>
+  /** Reports a non-blocking error banner when an explicit one-click JIT hydration fails. */
+  readonly reportError?: (message: string) => void
 }
 /** Lookups in flight at once across every editor: past it, completion answers keywords and functions only, marked incomplete. */
 export const indexCompletionLimits = { inFlight: 4, refreshStatements: 32, refreshScopes: 16, jumpCacheEntries: 64 } as const
@@ -72,6 +74,12 @@ const subtypeLabels: Readonly<Record<string, string>> = {
 }
 
 interface JumpCacheEntry { readonly prefix: string; readonly dataset?: string; readonly answer: LanguageLookupAnswer; readonly at: number }
+interface BatchedJumpSlot {
+  readonly request: LanguageLookupPath
+  consumed: boolean
+  readonly promise: Promise<LanguageLookupAnswer | undefined>
+  readonly resolve: (answer: LanguageLookupAnswer | undefined) => void
+}
 interface HydrateTargetRef { readonly project: string; readonly dataset: string; readonly name: string }
 interface ProjectRankInfo { readonly tierRank: number; readonly order: number }
 
@@ -110,11 +118,14 @@ function jumpMatches(name: string, query: string): boolean {
 export class IndexCompletionService extends SnapshotStore<Snapshot> implements Disposable {
   private readonly bindings: Disposable[] = []
   private readonly caches = new Map<string, LookupCache>()
+  private readonly cacheEpoch = new Map<string, number>()
   private readonly jumpCaches = new Map<string, JumpCacheEntry[]>()
   private readonly hydrateAttempted = new Map<string, Set<string>>()
+  private readonly externalKnown = new Map<string, Set<string>>()
+  private readonly hydrateInFlight = new Map<string, Map<string, Promise<LanguageHydrateOutcome | undefined>>>()
   private readonly ensured = new Set<string>()
   /** Optional sidecar jump request batched into the next `language.lookup` IPC on the current completion turn. */
-  private readonly batchedJump = new Map<string, { readonly request: LanguageLookupPath; answer?: LanguageLookupAnswer; consumed: boolean }>()
+  private readonly batchedJump = new Map<string, BatchedJumpSlot>()
   /** The connection (and generation) and origin each tab's error came from: it goes when the tab moves, reconnects, or a Search Objects build clears a refresh error. */
   private readonly errorMeta = new Map<string, { readonly key: string; readonly source: 'lookup' | 'refresh' }>()
   private readonly indexSignatures = new Map<string, string>()
@@ -166,27 +177,33 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
 
         // Cross-project fuzzy table jump on `FROM <2+ chars>` (batched into the same language.lookup IPC when uncached).
         const typedUnquoted = unquoteGoogleSqlName(read.word.typed, read.word.quoted)
+        const jumpQuery = typedUnquoted.trim()
         const wantsJump = read.site.kind === 'object'
           && read.site.qualifier.length === 0
           && !typedUnquoted.includes('.')
-          && typedUnquoted.length >= jumpLookupLimits.minPrefixChars
-          && typedUnquoted.length <= jumpLookupLimits.maxPrefixChars
+          && jumpQuery.length >= jumpLookupLimits.minPrefixChars
+          && jumpQuery.length <= jumpLookupLimits.maxPrefixChars
           && !!target.connectionId
           && !!target.key
         let jumpAnswer: LanguageLookupAnswer | undefined
-        let jumpSlot: { readonly request: LanguageLookupPath; answer?: LanguageLookupAnswer; consumed: boolean } | undefined
+        let jumpSlot: BatchedJumpSlot | undefined
         if (wantsJump && target.key) {
-          jumpAnswer = this.findJumpCache(target.key, typedUnquoted, target.dataset)
+          jumpAnswer = this.findJumpCache(target.key, jumpQuery, target.dataset)
           if (!jumpAnswer) {
+            let resolveSlot!: (answer: LanguageLookupAnswer | undefined) => void
+            const promise = new Promise<LanguageLookupAnswer | undefined>(resolve => { resolveSlot = resolve })
             jumpSlot = {
-              request: { path: [], prefix: typedUnquoted, mode: 'jump', limit: jumpLookupLimits.items, ...target.dataset ? { dataset: target.dataset } : {} },
-              consumed: false
+              request: { path: [], prefix: jumpQuery, mode: 'jump', limit: jumpLookupLimits.items, ...target.dataset ? { dataset: target.dataset } : {} },
+              consumed: false,
+              promise,
+              resolve: resolveSlot
             }
             this.batchedJump.set(target.key, jumpSlot)
           }
         }
 
         // A failure is a value: an empty list the editor asks for again, never a rejection.
+        const epochBefore = target.key ? (this.cacheEpoch.get(target.key) ?? 0) : 0
         let list: Awaited<ReturnType<typeof completeFromIndex>>
         try {
           list = await completeFromIndex(read, dialect, trackedLookup).catch(() => ({ items: [], incomplete: true }))
@@ -196,8 +213,10 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
 
         if (wantsJump && !jumpAnswer && jumpSlot) {
-          if (jumpSlot.consumed) jumpAnswer = jumpSlot.answer
-          else if (target.connectionId && target.key) {
+          if (jumpSlot.consumed) {
+            jumpAnswer = await jumpSlot.promise
+            if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
+          } else if (target.connectionId && target.key) {
             jumpAnswer = await this.fetchJumpAlone(target.connectionId, target.key, target.documentId, jumpSlot.request)
             if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
           }
@@ -205,34 +224,28 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
 
         // Hybrid JIT hydration: auto-hydrate Wave-3-pending / memory-capped tracked tables when enabled,
         // and surface actionable Fetch schema (free) / ★ Star project prompts for unstarred external projects.
-        const { autoTargets, externalTargets } = classifyLookupTargets(objectLookups, target.project)
+        const externalKnown = target.key ? this.externalKnown.get(target.key) : undefined
+        const { autoTargets, externalTargets } = classifyLookupTargets(objectLookups, target.project, externalKnown)
         const asksColumns = read.site.kind === 'member' || read.site.kind === 'expression' || read.site.kind === 'joinCondition' || read.site.kind === 'unnestArg'
         if (asksColumns && autoTargets.length > 0 && this.isJitHydrateEnabled() && this.api.languageHydrate && target.connectionId && target.key) {
-          const attempted = this.attemptedSet(target.key)
-          const fresh = autoTargets.filter(item => !attempted.has(hydrateKey(item))).slice(0, languageHydrateLimits.targets)
-          if (fresh.length > 0) {
-            for (const item of fresh) attempted.add(hydrateKey(item))
-            const hydrated = await this.api.languageHydrate({
-              connectionId: target.connectionId,
-              targets: fresh.map(item => ({ project: item.project, dataset: item.dataset, name: item.name, allowExternal: false }))
-            }).catch(() => undefined)
+          let anyHydrated = (this.cacheEpoch.get(target.key) ?? 0) !== epochBefore
+          if (!anyHydrated) {
+            const outcomes = await this.runAutoHydrate(target.connectionId, target.key, autoTargets)
             if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
-            if (hydrated?.ok) {
-              let anyHydrated = false
-              for (const outcome of hydrated.value.outcomes) {
-                if (outcome.status === 'hydrated' || outcome.status === 'cached') anyHydrated = true
-                else if (outcome.status === 'external') {
-                  if (!externalTargets.some(existing => existing.project === outcome.project && existing.dataset === outcome.dataset && existing.name === outcome.name)) {
-                    externalTargets.push({ project: outcome.project, dataset: outcome.dataset, name: outcome.name })
-                  }
+            for (const outcome of outcomes) {
+              if (!outcome) continue
+              if (outcome.status === 'hydrated' || outcome.status === 'cached') anyHydrated = true
+              else if (outcome.status === 'external') {
+                if (!externalTargets.some(existing => existing.project === outcome.project && existing.dataset === outcome.dataset && existing.name === outcome.name)) {
+                  externalTargets.push({ project: outcome.project, dataset: outcome.dataset, name: outcome.name })
                 }
               }
-              if (anyHydrated) {
-                this.clearConnectionCaches(target.key, false)
-                list = await completeFromIndex(read, dialect, trackedLookup).catch(() => list)
-                if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
-              }
             }
+            if ((this.cacheEpoch.get(target.key) ?? 0) !== epochBefore) anyHydrated = true
+          }
+          if (anyHydrated) {
+            list = await completeFromIndex(read, dialect, trackedLookup).catch(() => list)
+            if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
           }
         }
 
@@ -264,15 +277,20 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
 
         // Actionable Fetch schema (free) / ★ Star project items when an unstarred external table (or unhydrated table with auto-hydrate off) has no columns.
         const hasColumns = list.items.some(item => item.kind === 'column' || item.kind === 'field')
+        const isMemberSite = read.site.kind === 'member'
         const actionableTargets = externalTargets.length > 0
           ? externalTargets
-          : (!this.isJitHydrateEnabled() && read.site.kind === 'member' && !hasColumns ? autoTargets : [])
-        if (asksColumns && actionableTargets.length > 0 && target.connectionId && (read.site.kind === 'member' ? !hasColumns : true)) {
+          : (!this.isJitHydrateEnabled() && isMemberSite && !hasColumns ? autoTargets : [])
+        const showActions = asksColumns
+          && actionableTargets.length > 0
+          && !!target.connectionId
+          && (isMemberSite ? !hasColumns : read.word.typed.length === 0)
+        if (showActions && target.connectionId) {
           const picked = pickActionTarget(read, target.dialect, actionableTargets)
           if (picked) {
-            const actions = actionSuggestions(monaco, target.connectionId, picked, target.project, { insert, replace }, read.word, hasColumns)
-            if (hasColumns) suggestions.push(...actions)
-            else suggestions.unshift(...actions)
+            const actions = actionSuggestions(monaco, target.connectionId, picked, target.project, { insert, replace }, read.word, isMemberSite)
+            if (isMemberSite) suggestions.unshift(...actions)
+            else suggestions.push(...actions)
           }
         }
 
@@ -311,7 +329,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         }
         // Unstarred external project hover prompt with one-click Fetch schema (free) and ★ Star project links.
         if (target.connectionId) {
-          const { externalTargets } = classifyLookupTargets(objectLookups, target.project)
+          const { externalTargets } = classifyLookupTargets(objectLookups, target.project, target.key ? this.externalKnown.get(target.key) : undefined)
           const hoveredPath = read.object ? target.dialect.objectPath(read.parts) : undefined
           const matched = hoveredPath && hoveredPath.length === 3
             ? externalTargets.find(item => item.project === hoveredPath[0] && item.dataset === hoveredPath[1] && item.name === hoveredPath[2])
@@ -375,13 +393,25 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       connectionId,
       targets: [{ project, dataset, name, allowExternal: true }]
     }).catch(() => undefined)
-    if (this.disposed || !result?.ok) return false
-    const status = result.value.outcomes[0]?.status
-    if (status !== 'hydrated' && status !== 'cached') return false
-    this.clearConnectionCaches(key, false)
-    const activeEditor = this.monaco.editor?.getEditors?.().find(editor => editor.hasWidgetFocus?.() || editor.hasTextFocus?.())
-    if (activeEditor) activeEditor.trigger('varia.jit', 'editor.action.triggerSuggest', {})
-    return true
+    if (this.disposed) return false
+    if (!result) {
+      this.options.reportError?.(`Could not fetch metadata for ${project}.${dataset}.${name}.`)
+      return false
+    }
+    if (!result.ok) {
+      this.options.reportError?.(result.error || `Could not fetch metadata for ${project}.${dataset}.${name}.`)
+      return false
+    }
+    const outcome = result.value.outcomes[0]
+    if (outcome?.status === 'hydrated' || outcome?.status === 'cached') {
+      this.externalKnown.get(key)?.delete(hydrateKey({ project, dataset, name }))
+      this.clearConnectionCaches(key, false)
+      const activeEditor = this.monaco.editor?.getEditors?.().find(editor => editor.hasWidgetFocus?.() || editor.hasTextFocus?.())
+      if (activeEditor) activeEditor.trigger('varia.jit', 'editor.action.triggerSuggest', {})
+      return true
+    }
+    this.options.reportError?.(describeHydrateFailure(project, dataset, name, outcome))
+    return false
   }
 
   /** One-click ★ Star project action wired to PR #738's `BigQueryStarredService`. */
@@ -568,10 +598,84 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     return set
   }
 
+  private externalSet(key: string): Set<string> {
+    let set = this.externalKnown.get(key)
+    if (!set) { set = new Set(); this.externalKnown.set(key, set) }
+    return set
+  }
+
+  private recordBounded(set: Set<string>, entry: string): void {
+    if (set.has(entry)) { set.delete(entry); set.add(entry); return }
+    while (set.size >= languageHydrateLimits.maxNegativeEntries) {
+      const oldest = set.values().next().value
+      if (oldest === undefined) break
+      set.delete(oldest)
+    }
+    set.add(entry)
+  }
+
+  /**
+   * Coalesces auto-hydration per `(connectionKey, project, dataset, name)` and invalidates `LookupCache` on completion
+   * even if the triggering completion request was cancelled by rapid typing.
+   */
+  private runAutoHydrate(connectionId: string, key: string, targets: readonly HydrateTargetRef[]): Promise<readonly (LanguageHydrateOutcome | undefined)[]> {
+    const hydrate = this.api.languageHydrate
+    if (!hydrate) return Promise.resolve([])
+    let inFlight = this.hydrateInFlight.get(key)
+    if (!inFlight) { inFlight = new Map(); this.hydrateInFlight.set(key, inFlight) }
+    const attempted = this.attemptedSet(key)
+    const promises: Promise<LanguageHydrateOutcome | undefined>[] = []
+    const fresh: HydrateTargetRef[] = []
+    for (const item of targets) {
+      const k = hydrateKey(item)
+      const existing = inFlight.get(k)
+      if (existing) { promises.push(existing); continue }
+      if (!attempted.has(k) && fresh.length < languageHydrateLimits.targets) fresh.push(item)
+    }
+    if (fresh.length > 0) {
+      for (const item of fresh) this.recordBounded(attempted, hydrateKey(item))
+      const batchPromise = hydrate({
+        connectionId,
+        targets: fresh.map(item => ({ project: item.project, dataset: item.dataset, name: item.name, allowExternal: false }))
+      }).catch(() => undefined).then(result => {
+        if (this.disposed || !result?.ok) return undefined
+        let anyHydrated = false
+        for (const outcome of result.value.outcomes) {
+          const outcomeKey = hydrateKey(outcome)
+          if (outcome.status === 'hydrated' || outcome.status === 'cached') {
+            anyHydrated = true
+            this.externalKnown.get(key)?.delete(outcomeKey)
+          } else if (outcome.status === 'external') {
+            this.recordBounded(this.externalSet(key), outcomeKey)
+          }
+        }
+        if (anyHydrated) this.clearConnectionCaches(key, false)
+        return result.value.outcomes
+      })
+      fresh.forEach((item, idx) => {
+        const k = hydrateKey(item)
+        const tracked = batchPromise.then(outcomes => outcomes?.[idx]).finally(() => {
+          const map = this.hydrateInFlight.get(key)
+          if (map?.get(k) === tracked) {
+            map.delete(k)
+            if (map.size === 0) this.hydrateInFlight.delete(key)
+          }
+        })
+        inFlight!.set(k, tracked)
+        promises.push(tracked)
+      })
+    }
+    return promises.length > 0 ? Promise.all(promises) : Promise.resolve([])
+  }
+
   private clearConnectionCaches(key: string, resetHydrateAttempts: boolean): void {
+    this.cacheEpoch.set(key, (this.cacheEpoch.get(key) ?? 0) + 1)
     this.caches.get(key)?.clear()
     this.jumpCaches.delete(key)
-    if (resetHydrateAttempts) this.hydrateAttempted.delete(key)
+    if (resetHydrateAttempts) {
+      this.hydrateAttempted.delete(key)
+      this.externalKnown.delete(key)
+    }
   }
 
   private findJumpCache(key: string, prefix: string, dataset?: string): LanguageLookupAnswer | undefined {
@@ -636,16 +740,19 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const pending = !isSoloJump ? this.batchedJump.get(key) : undefined
     const attachJump = !!pending && !pending.consumed && requests.length < languageLookupLimits.requests
     const sent = attachJump ? [...requests, pending.request] : requests
-    if (attachJump && pending) pending.consumed = true
+    if (attachJump && pending) {
+      pending.consumed = true
+      if (this.batchedJump.get(key) === pending) this.batchedJump.delete(key)
+    }
     this.inFlight++
+    let jumpAnswer: LanguageLookupAnswer | undefined
     try {
       const result = await this.api.languageLookup({ connectionId, requests: sent })
       if (this.disposed) return undefined
       this.failure(documentId, key, result.ok ? undefined : result.error, 'lookup')
       if (!result.ok) return undefined
       if (attachJump && pending && result.value.answers.length === sent.length) {
-        const jumpAnswer = result.value.answers[result.value.answers.length - 1]
-        pending.answer = jumpAnswer
+        jumpAnswer = result.value.answers[result.value.answers.length - 1]
         if (result.value.index === 'ready' && jumpAnswer.state !== 'building') this.keepJumpCache(key, pending.request, jumpAnswer)
         return { index: result.value.index, answers: result.value.answers.slice(0, requests.length) }
       }
@@ -653,7 +760,10 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     } catch (error) {
       this.failure(documentId, key, error instanceof Error ? error.message : 'The index could not answer.', 'lookup')
       return undefined
-    } finally { this.inFlight-- }
+    } finally {
+      this.inFlight--
+      if (attachJump && pending) pending.resolve(jumpAnswer)
+    }
   }
 
   private isCurrentTarget(documentId: string, key: string): boolean {
@@ -677,7 +787,16 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   private reconcile(): void {
     if (this.disposed) return
     const live = new Set(this.connections.getSnapshot().filter(connection => isLiveConnection(connection) && isBigQueryConnection(connection)).map(cacheKey))
-    for (const key of [...this.caches.keys()]) if (!live.has(key)) { this.caches.delete(key); this.jumpCaches.delete(key); this.hydrateAttempted.delete(key); this.batchedJump.delete(key); this.ensured.delete(key) }
+    for (const key of [...this.caches.keys()]) if (!live.has(key)) {
+      this.caches.delete(key)
+      this.cacheEpoch.delete(key)
+      this.jumpCaches.delete(key)
+      this.hydrateAttempted.delete(key)
+      this.externalKnown.delete(key)
+      this.hydrateInFlight.delete(key)
+      this.batchedJump.delete(key)
+      this.ensured.delete(key)
+    }
     for (const [id, op] of [...this.refreshOps.entries()]) {
       if (!this.isCurrentTarget(id, op.key)) {
         this.refreshOps.delete(id)
@@ -773,8 +892,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     this.indexSignatures.clear()
     this.bindings.forEach(binding => binding.dispose())
     this.caches.clear()
+    this.cacheEpoch.clear()
     this.jumpCaches.clear()
     this.hydrateAttempted.clear()
+    this.externalKnown.clear()
+    this.hydrateInFlight.clear()
+    for (const slot of this.batchedJump.values()) slot.resolve(undefined)
     this.batchedJump.clear()
     this.clearListeners()
   }
@@ -858,7 +981,8 @@ const hydrateKey = (item: HydrateTargetRef) => `${item.project}\u0000${item.data
 /** Separates 3-part object lookup answers into auto-hydratable tracked tables (Wave-3 / memory-capped) vs unstarred external projects. */
 function classifyLookupTargets(
   lookups: ReadonlyMap<string, { readonly path: readonly string[]; readonly answer: LanguageLookupAnswer }>,
-  billingProject?: string
+  billingProject?: string,
+  externalKnown?: ReadonlySet<string>
 ): { autoTargets: HydrateTargetRef[]; externalTargets: HydrateTargetRef[] } {
   const autoTargets: HydrateTargetRef[] = []
   const externalTargets: HydrateTargetRef[] = []
@@ -870,7 +994,9 @@ function classifyLookupTargets(
     if (!isBigQueryName('project', project) || !isBigQueryName('dataset', dataset) || !(isBigQueryName('table', name) || isBigQueryName('routine', name))) continue
     const ref: HydrateTargetRef = { project, dataset, name }
     const key = hydrateKey(ref)
-    if (answer.object?.detailed === false) {
+    if (externalKnown?.has(key) && !answer.object && answer.items.length === 0) {
+      if (!seenExternal.has(key)) { seenExternal.add(key); externalTargets.push(ref) }
+    } else if (answer.object?.detailed === false) {
       if (!seenAuto.has(key)) { seenAuto.add(key); autoTargets.push(ref) }
     } else if ((answer.state === 'building' || answer.state === 'partial') && !answer.object && answer.items.length === 0
       && (!answer.skip || answer.skip === 'CHILDREN_LEFT_OUT' || answer.skip === 'TOO_LARGE')) {
@@ -913,15 +1039,16 @@ function actionSuggestions(
   billingProject: string | undefined,
   range: { insert: Monaco.IRange; replace: Monaco.IRange },
   word: Pick<CompletionWord, 'typed'>,
-  afterColumns = false
+  isMemberSite: boolean
 ): Monaco.languages.CompletionItem[] {
   const fullPath = `${target.project}.${target.dataset}.${target.name}`
-  const filter = word.typed || undefined
-  const sortPrefix = afterColumns ? '1:25' : '0:00'
+  // Only bind filterText to typed text on empty member sites so expression/join keywords are never hijacked; always preserve typed text on accept.
+  const filter = isMemberSite && word.typed ? word.typed : undefined
+  const sortPrefix = isMemberSite ? '0:00' : '9:90'
   const items: Monaco.languages.CompletionItem[] = [{
     label: { label: 'Fetch schema (free)', description: `${fullPath} · 0 B billed` },
     kind: monaco.languages.CompletionItemKind[kinds.cte],
-    insertText: '',
+    insertText: word.typed,
     detail: `Fetch schema (free) · ${fullPath}`,
     documentation: `Runs one free tables.get metadata call (0 B billed) for \`${fullPath}\` and caches its columns in memory.`,
     sortText: `${sortPrefix}:0:fetch`,
@@ -933,7 +1060,7 @@ function actionSuggestions(
     items.push({
       label: { label: `★ Star ${target.project}`, description: 'Add to Starred projects' },
       kind: monaco.languages.CompletionItemKind[kinds.container],
-      insertText: '',
+      insertText: word.typed,
       detail: `★ Star ${target.project}`,
       documentation: `Stars \`${target.project}\` for this BigQuery account so Object Explorer and IntelliSense index its datasets automatically.`,
       sortText: `${sortPrefix}:1:star`,
@@ -943,6 +1070,22 @@ function actionSuggestions(
     })
   }
   return items
+}
+
+function describeHydrateFailure(project: string, dataset: string, name: string, outcome?: LanguageHydrateOutcome): string {
+  const fullPath = `${project}.${dataset}.${name}`
+  switch (outcome?.status) {
+    case 'notFound':
+      return `BigQuery object ${fullPath} was not found.`
+    case 'forbidden':
+      return `Permission denied while reading metadata for ${fullPath}.`
+    case 'budget':
+      return `Could not cache metadata for ${fullPath}: the Search Objects RAM cap was reached.`
+    case 'throttled':
+      return 'BigQuery metadata hydration is temporarily rate-limited. Try again in a moment.'
+    default:
+      return `Could not fetch metadata for ${fullPath}.`
+  }
 }
 
 /** Cross-project fuzzy jump item: compact `dataset.table` for billing project or `` `project.dataset.table` `` cross-project. */

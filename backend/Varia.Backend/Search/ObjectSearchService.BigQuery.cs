@@ -36,13 +36,15 @@ internal sealed partial class ObjectSearchService
         /// <summary>Datasets holding only individual JIT-hydrated objects (no full dataset listing yet; reported Partial until indexed; under Gate).</summary>
         public readonly HashSet<(string Project, string Dataset)> HydratedOnlyDatasets = [];
         /// <summary>Short negative cache for 404/403 JIT hydration misses, bounded to <see cref="LanguageHydrateLimits.MaxNegativeEntries"/> (under Gate).</summary>
-        public readonly Dictionary<(string Project, string Dataset, string Name), (string Status, string? Code, DateTime ExpiresAt)> HydrateNegativeCache = [];
+        public readonly Dictionary<(string Project, string Dataset, string Name, bool IsRoutine), (string Status, string? Code, DateTime ExpiresAt)> HydrateNegativeCache = [];
         /// <summary>Per-connection sliding 60-second window of JIT REST hydration timestamps (UTC ticks; under Gate).</summary>
         public readonly Queue<long> HydrateWindowTicks = new();
         /// <summary>Per-connection concurrency gate for JIT REST calls.</summary>
         public readonly SemaphoreSlim HydrateGate = new(LanguageHydrateLimits.MaxConcurrent, LanguageHydrateLimits.MaxConcurrent);
-        /// <summary>In-flight JIT hydrations keyed by target so concurrent requests coalesce (under Gate).</summary>
-        public readonly Dictionary<(string Project, string Dataset, string Name), Task<LanguageHydrateOutcome>> HydrateInFlight = [];
+        /// <summary>In-flight JIT hydrations keyed by target and kind so concurrent requests coalesce (under Gate).</summary>
+        public readonly Dictionary<(string Project, string Dataset, string Name, bool IsRoutine), Task<LanguageHydrateOutcome>> HydrateInFlight = [];
+        /// <summary>True only while a full multi-wave BigQuery index build is in progress (not scoped or stale-only refreshes; under Gate).</summary>
+        public bool FullBuild;
     }
 
     /// <summary>Records recently queried BigQuery projects so top-level project lookup and cross-project jump boost them above other discovered projects.</summary>
@@ -189,7 +191,7 @@ internal sealed partial class ObjectSearchService
             return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed,
                 [.. state.PartialProjects], new Dictionary<string, ObjectIndexSkip>(state.ProjectListingSkips, StringComparer.Ordinal),
                 new Dictionary<(string Project, string Dataset), ObjectIndexSkip>(state.DatasetSkips), Limits.BigQueryNamesFloorBytes,
-                starredProjects: [.. state.StarredProjects], recentProjects: recent, phase: state.Phase,
+                starredProjects: [.. state.StarredProjects], recentProjects: recent, phase: state.FullBuild ? state.Phase : null,
                 externalHydratedProjects: [.. externalOnly], hydratedOnlyDatasets: [.. state.HydratedOnlyDatasets]);
         }
     }
@@ -291,6 +293,7 @@ internal sealed partial class ObjectSearchService
             try { state.Build?.Cancel(); } catch (ObjectDisposedException) { }
             state.Build = source2;
             state.Building = true;
+            state.FullBuild = scope is null && !staleOnly;
             state.Checking = staleOnly;
             state.BigQuery = true;
             state.Phase = "names";
@@ -1521,6 +1524,7 @@ internal sealed partial class ObjectSearchService
             {
                 if (!Current()) throw new OperationCanceledException(stop);
                 state.Building = false;
+                state.FullBuild = false;
                 state.Checking = false;
                 state.Built = true;
                 // Only a full build reads everything; a refresh re-reads a part and leaves a stopped build's gaps as they were.
@@ -1550,7 +1554,7 @@ internal sealed partial class ObjectSearchService
             watchStop.Cancel();
             await watcher;
             lock (state.Gate)
-                if (ReferenceEquals(state.Build, source2)) { state.Build = null; state.Building = false; state.Checking = false; state.Phase = null; state.InFlightProjects.Clear(); }
+                if (ReferenceEquals(state.Build, source2)) { state.Build = null; state.Building = false; state.FullBuild = false; state.Checking = false; state.Phase = null; state.InFlightProjects.Clear(); }
             if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
@@ -1735,8 +1739,14 @@ internal sealed partial class ObjectSearchService
             if (target is null) throw Invalid("targets.");
             if (!BqNames.IsProject(target.Project)) throw Invalid("project.");
             if (!BqNames.IsDataset(target.Dataset)) throw Invalid("dataset.");
-            if (!BqNames.IsTable(target.Name) && !BqNames.IsRoutine(target.Name)) throw Invalid("name.");
             if (target.Kind is not (null or "table" or "routine")) throw Invalid("kind.");
+            var validName = target.Kind switch
+            {
+                "routine" => BqNames.IsRoutine(target.Name),
+                "table" => BqNames.IsTable(target.Name),
+                _ => BqNames.IsTable(target.Name) || BqNames.IsRoutine(target.Name)
+            };
+            if (!validName) throw Invalid("name.");
         }
         var billing = source.BillingProject(args.ConnectionId);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
@@ -1749,6 +1759,8 @@ internal sealed partial class ObjectSearchService
         return new(outcomes);
     }
 
+    private static readonly TimeSpan SharedHydrateTimeout = TimeSpan.FromSeconds(15);
+
     private async Task<LanguageHydrateOutcome> HydrateOneAsync(string connectionId, string billing, State state, LanguageHydrateTarget target,
         IBigQueryIndexSource source, CancellationToken token)
     {
@@ -1757,25 +1769,29 @@ internal sealed partial class ObjectSearchService
         var name = target.Name;
         var allowExternal = target.AllowExternal == true;
         var key = project + "\u0001" + dataset;
-        var cacheKey = (project, dataset, name);
-        Task<LanguageHydrateOutcome>? existing = null;
+        bool? wantRoutine = target.Kind == "routine" ? true : target.Kind == "table" ? false : null;
+        var isRoutine = wantRoutine == true;
+        var cacheKey = (project, dataset, name, isRoutine);
+        Task<LanguageHydrateOutcome> sharedTask;
         TaskCompletionSource<LanguageHydrateOutcome>? owner = null;
         var tracked = false;
-        var isRoutine = target.Kind == "routine";
 
         lock (state.Gate)
         {
-            // Check if already cached with full details (and canonicalize name casing against any existing entry).
+            if (state.Closed)
+                return new(project, dataset, name, "error", "NOT_CONNECTED");
+
+            // Check if already cached with full details (and canonicalize name casing against any existing entry of matching kind).
             var held = state.Index.Get(key);
             if (held is not null)
             {
                 var table = held.Table;
-                var foundAt = FindTopLevelEntry(table, name);
+                var foundAt = FindTopLevelEntry(table, name, wantRoutine);
                 if (foundAt >= 0)
                 {
                     name = table.Name(foundAt);
-                    cacheKey = (project, dataset, name);
-                    if (table.Kind(foundAt) == "bqRoutine") isRoutine = true;
+                    isRoutine = table.Kind(foundAt) == "bqRoutine";
+                    cacheKey = (project, dataset, name, isRoutine);
                     var facts = held.Facts?.Of(foundAt);
                     if (!held.ChildrenLeftOut && (facts?.Detailed == true || (table.Kind(foundAt) == "bqModel" && state.NamesOnly?.Contains(project, StringComparer.Ordinal) != true)))
                         return new(project, dataset, name, "cached");
@@ -1801,10 +1817,10 @@ internal sealed partial class ObjectSearchService
                 state.HydrateNegativeCache.Remove(cacheKey);
             }
 
-            // Coalesce concurrent requests for the exact same target.
-            if (state.HydrateInFlight.TryGetValue(cacheKey, out existing))
+            // Coalesce concurrent requests for the exact same (project, dataset, name, isRoutine) target.
+            if (state.HydrateInFlight.TryGetValue(cacheKey, out var existing))
             {
-                // Wait outside Gate below.
+                sharedTask = existing;
             }
             else
             {
@@ -1819,30 +1835,52 @@ internal sealed partial class ObjectSearchService
                 state.HydrateWindowTicks.Enqueue(now.Ticks);
 
                 owner = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                state.HydrateInFlight[cacheKey] = owner.Task;
+                sharedTask = owner.Task;
+                // Observe any terminal fault so if all waiters cancel before a NOT_CONNECTED fault settles, no UnobservedTaskException is raised.
+                _ = sharedTask.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                state.HydrateInFlight[cacheKey] = sharedTask;
             }
         }
 
-        if (existing is not null)
-            return await existing.WaitAsync(token);
+        if (owner is not null)
+            _ = RunSharedHydrateAsync(connectionId, state, project, dataset, name, isRoutine, tracked, cacheKey, source, owner);
 
-        LanguageHydrateOutcome outcome;
+        // Both the owner and any coalesced waiters observe only their own cancellation token, so cancelling one caller never aborts the shared fetch.
+        return await sharedTask.WaitAsync(token);
+    }
+
+    private async Task RunSharedHydrateAsync(string connectionId, State state, string project, string dataset, string name, bool isRoutine, bool tracked,
+        (string Project, string Dataset, string Name, bool IsRoutine) cacheKey, IBigQueryIndexSource source, TaskCompletionSource<LanguageHydrateOutcome> owner)
+    {
+        using var sharedCts = new CancellationTokenSource(SharedHydrateTimeout);
+        var sharedToken = sharedCts.Token;
+        var entered = false;
         try
         {
-            await state.HydrateGate.WaitAsync(token);
+            await state.HydrateGate.WaitAsync(sharedToken);
+            entered = true;
+            lock (state.Gate)
+            {
+                if (state.Closed)
+                {
+                    owner.TrySetResult(new(project, dataset, name, "error", "NOT_CONNECTED"));
+                    return;
+                }
+            }
+            LanguageHydrateOutcome outcome;
             try
             {
                 BigQueryEntry freshEntry;
                 if (isRoutine)
                 {
-                    var routine = await source.RoutineAsync(connectionId, project, dataset, name, token);
+                    var routine = await source.RoutineAsync(connectionId, project, dataset, name, sharedToken);
                     var detail = BigQueryEntries.FromRoutine(routine);
                     freshEntry = new("bqRoutine", "bqRoutines", detail.Subtype ?? BigQueryEntries.RoutineSubtype(routine.RoutineType),
                         name, routine.CreationTime ?? 0, routine.LastModifiedTime, Detail: detail);
                 }
                 else
                 {
-                    var table = await source.TableAsync(connectionId, project, dataset, name, token);
+                    var table = await source.TableAsync(connectionId, project, dataset, name, sharedToken);
                     var kind = BigQueryEntries.TableKind(table.Type) ?? ("bqTable", "bqTables", null);
                     var detail = BigQueryEntries.FromTable(table);
                     var created = table.CreationTime ?? 0;
@@ -1850,9 +1888,13 @@ internal sealed partial class ObjectSearchService
                 }
                 outcome = MergeHydratedEntry(state, project, dataset, freshEntry, tracked);
             }
-            catch (Exception error) when (!token.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+            catch (OperationCanceledException) when (sharedToken.IsCancellationRequested)
             {
-                var mapped = source.Map(error, project, isRoutine ? "bigquery.routines.get" : "bigquery.tables.get", token);
+                outcome = new(project, dataset, name, "error", "TIMEOUT");
+            }
+            catch (Exception error) when (error is not RequestException { Code: "NOT_CONNECTED" })
+            {
+                var mapped = source.Map(error, project, isRoutine ? "bigquery.routines.get" : "bigquery.tables.get", sharedToken);
                 var code = mapped is RequestException request ? request.Code : "CATALOG_ERROR";
                 if (code == "NOT_FOUND")
                 {
@@ -1873,30 +1915,31 @@ internal sealed partial class ObjectSearchService
                     outcome = new(project, dataset, name, "error", code);
                 }
             }
-            finally
-            {
-                state.HydrateGate.Release();
-            }
+            lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
+            owner.TrySetResult(outcome);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (sharedToken.IsCancellationRequested)
         {
             lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
-            owner!.TrySetCanceled(token);
-            throw;
+            owner.TrySetResult(new(project, dataset, name, "error", "TIMEOUT"));
         }
         catch (Exception error)
         {
             lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
-            owner!.TrySetException(error);
-            throw;
+            owner.TrySetException(error);
         }
-
-        lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
-        owner!.TrySetResult(outcome);
-        return outcome;
+        finally
+        {
+            if (entered) state.HydrateGate.Release();
+            lock (state.Gate)
+            {
+                if (state.HydrateInFlight.TryGetValue(cacheKey, out var current) && ReferenceEquals(current, owner.Task))
+                    state.HydrateInFlight.Remove(cacheKey);
+            }
+        }
     }
 
-    private void CacheHydrateNegative(State state, (string Project, string Dataset, string Name) key, string status, string? code)
+    private void CacheHydrateNegative(State state, (string Project, string Dataset, string Name, bool IsRoutine) key, string status, string? code)
     {
         var now = UtcNow();
         var expires = now + HydrateNegativeTtl;
@@ -1920,10 +1963,20 @@ internal sealed partial class ObjectSearchService
     {
         var key = project + "\u0001" + dataset;
         var namesFloor = Limits.BigQueryNamesFloorBytes;
-        lock (state.Gate)
+        var isFreshRoutine = freshEntry.Kind == "bqRoutine";
+        const int maxRetries = 3;
+        for (var attempt = 0; attempt < maxRetries; attempt++)
         {
-            var old = state.Index.Get(key);
-            var definitions = state.Definitions;
+            DatabaseIndex? old;
+            bool definitions;
+            lock (state.Gate)
+            {
+                if (state.Closed)
+                    return new(project, dataset, freshEntry.Name, "error", "NOT_CONNECTED");
+                old = state.Index.Get(key);
+                definitions = state.Definitions;
+            }
+            // Build and allocate outside state.Gate so concurrent lookups and searches never stall on BigQueryReader.Read.
             var detailsFloor = Limits.BigQueryDetailsFloor(false, old is { Detailed: true });
             var entries = new List<BigQueryEntry>();
             var replaced = false;
@@ -1939,7 +1992,7 @@ internal sealed partial class ObjectSearchService
                     var existingName = table.Name(at);
                     var facts = old.Facts?.Of(at);
                     var shards = old.Facts?.Shards(at);
-                    if (!replaced && string.Equals(existingName, freshEntry.Name, StringComparison.Ordinal))
+                    if (!replaced && (kind == "bqRoutine") == isFreshRoutine && string.Equals(existingName, freshEntry.Name, StringComparison.Ordinal))
                     {
                         entries.Add(freshEntry with { Created = freshEntry.Created != 0 ? freshEntry.Created : facts?.Created ?? 0, Shards = shards });
                         replaced = true;
@@ -1955,18 +2008,46 @@ internal sealed partial class ObjectSearchService
                 return new(project, dataset, freshEntry.Name, "budget", "TOO_LARGE");
             // Individual JIT merges stay in memory only and never overwrite full saved dataset snapshots on disk.
             built.SaveWhenHeld = false;
-            state.BigQuery = true;
-            state.Index.Put(built);
-            if (old is null) state.HydratedOnlyDatasets.Add((project, dataset));
-            if (!tracked) state.ExternalHydratedProjects.Add(project);
-            else RecordQueriedProjectsLocked(state, [project]);
-            state.HydrateNegativeCache.Remove((project, dataset, freshEntry.Name));
+            var committed = false;
+            var closed = false;
+            lock (state.Gate)
+            {
+                if (state.Closed)
+                {
+                    closed = true;
+                }
+                else if (ReferenceEquals(state.Index.Get(key), old))
+                {
+                    state.BigQuery = true;
+                    state.Index.Put(built);
+                    if (old is null) state.HydratedOnlyDatasets.Add((project, dataset));
+                    if (!tracked) state.ExternalHydratedProjects.Add(project);
+                    else RecordQueriedProjectsLocked(state, [project]);
+                    state.HydrateNegativeCache.Remove((project, dataset, freshEntry.Name, isFreshRoutine));
+                    committed = true;
+                }
+            }
+            if (committed)
+            {
+                Changed();
+                return new(project, dataset, freshEntry.Name, "hydrated");
+            }
+            state.Index.Abandon(built);
+            if (closed)
+                return new(project, dataset, freshEntry.Name, "error", "NOT_CONNECTED");
         }
-        Changed();
-        return new(project, dataset, freshEntry.Name, "hydrated");
+        return new(project, dataset, freshEntry.Name, "error", "CONCURRENT_UPDATE");
     }
 
-    private static int FindTopLevelEntry(ObjectTable table, string name)
+    private static int FindTopLevelEntry(ObjectTable table, string name, bool? wantRoutine)
+    {
+        if (wantRoutine is bool want)
+            return FindTopLevelEntryByKind(table, name, want);
+        var nonRoutine = FindTopLevelEntryByKind(table, name, routine: false);
+        return nonRoutine >= 0 ? nonRoutine : FindTopLevelEntryByKind(table, name, routine: true);
+    }
+
+    private static int FindTopLevelEntryByKind(ObjectTable table, string name, bool routine)
     {
         var close = -1;
         var closeCount = 0;
@@ -1975,6 +2056,7 @@ internal sealed partial class ObjectSearchService
             if (table.Parent(at) >= 0) continue;
             var kind = table.Kind(at);
             if (kind == "bqDataset") continue;
+            if ((kind == "bqRoutine") != routine) continue;
             var entryName = table.Name(at);
             if (entryName == name) return at;
             if (string.Equals(entryName, name, StringComparison.OrdinalIgnoreCase)) { close = at; closeCount++; }

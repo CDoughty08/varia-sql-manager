@@ -621,13 +621,129 @@ internal static partial class BigQueryIndexChecks
         });
         var badProject = await HydrateRefused(new JsonObject { ["connectionId"] = id, ["targets"] = new JsonArray(new JsonObject { ["project"] = "Bad Project!", ["dataset"] = "sales", ["name"] = "orders" }) });
         var badKind = await HydrateRefused(new JsonObject { ["connectionId"] = id, ["targets"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = "orders", ["kind"] = "view" }) });
+        var badRoutineName = await HydrateRefused(new JsonObject { ["connectionId"] = id, ["targets"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = "bad-routine name", ["kind"] = "routine" }) });
         var wrongProvider = await HydrateRefused(new JsonObject { ["connectionId"] = Guid.NewGuid().ToString(), ["targets"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = "orders" }) });
         check(emptyTargets == "INVALID_PARAMS" && tooManyTargets == "INVALID_PARAMS" && badProject == "INVALID_PARAMS" && badKind == "INVALID_PARAMS"
-            && wrongProvider == "UNSUPPORTED_PROVIDER" && harness.Service.LaneOf("language.hydrate") == Varia.Backend.Protocol.RequestLane.Metadata,
-            $"language.hydrate validates targets/names/kinds, refuses non-BigQuery connections, and runs on metadata lane: {emptyTargets} {tooManyTargets} {badProject} {badKind} {wrongProvider}");
+            && badRoutineName == "INVALID_PARAMS" && wrongProvider == "UNSUPPORTED_PROVIDER"
+            && harness.Service.LaneOf("language.hydrate") == Varia.Backend.Protocol.RequestLane.Metadata,
+            $"language.hydrate validates targets/names/kinds, refuses non-BigQuery connections, and runs on metadata lane: {emptyTargets} {tooManyTargets} {badProject} {badKind} {badRoutineName} {wrongProvider}");
+
+        // #4: Singleflight cancellation isolation — Caller A cancelling never aborts Caller B coalesced on the same target.
+        using var singleflightSearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits());
+        var sfId = Guid.NewGuid().ToString();
+        var sfSource = new SlowSingleTableHydrateSource("varia-alpha");
+        using var callerACts = new CancellationTokenSource();
+        var callerA = singleflightSearch.HydrateBigQueryAsync(
+            new LanguageHydrateArgs(sfId, [new LanguageHydrateTarget(ExtProj, "samples", "shakespeare", AllowExternal: true)]),
+            sfSource, callerACts.Token);
+        await sfSource.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var callerB = singleflightSearch.HydrateBigQueryAsync(
+            new LanguageHydrateArgs(sfId, [new LanguageHydrateTarget(ExtProj, "samples", "shakespeare", AllowExternal: true)]),
+            sfSource, CancellationToken.None);
+        callerACts.Cancel();
+        var callerACancelled = false;
+        try { await callerA; } catch (OperationCanceledException) { callerACancelled = true; }
+        sfSource.Release.TrySetResult();
+        var callerBRes = await callerB;
+        check(callerACancelled && callerBRes.Outcomes[0].Status == "hydrated" && sfSource.TableCalls == 1,
+            $"singleflight hydrate cancellation isolation: cancelledA={callerACancelled} statusB={callerBRes.Outcomes[0].Status} calls={sfSource.TableCalls}");
+
+        // #5: Same-named table and routine in one dataset hydrate independently without colliding or overwriting each other.
+        using var dualSearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits());
+        var dualId = Guid.NewGuid().ToString();
+        var dualSource = new SingleTableHydrateSource("varia-alpha");
+        var dualTable = await dualSearch.HydrateBigQueryAsync(
+            new LanguageHydrateArgs(dualId, [new LanguageHydrateTarget(ExtProj, "samples", "shared_name", Kind: "table", AllowExternal: true)]),
+            dualSource, CancellationToken.None);
+        var dualRoutine = await dualSearch.HydrateBigQueryAsync(
+            new LanguageHydrateArgs(dualId, [new LanguageHydrateTarget(ExtProj, "samples", "shared_name", Kind: "routine", AllowExternal: true)]),
+            dualSource, CancellationToken.None);
+        var dualHeld = dualSearch.HeldOf(dualId).Single();
+        var dualTopKinds = Enumerable.Range(0, dualHeld.Table.Count)
+            .Where(at => dualHeld.Table.Parent(at) < 0 && dualHeld.Table.Name(at) == "shared_name")
+            .Select(at => dualHeld.Table.Kind(at))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        check(dualTable.Outcomes[0].Status == "hydrated" && dualRoutine.Outcomes[0].Status == "hydrated"
+            && dualTopKinds.SequenceEqual(["bqRoutine", "bqTable"]),
+            $"same-named table and routine hydrate independently without overwrite: {string.Join(',', dualTopKinds)}");
+
+        // #8: A second unhydrated table in an already-hydrated external dataset still answers state 'absent' in EditorLookup.
+        var secondExtLookup = EditorLookup.Answer(dualSearch.LookupBigQuery(dualId, "varia-alpha"),
+            new LanguageLookupArgs(dualId, [new([ExtProj, "samples", "other_unhydrated_table"])]));
+        check(secondExtLookup.Answers[0].State == "absent" && secondExtLookup.Answers[0].Object is null,
+            $"second unhydrated table in hydrated-only external dataset returns absent: {secondExtLookup.Answers[0].State}");
+
+        // #6b: Closing a connection before MergeHydratedEntry completes returns NOT_CONNECTED and leaks zero held reads.
+        var closeSource = new SlowSingleTableHydrateSource("varia-alpha");
+        var closeId = Guid.NewGuid().ToString();
+        var closeTask = singleflightSearch.HydrateBigQueryAsync(
+            new LanguageHydrateArgs(closeId, [new LanguageHydrateTarget(ExtProj, "samples", "closing_tbl", AllowExternal: true)]),
+            closeSource, CancellationToken.None);
+        await closeSource.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        singleflightSearch.Forget(closeId);
+        closeSource.Release.TrySetResult();
+        var closeOutcome = await closeTask;
+        check(closeOutcome.Outcomes[0] is { Status: "error", Code: "NOT_CONNECTED" } && singleflightSearch.HeldOf(closeId).Count == 0,
+            $"hydrate on closed connection abandons cleanly: {closeOutcome.Outcomes[0].Status}/{closeOutcome.Outcomes[0].Code}");
+
+        // #10 & #12: Scoped refresh (phase null) never flags Wave3Pending; jumpLimit <= 0 short-circuits with truncated=true;
+        // exact-remaining prefix matches + extra subsequence match reports truncated=true.
+        var edgePool = new StringPool(new IndexBudget(4 << 20));
+        var edgeLimits = new ObjectIndexLimits { MemoryBytes = 4 << 20 };
+        var edgeRead = new BigQueryReader(edgeLimits, edgePool, null).Read("varia-alpha", "ds",
+            [
+                new("bqTable", "bqTables", null, "ab_first", 1, null),
+                new("bqTable", "bqTables", null, "ab_second", 1, null),
+                new("bqTable", "bqTables", null, "xa_yb_subseq", 1, null)
+            ], false, false)!;
+        var scopedLookup = new BigQueryLookup("varia-alpha", ["other-proj"], [edgeRead], null, [], building: true, built: true, new IndexBudget(4 << 20), phase: null);
+        var scopedProjAnswer = EditorLookup.Answer(scopedLookup, new LanguageLookupArgs(id, [new([])])).Answers[0];
+        var otherProjItem = scopedProjAnswer.Items.Single(item => item.Name == "other-proj");
+        var fullBuildLookup = new BigQueryLookup("varia-alpha", ["other-proj"], [edgeRead], null, [], building: true, built: true, new IndexBudget(4 << 20), phase: "details");
+        var fullProjItem = EditorLookup.Answer(fullBuildLookup, new LanguageLookupArgs(id, [new([])])).Answers[0].Items.Single(item => item.Name == "other-proj");
+        var zeroJump = scopedLookup.JumpObjects("ab", null, 0, out var zeroTruncated);
+        var twoJump = scopedLookup.JumpObjects("ab", null, 2, out var twoTruncated);
+        check(otherProjItem.Indexing is null && fullProjItem.Indexing == true
+            && zeroJump.Count == 0 && zeroTruncated
+            && twoJump.Count == 2 && twoTruncated,
+            $"phase gate & jump truncation edge cases: scopedIdx={otherProjItem.Indexing} fullIdx={fullProjItem.Indexing} zero=({zeroJump.Count},{zeroTruncated}) two=({twoJump.Count},{twoTruncated})");
 
         // Suppress unused local warning on seedRead (used to verify BigQueryReader names-only creation).
         check(seedRead.Table.Count > 1, "names-only seed read built cleanly");
+    }
+
+    sealed class SlowSingleTableHydrateSource(string billing) : IBigQueryIndexSource
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int TableCalls => Volatile.Read(ref tableCalls);
+        private int tableCalls;
+
+        public string BillingProject(string connectionId) => billing;
+        public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token) => Task.FromResult(new BigQueryProjectDiscovery([], false));
+        public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token) => Task.FromResult(new BigQueryDatasetList([], false));
+        public Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token) => Task.FromResult(new BigQueryListing([], [], [], false));
+        public async Task<Google.Apis.Bigquery.v2.Data.Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token)
+        {
+            Interlocked.Increment(ref tableCalls);
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(token);
+            return new Google.Apis.Bigquery.v2.Data.Table
+            {
+                Type = "TABLE",
+                Schema = new() { Fields = [new() { Name = "id", Type = "INT64", Mode = "REQUIRED" }] }
+            };
+        }
+        public Task<Google.Apis.Bigquery.v2.Data.Routine> RoutineAsync(string connectionId, string project, string dataset, string routine, CancellationToken token) =>
+            Task.FromResult(new Google.Apis.Bigquery.v2.Data.Routine());
+        public async IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, BigQueryBulkBudget budget,
+            Func<string, string, bool> wanted, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+        public Exception Map(Exception error, string project, string? permission, CancellationToken token) => error;
     }
 
     sealed class SingleTableHydrateSource(string billing) : IBigQueryIndexSource

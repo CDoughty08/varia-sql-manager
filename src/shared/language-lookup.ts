@@ -103,7 +103,13 @@ export const languageHydrateTargetSchema = z.object({
   name: hydrateObject,
   kind: z.enum(languageHydrateKinds).optional(),
   allowExternal: z.boolean().optional()
-}).strict()
+}).strict().superRefine((target, ctx) => {
+  if (target.kind === 'routine' && !isBigQueryName('routine', target.name)) {
+    ctx.addIssue({ code: 'custom', path: ['name'], message: 'invalid routine name' })
+  } else if (target.kind === 'table' && !isBigQueryName('table', target.name)) {
+    ctx.addIssue({ code: 'custom', path: ['name'], message: 'invalid table name' })
+  }
+})
 export type LanguageHydrateTarget = z.infer<typeof languageHydrateTargetSchema>
 export const languageHydrateRequestSchema = z.object({
   connectionId: z.uuid(),

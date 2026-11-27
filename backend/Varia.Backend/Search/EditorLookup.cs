@@ -157,6 +157,11 @@ internal static class EditorLookup
         if (request.Mode == "jump")
         {
             var jumpLimit = Math.Min(request.Limit ?? JumpLookupLimits.Items, left);
+            if (jumpLimit <= 0)
+            {
+                bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes([], null));
+                return new(lookup.Index == "none" ? "absent" : "ready", [], [], lookup.HasAnyHeldObject());
+            }
             var details = request.Details == true;
             var hits = lookup.JumpObjects(prefix.Trim(), request.Dataset, jumpLimit, out var jumpTruncated);
             var (items, truncated) = Take(hits.Select(hit =>
@@ -227,7 +232,9 @@ internal static class EditorLookup
                 {
                     var earlyPath = lookup.Project(path[0]) is null ? [.. path] : new List<string> { dataset.Project, dataset.Dataset };
                     bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes(earlyPath, dataset.Skip?.Code));
-                    return new(State(dataset.State), earlyPath, [], false, Skip: dataset.Skip?.Code);
+                    // A dataset populated only by individual JIT-hydrated objects has no full listing, so any other object is absent.
+                    var missingState = lookup.IsHydratedOnly(dataset.Project, dataset.Dataset) ? LookupState.Absent : dataset.State;
+                    return new(State(missingState), earlyPath, [], false, Skip: dataset.Skip?.Code);
                 }
                 var facts = BigQueryLookup.Facts(entry);
                 var detailed = IsDetailed(lookup, dataset, entry, facts);
