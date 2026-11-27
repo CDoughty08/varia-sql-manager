@@ -10,13 +10,18 @@ import { googleSqlCallContext, scanGoogleSql, type GoogleSqlToken } from './lexe
 interface Tok extends GoogleSqlToken { readonly text: string; readonly upper: string }
 
 const reserved: ReadonlySet<string> = new Set(googleSqlReservedKeywords)
-/** Words after which a name is a table: FROM and JOIN, and the targets of DML and TABLE statements. */
-const objectWords = new Set(['FROM', 'JOIN', 'UPDATE', 'INTO', 'TABLE', 'MERGE'])
+/** Words after which a name is a table or routine: FROM and JOIN, CALL, and the targets of DML and TABLE statements. */
+const objectWords = new Set(['FROM', 'JOIN', 'UPDATE', 'INTO', 'TABLE', 'MERGE', 'CALL'])
 const joinWords = new Set(['JOIN', 'INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'NATURAL', 'OUTER'])
 const setWords = new Set(['UNION', 'INTERSECT', 'EXCEPT'])
 /** Words that end a FROM clause at its block's level. */
 const fromEnd = new Set(['WHERE', 'GROUP', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER', 'LIMIT', 'SET', 'SELECT', 'WHEN', 'OPTIONS', 'PIVOT', 'UNPIVOT', ...setWords])
 const castCalls = new Set(['CAST', 'SAFE_CAST'])
+/** Zero-based argument index that takes a date/time granularity part in GoogleSQL date/time functions. */
+const datePartArgIndex: ReadonlyMap<string, number> = new Map([
+  ['DATE_TRUNC', 1], ['DATETIME_TRUNC', 1], ['TIMESTAMP_TRUNC', 1], ['TIME_TRUNC', 1], ['LAST_DAY', 1],
+  ['DATE_DIFF', 2], ['DATETIME_DIFF', 2], ['TIMESTAMP_DIFF', 2], ['TIME_DIFF', 2]
+])
 /** Tokens an expression can end with before an implicit alias (`'x' label`); a parenthesis (`COUNT(*) n`) shows at its block's level as its '('. */
 const valueEnds: ReadonlySet<string> = new Set(['word', 'quotedIdentifier', 'string', 'number', 'parameter', 'systemVariable'])
 /** Words after a FROM item that are not its alias. */
@@ -354,6 +359,11 @@ class BlockReader {
         const nextSeg = dashed(toks, run, at + 1)
         for (const part of nextSeg.parts) parts.push(part)
         at = nextSeg.next
+      }
+      // Wildcard table suffix written without backticks (`FROM analytics.events_* e`): join adjacent `*` onto the table name.
+      if (isPunct(toks[run[at]], '*') && toks[run[at]].start === toks[run[at - 1]].end && parts.length > 0 && !parts.at(-1)!.endsWith('*')) {
+        parts[parts.length - 1] += '*'
+        at++
       }
       // A table-valued function's columns are not indexed.
       if (isPunct(toks[run[at]], '(') && !target) return { next: at + 1 }
@@ -719,7 +729,7 @@ function placeOf(statement: Statement, first: number, open: number): 'object' | 
   if (isPunct(previous, ',') && from) return 'object'
   // After a table, its alias, a subquery, or a table-operator/time-travel suffix in FROM: an alias or the next clause's keyword.
   const prevBefore = before >= 0 ? prevAtLevel(statement, before, open) : -1
-  if (from?.kind === 'items' && (isName(previous) || (isPiece(previous) && prevBefore >= 0 && isPunct(toks[prevBefore], '-', '.')) || isClosedGroup(statement, before, first) || (before >= 0 && valueEnds.has(toks[before].kind) && systemTimeBefore(statement, before, open) >= 0))) return 'afterFromTable'
+  if (from?.kind === 'items' && (isName(previous) || (isPiece(previous) && prevBefore >= 0 && isPunct(toks[prevBefore], '-', '.')) || (before >= 0 && isPunct(toks[before], '*') && prevBefore >= 0 && isPiece(toks[prevBefore]) && toks[prevBefore].end === toks[before].start) || isClosedGroup(statement, before, first) || (before >= 0 && valueEnds.has(toks[before].kind) && systemTimeBefore(statement, before, open) >= 0))) return 'afterFromTable'
   return 'expression'
 }
 
@@ -807,6 +817,17 @@ function chainBefore(statement: Statement, end: number, allowDigitSegment = fals
   return { parts: reversed.reverse().flat(), first: at + 1, usedDigitSegment }
 }
 
+/** Attaches `parenAhead` / `angleAhead` when `(` or `<` already follows `word` on the same line. */
+function withAheadFlags(text: string, offset: number, word: CompletionWord): CompletionWord {
+  const after = Math.max(word.end, offset)
+  const checkFrom = word.quoted && text[after] === '`' ? after + 1 : after
+  const rest = text.slice(checkFrom)
+  const parenAhead = /^[ \t]*\(/.test(rest)
+  const angleAhead = /^[ \t]*</.test(rest)
+  if (!parenAhead && !angleAhead) return word
+  return { ...word, ...parenAhead ? { parenAhead: true } : {}, ...angleAhead ? { angleAhead: true } : {} }
+}
+
 /** What completion finds at `offset` in `text`. */
 export function readGoogleSqlCompletion(text: string, offset: number): CompletionRead {
   const statement = new Statement(text, offset)
@@ -818,6 +839,39 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   let word = empty, next = toks.findIndex(token => token.start >= offset), qualifier: string[] = []
   if (next < 0) next = toks.length
   const current = toks.findIndex(token => token.start < offset && offset <= token.end)
+  // System variables (`@@`, `@@project_id`, `@@script.`, `@@script.bytes_billed`) and single `@` parameter guard.
+  if (current >= 0) {
+    const token = toks[current]
+    if (token.kind === 'punctuation' && token.text === '@' && offset === token.end) {
+      const prev = toks[current - 1]
+      if (prev && prev.kind === 'punctuation' && prev.text === '@' && prev.end === token.start) {
+        const sysWord: CompletionWord = { start: prev.start, end: token.end, typed: '@@', quoted: false }
+        return { site: { kind: 'systemVar' }, scope: scopeAt(statement, statement.parentAt(sysWord.start), offset), word: sysWord }
+      }
+      return none(empty)
+    }
+    if (token.kind === 'systemVariable') {
+      const beforeCaret = text.slice(token.start, offset)
+      const dot = beforeCaret.lastIndexOf('.')
+      if (dot >= 2) {
+        const qualParts = beforeCaret.slice(2, dot).split('.')
+        const partStart = token.start + dot + 1
+        const nextDot = token.text.indexOf('.', dot + 1)
+        const partEnd = nextDot < 0 ? token.end : token.start + nextDot
+        const sysWord: CompletionWord = { start: partStart, end: partEnd, typed: text.slice(partStart, offset), quoted: false }
+        return { site: { kind: 'systemVar', qualifier: qualParts }, scope: scopeAt(statement, statement.parentAt(token.start), offset), word: sysWord }
+      }
+      const sysWord: CompletionWord = { start: token.start, end: token.end, typed: beforeCaret, quoted: false }
+      return { site: { kind: 'systemVar' }, scope: scopeAt(statement, statement.parentAt(token.start), offset), word: sysWord }
+    }
+    if (token.kind === 'punctuation' && token.text === '.' && offset === token.end) {
+      const prev = toks[current - 1]
+      if (prev?.kind === 'systemVariable' && prev.end === token.start) {
+        const qualParts = prev.text.slice(2).split('.')
+        return { site: { kind: 'systemVar', qualifier: qualParts }, scope: scopeAt(statement, statement.parentAt(prev.start), offset), word: empty }
+      }
+    }
+  }
   // A dashed or digit-starting unquoted segment where a table goes (FROM my-pro, FROM my-proj.123, FROM my-proj.2024_sales).
   const at = current >= 0 && isPiece(toks[current]) ? current : -1
   const leftOf = at >= 0 ? at : next
@@ -830,8 +884,11 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
       if (chain && placeOf(statement, chain.first, open) === 'object') {
         const right = at >= 0 ? at : (next < toks.length && isPiece(toks[next]) && toks[next].start === offset ? next : -1)
         const end = right >= 0 ? toks[segmentSpan(toks, right)[1]].end : offset
-        word = { start: toks[lo].start, end, typed: text.slice(toks[lo].start, offset), quoted: false }
-        return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
+        word = withAheadFlags(text, offset, { start: toks[lo].start, end, typed: text.slice(toks[lo].start, offset), quoted: false })
+        const site: CompletionSite = chain.parts.length >= 1 && chain.parts.at(-1)!.toUpperCase() === 'INFORMATION_SCHEMA'
+          ? { kind: 'infoSchema', qualifier: chain.parts.slice(0, -1) }
+          : { kind: 'object', qualifier: chain.parts }
+        return { site, scope: scopeAt(statement, open, offset), word }
       }
     }
   }
@@ -844,7 +901,7 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
           const open = statement.parentAt(toks[lo].start)
           const chain = chainBefore(statement, lo, true)
           if (chain && placeOf(statement, chain.first, open) === 'object') {
-            word = { start: toks[lo].start, end: toks[hi].end, typed: text.slice(toks[lo].start, offset), quoted: false }
+            word = withAheadFlags(text, offset, { start: toks[lo].start, end: toks[hi].end, typed: text.slice(toks[lo].start, offset), quoted: false })
             return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
           }
         }
@@ -854,12 +911,12 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
         const open = statement.parentAt(toks[lo].start)
         const chain = chainBefore(statement, lo, true)
         if (chain && placeOf(statement, chain.first, open) === 'object') {
-          word = { start: toks[lo].start, end: toks[hi].end, typed: text.slice(toks[lo].start, offset), quoted: false }
+          word = withAheadFlags(text, offset, { start: toks[lo].start, end: toks[hi].end, typed: text.slice(toks[lo].start, offset), quoted: false })
           return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
         }
       }
     }
-    if (token.kind === 'number' || token.kind === 'string' || token.kind === 'parameter' || token.kind === 'systemVariable') return none(empty)
+    if (token.kind === 'number' || token.kind === 'string' || token.kind === 'parameter') return none(empty)
     if (token.kind === 'word') { word = { start: token.start, end: token.end, typed: text.slice(token.start, offset), quoted: false }; next = current }
     else if (token.kind === 'quotedIdentifier' && (offset < token.end || token.open)) {
       // Inside backticks: the dotted path before the caret qualifies the part being typed; unclosed backticks stop at whitespace.
@@ -894,20 +951,44 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   const place = placeOf(statement, chain.first, open)
   if (chain.usedDigitSegment && place !== 'object') return none(word)
   const scope = scopeAt(statement, open, offset)
+  const inUnnest = open >= 0 && isWord(toks[open - 1], 'UNNEST')
   let site: CompletionSite
+  let qualifierStart: number | undefined
+  let preferArray: boolean | undefined
   if (place === 'object') {
     if (current >= 0 && isPiece(toks[current])) word = { ...word, end: toks[segmentSpan(toks, current)[1]].end }
-    site = { kind: 'object', qualifier: parts }
+    site = parts.length >= 1 && parts.at(-1)!.toUpperCase() === 'INFORMATION_SCHEMA'
+      ? { kind: 'infoSchema', qualifier: parts.slice(0, -1) }
+      : { kind: 'object', qualifier: parts }
   }
   else if (place === 'alias') site = castCalls.has(googleSqlCallContext(text, offset)?.name.toUpperCase() ?? '') ? { kind: 'castType' } : { kind: 'none' }
-  else if (parts.length) site = { kind: 'member', qualifier: parts }
+  else if (parts.length) {
+    site = { kind: 'member', qualifier: parts }
+    if (!word.quoted && chain.parts.length > 0 && toks[chain.first]) qualifierStart = toks[chain.first].start
+    if (inUnnest) preferArray = true
+  }
   else if (place === 'afterFromTable') {
     const before = prevAtLevel(statement, chain.first, open)
     const from = fromPlace(statement, chain.first, open)
     site = { kind: 'afterFromTable', hasAlias: hasFromAlias(statement, before, open, chain.first), inJoin: from?.inJoin ?? false, ...from?.mergeUsing ? { mergeUsing: true } : {} }
   } else if (place === 'statementStart') site = { kind: 'statementStart' }
-  else site = { kind: 'expression' }
-  return { site, scope, word }
+  else if (inUnnest) site = { kind: 'unnestArg' }
+  else {
+    const before = prevAtLevel(statement, chain.first, open)
+    const call = googleSqlCallContext(text, offset)
+    const callFn = call?.name.toUpperCase().replace(/^SAFE\./, '')
+    if (callFn && castCalls.has(callFn) && before >= 0 && isPunct(toks[before], '<') && isWord(toks[prevAtLevel(statement, before, open)], 'ARRAY', 'RANGE')) {
+      site = { kind: 'castType' }
+    } else if (callFn === 'EXTRACT' && call?.argument === 0 && before < 0) {
+      site = { kind: 'datePart', functionName: 'EXTRACT' }
+    } else if (callFn && datePartArgIndex.get(callFn) === call?.argument && before >= 0 && isPunct(toks[before], ',')) {
+      site = { kind: 'datePart', functionName: callFn }
+    } else {
+      site = { kind: 'expression' }
+    }
+  }
+  word = withAheadFlags(text, offset, word)
+  return { site, scope, word, ...qualifierStart !== undefined ? { qualifierStart } : {}, ...preferArray ? { preferArray } : {} }
 }
 
 /** The name chain at `offset` for hover: every part, the one under the caret, and whether it names a table. */

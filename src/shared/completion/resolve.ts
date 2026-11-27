@@ -5,7 +5,7 @@ import { languageLookupLimits, type LanguageLookupAnswer, type LanguageLookupObj
 import type { CompletionDialect, IndexLookup, QueryScope, QueryShape, ScopeSource } from './model'
 
 /** A column or nested field a source gives: its full path (address.city), with what the index knows of it. */
-export interface ScopeColumn { readonly path: string; readonly type?: string; readonly nullable?: boolean; readonly description?: string }
+export interface ScopeColumn { readonly path: string; readonly type?: string; readonly nullable?: boolean; readonly description?: string; readonly pseudo?: boolean }
 /** A source's columns as far as they are known; `truncated` when the index holds more than came back. */
 export interface SourceColumns {
   readonly columns: readonly ScopeColumn[]; readonly truncated: boolean; readonly object?: LanguageLookupObject; readonly path?: readonly string[]
@@ -249,8 +249,17 @@ export class ScopeResolver {
         if (!path || !answer?.object) return { columns: [], truncated: false, path }
         let shared = this.objects.get(key(path))
         if (!shared) {
-          shared = { path: answer.path, object: answer.object, truncated: answer.truncated,
-            columns: answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description })) }
+          const cols: ScopeColumn[] = answer.items.map(item => ({ path: item.name, type: item.type, nullable: item.nullable, description: item.description }))
+          const extras = this.dialect.pseudoColumns?.(answer.object, source.parts) ?? []
+          if (extras.length) {
+            const existing = new Set(cols.map(col => col.path.toLowerCase()))
+            for (const extra of extras) {
+              if (existing.has(extra.name.toLowerCase())) continue
+              existing.add(extra.name.toLowerCase())
+              cols.push({ path: extra.name, type: extra.type, description: extra.description, pseudo: extra.pseudo ?? true })
+            }
+          }
+          shared = { path: answer.path, object: answer.object, truncated: answer.truncated, columns: cols }
           this.objects.set(key(path), shared)
         }
         return shared
@@ -303,6 +312,7 @@ export class ScopeResolver {
       truncated ||= given.truncated
       budget ||= given.budget === true
       for (const column of given.columns) {
+        if (column.pseudo) continue
         const name = column.path.toLowerCase()
         if (known.has(name)) continue
         known.add(name)
