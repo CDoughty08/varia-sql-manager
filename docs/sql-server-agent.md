@@ -84,10 +84,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Job Activity Monitor node, and the palette's SQL Server Agent: Job Activity Monitor open one document per connection
   ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
   (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
-  and a tone per row (last run failed, running, disabled). Tiles count Running, Last run failed, Between retries and
-  Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box (the
-  job's own columns, never the last run) and the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
-  shows the selected job's last run below the list (`args.expand`: the job outcome and step rows from the newest
+  and a tone per row (last run failed, running, disabled). Slim KPI tiles count Running, Last run failed, Between retries and
+  Disabled, and pressing one filters to those jobs; a single grouped toolbar holds the filter box (matching the
+  job's own columns, never the last run), Clear filters, selection count, Start, Stop, Enable / Disable ▾, More actions ▾
+  (Change owner…, Attach schedule…, View history, Create Job Like This…) and the right-pinned Last run drawer toggle. The Last run drawer
+  shows the selected job's last run in a resizable split pane (`agent.jam.lastRunMessage`, persisted in localStorage) with the steps grid beside an inline step message preview (fetching full truncated messages via `agent.historyMessage`, with Copy, Open Job, and Log File Viewer shortcuts; `args.expand` reads the job outcome and step rows from the newest
   `lastRunRows` rows of `sp_help_jobhistory`; when that read stops inside the run, the panel says only its newest steps
   show, or that no finished run is among those rows; a job that left the list says so).
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
@@ -116,9 +117,10 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Agent overview** (AG-15; `agent.overview`, docs/live.md; the rules in `src/shared/agent/overview.ts`, `AgentOverviewService`
   and `AgentOverview.tsx` in the renderer). Agent Overview on the Agent node's menu, or the palette's SQL Server Agent: Agent
   Overview (Ctrl+Q finds it as a command), opens one document per connection ("Agent Overview - server"). Its header shows
-  Agent's state, startup type, service account and the server's version, with Check again and Properties; tiles count jobs,
-  jobs failed in the last 24 hours (by the server's clock), running jobs and alerts (those fired this week); then the health
-  checks, each with a severity, the jobs or schedules it names (each name a link in its sentence that opens it) and a fix that opens the usual editor
+  Agent's state and startup type pill with Properties and Check again, above a compact fact line with Service Account,
+  the server's version and last-checked timestamp; clickable KPI tiles count Total jobs, Failed (24 h), Running now and
+  Alerts (7 d) (opening Job Activity Monitor or Operators and Notifications); then grouped health checks (**Needs attention**,
+  **Notes**, **Passing**, **Not checked**), each with a severity, clickable object chips for named jobs or schedules and a fixed-width right-aligned fix button that opens the usual editor
   or confirmation. Nothing is written by the overview itself:
   - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
   - **Failed jobs**: a job whose last run failed and started within 24 hours ("(retrying)" while it retries); Show

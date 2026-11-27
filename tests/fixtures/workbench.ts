@@ -93,7 +93,7 @@ import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
-import { AgentOverviewService, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
+import { AgentOverviewService, focusAgentOverview, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
 import { stepMenuProviders } from '../../src/renderer/src/agent/step-menus'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
@@ -488,11 +488,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const logViewerRecycled = vi.fn<(connectionId: string) => void>()
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf, recycled: logViewerRecycled })
   const overviewFixes = {
-    failedJobs: vi.fn<AgentOverviewFixes['failedJobs']>(), changeOwner: vi.fn<AgentOverviewFixes['changeOwner']>(), openJob: vi.fn<AgentOverviewFixes['openJob']>(),
-    agentProperties: vi.fn<AgentOverviewFixes['agentProperties']>(), recommendedAlerts: vi.fn<AgentOverviewFixes['recommendedAlerts']>(), schedules: vi.fn<AgentOverviewFixes['schedules']>(),
+    failedJobs: vi.fn<AgentOverviewFixes['failedJobs']>(), jobsView: vi.fn<NonNullable<AgentOverviewFixes['jobsView']>>(),
+    alerts: vi.fn<NonNullable<AgentOverviewFixes['alerts']>>(), changeOwner: vi.fn<AgentOverviewFixes['changeOwner']>(),
+    openJob: vi.fn<AgentOverviewFixes['openJob']>(), agentProperties: vi.fn<AgentOverviewFixes['agentProperties']>(),
+    recommendedAlerts: vi.fn<AgentOverviewFixes['recommendedAlerts']>(), schedules: vi.fn<AgentOverviewFixes['schedules']>(),
     startAgent: vi.fn<AgentOverviewFixes['startAgent']>()
   }
-  const agentOverview = new AgentOverviewService({ documents, panes, live, connections, targetIdOf, fixes: overviewFixes })
+  const agentOverview = new AgentOverviewService({ documents, panes, live, connections, targetIdOf, fixes: overviewFixes, focus: focusAgentOverview })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
