@@ -362,4 +362,27 @@ describe('versioned SQL diagnostics markers', () => {
     f.model(tab.id).edit('SELECT MissingX'); await f.tick()
     expect(f.markers(tab.id)).toHaveLength(2)
   })
+  it('R4 D1 #2: status() returns undefined when Cross-Engine Split focuses the GoogleSQL secondary pane and restores T-SQL status on primary pane', async () => {
+    const f = fixture()
+    f.addConnection('sql-1')
+    const tab = f.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT Missing',
+      bigQuerySql: 'SELECT 2',
+      targets: [
+        { targetId: 't-sql', connectionId: 'sql-1', database: 'master', enabled: true, provider: 'sqlserver' },
+        { targetId: 't-bq', connectionId: 'bq-1', database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    await f.tick()
+    expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error, 1 warning')
+
+    // Focusing secondary GoogleSQL pane makes documentProvider return 'bigquery' -> status() must return undefined.
+    f.documents.setActivePane(tab.id, 'secondary')
+    expect(f.service.status(tab.id)).toBeUndefined()
+
+    // Returning to primary T-SQL pane restores T-SQL diagnostics status.
+    f.documents.setActivePane(tab.id, 'primary')
+    expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error, 1 warning')
+  })
 })

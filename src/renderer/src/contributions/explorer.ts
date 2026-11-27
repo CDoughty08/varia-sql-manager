@@ -376,8 +376,17 @@ export function explorerContribution({ commands, documents, connections, explore
       run: () => {
         const selected = explorer.multiSelectedTargets()
         if (selected.length < 2) return
-        const provider = selected[0]!.provider
-        const targets: MultiDocumentTarget[] = selected.map(target => ({
+        const limited = selected.slice(0, 32)
+        if (selected.length > 32) {
+          const noun = limited[0]!.provider === 'bigquery' ? 'BigQuery projects' : 'SQL Servers'
+          notifications?.notify({
+            severity: 'info',
+            key: 'explorer.multiSelect.engineLock',
+            message: `Multi-Server queries support at most 32 targets. Opened with the first 32 of ${selected.length} selected ${noun}.`
+          })
+        }
+        const provider = limited[0]!.provider
+        const targets: MultiDocumentTarget[] = limited.map(target => ({
           ...target.targetId ? { targetId: target.targetId, attachWanted: true } : {},
           connectionId: target.connectionId,
           database: target.database,

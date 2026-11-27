@@ -536,6 +536,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
 
   /** Text for the editor status bar's issues segment, as SQL Server's analysis shows it. */
   status(id: string): { label: string; detail: string } | undefined {
+    const document = this.deps.documents.get(id)
+    if (document?.multiMode === 'cross' && document.crossView !== 'file' && document.activePane !== 'secondary') return undefined
     const state = this.getSnapshot().get(id)
     if (!state) return undefined
     if (state.phase === 'checking') return { label: 'Checking with BigQuery', detail: 'A free dry run is checking this query. It sends the query text to Google; nothing runs.' }
