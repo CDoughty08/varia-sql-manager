@@ -636,13 +636,18 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
 
-    /// <summary>language.lookup: the editor's completion and hover read a BigQuery connection's index in process, from one snapshot
-    /// (CheckProvider has refused any handle BigQuery does not own, a closed one included, with UNSUPPORTED_PROVIDER).</summary>
+    /// <summary>language.lookup: the editor's completion, hover and lazy schema preview drawer read the connection's Search Objects index
+    /// in process, from one snapshot (both BigQuery and SQL Server).</summary>
     private LanguageLookupResult LookupIndex(LanguageLookupArgs args)
     {
         EditorLookup.Validate(args);
-        var billing = ((IBigQueryIndexSource)bigQuery).BillingProject(args.ConnectionId);
-        return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing), args);
+        if (bigQuery.Owns(args.ConnectionId))
+        {
+            var billing = ((IBigQueryIndexSource)bigQuery).BillingProject(args.ConnectionId);
+            return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing), args);
+        }
+        _ = Profile(args.ConnectionId);
+        return EditorLookup.Answer(search.Lookup(args.ConnectionId), args);
     }
 
     /// <summary>Marks the Search Objects index of a SQL Server connection stale in the database a script began in and the one it

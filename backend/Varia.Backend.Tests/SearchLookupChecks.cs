@@ -337,6 +337,29 @@ internal static class SearchLookupChecks
             "the service answers lookups from the connection's index, charging the shared budget");
         lookup.Objects("Sales", "dbo", "Customers");
         check(service.Builds == builds + 1, "building the lookup arrays (once) makes the Memory panel walk the index again, so they never show as reading");
+        var summaryRes = EditorLookup.Answer(lookup, new LanguageLookupArgs(id, [
+            new([]),
+            new(["Sales"]),
+            new(["Sales", "dbo"]),
+            new(["Sales", "dbo", "Orders"], Details: true),
+            new(["Sales", "*", "Orders"], Details: true),
+            new(["Sales", "dbo", "Customers"], Details: true),
+            new(["Sales", "dbo", "Missing"], Details: true)
+        ]));
+        check(summaryRes.Index == "ready"
+            && summaryRes.Answers[0].Items.Any(item => item is { Name: "Sales", Kind: "database" })
+            && summaryRes.Answers[1].Items.Any(item => item is { Name: "dbo", Kind: "schema" })
+            && summaryRes.Answers[2].Items.Any(item => item is { Name: "Orders", Kind: "table" })
+            && summaryRes.Answers[3] is { Path: ["Sales", "dbo", "Orders"], Object: { Name: "Orders", Kind: "table", Detailed: true } }
+            && summaryRes.Answers[3].Items.Any(item => item.Kind == "column" && item.Detail is not null && item.Detail.Contains("PK", StringComparison.Ordinal))
+            && summaryRes.Answers[3].Items.Any(item => item.Kind == "foreignKey" && item.Subtype == "outgoing")
+            && summaryRes.Answers[4] is { Path: ["Sales", "dbo", "Orders"], Object.Name: "Orders" }
+            && summaryRes.Answers[5].Items.Any(item => item.Kind == "foreignKey" && item.Subtype == "incoming")
+            && summaryRes.Answers[6].Object is null,
+            "EditorLookup.Answer(IndexLookup) serves SQL Server databases, schemas, objects, and rich table summaries with PK/FK/column markers from RAM");
+        var emptyRes = EditorLookup.Answer((IndexLookup?)null, new LanguageLookupArgs(id, [new(["Sales", "dbo", "Orders"])]));
+        check(emptyRes.Index == "none" && emptyRes.Answers[0] is { State: "absent", Object: null, Items.Count: 0 },
+            "EditorLookup.Answer(null IndexLookup) returns index none and absent answers");
         service.Forget(id);
         check(service.MemoryUsed == 0 && service.Lookup(id) is null, "a disconnect drops the index and its lookup arrays");
     }

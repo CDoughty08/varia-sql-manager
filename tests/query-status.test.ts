@@ -7,6 +7,7 @@ import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
 import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
 import EditorStatus, { sqlStatusChip } from '../src/renderer/src/EditorStatus'
+import { classifyQuerySourceHealth, extractBigQueryQuerySources, summarizeBigQueryWaves } from '../src/renderer/src/languages/IntelliSensePopover'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { QueryTab } from '../src/renderer/src/documents'
@@ -207,10 +208,60 @@ describe('grouped calm status bar and condensed SQL status chip', () => {
     expect(html).toContain('editor-status-caret')
     expect(html).toContain('editor-status-file')
     expect(html).toContain('editor-status-sql')
+    expect(html).toContain('aria-haspopup="dialog"')
+    expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('SQL: Paused')
     expect(html).toContain('aria-live="polite"')
     expect(html).toContain('aria-label="SQL IntelliSense"')
     expect(html).toContain('aria-label="SQL query issues"')
+  })
+
+  it('extracts BigQuery query sources, summarizes PR #738 3-wave tiers, and classifies source health', () => {
+    const sql = [
+      'SELECT o.id, s.sid, w.word',
+      'FROM sales.orders o',
+      'JOIN `org-marketing.web.sessions` s ON o.sid = s.sid',
+      'LEFT JOIN `bigquery-public-data.samples.shakespeare` w ON TRUE;',
+      'SELECT * FROM `analytics-prod.region-us`.INFORMATION_SCHEMA.TABLES;'
+    ].join('\n')
+    const sources = extractBigQueryQuerySources(sql, 'analytics-prod', 'sales')
+    expect(sources.map(s => s.path)).toEqual([
+      'analytics-prod.sales.orders',
+      'org-marketing.web.sessions',
+      'bigquery-public-data.samples.shakespeare'
+    ])
+
+    const waves = summarizeBigQueryWaves(
+      'analytics-prod',
+      {
+        connectionId: 'bq-1',
+        done: 504,
+        total: 504,
+        objects: 12_400,
+        status: {
+          state: 'ready',
+          databases: 90,
+          indexed: 90,
+          objects: 12_400,
+          modules: 120,
+          cut: 0,
+          skipped: [],
+          definitions: true,
+          provider: 'bigquery',
+          projects: 504,
+          namesOnly: ['org-marketing', 'org-raw-09']
+        }
+      },
+      ['dw-shared', 'bigquery-public-data', 'analytics-prod']
+    )
+    expect(waves.billing).toEqual({ project: 'analytics-prod', state: 'full' })
+    expect(waves.starred).toEqual({ count: 2, full: 2, namesOnly: 0 })
+    expect(waves.discovered).toEqual({ count: 501, full: 499, namesOnly: 2 })
+
+    expect(classifyQuerySourceHealth({ state: 'ready', path: ['p', 'd', 't'], items: [], truncated: false, object: { name: 't', kind: 'bqTable', detailed: true } }, false)).toBe('indexed')
+    expect(classifyQuerySourceHealth({ state: 'partial', path: ['p', 'd', 't'], items: [], truncated: false, object: { name: 't', kind: 'bqTable', detailed: false } }, true)).toBe('namesOnly')
+    expect(classifyQuerySourceHealth({ state: 'building', path: ['p', 'd', 't'], items: [], truncated: false }, false)).toBe('building')
+    expect(classifyQuerySourceHealth({ state: 'absent', path: ['p', 'd', 't'], items: [], truncated: false }, false)).toBe('notIndexed')
   })
 
   it('replaces vertical pipe separators with calm dividers in the window status bar', () => {

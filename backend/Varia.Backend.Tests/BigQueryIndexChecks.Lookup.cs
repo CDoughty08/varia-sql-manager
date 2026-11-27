@@ -248,9 +248,9 @@ internal static partial class BigQueryIndexChecks
         var exactWithout = await Refused(LookupArgs(id, new JsonObject { ["path"] = new JsonArray(), ["exact"] = true }));
         var emptyPart = await Refused(LookupArgs(id, PathRequest("")));
         var longPrefix = await Refused(LookupArgs(id, new JsonObject { ["path"] = new JsonArray(), ["prefix"] = new string('x', EditorLookupLimits.PrefixChars + 1) }));
-        var sqlServer = await Refused(LookupArgs(Guid.NewGuid().ToString(), PathRequest()));
-        check(tooDeep == "INVALID_PARAMS" && tooMany == "INVALID_PARAMS" && exactWithout == "INVALID_PARAMS" && emptyPart == "INVALID_PARAMS" && longPrefix == "INVALID_PARAMS" && sqlServer == "UNSUPPORTED_PROVIDER",
-            $"the request is bounded (path depth, requests, prefix length, exact needs a prefix) and a handle BigQuery does not own is refused: {tooDeep} {tooMany} {exactWithout} {emptyPart} {longPrefix} {sqlServer}");
+        var unknownHandle = await Refused(LookupArgs(Guid.NewGuid().ToString(), PathRequest()));
+        check(tooDeep == "INVALID_PARAMS" && tooMany == "INVALID_PARAMS" && exactWithout == "INVALID_PARAMS" && emptyPart == "INVALID_PARAMS" && longPrefix == "INVALID_PARAMS" && unknownHandle == "NOT_CONNECTED",
+            $"the request is bounded (path depth, requests, prefix length, exact needs a prefix) and an unknown handle is refused: {tooDeep} {tooMany} {exactWithout} {emptyPart} {longPrefix} {unknownHandle}");
         var lane = harness.Service.LaneOf("language.lookup");
         check(lane == Varia.Backend.Protocol.RequestLane.Metadata, "language.lookup runs on the metadata lane: " + lane);
 

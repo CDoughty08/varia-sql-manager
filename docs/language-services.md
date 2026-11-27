@@ -34,6 +34,8 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
   probe edits are restored before any other request), limited to 16 source qualifiers and a five-second probe budget. An
   incomplete expansion does not bring back ambiguous bare columns.
 - **Hover** an identifier for the language server's information.
+- **Lazy schema preview drawer.** Arrowing through completion suggestions lazily resolves a full schema preview in Monaco's details pane from the local Search Objects RAM index (~1 ms, zero extra SQL Server, STS, or BigQuery calls): BigQuery items show their path, PR #738 discovery tier (`Billing`, `★ Starred`, `Discovered`), rows, size, partitioning/clustering, description, nested `STRUCT` field summaries, and top columns; SQL Server items enrich STS suggestions with columns, types, `PK`/`UK`/`FK`/`IDENTITY` markers, indexes, and incoming/outgoing foreign keys.
+- **Unified status bar IntelliSense popover.** Clicking the status bar's SQL IntelliSense chip opens a Calm Pro popover (dismissible with **Esc** or an outside click) summarizing index and provider health, the shared Search Objects memory budget bar, one-click **Refresh Cache** / **Refresh Local Cache** (`Ctrl+Shift+R`), and **Settings**. On BigQuery tabs it breaks down the 3-wave index (billing, ★ starred, and discovered / memory-capped projects) and checks the health of each `FROM`/`JOIN` table in the active query; on SQL Server tabs it reports SQL Tools Service and `IndexLookup` status alongside indexed database counts.
 - Hover and completion widgets can extend beyond a short query panel within the window; each editor owns its widgets
   across split and floating groups, and menus and dialogs stay above them.
 
@@ -174,9 +176,12 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   identifier (`table`, `view`, `routine`, `model`, `column`, `field`, `cte`, `alias`) inside auto-closed `` `…` ``
   consumes the trailing closing backtick so the caret exits cleanly; accepting a container (`project`, `dataset`) keeps
   the caret inside so `.` chaining continues.
-- **Hover.** A table or view: its kind and path, rows, size, partitioning, clustering, shards and top-level columns with
-  types (the first 40); a routine's signature; a column or field: type, REQUIRED and description; an alias or `WITH`
-  name: what it reads; a function: its signatures.
+- **Hover.** 3-level BigQuery hover: hovering a **project** segment shows its PR #738 tier (`Billing`, `★ Starred`, or
+  `Discovered`), dataset counts, names-only/memory-cap state, and star/refresh hints; hovering a **dataset** shows its
+  location (when known), object counts by kind, and sample objects; hovering a **table** or **view** shows its kind,
+  tier, path, rows, size, partitioning, clustering, shards, description, and top-level columns with nested `STRUCT` field
+  counts (`STRUCT · 3 fields: city, state, geo`, first 40 columns); a routine shows its signature; a column or field shows
+  type, REQUIRED and description; an alias or `WITH` name shows what it reads; a function shows its signatures.
 - **Index state.** While the index builds, every index-reading list is incomplete, so names read later appear as the word
   grows; the first request on a connection that was never indexed starts a build when Options allows builds on connect.
   `IndexCompletionService` subscribes to `ObjectSearchService` so index builds, manual refreshes, and DDL-stale updates
@@ -243,8 +248,9 @@ before promoting any SQL Server-specific assumption into the common contract.
 
 ## Scope and limits
 
-- Implemented: completion, hover, syntax/catalog diagnostics, metadata-cache refresh, Go To Definition. Not yet:
-  formatting, signature help, completion-item resolution, Entra IntelliSense.
+- Implemented: completion, lazy completion-item schema previews (via local Search Objects `language.lookup` on both
+  BigQuery and SQL Server), hover, syntax/catalog diagnostics, metadata-cache refresh, Go To Definition, and unified status
+  bar IntelliSense popover. Not yet: formatting, signature help, Entra IntelliSense.
 - Documents above 250,000 UTF-16 code units edit and execute normally without language requests.
 - Completion keeps at most 128 documents and 8,000,000 UTF-16 code units in total, and returns at most 500 items per
   response, prioritizing matching identifiers before truncation so later catalog names stay reachable.

@@ -754,8 +754,8 @@ a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databa
 (BigQuery's datasets); `.preview` refuses `bigquery` with `UNSUPPORTED_PROVIDER`. `live.subscribe` and `live.update` serve
 both, each source only the engines its catalogue entry names (Job History's `bigquery.jobs` is BigQuery's). `bigquery.account`,
 `bigquery.projects`, `bigquery.connectionProjects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.indexEstimate`, `bigquery.endIdleSessions`,
-`bigquery.cancelJobs`, `bigquery.jobs.get`, `bigquery.jobs.cancel`, `results.remoteQuery`, `query.attach` and
-`language.lookup` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`bigquery.cancelJobs`, `bigquery.jobs.get`, `bigquery.jobs.cancel`, `results.remoteQuery` and `query.attach`
+serve BigQuery alone (`Providers.BigQueryMethods`). `language.lookup` serves both engines (in-process Search Objects index lookup). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers

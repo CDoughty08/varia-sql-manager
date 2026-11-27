@@ -700,4 +700,79 @@ describe('IndexCompletionService', () => {
     await f.completeAt(tabLookup.id, 'SELECT * FROM |')
     expect(f.service.availability(tabLookup.id)?.label).toBe('IntelliSense')
   })
+
+  it('lazy-resolves BigQuery schema preview drawer on resolveCompletionItem from local LookupCache (0 BQ API calls)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((request): LanguageLookupAnswer => {
+            const key = request.path.join('.')
+            if (key === '') {
+              return { state: 'ready', path: [], truncated: false, items: [{ name: 'varia-alpha', kind: 'bqProject', tier: 'billing' }] }
+            }
+            if (key === 'varia-alpha') {
+              return { state: 'ready', path: ['varia-alpha'], truncated: false, items: [{ name: 'sales', kind: 'bqDataset', detail: 'US' }] }
+            }
+            if (key === 'varia-alpha.sales') {
+              return {
+                state: 'ready', path: ['varia-alpha', 'sales'], truncated: false,
+                items: [{ name: 'orders', kind: 'bqTable' }, { name: 'daily', kind: 'bqView' }]
+              }
+            }
+            if (key === 'varia-alpha.sales.orders') {
+              return {
+                state: 'ready', path: ['varia-alpha', 'sales', 'orders'], truncated: false,
+                object: {
+                  name: 'orders', kind: 'bqTable', detailed: true, rows: 4200, bytes: 2048,
+                  partitioning: 'DAY on placed', clustering: 'customer', description: 'Orders ledger.'
+                },
+                items: [
+                  { name: 'id', kind: 'bqColumn', type: 'INT64', nullable: false },
+                  { name: 'address', kind: 'bqColumn', type: 'STRUCT', subtype: 'struct', nullable: true },
+                  { name: 'address.city', kind: 'bqColumn', type: 'STRING', nullable: true },
+                  { name: 'address.state', kind: 'bqColumn', type: 'STRING', nullable: true }
+                ]
+              }
+            }
+            return { state: 'absent', path: [...request.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('q1.sql', '', 'sales', bqConnId)
+    const list = await f.completeAt(tab.id, 'SELECT * FROM |')
+    const orders = list.suggestions.find(s => labelText(s.label) === 'orders')!
+    const salesDs = list.suggestions.find(s => labelText(s.label) === 'sales')!
+    const project = list.suggestions.find(s => labelText(s.label) === 'varia-alpha')!
+    const provider = f.completionProvider()
+
+    const resolvedTable = (await provider.resolveCompletionItem!(orders, token()))!
+    expect(resolvedTable.documentation).toMatchObject({ isTrusted: false, supportHtml: false })
+    const tableMd = (resolvedTable.documentation as Monaco.IMarkdownString).value
+    expect(tableMd).toContain('**orders** · Table · Billing')
+    expect(tableMd).toContain('4,200 rows · 2.0 KiB · Partitioned by DAY on placed · Clustered by customer')
+    expect(tableMd).toContain('Orders ledger\\.')
+    expect(tableMd).toContain('| address | STRUCT · 2 fields: city, state |')
+
+    const resolvedDs = (await provider.resolveCompletionItem!(salesDs, token()))!
+    const dsMd = (resolvedDs.documentation as Monaco.IMarkdownString).value
+    expect(dsMd).toContain('**sales** · Dataset · US · Billing')
+    expect(dsMd).toContain('1 table · 1 view')
+
+    const resolvedProj = (await provider.resolveCompletionItem!(project, token()))!
+    const projMd = (resolvedProj.documentation as Monaco.IMarkdownString).value
+    expect(projMd).toContain('**varia\\-alpha** · Billing project')
+    expect(projMd).toContain('1 dataset')
+
+    // Cancelled token returns the original item untouched.
+    const cancel = cancellationSource()
+    cancel.cancel()
+    expect(await provider.resolveCompletionItem!(orders, cancel.token)).toBe(orders)
+
+    // lookupDocument exposes cached RAM lookups for the IntelliSense popover's source health list.
+    const answers = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])
+    expect(answers?.[0]?.object?.name).toBe('orders')
+  })
 })

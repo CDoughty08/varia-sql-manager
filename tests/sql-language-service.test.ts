@@ -58,7 +58,11 @@ async function fixture(status = configured, withBackend = false) {
     languageDiagnostics: vi.fn<VariaApi['languageDiagnostics']>(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } })),
     languageRefresh: vi.fn<VariaApi['languageRefresh']>(async () => ({ ok: true, value: { refreshed: true } })),
     languageClose: vi.fn<VariaApi['languageClose']>(async () => ({ ok: true, value: { closed: true } })),
-    languageDefinition: vi.fn<VariaApi['languageDefinition']>(async () => ({ ok: true, value: null }))
+    languageDefinition: vi.fn<VariaApi['languageDefinition']>(async () => ({ ok: true, value: null })),
+    languageLookup: vi.fn<VariaApi['languageLookup']>(async ({ requests }) => ({
+      ok: true,
+      value: { index: 'ready', answers: requests.map(request => ({ state: 'absent', path: [...request.path], items: [], truncated: false })) }
+    }))
   }
   let completion!: Monaco.languages.CompletionItemProvider, hover!: Monaco.languages.HoverProvider, definition!: Monaco.languages.DefinitionProvider
   const unregisterCompletion = vi.fn(), unregisterHover = vi.fn(), unregisterDefinition = vi.fn()
@@ -1328,5 +1332,74 @@ describe('SQL language features in Peek', () => {
     expect(f.api.languageClose).toHaveBeenCalledWith(id)
     expect(await f.hover.provideHover(model, position, token())).toBeNull()
     expect(f.api.languageHover).toHaveBeenCalledOnce()
+  })
+})
+
+describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => {
+  it('enriches STS table completion items from local IndexLookup via language.lookup with PK/UK/Identity, indexes, and FKs', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    const tab = f.documents.create('q.sql', 'SELECT * FROM dbo.Ord', 'SalesDB', 'sql-1')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: '[Orders]', kind: 7, detail: 'Table', filterText: 'Orders', insertText: '[Orders]' },
+          { label: 'ORDER', kind: 14, detail: 'Keyword' }
+        ]
+      }
+    })
+    f.api.languageLookup.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: [{
+          state: 'ready',
+          path: ['SalesDB', 'dbo', 'Orders'],
+          truncated: false,
+          object: { name: 'Orders', kind: 'table', detailed: true },
+          items: [
+            { name: 'OrderId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+            { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+            { name: 'PK_Orders', kind: 'key', subtype: 'primary', detail: '(OrderId)' },
+            { name: 'IX_Orders_Customer', kind: 'index', subtype: 'nonclustered', detail: '(CustomerId)' },
+            { name: 'FK_Orders_Customers', kind: 'foreignKey', subtype: 'outgoing', detail: '(CustomerId) → dbo.Customers(Id)' }
+          ]
+        }]
+      }
+    })
+
+    const list = await f.complete(tab.id, { lineNumber: 1, column: 22 } as Monaco.Position)
+    const orders = list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === '[Orders]')!
+    const keyword = list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === 'ORDER')!
+
+    const resolved = (await f.completion.resolveCompletionItem!(orders, token()))!
+    expect(f.api.languageLookup).toHaveBeenCalledWith({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', 'dbo', 'Orders'], limit: 2000, details: true }]
+    })
+    expect(resolved.documentation).toMatchObject({ isTrusted: false, supportHtml: false })
+    const md = (resolved.documentation as Monaco.IMarkdownString).value
+    expect(md).toContain('**dbo\\.Orders** · Table')
+    expect(md).toContain('\\[SalesDB\\]\\.\\[dbo\\]\\.\\[Orders\\]')
+    expect(md).toContain('| OrderId | int · NOT NULL · PK · IDENTITY |')
+    expect(md).toContain('FK\\_Orders\\_Customers'.replace('FK\\_Orders\\_Customers', '→ \\(CustomerId\\) → dbo\\.Customers\\(Id\\)'))
+
+    // Second resolve hits LookupCache (0 extra IPC calls); keywords are never looked up.
+    await f.completion.resolveCompletionItem!(orders, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(1)
+    expect(await f.completion.resolveCompletionItem!(keyword, token())).toBe(keyword)
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(1)
+
+    // Refresh Local Cache invalidates the SQL Server lookup cache.
+    await f.service.refreshCache(tab.id)
+    f.api.languageLookup.mockResolvedValueOnce({
+      ok: true,
+      value: { index: 'ready', answers: [{ state: 'absent', path: ['SalesDB', 'dbo', 'Orders'], items: [], truncated: false }] }
+    })
+    const afterRefresh = await f.completion.resolveCompletionItem!(orders, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(2)
+    expect(afterRefresh).toBe(orders)
   })
 })
