@@ -1944,7 +1944,10 @@ function agentAdvance() {
   }
 }
 function agentJobsSample(live, probe) {
-  if (probe.probe === 'agent.jobs.service') return { status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }, { id: 'startupType', value: 2 }] }
+  if (probe.probe === 'agent.jobs.service') {
+    const [agentXps, serviceState, startupType, clustered = 0] = explorerStatus()?.agent ?? [1, 4, 2]
+    return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }, { id: 'clustered', value: clustered }] }
+  }
   agentAdvance()
   if (probe.probe === 'agent.jobs.watched') {
     const metrics = liveProbes['agent.jobs.watched'].series.map(() => null)

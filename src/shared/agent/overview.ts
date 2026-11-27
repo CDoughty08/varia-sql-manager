@@ -382,10 +382,10 @@ export function overviewTiles(facts: OverviewFacts): OverviewTile[] {
   const fired = facts.alerts.filter(alert => { const at = stampMs(alert.lastOccurred); return now !== undefined && at !== undefined && now - at <= alertWeekMs })
   const alertsRead = readOk(facts, 'alerts')
   return [
-    { id: 'jobs', label: 'Jobs', value: jobsRead ? `${facts.jobs.length}${facts.reads.jobs?.truncated ? '+' : ''}` : '—', detail: jobsRead ? `${facts.jobs.filter(job => job.enabled).length} enabled` : '' },
-    { id: 'failed', label: facts.serverNow ? 'Failed, last 24 h' : 'Last run failed', value: jobsRead ? String(failed.length) : '—', detail: namesText(failed.map(job => job.name), 2), ...failed.length ? { tone: 'error' as const } : {} },
-    { id: 'running', label: 'Running', value: jobsRead ? String(running.length) : '—', detail: namesText(running.map(job => job.name), 2), ...running.length ? { tone: 'accent' as const } : {} },
-    { id: 'alerts', label: 'Alerts', value: alertsRead ? `${facts.alerts.length}${facts.reads.alerts?.truncated ? '+' : ''}` : '—', detail: alertsRead ? `${fired.length} fired this week` : '' }
+    { id: 'jobs', label: 'Total jobs', value: jobsRead ? `${facts.jobs.length}${facts.reads.jobs?.truncated ? '+' : ''}` : '—', detail: jobsRead ? `${facts.jobs.filter(job => job.enabled).length} enabled` : '' },
+    { id: 'failed', label: facts.serverNow ? 'Failed (24 h)' : 'Last run failed', value: jobsRead ? String(failed.length) : '—', detail: namesText(failed.map(job => job.name), 2), ...failed.length ? { tone: 'error' as const } : {} },
+    { id: 'running', label: 'Running now', value: jobsRead ? String(running.length) : '—', detail: namesText(running.map(job => job.name), 2), ...running.length ? { tone: 'accent' as const } : {} },
+    { id: 'alerts', label: 'Alerts (7 d)', value: alertsRead ? `${facts.alerts.length}${facts.reads.alerts?.truncated ? '+' : ''}` : '—', detail: alertsRead ? `${fired.length} fired this week` : '' }
   ]
 }
 
