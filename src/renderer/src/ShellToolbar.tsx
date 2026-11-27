@@ -80,7 +80,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
       <button type="button" className="ui-button icon-button" disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>
       <button type="button" className="ui-button" onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
     </div>
-    <div className="toolbar-context">{isMulti && tab ? <MultiTargetPopover tabId={tab.id} variant="classic" /> : <QueryPickers variant="classic" />}</div>
+    <div className="toolbar-context">{isMulti && tab ? <MultiTargetPopover key={tab.id} tabId={tab.id} variant="classic" /> : <QueryPickers variant="classic" />}</div>
   </div>
 
   return <div className="header-toolbar" role="toolbar" aria-label="Standard">

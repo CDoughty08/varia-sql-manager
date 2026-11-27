@@ -16,16 +16,19 @@ import CrossEngineEditor, {
   toGuardMarkers
 } from '../src/renderer/src/CrossEngineEditor'
 import MultiTargetPopover, {
+  canonicalDatabaseName,
   findSharedSqlDatabases,
   loadDatabaseListsBounded,
-  multiTargetTriggerSummary
+  maxMultiTargets,
+  multiTargetTriggerSummary,
+  resolveMultiTargets
 } from '../src/renderer/src/MultiTargetPopover'
 import QueryBar from '../src/renderer/src/QueryBar'
 import StandardToolbar from '../src/renderer/src/ShellToolbar'
 import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
 import GoToLineDialog from '../src/renderer/src/editor/GoToLineDialog'
 import { BookmarkService, type BookmarkEditor, type BookmarkModel } from '../src/renderer/src/editor/bookmarks'
-import { DocumentTab } from '../src/renderer/src/editor-groups/EditorArea'
+import { AreaContext, DocumentTab } from '../src/renderer/src/editor-groups/EditorArea'
 import { dropVerdict, ServerDropService, verdicts, type ServerDrag } from '../src/renderer/src/editor-groups/server-drop'
 import { placeOf } from '../src/renderer/src/editor-groups/ServerDropLayer'
 import { EventBus } from '../src/renderer/src/core/events'
@@ -679,5 +682,422 @@ describe('Dual-pane GoToLineDialog, BookmarkService & ServerDropLayer', () => {
       ['sql-1', 'SalesDB'],
       ['sql-2', 'Reporting']
     ])
+  })
+})
+
+describe('Round 1 Editor Surfaces regressions', () => {
+  it('Finding 1: resolves live strictly from attached handle and re-attaches detached targetId in-place when checked', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-live', 'Prod Primary', { color: 'red', environment: 'Production', database: 'SalesDB' })
+    const liveConn = connections.get('sql-live')!
+    const sharedTargetId = liveConn.targetId!
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([['sql-live', [{ name: 'SalesDB', isSystem: false, isSnapshot: false }]]]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [{ targetId: sharedTargetId, provider: 'sqlserver', database: 'SalesDB', enabled: true, attachWanted: false }]
+    })
+
+    // Detached target must NOT resolve as live even though a live connection shares its targetId, while still inheriting metadata.
+    const resolved = resolveMultiTargets(tab, connections.getSnapshot(), [])
+    expect(resolved).toHaveLength(1)
+    expect(resolved[0]).toMatchObject({ live: false, connection: undefined, name: 'Prod Primary', color: 'red', environment: 'Production' })
+    expect(multiTargetTriggerSummary(tab, connections.getSnapshot(), [])).toMatchObject({ enabledCount: 1, connectedCount: 0, ready: false })
+
+    // In MultiTargetPopover, the live row is unchecked until clicked, and clicking re-attaches in-place without duplicating.
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    const checkbox = document.body.querySelector<HTMLInputElement>('.multi-target-popover input[type="checkbox"]')!
+    expect(checkbox.checked).toBe(false)
+    await act(async () => { checkbox.click() })
+    const updated = documents.get(tab.id)!.multiTargets!
+    expect(updated).toHaveLength(1)
+    expect(updated[0]).toMatchObject({ targetId: sharedTargetId, connectionId: 'sql-live', attachWanted: true, enabled: true })
+  })
+
+  it('Finding 2: reconnectRow checks commands.isEnabled and inExplorer before connection.reconnect, otherwise falls back to connection.connect', async () => {
+    const { connections, documents, commands, mount } = uiFixture()
+    // Connection 1: lost + in explorer -> reconnect enabled -> runs connection.reconnect.
+    addSqlConnection(connections, 'sql-lost-in', 'Lost In Explorer')
+    // Connection 2: lost + removed from explorer (inExplorer: false) -> falls back to connection.connect.
+    addSqlConnection(connections, 'sql-lost-out', 'Lost Hidden')
+    // Mark connections lost via snapshot mock so inExplorer flags are exact.
+    const baseConns = connections.getSnapshot()
+    const mockedConns = [
+      { ...baseConns[0]!, lost: true as const, inExplorer: true },
+      { ...baseConns[1]!, lost: true as const, inExplorer: false }
+    ]
+    vi.spyOn(connections, 'getSnapshot').mockReturnValue(mockedConns)
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'sql-lost-in', provider: 'sqlserver', database: 'master', enabled: true, lastServer: 'Lost In Explorer' },
+        { connectionId: 'sql-lost-out', provider: 'sqlserver', database: 'master', enabled: true, lastServer: 'Lost Hidden' },
+        { provider: 'sqlserver', database: 'master', enabled: true, lastServer: 'Restored Target' }
+      ]
+    })
+
+    const isEnabled = vi.spyOn(commands, 'isEnabled').mockReturnValue(true)
+    const execute = vi.spyOn(commands, 'execute').mockResolvedValue(true)
+
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    const open = async () => { await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() }) }
+
+    // 1. Lost + inExplorer + command enabled -> connection.reconnect.
+    await open()
+    let buttons = [...document.body.querySelectorAll<HTMLButtonElement>('.multi-target-reconnect')]
+    expect(buttons).toHaveLength(3)
+    await act(async () => { buttons[0]!.click() })
+    expect(isEnabled).toHaveBeenCalledWith('connection.reconnect', expect.objectContaining({ target: expect.objectContaining({ kind: 'explorer' }) }))
+    expect(execute).toHaveBeenLastCalledWith('connection.reconnect', expect.any(Object), 'toolbar')
+
+    // 2. Lost + inExplorer, but command disabled -> falls back to connection.connect.
+    isEnabled.mockReturnValue(false)
+    await open()
+    buttons = [...document.body.querySelectorAll<HTMLButtonElement>('.multi-target-reconnect')]
+    await act(async () => { buttons[0]!.click() })
+    expect(execute).toHaveBeenLastCalledWith('connection.connect', undefined, 'toolbar')
+
+    // 3. Lost + inExplorer === false -> skips connection.reconnect and falls back to connection.connect.
+    isEnabled.mockReturnValue(true)
+    execute.mockClear()
+    await open()
+    buttons = [...document.body.querySelectorAll<HTMLButtonElement>('.multi-target-reconnect')]
+    await act(async () => { buttons[1]!.click() })
+    expect(execute).toHaveBeenCalledWith('connection.connect', undefined, 'toolbar')
+
+    // 4. Restored target without connection -> falls back to connection.connect.
+    execute.mockClear()
+    await open()
+    buttons = [...document.body.querySelectorAll<HTMLButtonElement>('.multi-target-reconnect')]
+    await act(async () => { buttons[2]!.click() })
+    expect(execute).toHaveBeenCalledWith('connection.connect', undefined, 'toolbar')
+  })
+
+  it('Finding 3: Open in BigQuery / SQL Server tab never opens a multi-server tab for single-engine opening and skips non-live handles', async () => {
+    const { connections, documents, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-live', 'prod-sql', { database: 'SalesDB' })
+    addBqConnection(connections, 'bq-dead', 'dead-bq', { database: 'sales_dw' })
+    vi.spyOn(connections, 'isLive').mockImplementation(id => id === 'sql-live')
+
+    const tab = documents.openMultiQuery({
+      mode: 'cross',
+      name: 'Audit.sql',
+      sql: 'UPDATE dbo.Orders SET A = 1;',
+      bigQuerySql: 'DROP TABLE sales_dw.orders;',
+      targets: [
+        { connectionId: 'sql-live', provider: 'sqlserver', database: 'SalesDB', enabled: true },
+        { connectionId: 'bq-dead', provider: 'bigquery', database: 'sales_dw', enabled: true }
+      ]
+    })
+
+    const primarySlot = createRef<HTMLDivElement>()
+    const openMultiSpy = vi.spyOn(documents, 'openMultiQuery')
+    const { host } = await mount(createElement(CrossEngineEditor, { tabId: tab.id, visible: true, primarySlotRef: primarySlot }))
+
+    // BigQuery target is NOT live -> opens single-server BigQuery tab via reopen (no multiMode, no dead connectionId).
+    const bqOpenBtn = host.querySelector<HTMLButtonElement>('.cross-engine-pane[data-cross-dialect="bigquery"] .cross-engine-guard-open')!
+    await act(async () => { bqOpenBtn.click() })
+    expect(openMultiSpy).not.toHaveBeenCalled()
+    const openedBq = documents.active!
+    expect(openedBq.name).toBe('Audit_BigQuery.sql')
+    expect(openedBq.multiMode).toBeUndefined()
+    expect(openedBq.provider).toBe('bigquery')
+    expect(openedBq.connectionId).toBeUndefined()
+    expect(documents.getText(openedBq.id)).toContain('DROP TABLE sales_dw.orders')
+
+    // Zero BigQuery targets case also opens a single-server BigQuery tab via reopen.
+    await act(async () => {
+      documents.setMultiTargets(tab.id, [{ connectionId: 'sql-live', provider: 'sqlserver', database: 'SalesDB', enabled: true }])
+      documents.activate(tab.id)
+    })
+    await act(async () => { bqOpenBtn.click() })
+    expect(openMultiSpy).not.toHaveBeenCalled()
+    const openedEmptyBq = documents.active!
+    expect(openedEmptyBq.multiMode).toBeUndefined()
+    expect(openedEmptyBq.provider).toBe('bigquery')
+    expect(openedEmptyBq.database).toBe('')
+    expect(openedEmptyBq.connectionId).toBeUndefined()
+
+    // Live SQL Server target opens single-server SQL Server tab attached to the live handle.
+    documents.activate(tab.id)
+    const sqlOpenBtn = host.querySelector<HTMLButtonElement>('.cross-engine-pane[data-cross-dialect="sqlserver"] .cross-engine-guard-open')!
+    await act(async () => { sqlOpenBtn.click() })
+    expect(openMultiSpy).not.toHaveBeenCalled()
+    const openedSql = documents.active!
+    expect(openedSql.name).toBe('Audit_SqlServer.sql')
+    expect(openedSql.multiMode).toBeUndefined()
+    expect(openedSql.connectionId).toBe('sql-live')
+    expect(openedSql.database).toBe('SalesDB')
+  })
+
+  it('Finding 4: CrossEngineEditor calls AreaContext.syncStatus on secondary editor bind, focus, and unbind', async () => {
+    const { documents, createdEditors, mount } = uiFixture()
+    const tab = documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: []
+    })
+    const syncStatus = vi.fn()
+    const area = { mount: vi.fn(), unmount: vi.fn(), syncStatus }
+    const primarySlot = createRef<HTMLDivElement>()
+
+    const { host } = await mount(
+      createElement(AreaContext.Provider, {
+        value: area,
+        children: createElement(CrossEngineEditor, { tabId: tab.id, visible: true, primarySlotRef: primarySlot })
+      })
+    )
+    expect(syncStatus).toHaveBeenCalledTimes(1)
+
+    await act(async () => { createdEditors[0]!.triggerFocusWidget() })
+    expect(syncStatus).toHaveBeenCalledTimes(2)
+    expect(documents.get(tab.id)?.activePane).toBe('secondary')
+
+    // Switching Split -> File unbinds secondary editor and calls syncStatus again.
+    const fileBtn = [...host.querySelectorAll<HTMLButtonElement>('.cross-engine-view-btn')].find(b => b.textContent?.includes('#Dialect File'))!
+    await act(async () => { fileBtn.click() })
+    expect(syncStatus).toHaveBeenCalledTimes(3)
+  })
+
+  it('Finding 6: MultiTargetPopover skips already-loaded empty BigQuery projects, keys effect on liveIds, and deduplicates in-flight reloads on focus', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addBqConnection(connections, 'bq-empty', 'Empty Project', { database: '' })
+    addSqlConnection(connections, 'sql-pending', 'Pending SQL', { database: 'master' })
+
+    let resolvePending!: () => void
+    const dbMap = new Map<string, readonly DatabaseInfo[]>([
+      ['bq-empty', []]
+    ])
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(dbMap)
+    vi.spyOn(databaseList, 'get').mockImplementation(id => dbMap.get(id) ?? [])
+    const reload = vi.spyOn(databaseList, 'reload').mockImplementation(id => {
+      if (id === 'sql-pending') return new Promise<void>(resolve => { resolvePending = resolve })
+      return Promise.resolve()
+    })
+
+    const tab = documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { connectionId: 'bq-empty', provider: 'bigquery', database: '', enabled: true },
+        { connectionId: 'sql-pending', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+
+    const { host, rerender } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+
+    // bq-empty is already in snapshot (with 0 datasets) -> must NOT reload; sql-pending reloads once.
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(reload).toHaveBeenCalledWith('sql-pending')
+
+    // Focusing sql-pending's <select> while reload is in flight must NOT fire a duplicate reload and keeps loading state.
+    const sqlSelect = document.body.querySelector<HTMLSelectElement>('select[aria-label="Pending SQL database"]')!
+    expect(sqlSelect.title).toBe('Loading…')
+    await act(async () => { sqlSelect.dispatchEvent(new FocusEvent('focus', { bubbles: true })) })
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(sqlSelect.title).toBe('Loading…')
+
+    // Settle sql-pending reload.
+    await act(async () => { resolvePending(); await Promise.resolve() })
+    expect(sqlSelect.title).toBe('Database: master')
+
+    // Swap sql-pending out and add sql-new (same live row count!) -> liveIdsKey changes and triggers reload for sql-new.
+    await act(async () => {
+      connections.remove('sql-pending')
+      addSqlConnection(connections, 'sql-new', 'New SQL', { database: 'master' })
+    })
+    await rerender(createElement(MultiTargetPopover, { tabId: tab.id }))
+    expect(reload).toHaveBeenCalledWith('sql-new')
+  })
+
+  it('Finding 7: traps Tab and Shift+Tab inside the open MultiTargetPopover dialog', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'prod-sql-01', { database: 'master' })
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([['sql-1', [{ name: 'master', isSystem: true, isSnapshot: false }]]]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+    })
+
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    const dialog = document.body.querySelector<HTMLElement>('.multi-target-popover[role="dialog"]')!
+    const focusables = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)')]
+    for (const el of focusables) {
+      vi.spyOn(el, 'getClientRects').mockReturnValue([{ width: 10, height: 10 }] as unknown as DOMRectList)
+    }
+    const first = focusables[0]!
+    const last = focusables.at(-1)!
+
+    // Tab on last control wraps to first.
+    last.focus()
+    expect(document.activeElement).toBe(last)
+    const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    await act(async () => { last.dispatchEvent(tabEvent) })
+    expect(tabEvent.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(first)
+
+    // Shift+Tab on first control wraps to last.
+    const shiftTabEvent = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    await act(async () => { first.dispatchEvent(shiftTabEvent) })
+    expect(shiftTabEvent.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
+  })
+
+  it('Finding 9: Apply database to all only updates live enabled SQL Server targets using each server\'s canonical casing', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'SQL One', { database: 'master' })
+    addSqlConnection(connections, 'sql-2', 'SQL Two', { database: 'master' })
+    const dbMap = new Map<string, readonly DatabaseInfo[]>([
+      ['sql-1', [{ name: 'SalesDB', isSystem: false, isSnapshot: false }, { name: 'master', isSystem: true, isSnapshot: false }]],
+      ['sql-2', [{ name: 'salesdb', isSystem: false, isSnapshot: false }, { name: 'master', isSystem: true, isSnapshot: false }]]
+    ])
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(dbMap)
+    vi.spyOn(databaseList, 'get').mockImplementation(id => dbMap.get(id) ?? [])
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    expect(canonicalDatabaseName('sql-2', 'SalesDB', dbMap)).toBe('salesdb')
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'sql-2', provider: 'sqlserver', database: 'master', enabled: true },
+        { provider: 'sqlserver', database: 'ArchiveDB', enabled: true, lastServer: 'offline-sql' }
+      ]
+    })
+
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    const sharedSelect = document.body.querySelector<HTMLSelectElement>('.multi-target-shared-select')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
+      setter.call(sharedSelect, 'SalesDB')
+      sharedSelect.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => { document.body.querySelector<HTMLButtonElement>('.multi-target-apply-btn')!.click() })
+
+    const updated = documents.get(tab.id)!.multiTargets!
+    expect(updated.map(t => t.database)).toEqual(['SalesDB', 'salesdb', 'ArchiveDB'])
+  })
+
+  it('Finding 10: GoToLineDialog captures expectedModel on mount and refuses to jump if active pane changes before OK', async () => {
+    const { documents, mount } = uiFixture()
+    const tab = documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;\nSELECT 2;',
+      bigQuerySql: 'SELECT 10;\nSELECT 20;\nSELECT 30;\nSELECT 40;',
+      targets: []
+    })
+    const primaryFake = makeFakeEditor(document.createElement('div'))
+    const secondaryFake = makeFakeEditor(document.createElement('div'))
+    documents.showIn(primaryFake.instance as never, tab.id, 'primary')
+    documents.bindSecondaryEditor(secondaryFake.instance as never, tab.id)
+    documents.setActivePane(tab.id, 'secondary')
+
+    const { host } = await mount(createElement(GoToLineDialog, { request: { tabId: tab.id, lineCount: 4, line: 1 } }))
+    // Switch activePane to primary while Go To Line is still open.
+    await act(async () => { documents.setActivePane(tab.id, 'primary') })
+
+    const input = host.querySelector<HTMLInputElement>('#go-to-line-input')!
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, '2')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const form = host.querySelector<HTMLFormElement>('form')!
+    await act(async () => { form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    expect(primaryFake.instance.setPosition).not.toHaveBeenCalled()
+    expect(secondaryFake.instance.setPosition).not.toHaveBeenCalled()
+  })
+
+  it('Finding 11: MultiTargetPopover enforces 32-target cap against enabled targets, prunes disabled entries on add, and CrossEngineEditor chip remove deletes target', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    const dbMap = new Map<string, readonly DatabaseInfo[]>()
+    for (let i = 1; i <= maxMultiTargets + 1; i++) {
+      addSqlConnection(connections, `sql-${i}`, `Server ${i}`, { database: 'master' })
+      dbMap.set(`sql-${i}`, [{ name: 'master', isSystem: true, isSnapshot: false }])
+    }
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(dbMap)
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const initialTargets = [
+      ...Array.from({ length: maxMultiTargets - 1 }, (_, i) => ({
+        connectionId: `sql-${i + 1}`, provider: 'sqlserver' as const, database: 'master', enabled: true
+      })),
+      { connectionId: `sql-${maxMultiTargets}`, provider: 'sqlserver' as const, database: 'master', enabled: false }
+    ]
+    const tab = documents.openMultiQuery({ mode: 'same', targets: initialTargets })
+
+    // 31 enabled + 1 disabled (= 32 stored): adding sql-33 is allowed and prunes the disabled sql-32 entry.
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    const cb33 = document.body.querySelector<HTMLInputElement>('input[aria-label="Enable Server 33"]')!
+    expect(cb33.disabled).toBe(false)
+    await act(async () => { cb33.click() })
+    const afterAdd = documents.get(tab.id)!.multiTargets!
+    expect(afterAdd).toHaveLength(maxMultiTargets)
+    expect(afterAdd.filter(t => t.enabled)).toHaveLength(maxMultiTargets)
+    expect(afterAdd.some(t => t.connectionId === 'sql-33')).toBe(true)
+    expect(afterAdd.some(t => t.connectionId === `sql-${maxMultiTargets}`)).toBe(false)
+
+    // At 32 enabled targets, unchecked sql-32 is now disabled.
+    const cb32 = document.body.querySelector<HTMLInputElement>('input[aria-label="Enable Server 32"]')!
+    expect(cb32.disabled).toBe(true)
+
+    // CrossEngineEditor chip remove deletes the target entry cleanly instead of leaving a disabled slot.
+    let crossTab!: ReturnType<typeof documents.openMultiQuery>
+    await act(async () => {
+      crossTab = documents.openMultiQuery({
+        mode: 'cross',
+        targets: [
+          { connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true },
+          { connectionId: 'sql-2', provider: 'sqlserver', database: 'master', enabled: true }
+        ]
+      })
+    })
+    const primarySlot = createRef<HTMLDivElement>()
+    const crossView = await mount(createElement(CrossEngineEditor, { tabId: crossTab.id, visible: true, primarySlotRef: primarySlot }))
+    await act(async () => { crossView.host.querySelector<HTMLButtonElement>('button[aria-label="Remove Server 1"]')!.click() })
+    expect(documents.get(crossTab.id)!.multiTargets!.map(t => t.connectionId)).toEqual(['sql-2'])
+  })
+
+  it('Finding 12: MultiTargetPopover closes on tabId change and StandardToolbar resets popover when active tab switches', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'Server 1', { database: 'master' })
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([['sql-1', [{ name: 'master', isSystem: true, isSnapshot: false }]]]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tabA = documents.openMultiQuery({
+      mode: 'same',
+      name: 'TabA.sql',
+      targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+    })
+    const tabB = documents.openMultiQuery({
+      mode: 'same',
+      name: 'TabB.sql',
+      targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+    })
+
+    // Direct tabId prop change closes open popover.
+    const direct = await mount(createElement(MultiTargetPopover, { tabId: tabA.id }))
+    await act(async () => { direct.host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    expect(document.body.querySelector('.multi-target-popover')).not.toBeNull()
+    await direct.rerender(createElement(MultiTargetPopover, { tabId: tabB.id }))
+    expect(document.body.querySelector('.multi-target-popover')).toBeNull()
+
+    // Classic toolbar switches active tab -> popover closes via key={tab.id}.
+    await act(async () => { documents.activate(tabA.id) })
+    const classic = await mount(createElement(StandardToolbar, { variant: 'classic' }))
+    await act(async () => { classic.host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    expect(document.body.querySelector('.multi-target-popover')).not.toBeNull()
+    await act(async () => { documents.activate(tabB.id) })
+    expect(document.body.querySelector('.multi-target-popover')).toBeNull()
   })
 })

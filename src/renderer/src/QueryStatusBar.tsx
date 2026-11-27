@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import type { QueryMultiStatus } from '../../shared/contracts'
 import { documentKind, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useTicker } from './core/useTicker'
@@ -7,9 +8,29 @@ import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import { resolveMultiTargets } from './MultiTargetPopover'
 import { queryStatusModel, type MultiQueryStatusTarget } from './results/query-status'
+import type { TabResults } from './results/ResultsService'
 import type { LiveConnection } from './services/connections'
-import { liveQuerySession } from './services/queries'
+import { liveQuerySession, type QueryState } from './services/queries'
 import { queryConnectionPresentation } from './query-connection'
+
+/** Derives the settled multi-server status so local failures (e.g. refuseReadOnly), backend loss, cancel, and timeout never show stale summaries. */
+export function deriveMultiStatus(
+  running: boolean,
+  run: (Pick<TabResults, 'status' | 'closedFrom' | 'summary'> & { readonly multiSummary?: { readonly status: QueryMultiStatus } }) | undefined,
+  query: (Pick<QueryState, 'error'> & { readonly multiSummary?: { readonly status: QueryMultiStatus } }) | undefined
+): QueryMultiStatus | undefined {
+  if (running) return undefined
+  if (run) {
+    const ended = run.status === 'closed' ? (run.closedFrom ?? run.summary?.status) : run.status
+    if (ended === 'lost') return 'failed'
+    if (run.multiSummary) return run.multiSummary.status
+    if (ended === 'failed') return 'failed'
+    if (ended === 'cancelled') return 'cancelled'
+    if (ended === 'timedOut') return 'timedOut'
+  }
+  if (query?.error && !query?.multiSummary) return 'failed'
+  return query?.multiSummary?.status
+}
 
 interface Props {
   readonly tab: QueryTab
@@ -67,9 +88,9 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   let model
   if (isMulti) {
     const statusTargets: MultiQueryStatusTarget[] = multiResolved.map(item => {
-      const liveState = query?.multiTargets?.find(state =>
-        (item.target.connectionId && state.connectionId === item.target.connectionId) || state.label === item.name
-      )
+      const liveState = item.target.connectionId
+        ? query?.multiTargets?.find(state => state.connectionId === item.target.connectionId)
+        : query?.multiTargets?.find(state => state.label === item.name)
       return {
         provider: item.target.provider,
         connected: item.live,
@@ -82,7 +103,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
     model = queryStatusModel({
       multiMode: tab.multiMode,
       multiTargets: statusTargets,
-      multiStatus: query?.multiSummary?.status,
+      multiStatus: deriveMultiStatus(running, run, query),
       database: tab.database,
       run,
       running,

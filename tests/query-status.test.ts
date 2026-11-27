@@ -5,7 +5,7 @@ import { defaultSettings } from '../src/shared/settings/catalog'
 import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
-import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
+import QueryStatusBar, { deriveMultiStatus } from '../src/renderer/src/QueryStatusBar'
 import EditorStatus, { sqlStatusChip } from '../src/renderer/src/EditorStatus'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
@@ -153,6 +153,56 @@ describe('the query status facts\' environment tag', () => {
     const classic = renderStatus(live, 'bar', true)
     expect(classic).not.toContain('data-compact="true"')
     expect(classic).toContain('data-icon="plug"')
+  })
+
+  it('derives multi-server status without stale success after refuseReadOnly, backend loss, cancel, timeout, or IPC error', () => {
+    const staleCompleted = { queryId: 'q1', mode: 'cross' as const, status: 'completed' as const, elapsedMs: 10, targets: [] }
+    // Running always clears settled outcome.
+    expect(deriveMultiStatus(true, { status: 'failed' }, { multiSummary: staleCompleted })).toBeUndefined()
+    // After refuseReadOnly (run.status='failed', no run.multiSummary), never shows stale completed summary.
+    expect(deriveMultiStatus(false, { status: 'failed' }, { multiSummary: staleCompleted })).toBe('failed')
+    // Backend lost mid-run overrides any stale summary.
+    expect(deriveMultiStatus(false, { status: 'lost' }, { multiSummary: staleCompleted })).toBe('failed')
+    // Cancelled / timedOut runs without multiSummary map cleanly instead of falling back to stale summary.
+    expect(deriveMultiStatus(false, { status: 'cancelled' }, { multiSummary: staleCompleted })).toBe('cancelled')
+    expect(deriveMultiStatus(false, { status: 'timedOut' }, { multiSummary: staleCompleted })).toBe('timedOut')
+    // Authoritative run.multiSummary (e.g. rolledBack / commitInDoubt) is preserved when run.status is 'failed'.
+    expect(deriveMultiStatus(false, { status: 'failed', multiSummary: { ...staleCompleted, status: 'rolledBack' } }, { multiSummary: staleCompleted })).toBe('rolledBack')
+    expect(deriveMultiStatus(false, { status: 'failed', multiSummary: { ...staleCompleted, status: 'commitInDoubt' } }, undefined)).toBe('commitInDoubt')
+    // IPC error without multiSummary reports failed.
+    expect(deriveMultiStatus(false, undefined, { error: 'IPC failed' })).toBe('failed')
+  })
+
+  it('matches multi-target live phases strictly by connectionId before falling back to label', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    fixture.connections.add(
+      { id: 'c1', server: 'sql01', displayName: 'SharedName', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql01', displayName: 'SharedName', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    fixture.connections.add(
+      { id: 'c2', server: 'sql02', displayName: 'SharedName', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql02', displayName: 'SharedName', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    const tab = fixture.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'c1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'c2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    // Only c2 is in multiTargets as succeeded; c1 has a connectionId so it must NOT borrow c2's phase by matching label 'SharedName'.
+    const queries = new SnapshotStore({
+      [tab.id]: {
+        running: { queryId: 'q1', connectionId: 'c2', startedAt: 100 },
+        multiTargets: [{ targetKey: 't2', connectionId: 'c2', label: 'SharedName', provider: 'sqlserver', database: 'master', phase: 'succeeded' }]
+      }
+    })
+    const workbench = { ...fixture, queries, theme } as unknown as Workbench
+    const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
+    // Only 1 target (c2) has a live phase, not 2!
+    expect(html).toContain('Executing on 1 target (1/1 settled)')
   })
 })
 

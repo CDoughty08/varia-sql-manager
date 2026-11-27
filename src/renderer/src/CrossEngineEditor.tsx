@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { editor } from 'monaco-editor'
 import { checkCrossEngineReadOnly, parseCrossEngineSql, type ReadOnlyViolation } from '../../shared/multi-query'
 import type { ProviderId } from '../../shared/providers'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { createQueryEditor, type QueryEditorInstance } from './editor/create-editor'
+import { AreaContext } from './editor-groups/EditorArea'
 import Icon from './Icon'
 import { requestMultiTargetPopover, resolveMultiTargets } from './MultiTargetPopover'
 
@@ -93,6 +94,9 @@ export interface CrossEngineEditorProps {
  * guard with dedicated Monaco markers (`varia-cross-engine-guard`).
  */
 export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onActivate, onOpenInSingleEngine }: CrossEngineEditorProps) {
+  const area = useContext(AreaContext)
+  const areaRef = useRef(area)
+  areaRef.current = area
   const workbench = useWorkbench()
   const { documents, connections: connectionService, targets: targetService, queries, theme, monaco } = workbench
   const docSnapshot = useServiceSnapshot(documents)
@@ -146,9 +150,11 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
     secondaryEditorRef.current = created
     const binding = documents.bindSecondaryEditor(created.instance, tabId)
     documents.showIn(created.instance, tabId, 'secondary')
+    areaRef.current?.syncStatus()
     const focusSub = created.instance.onDidFocusEditorWidget(() => {
       documents.setActivePane(tabId, 'secondary')
       onActivate?.()
+      areaRef.current?.syncStatus()
     })
     created.setVisible(visible)
     return () => {
@@ -158,6 +164,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
       created.dispose()
       element.remove()
       if (secondaryEditorRef.current === created) secondaryEditorRef.current = null
+      areaRef.current?.syncStatus()
     }
     // `visible` and `onActivate` are synchronized below without recreating the Monaco instance.
   }, [crossView, tabId, workbench, documents, monaco])
@@ -238,7 +245,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
 
   const removeTarget = (targetIndex: number) => {
     if (locked) return
-    documents.updateMultiTarget(tabId, targetIndex, { enabled: false })
+    documents.setMultiTargets(tabId, (tab.multiTargets ?? []).filter((_, index) => index !== targetIndex))
   }
 
   const jumpToNextBlocked = (scope: 'sqlserver' | 'bigquery' | 'file', violations: readonly CrossEngineViolation[]) => {
@@ -273,11 +280,19 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
       return
     }
     const first = matching[0]
-    if (dialect === 'bigquery' && !first?.connectionId) {
-      documents.openMultiQuery({ mode: 'same', targets: matching, name, sql, provider: 'bigquery', unsaved: sql.length > 0 })
+    if (first?.connectionId && connectionService.isLive(first.connectionId)) {
+      documents.create(name, sql, first.database || (dialect === 'bigquery' ? '' : 'master'), first.connectionId, sql.length > 0)
       return
     }
-    documents.create(name, sql, first?.database ?? (dialect === 'bigquery' ? '' : 'master'), first?.connectionId, sql.length > 0)
+    documents.reopen({
+      name,
+      kind: 'sql',
+      text: sql,
+      eol: 'lf',
+      dirty: sql.length > 0,
+      database: dialect === 'bigquery' ? '' : 'master',
+      provider: dialect
+    })
   }
 
   const renderTargetChips = (dialect: ProviderId, items: typeof resolvedTargets, emptyLabel: string) => {
@@ -370,7 +385,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
           className={activePane === 'primary' ? 'cross-engine-pane is-active' : 'cross-engine-pane'}
           data-cross-dialect="sqlserver"
           data-document-id={tabId}
-          onFocusCapture={() => { documents.setActivePane(tabId, 'primary'); onActivate?.() }}>
+          onFocusCapture={() => { documents.setActivePane(tabId, 'primary'); onActivate?.(); areaRef.current?.syncStatus() }}>
           <div className="cross-engine-pane-header">
             {renderTargetChips('sqlserver', enabledSql, '+ Pick SQL Server…')}
             <span className="cross-engine-dialect-tag">Transact-SQL</span>
@@ -383,7 +398,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
           className={activePane === 'secondary' ? 'cross-engine-pane is-active' : 'cross-engine-pane'}
           data-cross-dialect="bigquery"
           data-document-id={tabId}
-          onFocusCapture={() => { documents.setActivePane(tabId, 'secondary'); onActivate?.() }}>
+          onFocusCapture={() => { documents.setActivePane(tabId, 'secondary'); onActivate?.(); areaRef.current?.syncStatus() }}>
           <div className="cross-engine-pane-header">
             {renderTargetChips('bigquery', enabledBq, '+ Pick BigQuery…')}
             <span className="cross-engine-dialect-tag">GoogleSQL</span>

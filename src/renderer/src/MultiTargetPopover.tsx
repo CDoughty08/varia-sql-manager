@@ -13,6 +13,7 @@ import Icon from './Icon'
 import { isBigQueryConnection, isLiveConnection } from './services/connection-availability'
 import type { LiveConnection } from './services/connections'
 import type { DatabaseLists } from './services/database-list'
+import { trapFocus } from './trap-focus'
 
 // Chromium handles Escape through close requests, independently of the menu's visual layer.
 declare const CloseWatcher: (new () => EventTarget & { destroy(): void }) | undefined
@@ -55,19 +56,20 @@ export function resolveMultiTargets(
   rememberedTargets: readonly ConnectionTarget[]
 ): ResolvedTargetVisual[] {
   return (tab.multiTargets ?? []).map(target => {
-    const connection = target.connectionId
+    const attached = target.connectionId
       ? connections.find(item => item.id === target.connectionId)
-      : target.targetId
-        ? connections.find(item => item.targetId === target.targetId)
-        : undefined
+      : undefined
+    const matched = attached ?? (target.targetId
+      ? connections.find(item => item.targetId === target.targetId)
+      : undefined)
     const remembered = target.targetId ? rememberedTargets.find(item => item.id === target.targetId) : undefined
-    const live = isLiveConnection(connection) && (!target.connectionId || connection?.id === target.connectionId)
-    const host = (remembered ? targetServerName(remembered.options) : undefined) ?? connection?.server ?? target.lastServer
-    const displayName = remembered?.details.displayName ?? connection?.displayName
+    const live = isLiveConnection(attached)
+    const host = (remembered ? targetServerName(remembered.options) : undefined) ?? matched?.server ?? target.lastServer
+    const displayName = remembered?.details.displayName ?? matched?.displayName
     const name = displayName || host || (target.provider === 'bigquery' ? 'BigQuery project' : 'SQL Server')
-    const environment = remembered?.details.environment ?? connection?.options.environment
-    const color = remembered?.details.color ?? connection?.color
-    return { target, connection, remembered, live, name, host, environment, color }
+    const environment = remembered?.details.environment ?? matched?.options.environment
+    const color = remembered?.details.color ?? matched?.color
+    return { target, connection: attached, remembered, live, name, host, environment, color }
   })
 }
 
@@ -171,6 +173,34 @@ export function findSharedSqlDatabases(
   return shared
 }
 
+/** Resolves a database name to a server's own canonical casing from its loaded database list, if present. */
+export function canonicalDatabaseName(
+  connectionId: string | undefined,
+  database: string,
+  databaseLists: DatabaseLists
+): string {
+  if (!connectionId) return database
+  const key = database.trim().toLowerCase()
+  const match = (databaseLists.get(connectionId) ?? []).find(db => db.name.trim().toLowerCase() === key)
+  return match ? match.name : database
+}
+
+/** Appends a new target while keeping stored entries within `limit` by pruning a disabled entry first when needed. */
+export function appendMultiTarget(
+  targets: readonly MultiDocumentTarget[],
+  added: MultiDocumentTarget,
+  limit = maxMultiTargets
+): MultiDocumentTarget[] {
+  const next = [...targets]
+  while (next.length >= limit) {
+    const disabledIndex = next.findIndex(item => !item.enabled)
+    if (disabledIndex < 0) break
+    next.splice(disabledIndex, 1)
+  }
+  if (next.length >= limit) return next
+  return [...next, added]
+}
+
 /** Runs `load` over `connectionIds` with bounded concurrency so the metadata lane is never flooded. */
 export function loadDatabaseListsBounded(
   connectionIds: readonly string[],
@@ -241,6 +271,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   const filterInput = useRef<HTMLInputElement>(null)
   const openedByKeyboard = useRef(false)
   const focusOnOpen = useRef(false)
+  const inFlightRef = useRef<Set<string>>(new Set())
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
   const [coords, setCoords] = useState<{ top: number; left: number; maxHeight: number } | undefined>()
@@ -255,6 +286,11 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     openedByKeyboard.current = false
     focusOnOpen.current = false
   }, [])
+
+  useEffect(() => {
+    close(false)
+    setSharedChoice('')
+  }, [tabId, close])
 
   const openPopover = useCallback((fromKeyboard: boolean) => {
     if (modalOpen() || menus?.ownsKeyboard?.()) return
@@ -294,9 +330,10 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
 
     for (const conn of eligibleLive) {
       const prov = connectionProvider(conn)
-      const targetIndex = tabTargets.findIndex((item, index) =>
-        !matchedTargetIndices.has(index) && (item.connectionId === conn.id || (!!conn.targetId && item.targetId === conn.targetId))
-      )
+      let targetIndex = tabTargets.findIndex((item, index) => !matchedTargetIndices.has(index) && item.connectionId === conn.id)
+      if (targetIndex < 0 && conn.targetId) {
+        targetIndex = tabTargets.findIndex((item, index) => !matchedTargetIndices.has(index) && item.targetId === conn.targetId)
+      }
       const target = targetIndex >= 0 ? tabTargets[targetIndex] : undefined
       if (targetIndex >= 0) matchedTargetIndices.add(targetIndex)
       result.push({
@@ -310,7 +347,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         host: conn.server,
         environment: conn.options.environment,
         color: conn.color,
-        enabled: !!target?.enabled,
+        enabled: !!target?.enabled && target?.connectionId === conn.id,
         database: target?.database ?? (prov === 'bigquery' ? (conn.database || '') : (conn.database || 'master'))
       })
     }
@@ -376,12 +413,16 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
 
   // Lazy-load missing database/dataset lists when popover opens, bounded to avoid flooding the metadata lane.
   const ensureDatabaseList = useCallback((connectionIds: readonly string[]) => {
-    const missing = connectionIds.filter(id => (databaseList.get(id)?.length ?? 0) === 0)
+    const snapshot = databaseList.getSnapshot()
+    const missing = [...new Set(connectionIds)].filter(id => !snapshot.has(id) && !inFlightRef.current.has(id))
     if (!missing.length) return () => {}
     const task = loadDatabaseListsBounded(missing, async id => {
+      if (databaseList.getSnapshot().has(id) || inFlightRef.current.has(id)) return
+      inFlightRef.current.add(id)
       setLoadingIds(prev => { const next = new Set(prev); next.add(id); return next })
       try { await databaseList.reload(id) }
       finally {
+        inFlightRef.current.delete(id)
         setLoadingIds(prev => {
           if (!prev.has(id)) return prev
           const next = new Set(prev)
@@ -393,11 +434,15 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     return () => task.cancel()
   }, [databaseList])
 
+  const liveIdsKey = useMemo(
+    () => rows.filter(row => row.live && row.connection).map(row => row.connection!.id).join(','),
+    [rows]
+  )
+
   useEffect(() => {
-    if (!open) return
-    const liveIds = rows.filter(row => row.live && row.connection).map(row => row.connection!.id)
-    return ensureDatabaseList(liveIds)
-  }, [open, rows.length, ensureDatabaseList])
+    if (!open || !liveIdsKey) return
+    return ensureDatabaseList(liveIdsKey.split(','))
+  }, [open, liveIdsKey, ensureDatabaseList])
 
   // Positioning & dismiss lifecycle (matching QueryBar's PlanMenuButton).
   useLayoutEffect(() => {
@@ -462,19 +507,22 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   if (!tab || !tab.multiMode || !summary) return null
 
   const currentTargets = tab.multiTargets ?? []
-  const atLimit = currentTargets.length >= maxMultiTargets
+  const enabledCount = currentTargets.filter(target => target.enabled).length
+  const atLimit = enabledCount >= maxMultiTargets
 
   const toggleRow = (row: PopoverRow, checked: boolean) => {
     if (locked) return
     if (row.targetIndex !== undefined) {
+      if (checked && !row.target?.enabled && atLimit) return
+      const targetId = row.connection ? (targetService.targetForConnection(row.connection.id) ?? row.connection.targetId) : undefined
       documents.updateMultiTarget(tab.id, row.targetIndex, prev => ({
         ...prev,
         enabled: checked,
-        ...row.connection ? { connectionId: row.connection.id, ...row.connection.targetId ? { targetId: row.connection.targetId, attachWanted: true } : {} } : {}
+        ...row.connection ? { connectionId: row.connection.id, ...targetId ? { targetId, attachWanted: true } : {} } : {}
       }))
       return
     }
-    if (!checked || !row.connection || currentTargets.length >= maxMultiTargets) return
+    if (!checked || !row.connection || atLimit) return
     const targetId = targetService.targetForConnection(row.connection.id) ?? row.connection.targetId
     const added: MultiDocumentTarget = {
       ...targetId ? { targetId, attachWanted: true } : {},
@@ -483,7 +531,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       enabled: true,
       provider: row.provider
     }
-    documents.setMultiTargets(tab.id, [...currentTargets, added])
+    documents.setMultiTargets(tab.id, appendMultiTarget(currentTargets, added, maxMultiTargets))
   }
 
   const changeRowDatabase = (row: PopoverRow, database: string) => {
@@ -498,10 +546,11 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
 
   const applyDatabaseToAll = () => {
     if (locked || !sharedChoice) return
+    const liveIds = new Set(connections.filter(isLiveConnection).map(c => c.id))
     documents.updateMultiTarget(
       tab.id,
-      target => target.enabled && target.provider === 'sqlserver',
-      { database: sharedChoice }
+      target => target.enabled && target.provider === 'sqlserver' && !!target.connectionId && liveIds.has(target.connectionId),
+      target => ({ ...target, database: canonicalDatabaseName(target.connectionId, sharedChoice, databaseLists) })
     )
   }
 
@@ -512,22 +561,25 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       onReconnectTarget(row.target, row.connection?.id)
       return
     }
-    if (row.connection?.lost) {
-      void commands.execute('connection.reconnect', {
+    if (row.connection?.lost && row.connection.inExplorer !== false) {
+      const reconnectArgs = {
         target: {
-          kind: 'explorer',
+          kind: 'explorer' as const,
           node: {
             id: 0,
-            kind: 'server',
+            kind: 'server' as const,
             connectionId: row.connection.id,
-            ref: { type: 'object', object: { kind: 'server' } },
+            ref: { type: 'object' as const, object: { kind: 'server' as const } },
             label: row.name,
-            lost: true,
+            lost: true as const,
             ...row.provider === 'bigquery' ? { provider: 'bigquery' as const } : {}
           }
         }
-      }, 'toolbar')
-      return
+      }
+      if (commands.isEnabled('connection.reconnect', reconnectArgs)) {
+        void commands.execute('connection.reconnect', reconnectArgs, 'toolbar')
+        return
+      }
     }
     void commands.execute('connection.connect', undefined, 'toolbar')
   }
@@ -539,6 +591,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   }
 
   const popoverKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(true) }
   }
 
@@ -567,7 +620,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
           const swatch = theme.accent(row.color)
           const choices = databaseChoicesFor(row)
           const isLoading = !!(row.connection && loadingIds.has(row.connection.id))
-          const checkDisabled = locked || (!row.enabled && row.targetIndex === undefined && atLimit)
+          const checkDisabled = locked || (!row.enabled && !row.target?.enabled && atLimit)
           return <div key={row.key} className={row.enabled ? 'multi-target-row' : 'multi-target-row is-unchecked'} data-live={row.live || undefined}>
             <input
               type="checkbox"
@@ -656,6 +709,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         id={popoverId}
         className="multi-target-popover"
         role="dialog"
+        tabIndex={-1}
         aria-label={isCross ? 'Cross-Engine Targets' : 'Query Targets'}
         style={coords ? { top: `${coords.top}px`, left: `${coords.left}px`, maxHeight: `${coords.maxHeight}px` } : { visibility: 'hidden' }}
         onKeyDown={popoverKeyDown}>
