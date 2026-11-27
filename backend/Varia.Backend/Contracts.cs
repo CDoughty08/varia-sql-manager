@@ -492,12 +492,13 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is projects, names (pass 1) or details (pass 2) while building; NamesOnly lists
 /// projects whose details could not be read due to the memory budget; Bulk is the last full build's billed bulk path, when it ran;
 /// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left);
-/// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise).</summary>
+/// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise);
+/// SavedAt (UTC) is when the oldest dataset loaded from the saved index that no listing has checked yet was read (absent when none is).</summary>
 /// <summary>LeftOut: the definitions (counted in Cut too) left out whole because the index's memory ran out, and LeftOutIn the
 /// databases (BigQuery: datasets) they belong to (the server's own and the system objects are in none); each absent when zero.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
     string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null,
-    int? LeftOut = null, int? LeftOutIn = null);
+    int? LeftOut = null, int? LeftOutIn = null, string? SavedAt = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
 /// <summary>explorer.indexStatus: what a connection's index holds now, without building or searching.</summary>
 internal sealed record ObjectIndexStatusArgs(string ConnectionId);

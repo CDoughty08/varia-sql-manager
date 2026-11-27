@@ -998,7 +998,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Copy of a whole column across blocks, Save Results As streaming every row, Load into memory in place, and Automatically,
   by size keeping the same small result in memory. `scripts/bigquery-explorer-smoke.mjs` drives Object Explorer against the
   same fake with `objects` (a table, a view, a routine and a model): the folders and objects, Columns with a STRUCT's
-  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties.
+  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties; then, after a
+  backend restart, a search finds the saved index's objects while the dataset's `tables.list` is held, with no
+  object's details read again (docs/object-search.md, Reloading a BigQuery index).
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
   REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
   it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the

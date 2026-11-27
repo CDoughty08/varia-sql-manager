@@ -113,6 +113,17 @@ internal sealed partial class ObjectSearchService : IDisposable
         /// with no target and no default dataset), by project (under Gate): the next stale-only build lists the project again and
         /// reads every dataset in it whole.</summary>
         public readonly Dictionary<string, long> StaleProjects = new(StringComparer.Ordinal);
+        /// <summary>BigQuery reads loaded from the saved index that no listing has checked yet, by key, with the file each came
+        /// from (under Gate): the status says how old they are while the build that checks them runs.</summary>
+        /// The read is held weakly: one replaced or dropped (its charge given back) is not kept alive here.
+        public readonly Dictionary<string, (WeakReference<DatabaseIndex> Read, SavedUnit Unit, long Ticks)> Saved = new(StringComparer.Ordinal);
+        /// <summary><see cref="Saved"/>'s entries by when each was read (UTC ticks), oldest first (under Gate).</summary>
+        public readonly SortedSet<(long Ticks, string Key)> SavedOrder = [];
+        /// <summary>Whether a full build has loaded the connection's saved index (once, when the store reads; under Gate).</summary>
+        public bool SavedLoaded;
+        /// <summary>When the oldest of <see cref="Saved"/> was read, and as the status's text (read by the progress without Gate).</summary>
+        public DateTime? SavedAt;
+        public volatile string? SavedAtText;
         /// <summary>The newest stale mark not yet spent, or null: index status carries it so the renderer asks a stale-only
         /// build once per new mark (never again for a mark a failed read left).</summary>
         public long? StaleMark => Stale.Count + StaleProjects.Count == 0 ? null : Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max());
@@ -463,11 +474,12 @@ internal sealed partial class ObjectSearchService : IDisposable
                 var projects = databases.Where(value => value.Dataset is not null).Select(value => value.Database).Distinct(StringComparer.Ordinal).Count();
                 var skipped = state.Skipped.ToList();
                 var (bigQueryLeftOut, bigQueryLeftOutIn) = (Total(databases.Select(value => value.LeftOut)), databases.Count(value => value.LeftOut > 0));
+                var savedAt = SavedAtText(SavedAtLocked(state));
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, Total(databases.Select(value => value.Modules)), Total(databases.Select(value => value.Cut)), skipped, state.Definitions,
                     state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped,
-                    bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null);
+                    bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null, savedAt);
             }
             // LeftOutIn counts databases only: the server's own objects and the system objects are in none.
             var leftOut = Total(databases.Select(value => value.LeftOut).Append(state.Index.Resource?.LeftOut ?? 0).Append(state.Index.Server?.LeftOut ?? 0));

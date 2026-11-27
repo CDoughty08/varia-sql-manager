@@ -688,7 +688,13 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   turned on again), `IndexStore.Opened` has `ObjectSearchService.SaveHeld` announce what every index holds, so a read held
   before main configured the store is not lost until its next build. What a builder will later compare with its source goes in
   `DatabaseIndex.Sync` (BigQuery's `BigQuerySync`; SQL Server's is empty until a fingerprint is added), which a listing
-  of saved units reads from the headers alone.
+  of saved units reads from the headers alone. A BigQuery connection's first full build loads its principal's saved units
+  (`ObjectSearchService.LoadSaved`) before any call, each through `IndexStore.Load` (charged as a read, under BigQuery's
+  floors) and held only while `IndexStore.Settled` and the connection's own marks say nothing made it stale (no queued
+  save or deletion of it, no DDL mark since it was listed); its listings then compare with each unit's facts and the
+  sync's listing digest, and a dataset found unchanged keeps the loaded read and is only marked used
+  (`ObjectSearchService.Unchanged`), never written again. Every load failure is a value that leaves the dataset to the
+  usual read.
 - **Script As.** Verbs, titles, URN types and preflight ids live only in `src/shared/scripting/catalog.ts`, options only in
   `options.ts` (regenerate `docs/scripting.md` and embedded `Scripting/scripting-catalog.json`). Its own pool
   (`READ COMMITTED`, `LOCK_TIMEOUT 10000`, database context restored before pooling); SMO only through `ScriptPipeline`
