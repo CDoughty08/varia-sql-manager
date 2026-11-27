@@ -281,7 +281,8 @@ describe('MultiExecuteDialog', () => {
     expect(exportMount.form().querySelector('.multi-exec-banner')?.textContent).toContain('EXPORT')
     exportMount.unmount()
 
-    // Dynamic emulator detection via dry-run `faked: true` disables transaction even for DML.
+    // Dynamic emulator detection via dry-run `faked: true` disables transaction even for DML,
+    // moves focus from the now-disabled transaction radio to Fire and Forget, and disables Pre-flight Dry Run.
     const emuMount = await mountDialog({
       tabId: 'tab-6',
       provider: 'bigquery',
@@ -292,8 +293,92 @@ describe('MultiExecuteDialog', () => {
     await flush()
     expect(emuMount.radio('transaction').disabled).toBe(true)
     expect(emuMount.radio('fireAndForget').checked).toBe(true)
+    expect(document.activeElement).toBe(emuMount.radio('fireAndForget'))
+    expect(emuMount.checkbox('Pre-flight Dry Run (free)')?.disabled).toBe(true)
+    expect(emuMount.checkbox('Pre-flight Dry Run (free)')?.checked).toBe(false)
     expect(emuMount.form().querySelector('.multi-exec-banner')?.textContent).toContain('emulator')
     expect(emuMount.form().textContent).toContain('Emulator (0 B)')
+
+    // Escape still works after focus moves onto the Fire and Forget radio.
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(emuMount.onCancel).toHaveBeenCalledTimes(1)
+    emuMount.unmount()
+
+    // Dynamic emulator detection during SELECT (already in fireAndForget mode) still unchecks/disables Pre-flight Dry Run.
+    const selectDryRun = deferred<ApiResult<BigQueryDryRunResult>>()
+    const selectMount = await mountDialog({
+      tabId: 'tab-6b',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: true
+    }, { estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(() => selectDryRun.promise) })
+    expect(selectMount.radio('fireAndForget').checked).toBe(true)
+    expect(selectMount.checkbox('Pre-flight Dry Run (free)')?.checked).toBe(true)
+    expect(selectMount.checkbox('Pre-flight Dry Run (free)')?.disabled).toBe(false)
+    await act(async () => {
+      selectDryRun.resolve({ ok: true, value: { bytesProcessed: 0, faked: true } })
+      await Promise.resolve()
+    })
+    await flush()
+    expect(selectMount.checkbox('Pre-flight Dry Run (free)')?.disabled).toBe(true)
+    expect(selectMount.checkbox('Pre-flight Dry Run (free)')?.checked).toBe(false)
+    await act(async () => { selectMount.form().querySelector<HTMLButtonElement>('button[type="submit"]')!.click() })
+    expect(selectMount.onConfirm).toHaveBeenCalledWith({
+      mode: 'fireAndForget',
+      sequential: false,
+      preflightDryRun: false,
+      stopOnError: false,
+      autoCombine: true
+    })
+    selectMount.unmount()
+
+    // Static emulator target metadata starts with Pre-flight Dry Run disabled and unchecked.
+    const staticEmuMount = await mountDialog({
+      tabId: 'tab-6c',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1, { emulator: true }), bqTarget(2)],
+      prices: true
+    }, { estimateBigQuery: estimator })
+    await flush()
+    expect(staticEmuMount.checkbox('Pre-flight Dry Run (free)')?.disabled).toBe(true)
+    expect(staticEmuMount.checkbox('Pre-flight Dry Run (free)')?.checked).toBe(false)
+    await act(async () => { staticEmuMount.form().querySelector<HTMLButtonElement>('button[type="submit"]')!.click() })
+    expect(staticEmuMount.onConfirm).toHaveBeenCalledWith({
+      mode: 'fireAndForget',
+      sequential: false,
+      preflightDryRun: false,
+      stopOnError: false,
+      autoCombine: true
+    })
+  })
+
+  it('blocks stray Enter on cross-window INPUT elements when PROD + mutation is present', async () => {
+    const { radio, onConfirm } = await mountDialog({
+      tabId: 'tab-cross-win',
+      provider: 'sqlserver',
+      sql: 'DELETE FROM dbo.Orders WHERE Id = 1;',
+      targets: [sqlTarget(1, { environment: 'Production' }), sqlTarget(2)],
+      prices: true
+    })
+
+    // Simulate a popout/dialog window realm where event.target is NOT instanceof the main window's HTMLElement.
+    const OriginalHTMLElement = globalThis.HTMLElement
+    const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    try {
+      vi.stubGlobal('HTMLElement', class OtherWindowHTMLElement {})
+      expect(radio('transaction') instanceof globalThis.HTMLElement).toBe(false)
+      await act(async () => {
+        radio('transaction').dispatchEvent(enterEvent)
+      })
+    } finally {
+      vi.stubGlobal('HTMLElement', OriginalHTMLElement)
+    }
+    expect(enterEvent.defaultPrevented).toBe(true)
+    expect(onConfirm).not.toHaveBeenCalled()
   })
 
   it('runs free per-target BigQuery dry runs inline (omitting sessionId), respects per-connection cost settings, and cancels on unmount', async () => {

@@ -21,6 +21,7 @@ import { languagesContribution } from '../src/renderer/src/contributions/languag
 import { outputContribution } from '../src/renderer/src/contributions/output'
 import { compareContribution } from '../src/renderer/src/contributions/compare'
 import { messagesContribution } from '../src/renderer/src/contributions/messages'
+import { canReattachTabOnReconnect, statusBarAppearance } from '../src/renderer/src/App'
 import type { DisconnectCoordinator } from '../src/renderer/src/services/disconnect'
 import { TestEditor } from './fixtures/documents'
 import { fakeDocument, FakeElement } from './fixtures/elements'
@@ -380,6 +381,329 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
 
     langContrib.dispose()
     bindSec.dispose()
+    wb.dispose()
+  })
+
+  it('tracks in-flight multi execution in queryContribution (blocks double-F5, aborts on cancel, close, and dispose) and guards single-server plan/stats commands on multi tabs', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const sql2 = connectSql(wb, 'stage-sql-01', 'SalesDB')
+
+    const estimateMock = vi.fn(async () => ({ ok: true as const, value: { plans: [], database: 'SalesDB' } }))
+    const queryApi = {
+      execute: vi.fn(),
+      executeMulti: vi.fn(async () => ({
+        ok: true as const,
+        value: multiSummary('fireAndForget', [
+          multiOutcome(sql1.targetId, 'sqlserver', 'prod-sql-01'),
+          multiOutcome(sql2.targetId, 'sqlserver', 'stage-sql-01')
+        ])
+      })),
+      estimatePlan: estimateMock,
+      cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+      confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+      querySessionState: vi.fn(async () => ({ ok: true as const, value: { checked: true, transactionCount: 0 } }))
+    }
+    const settings = new MutableSettings()
+    const resultsSink = { begin: vi.fn(), finish: vi.fn(async () => {}) }
+    const queries = new QueryService(wb.documents, queryApi, id => wb.connections.get(id), wb.events, resultsSink, () => 1000, async () => {}, () => settings.getSnapshot().values)
+    const multiExecutePrompts = new MultiExecutePromptService()
+    const costPrompts = new CostPromptService()
+    const optOut = costOptOut({
+      loadConnectionLibrary: vi.fn(async () => ({ ok: false as const, error: 'none' })),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: true as const, value: true }))
+    })
+    const notifications = new NotificationService()
+    const commands = new CommandService({ state: () => wb.context.getState() })
+
+    const contrib = queryContribution(
+      {
+        commands, queries, documents: wb.documents, connections: wb.connections,
+        targets: wb.targets, quickInput: wb.quickInput, events: wb.events,
+        backend: wb.backend, settings: settings as never,
+        costOptOut: optOut, costPrompts, multiExecutePrompts, notifications
+      },
+      wb.api
+    )
+
+    // Connected single-server tab is active so catalog active-tab preconditions pass;
+    // split-group or API calls targeting multiTab by tabId must still be rejected.
+    const multiTab = wb.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'sqlserver',
+      sql: 'SELECT 1;',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: sql2.targetId, connectionId: sql2.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver', attachWanted: true }
+      ]
+    })
+    const singleTab = wb.documents.newQuery('SELECT 1;', undefined, sql1.info.id, 'SalesDB')
+    expect(wb.documents.active?.id).toBe(singleTab.id)
+
+    for (const id of ['query.estimatePlan', 'query.estimateSessionPlan', 'query.includeActualPlan', 'query.includeLivePlan', 'query.includeClientStatistics'] as const) {
+      expect(commands.isEnabled(id, { tabId: multiTab.id }), id).toBe(false)
+      await commands.execute(id, { tabId: multiTab.id }, 'toolbar')
+    }
+    expect(estimateMock).not.toHaveBeenCalled()
+    expect(wb.documents.get(multiTab.id)?.includeActualPlan).toBeFalsy()
+    expect(wb.documents.get(multiTab.id)?.includeLivePlan).toBeFalsy()
+    expect(wb.documents.get(multiTab.id)?.includeClientStatistics).toBeFalsy()
+
+    // In-flight multi-execute blocks re-entry until cancelled or settled.
+    wb.documents.activate(multiTab.id)
+    expect(commands.isEnabled('query.execute', { tabId: multiTab.id })).toBe(true)
+    const run1 = commands.execute('query.execute', { tabId: multiTab.id }, 'toolbar')
+    await Promise.resolve()
+    expect(multiExecutePrompts.getSnapshot().pending).toBeDefined()
+    expect(commands.isEnabled('query.execute', { tabId: multiTab.id })).toBe(false)
+
+    // Second F5 while in-flight is blocked (no second prompt queued).
+    await commands.execute('query.execute', { tabId: multiTab.id }, 'toolbar')
+    const firstPendingId = multiExecutePrompts.getSnapshot().pending!.id
+
+    // query.cancel aborts the in-flight AbortController and dismisses the pending prompt.
+    await commands.run('query.cancel', { tabId: multiTab.id })
+    await run1
+    expect(multiExecutePrompts.getSnapshot().pending).toBeUndefined()
+    expect(commands.isEnabled('query.execute', { tabId: multiTab.id })).toBe(true)
+
+    // Closing the tab aborts an in-flight multi-execute prompt.
+    const run2 = commands.execute('query.execute', { tabId: multiTab.id }, 'toolbar')
+    await Promise.resolve()
+    expect(multiExecutePrompts.getSnapshot().pending?.id).not.toBe(firstPendingId)
+    wb.events.emit({ type: 'documents.closed', tabId: multiTab.id })
+    await run2
+    expect(multiExecutePrompts.getSnapshot().pending).toBeUndefined()
+
+    // Disposing queryContribution aborts any remaining in-flight prompt.
+    const run3 = commands.execute('query.execute', { tabId: multiTab.id }, 'toolbar')
+    await Promise.resolve()
+    expect(multiExecutePrompts.getSnapshot().pending).toBeDefined()
+    contrib.dispose()
+    await run3
+    expect(multiExecutePrompts.getSnapshot().pending).toBeUndefined()
+
+    multiExecutePrompts.dispose()
+    costPrompts.dispose()
+    queries.dispose()
+    wb.dispose()
+  })
+
+  it('caps Cross-Engine seeding at 31 primary-engine servers when opposite engine is live, and gates explorer.disconnectSelected on >= 2 targets', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    wb.api.explorerChildren.mockImplementation(async () => ({ ok: true as const, value: { nodes: [], elapsedMs: 1, total: 0 } }))
+
+    for (let i = 1; i <= 32; i++) connectSql(wb, `sql-node-${String(i).padStart(2, '0')}`, 'SalesDB')
+    const bq1 = connectBq(wb, 'bq-proj-01', 'sales_dw')
+    const bq2 = connectBq(wb, 'bq-proj-02', 'sales_dw')
+    wb.explorer.settle()
+
+    const disconnectMany = vi.fn(async () => new Map())
+    const disconnectCoordinator = { disconnectMany } as unknown as DisconnectCoordinator
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const contrib = explorerContribution(
+      { commands, documents: wb.documents, connections: wb.connections, explorer: wb.explorer, disconnectCoordinator },
+      wb.api
+    )
+
+    // Single multi-selected server: disconnectSelected must be disabled (< 2).
+    const firstSqlRoot = wb.explorer.rootIds.find(id => wb.explorer.serverProvider(id) === 'sqlserver')!
+    wb.explorer.toggleMultiSelect(firstSqlRoot)
+    expect(wb.explorer.multiSelectedTargets()).toHaveLength(1)
+    expect(commands.isEnabled('explorer.disconnectSelected')).toBe(false)
+
+    // Select all 32 SQL Servers: disconnectSelected enabled, and newCrossEngineQuery reserves room for BigQuery.
+    await commands.execute('explorer.selectAllSqlServers', undefined, 'menu')
+    expect(wb.explorer.multiSelectedTargets()).toHaveLength(32)
+    expect(commands.isEnabled('explorer.disconnectSelected')).toBe(true)
+
+    await commands.execute('explorer.newCrossEngineQuery', undefined, 'menu')
+    const crossTab = wb.documents.active!
+    expect(crossTab.multiMode).toBe('cross')
+    expect(crossTab.multiTargets).toHaveLength(32)
+    expect(crossTab.multiTargets!.filter(t => t.provider === 'sqlserver')).toHaveLength(31)
+    const bqTargets = crossTab.multiTargets!.filter(t => t.provider === 'bigquery')
+    expect(bqTargets).toHaveLength(1)
+    expect([bq1.info.id, bq2.info.id]).toContain(bqTargets[0]!.connectionId)
+
+    contrib.dispose()
+    wb.dispose()
+  })
+
+  it('gates output.saveResultsAs while Summary is focused, defaults Cross-Engine output.compareWithPrevious to exact text, and emits query.outputSelected on refuseReadOnly', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const settings = new MutableSettings({ 'queryResults.grid.layout': 'tabs' })
+    const client = fakeResultClient()
+    const panes = new PaneService()
+    panes.set({ explorer: true, editor: true, results: true, messages: false, plan: false, statistics: false })
+    const results = new ResultsService({ client, api: wb.api, events: wb.events, documents: wb.documents, frame: fn => fn() })
+    const compare = new CompareService(results)
+    const resultsSearch = new ResultsSearchService({ results })
+    const menuTargets = new MenuTargetService()
+
+    const doc = wb.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { targetId: uuid(501), connectionId: uuid(511), database: 'SalesDB', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(502), connectionId: uuid(512), database: 'sales_dw', enabled: true, provider: 'bigquery', attachWanted: true }
+      ],
+      sql: 'SELECT 1 AS Id;',
+      bigQuerySql: 'SELECT 1 AS Id;'
+    })
+    const queries = new QueryService(
+      wb.documents,
+      { execute: vi.fn(), cancel: vi.fn(), confirmSessions: vi.fn(), querySessionState: vi.fn() } as never,
+      () => undefined,
+      wb.events,
+      results
+    )
+
+    const outContrib = outputContribution({ commands, results, queries, menuTargets, documents: wb.documents, settings: settings as never, resultsSearch, panes }, { writeClipboardText: vi.fn(async () => ({ ok: true as const, value: undefined })) })
+    const cmpContrib = compareContribution({ commands, compare, results, documents: wb.documents, menuTargets, panes })
+
+    const q1 = uuid(601)
+    const sqlDesc: ResultDescriptor = descriptor(1, { index: 0, targetKey: 'sql1', statementSlot: 0 })
+    const bqDesc: ResultDescriptor = descriptor(2, { index: 1, targetKey: 'bq1', statementSlot: 0 })
+    results.begin(doc.id, q1, undefined, {
+      multi: {
+        mode: 'crossEngineReadOnly',
+        targets: [
+          { targetKey: 'sql1', connectionId: uuid(511), provider: 'sqlserver', label: 'prod-sql-01', database: 'SalesDB' },
+          { targetKey: 'bq1', connectionId: uuid(512), provider: 'bigquery', label: 'analytics-prod', database: 'sales_dw' }
+        ]
+      }
+    })
+    client.emit(q1, { type: 'resultSet.opened', descriptor: sqlDesc })
+    client.emit(q1, { type: 'resultSet.closed', descriptor: sqlDesc })
+    client.emit(q1, { type: 'resultSet.opened', descriptor: bqDesc })
+    client.emit(q1, { type: 'resultSet.closed', descriptor: bqDesc })
+    await results.finish(doc.id, q1, {
+      multiSummary: multiSummary('crossEngineReadOnly', [
+        multiOutcome('sql1', 'sqlserver', 'prod-sql-01', [1]),
+        multiOutcome('bq1', 'bigquery', 'analytics-prod', [2])
+      ], [sqlDesc, bqDesc])
+    })
+
+    const sets = results.getSnapshot()[doc.id]!.sets
+    const sqlKey = sets[0]!.key
+    const bqKey = sets[1]!.key
+
+    // Finding 6: while Summary is focused, non-grid output.saveResultsAs is disabled, but explicit grid target remains enabled.
+    results.focusEntry(doc.id, summaryEntryKey)
+    expect(commands.isEnabled('output.saveResultsAs', { tabId: doc.id })).toBe(false)
+    expect(commands.isEnabled('output.saveResultsAs')).toBe(false)
+    expect(commands.isEnabled('output.saveResultsAs', { target: { kind: 'output', view: 'grid', tabId: doc.id, entry: sqlKey, element: new FakeElement(fakeDocument(), 'div').dom, selectedText: '' } })).toBe(true)
+
+    // Focusing a real result grid enables output.saveResultsAs again.
+    results.focusEntry(doc.id, bqKey)
+    expect(commands.isEnabled('output.saveResultsAs', { tabId: doc.id })).toBe(true)
+
+    // Finding 10: output.compareWithPrevious omits explicit exact: false so Cross-Engine pairs default to exact: true.
+    const compareSpy = vi.spyOn(compare, 'compare')
+    expect(commands.isEnabled('output.compareWithPrevious', { tabId: doc.id })).toBe(true)
+    await commands.execute('output.compareWithPrevious', { tabId: doc.id }, 'toolbar')
+    expect(compareSpy).toHaveBeenCalledWith(doc.id, bqKey, {})
+
+    // Finding 2: refuseReadOnly emits query.outputSelected for 'messages' so App reveals Messages even if Ctrl+R hid output.
+    const selectedViews: { tabId: string; view: string }[] = []
+    const sub = wb.events.subscribe(event => {
+      if (event.type === 'query.outputSelected') selectedViews.push({ tabId: event.tabId, view: event.view })
+    })
+    queries.refuseReadOnly(doc.id, [{ line: 1, column: 1, message: 'Write blocked', dialect: 'sqlserver' }])
+    expect(selectedViews).toContainEqual({ tabId: doc.id, view: 'messages' })
+    sub.dispose()
+
+    outContrib.dispose()
+    cmpContrib.dispose()
+    compare.dispose()
+    results.dispose()
+    queries.dispose()
+    wb.dispose()
+  })
+
+  it('computes App default status bar multi-target accent & PROD tag and guards reconnect against multi-mode or undefined targetId', () => {
+    const wb = workbenchFixture()
+    const prodSql = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const stageSql = connectSql(wb, 'stage-sql-01', 'SalesDB')
+    const bq = connectBq(wb, 'analytics-bq', 'sales_dw')
+
+    wb.connections.setDetails(prodSql.info.id, { environment: 'Production', color: '#d97706', autoReconnect: 'inherit' })
+    wb.connections.setDetails(stageSql.info.id, { environment: 'Staging', color: '#2563eb', autoReconnect: 'inherit' })
+    const allConns = wb.connections.getSnapshot()
+    const allTargets = wb.targets.getSnapshot()
+
+    // Finding 5: PROD target wins (uses its color, or 'red' fallback) + renders Production status tag.
+    const prodMulti = statusBarAppearance(
+      {
+        multiMode: 'same',
+        multiTargets: [
+          { targetId: stageSql.targetId, connectionId: stageSql.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+          { targetId: prodSql.targetId, connectionId: prodSql.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' }
+        ]
+      },
+      undefined,
+      allConns,
+      allTargets
+    )
+    expect(prodMulti).toEqual({ accentColor: '#d97706', environment: 'Production', environmentAbout: '1 Production target' })
+
+    // PROD without explicit color falls back to 'red'.
+    wb.connections.setDetails(prodSql.info.id, { environment: 'Production', autoReconnect: 'inherit' })
+    const prodDefaultRed = statusBarAppearance(
+      {
+        multiMode: 'cross',
+        multiTargets: [
+          { targetId: prodSql.targetId, connectionId: prodSql.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+          { targetId: bq.targetId, connectionId: bq.info.id, database: 'sales_dw', enabled: true, provider: 'bigquery' }
+        ]
+      },
+      undefined,
+      wb.connections.getSnapshot(),
+      wb.targets.getSnapshot()
+    )
+    expect(prodDefaultRed).toEqual({ accentColor: 'red', environment: 'Production', environmentAbout: '1 Production target' })
+
+    // Cross-Engine without enabled PROD target gets 'purple' and no environment tag (disabled PROD is ignored).
+    const crossNoProd = statusBarAppearance(
+      {
+        multiMode: 'cross',
+        multiTargets: [
+          { targetId: prodSql.targetId, connectionId: prodSql.info.id, database: 'SalesDB', enabled: false, provider: 'sqlserver' },
+          { targetId: stageSql.targetId, connectionId: stageSql.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+          { targetId: bq.targetId, connectionId: bq.info.id, database: 'sales_dw', enabled: true, provider: 'bigquery' }
+        ]
+      },
+      undefined,
+      wb.connections.getSnapshot(),
+      wb.targets.getSnapshot()
+    )
+    expect(crossNoProd).toEqual({ accentColor: 'purple', environment: undefined, environmentAbout: undefined })
+
+    // Same-Engine without PROD falls back to first colored enabled target.
+    const sameColored = statusBarAppearance(
+      {
+        multiMode: 'same',
+        multiTargets: [
+          { targetId: stageSql.targetId, connectionId: stageSql.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' }
+        ]
+      },
+      undefined,
+      wb.connections.getSnapshot(),
+      wb.targets.getSnapshot()
+    )
+    expect(sameColored).toEqual({ accentColor: '#2563eb', environment: undefined, environmentAbout: undefined })
+
+    // Finding 9: reconnect guard rejects multi-server tabs and undefined targetIds.
+    expect(canReattachTabOnReconnect({ targetId: prodSql.targetId }, { targetId: prodSql.targetId })).toBe(true)
+    expect(canReattachTabOnReconnect({ multiMode: 'same', targetId: prodSql.targetId }, { targetId: prodSql.targetId })).toBe(false)
+    expect(canReattachTabOnReconnect({ multiMode: 'cross', targetId: undefined }, { targetId: undefined })).toBe(false)
+    expect(canReattachTabOnReconnect({ targetId: undefined }, { targetId: undefined })).toBe(false)
+    expect(canReattachTabOnReconnect({ targetId: prodSql.targetId, kind: 'activityMonitor' }, { targetId: prodSql.targetId })).toBe(false)
+
     wb.dispose()
   })
 })

@@ -398,12 +398,16 @@ export function explorerContribution({ commands, documents, connections, explore
       run: args => {
         const node = nodeOf(args)
         const multi = explorer.multiSelectedTargets()
+        const liveConnections = connections.live()
+        const providerOf = (connection: LiveConnection) => connection.providerId === 'bigquery' ? 'bigquery' as const : 'sqlserver' as const
+        const hasLiveSql = liveConnections.some(connection => providerOf(connection) === 'sqlserver')
+        const hasLiveBq = liveConnections.some(connection => providerOf(connection) === 'bigquery')
         const seeded: MultiDocumentTarget[] = []
         const seen = new Set<string>()
-        const addConnection = (connection: LiveConnection) => {
-          if (seen.has(connection.id) || seeded.length >= 32) return
+        const addConnection = (connection: LiveConnection, max = 32) => {
+          if (seen.has(connection.id) || seeded.length >= max) return
           seen.add(connection.id)
-          const provider = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
+          const provider = providerOf(connection)
           seeded.push({
             ...connection.targetId ? { targetId: connection.targetId, attachWanted: true } : {},
             connectionId: connection.id,
@@ -415,9 +419,12 @@ export function explorerContribution({ commands, documents, connections, explore
         }
         const useMulti = multi.length >= 2 && (!node || multi.some(item => item.rowId === node.id))
         if (useMulti) {
+          const multiProvider = multi[0]!.provider
+          const hasOppositeLive = multiProvider === 'bigquery' ? hasLiveSql : hasLiveBq
+          const primaryCap = hasOppositeLive ? 31 : 32
           for (const target of multi) {
             const connection = connections.get(target.connectionId)
-            if (connection && connections.isLive(connection.id)) addConnection(connection)
+            if (connection && connections.isLive(connection.id)) addConnection(connection, primaryCap)
           }
         } else if (live(node) && node.kind === 'server') {
           const connection = connections.get(node.connectionId)
@@ -425,8 +432,14 @@ export function explorerContribution({ commands, documents, connections, explore
         }
         // Also include connected live server(s) of the other engine (or all connected servers if invoked from the palette).
         const seededProviders = new Set(seeded.map(item => item.provider))
-        for (const connection of connections.live()) {
-          const provider = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
+        if (seededProviders.size === 0 && hasLiveSql && hasLiveBq) {
+          const firstSql = liveConnections.find(connection => providerOf(connection) === 'sqlserver')
+          const firstBq = liveConnections.find(connection => providerOf(connection) === 'bigquery')
+          if (firstSql) addConnection(firstSql)
+          if (firstBq) addConnection(firstBq)
+        }
+        for (const connection of liveConnections) {
+          const provider = providerOf(connection)
           if (seededProviders.size === 0 || !seededProviders.has(provider)) addConnection(connection)
         }
         if (!seeded.length) return
@@ -449,10 +462,16 @@ export function explorerContribution({ commands, documents, connections, explore
       run: () => explorer.clearMultiSelect()
     }),
     commands.register('explorer.disconnectSelected', {
-      when: () => !!disconnectCoordinator && explorer.multiSelectedTargets().some(target => !!target.targetId),
+      when: () => {
+        if (!disconnectCoordinator) return false
+        const selected = explorer.multiSelectedTargets()
+        return selected.length >= 2 && selected.some(target => !!target.targetId)
+      },
       run: async () => {
-        const targetIds = explorer.multiSelectedTargets().map(target => target.targetId).filter((id): id is string => !!id)
-        if (!targetIds.length || !disconnectCoordinator) return
+        const selected = explorer.multiSelectedTargets()
+        if (selected.length < 2 || !disconnectCoordinator) return
+        const targetIds = selected.map(target => target.targetId).filter((id): id is string => !!id)
+        if (!targetIds.length) return
         const outcomes = await disconnectCoordinator.disconnectMany(targetIds)
         for (const outcome of outcomes.values()) {
           if ('error' in outcome && outcome.error) { commands.reportWarning(outcome.error); break }

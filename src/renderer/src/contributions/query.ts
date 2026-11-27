@@ -48,9 +48,20 @@ export function queryContribution(
     // An obsolete handle without a canonical target is not enough evidence to choose a reconnect identity.
     return !tab.connectionId || target?.lifecycle.state === 'disconnected' || target?.lifecycle.state === 'lost'
   }
+  const inFlightMulti = new Map<string, AbortController>()
+  const abortInFlightMulti = (tabId: string) => {
+    const controller = inFlightMulti.get(tabId)
+    if (!controller) return
+    inFlightMulti.delete(tabId)
+    controller.abort()
+  }
+  const eventsSubscription = events.subscribe(event => {
+    if (event.type === 'documents.closed') abortInFlightMulti(event.tabId)
+  })
   const canExecuteMulti = (tabId?: string) => {
     const tab = targetTab(tabId)
     return !!tab && isQueryDocument(tab) && !!tab.multiMode
+      && !inFlightMulti.has(tab.id)
       && !queries.isRunning(tab.id) && !documents.getSnapshot().busy
       && backend.getSnapshot().state.status === 'ready'
   }
@@ -68,6 +79,8 @@ export function queryContribution(
         if (!tab) return
         if (tab.multiMode) {
           if (!canExecuteMulti(tab.id) || !settings || !costOptOut || !costPrompts || !multiExecutePrompts) return
+          const controller = new AbortController()
+          inFlightMulti.set(tab.id, controller)
           return executeMultiTab(tab.id, {
             documents,
             connections,
@@ -79,6 +92,8 @@ export function queryContribution(
             multiExecutePrompts,
             notify: (message, severity = 'warning') => { notifications?.notify({ severity, message }) },
             disableIncompleteWarning: () => settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false)
+          }, controller.signal).finally(() => {
+            if (inFlightMulti.get(tab.id) === controller) inFlightMulti.delete(tab.id)
           }).then(() => undefined)
         }
         if (executesAttached(tab.id)) return queries.execute(tab.id)
@@ -86,24 +101,43 @@ export function queryContribution(
       }
     }),
     // A results strip's Stop query and a split group's query bar name their own tab; menus, keys and the classic toolbar cancel the active one.
-    commands.register('query.cancel', { run: args => queries.cancel(args?.tabId) }),
-    commands.register('query.estimatePlan', { when: args => queries.canExecute(args?.tabId), run: args => queries.estimate(args?.tabId) }),
-    commands.register('query.estimateSessionPlan', { when: args => queries.canExecute(args?.tabId), run: args => queries.estimate(args?.tabId, 'session') }),
-    commands.register('query.includeActualPlan', { run: args => {
+    commands.register('query.cancel', { run: args => {
       const tab = targetTab(args?.tabId)
-      if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })
+      if (tab) abortInFlightMulti(tab.id)
+      return queries.cancel(args?.tabId)
     } }),
-    commands.register('query.includeLivePlan', { run: args => {
-      const tab = targetTab(args?.tabId)
-      if (tab && isQueryDocument(tab)) documents.update(tab.id, { includeLivePlan: !tab.includeLivePlan })
-    } }),
-    commands.register('query.includeClientStatistics', { run: args => {
-      const tab = targetTab(args?.tabId)
-      if (tab && isQueryDocument(tab)) {
-        documents.update(tab.id, { includeClientStatistics: !tab.includeClientStatistics })
-        if (!tab.includeClientStatistics) void commands.execute('window.statistics', undefined, 'toolbar')
+    commands.register('query.estimatePlan', {
+      when: args => executesAttached(args?.tabId),
+      run: args => { if (executesAttached(args?.tabId)) return queries.estimate(args?.tabId) }
+    }),
+    commands.register('query.estimateSessionPlan', {
+      when: args => executesAttached(args?.tabId),
+      run: args => { if (executesAttached(args?.tabId)) return queries.estimate(args?.tabId, 'session') }
+    }),
+    commands.register('query.includeActualPlan', {
+      when: args => { const tab = targetTab(args?.tabId); return !!tab && isQueryDocument(tab) && !tab.multiMode },
+      run: args => {
+        const tab = targetTab(args?.tabId)
+        if (tab && isQueryDocument(tab) && !tab.multiMode) documents.update(tab.id, { includeActualPlan: !tab.includeActualPlan })
       }
-    } }),
+    }),
+    commands.register('query.includeLivePlan', {
+      when: args => { const tab = targetTab(args?.tabId); return !!tab && isQueryDocument(tab) && !tab.multiMode },
+      run: args => {
+        const tab = targetTab(args?.tabId)
+        if (tab && isQueryDocument(tab) && !tab.multiMode) documents.update(tab.id, { includeLivePlan: !tab.includeLivePlan })
+      }
+    }),
+    commands.register('query.includeClientStatistics', {
+      when: args => { const tab = targetTab(args?.tabId); return !!tab && isQueryDocument(tab) && !tab.multiMode },
+      run: args => {
+        const tab = targetTab(args?.tabId)
+        if (tab && isQueryDocument(tab) && !tab.multiMode) {
+          documents.update(tab.id, { includeClientStatistics: !tab.includeClientStatistics })
+          if (!tab.includeClientStatistics) void commands.execute('window.statistics', undefined, 'toolbar')
+        }
+      }
+    }),
     commands.register('query.resetClientStatistics', { run: () => { const tab = documents.active; if (tab) queries.statistics.reset(tab.id) } }),
     commands.register('query.changeConnection', { run: () => {
       const tab = documents.active
@@ -134,5 +168,12 @@ export function queryContribution(
       })
     } })
   ]
-  return { dispose: () => registrations.forEach(registration => registration.dispose()) }
+  return {
+    dispose: () => {
+      eventsSubscription.dispose()
+      for (const controller of inFlightMulti.values()) controller.abort()
+      inFlightMulti.clear()
+      registrations.forEach(registration => registration.dispose())
+    }
+  }
 }

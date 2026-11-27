@@ -80,13 +80,13 @@ export function compareContribution({ commands, compare, results, documents, men
       if (target && unitsOf(target) > 0) await compare.navigate(target.tabId, target.key, direction, { focus: true })
     }
   })
-  const command = (exact: boolean) => ({
+  const command = (options: { readonly exact?: boolean }) => ({
     when: (args?: CommandArgs) => !!previousOf(args),
-    run: async (args?: CommandArgs) => { const target = previousOf(args); if (target) await compare.compare(target.tabId, target.key, { exact }) }
+    run: async (args?: CommandArgs) => { const target = previousOf(args); if (target) await compare.compare(target.tabId, target.key, options) }
   })
   const registrations = [
-    commands.register('output.compareWithPrevious', command(false)),
-    commands.register('output.compareWithPreviousExact', command(true)),
+    commands.register('output.compareWithPrevious', command({})),
+    commands.register('output.compareWithPreviousExact', command({ exact: true })),
     commands.register('output.compare', {
       when: (args?: CommandArgs) => !!pickerOf(args),
       run: (args?: CommandArgs) => {
