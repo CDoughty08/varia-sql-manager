@@ -93,7 +93,7 @@ export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> &
   const entry = selectedEntry(tab)
   if (!entry) return 0
   const turned = transposedView(grids?.get(entry.key), entry.descriptor) ? new Set([entry.key]) : undefined
-  const content = settledContent({ sets: [entry], settled: tab.settled, ...tab.sorts ? { sorts: tab.sorts } : {}, ...tab.multi ? { multi: tab.multi } : {}, ...tab.staleCombined ? { staleCombined: tab.staleCombined } : {} }, undefined, turned)[0]
+  const content = settledContent(tab, undefined, turned, [entry])[0]
   const noticeHeight = entryNoticesHeight(tab, entry)
   const minHeight = minGridHeight(scrollbarSize()) + noticeHeight
   const group = tab.groups ? selectedGroup({ ...tab, groups: tab.groups, comparisons: tab.comparisons ?? [] }) : undefined
@@ -230,12 +230,18 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     target?.focus({ preventScroll: true })
   })
 
+  // A short pane folds the rows of tabs (`tabsFold`, accounting for exact notice strip height so grids are never starved).
+  const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
+  const foldRef = useRef(fold)
+  foldRef.current = fold
+  const collapseStatements = fold === 'one' || statementGroups.length > 3
+
   const gridFocus = useRef(false)
   const tabRow = useRef<string | undefined>(undefined)
   const trackFocus = (event: FocusEvent<HTMLDivElement>) => {
     const target = event.target as Element
     gridFocus.current = !!target.closest?.('[data-result-grid]')
-    tabRow.current = target.matches?.('[role="tab"]') ? target.closest('[data-tab-row]')?.getAttribute('data-tab-row') ?? undefined : undefined
+    tabRow.current = target.matches?.('[role="tab"]') ? target.closest('[data-tab-row]')?.getAttribute('data-tab-row') ?? undefined : target.matches?.('.rt-stmt-select') ? 'stmt' : undefined
   }
   const trackBlur = (event: FocusEvent<HTMLDivElement>) => {
     const to = event.relatedTarget as Element | null
@@ -246,10 +252,14 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const root = rootRef.current, doc = root?.ownerDocument, active = doc?.activeElement
     const lost = !active || active === doc?.body
     const row = active?.matches('[role="tab"][aria-selected="false"]') && root?.contains(active) ? active.closest('[data-tab-row]')?.getAttribute('data-tab-row') : lost ? tabRow.current : undefined
-    const view = row === 'view' ? root?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]') : undefined
-    if (view) view.focus()
+    const target = row === 'view'
+      ? root?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]')
+      : row === 'stmt'
+        ? root?.querySelector<HTMLElement>('[data-tab-row="stmt"] [role="tab"][aria-selected="true"]') ?? root?.querySelector<HTMLElement>('.rt-stmt-select')
+        : undefined
+    if (target) target.focus()
     else if (row) { focusTab.current = items[at]?.key; focusResultTab() }
-  }, [selected?.key, summaryActive, first, showViewRow])
+  }, [selected?.key, summaryActive, first, showViewRow, collapseStatements])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!gridFocus.current || !root || (active && active !== root.ownerDocument.body && active !== resultsTab() && !root.contains(active))) return
@@ -341,10 +351,6 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     return () => observer.dispose()
   }, [!hasActiveView])
 
-  // A short pane folds the rows of tabs (`tabsFold`, accounting for exact notice strip height so grids are never starved).
-  const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
-  const foldRef = useRef(fold)
-  foldRef.current = fold
   useLayoutEffect(() => {
     const root = rootRef.current
     if (!root) return
@@ -430,7 +436,6 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
       : tabIdOf(items[at]?.key ?? selected!.key, 'result')
   const cached = tab.summary?.job?.cacheHit === true
   const budget = tab.summary?.budget ?? tab.multiSummary?.budget
-  const collapseStatements = fold === 'one' || statementGroups.length > 3
 
   return <div ref={rootRef} className="rt-root" data-fold={fold} data-compact={!showViewRow || undefined} data-summary={summaryActive || undefined} onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" data-tab-row="result" onKeyDown={resultKey}>

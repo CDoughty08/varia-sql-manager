@@ -142,7 +142,8 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   }, [host, !!picker])
 
   // Closed, it is placed afresh (and takes the focus again) when it next opens.
-  useLayoutEffect(() => { if (!picker) { setPlace(undefined); setFilter('') } }, [!!picker])
+  useLayoutEffect(() => { if (!picker) setPlace(undefined) }, [!!picker])
+  useLayoutEffect(() => { setFilter('') }, [!!picker, picker?.active])
   // The focus goes in once it is placed, and again when it opens on another Table: to the picked target when there is a
   // list, else to Compare.
   const placed = !!place
@@ -244,12 +245,20 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
   const keyDown = (event: KeyboardEvent<HTMLFormElement>) => {
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismiss() }
-    // Never let Enter in the quick search box trigger native HTML form submission; move focus to the first visible target instead.
+    // Never let Enter in the quick search box trigger native HTML form submission; move focus to the checked target if visible, else the first visible target.
     else if (event.key === 'Enter' && (event.target as Element).matches('.compare-search')) {
       event.preventDefault()
-      card.current?.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]')?.focus({ preventScroll: true })
+      const targetRadio = card.current?.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]:checked')
+        ?? card.current?.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]')
+      targetRadio?.focus({ preventScroll: true })
     }
-    // Enter on a target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first,
+    // Enter on an unchecked visible target selects it instead of submitting a hidden previously-checked target.
+    else if (event.key === 'Enter' && (event.target as Element).matches('.compare-targets input[type="radio"]:not(:checked)')) {
+      event.preventDefault()
+      const radio = event.target as HTMLInputElement
+      radio.click()
+    }
+    // Enter on a checked target or on Exact text compares, as it would in a form with one button. The focus moves to Compare first,
     // where a failure is said and from where Escape returns it.
     else if (event.key === 'Enter' && (event.target as Element).matches('input:not(.compare-search)')) { event.preventDefault(); button.current?.focus(); void start() }
   }

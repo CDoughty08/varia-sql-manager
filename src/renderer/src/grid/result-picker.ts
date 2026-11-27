@@ -88,7 +88,7 @@ export function comparisonTabLabel(slot: Pick<ResultSlot, 'entry' | 'sources'>):
 export function combinedTargetCount(tab: Partial<Pick<TabResults, 'sets' | 'multi'>>, statementSlot: number): number {
   const seen = new Set<string>()
   for (const entry of tab.sets ?? []) {
-    if (entry.descriptor.kind !== 'rows' || !entry.descriptor.targetKey) continue
+    if (entry.sample || entry.descriptor.kind !== 'rows' || !entry.descriptor.targetKey) continue
     if ((entry.descriptor.statementSlot ?? 0) !== statementSlot) continue
     if (entry.handle?.getSnapshot().residence === 'remote') continue
     seen.add(entry.descriptor.targetKey)
@@ -99,8 +99,8 @@ export function combinedTargetCount(tab: Partial<Pick<TabResults, 'sets' | 'mult
 type MultiTabShape = Pick<TabResults, 'groups' | 'comparisons'> & Partial<Pick<TabResults, 'multi' | 'sets' | 'focused' | 'activeSummary'>>
 
 /** The top row's items in the order drawn: for single-server, groups by ordinal then comparisons; for multi-server,
- *  Summary → Combined (k/N) → per-server tabs (in target order) → any extra groups → comparisons. */
-export function topItems(tab: MultiTabShape): TopItem[] {
+ *  Summary (when `includeSummary` is true) → Combined (k/N) → per-server tabs (in target order) → any extra groups → comparisons. */
+export function topItems(tab: MultiTabShape, includeSummary = true): TopItem[] {
   if (!hasMultiSummary(tab)) {
     return [
       ...tab.groups.map(group => {
@@ -110,7 +110,7 @@ export function topItems(tab: MultiTabShape): TopItem[] {
       ...tab.comparisons.map(slot => ({ key: slot.key, name: entryName(slot.entry), short: comparisonTabLabel(slot), comparison: slot }))
     ]
   }
-  const items: TopItem[] = [{ key: summaryEntryKey, name: 'Summary', summary: true }]
+  const items: TopItem[] = includeSummary ? [{ key: summaryEntryKey, name: 'Summary', summary: true }] : []
   const targets = tab.multi!.targets
   const activeKey = tab.focused !== summaryEntryKey ? tab.focused : undefined
   const activeGroup = activeKey === undefined ? undefined : tab.groups.find(group => group.table.key === activeKey || group.pivot?.key === activeKey)
@@ -181,9 +181,10 @@ export function selectedItem(tab: Run, items: readonly TopItem[] = topItems(tab)
 }
 /** Next Result (`delta` 1) and Previous Result (-1): the view to select in the item that many places along the top row,
  *  wrapping round as the arrow keys do; a group's is the view it last showed, and Summary returns `summaryEntryKey`.
+ *  Pass `includeSummary = false` in Stacked layout when result sets exist so stepping wraps across real grids.
  *  Undefined with fewer than two items. */
-export function stepResult(tab: Run, delta: number): EntryKey | undefined {
-  const items = topItems(tab)
+export function stepResult(tab: Run, delta: number, includeSummary = true): EntryKey | undefined {
+  const items = topItems(tab, includeSummary)
   if (items.length < 2) return undefined
   const item = items[(((Math.max(0, selectedItem(tab, items)) + delta) % items.length) + items.length) % items.length]
   return item.summary ? summaryEntryKey : item.group ? groupView(item.group) : item.key
@@ -191,8 +192,8 @@ export function stepResult(tab: Run, delta: number): EntryKey | undefined {
 /** Go to Result 1 to 8 (`place` 1 to 8) and Go to Last Result (`place` 'last'), as a browser's Ctrl+1 to Ctrl+9 pick its
  *  tabs: the view to select in that item of the top row, a group's being the view it last showed. Undefined when the run
  *  has no such item. */
-export function jumpResult(tab: Run, place: number | 'last'): EntryKey | undefined {
-  const items = topItems(tab), at = place === 'last' ? items.length - 1 : place - 1
+export function jumpResult(tab: Run, place: number | 'last', includeSummary = true): EntryKey | undefined {
+  const items = topItems(tab, includeSummary), at = place === 'last' ? items.length - 1 : place - 1
   const item = items[at]
   if (!item) return undefined
   return item.summary ? summaryEntryKey : item.group ? groupView(item.group) : item.key

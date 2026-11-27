@@ -14,7 +14,7 @@ import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { minGridHeight, setFloors, stackLayout } from '../src/renderer/src/grid/stack'
 import ResultsTabs, { tabsFold, tabsNeed } from '../src/renderer/src/grid/ResultsTabs'
 import ResultsStack, { entryNoticesHeight, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
-import { comparisonTabLabel, jumpResult, pickerRows, shortenDistinct, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
+import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRows, shortenDistinct, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
 import { CompareService } from '../src/renderer/src/results/CompareService'
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
 import MessagesView from '../src/renderer/src/results/MessagesView'
@@ -22,7 +22,7 @@ import MultiRunSummary from '../src/renderer/src/results/MultiRunSummary'
 import OutputPane, { hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
-import { isSummaryActive, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
+import { isSummaryActive, pivotOutOfDate, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
 import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -1055,5 +1055,404 @@ describe('Round 1 adversarial regression checks (Domain 4: Results & CSS)', () =
       { property: 'align-items', value: 'stretch' },
       { property: 'gap', value: '1px' }
     ]))
+  })
+})
+
+describe('Round 2 adversarial regression checks (Domain 4: Results & CSS)', () => {
+  it('R2-1: Previous/Next/Go to Result skip virtual Summary in Stacked layout with >=1 sets while keeping Summary navigable in Tabs and 0-set DDL runs', async () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+
+    const doc = f.documents.create('stacked-nav.sql', 'SELECT 1', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [comb, s1, s2]
+      )
+    })
+    const tabSets = f.results.getSnapshot()[doc.id].sets
+    const combKey = tabSets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const eastKey = tabSets.find(entry => entry.descriptor.targetKey === 'prod-east')!.key
+    const westKey = tabSets.find(entry => entry.descriptor.targetKey === 'prod-west')!.key
+
+    // Stacked layout: mount ResultsStack so activeSummary clears to sets[0] (Combined).
+    await f.settings.choose('queryResults.grid.layout', 'stacked')
+    mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(combKey)
+
+    // Previous Result wraps backwards from sets[0] to last real grid instead of getting trapped on Summary.
+    await act(async () => { await f.commands.execute('output.previousResult', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(westKey)
+    await act(async () => { await f.commands.execute('output.nextResult', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(combKey)
+    await act(async () => { await f.commands.execute('output.nextResult', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(eastKey)
+    await act(async () => { await f.commands.execute('output.goToResult1', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(combKey)
+    await act(async () => { await f.commands.execute('output.goToLastResult', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(westKey)
+
+    // Direct picker helper: includeSummary=false with 1 real grid returns undefined (cannot step).
+    f.results.begin('one-set', 'q-one', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish('one-set', 'q-one', {
+      multiSummary: multiSummaryOf([multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1])], [s1])
+    })
+    const oneTab = f.results.getSnapshot()['one-set']
+    expect(stepResult(oneTab, -1, false)).toBeUndefined()
+    expect(stepResult(oneTab, -1, true)).toBe(oneTab.sets[0].key)
+
+    // Tabs layout: Summary remains item 1 and Previous Result from Combined reaches Summary.
+    await f.settings.choose('queryResults.grid.layout', 'tabs')
+    f.results.focusEntry(doc.id, combKey)
+    await act(async () => { await f.commands.execute('output.previousResult', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(summaryEntryKey)
+    await act(async () => { await f.commands.execute('output.nextResult', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(combKey)
+    await act(async () => { await f.commands.execute('output.goToResult1', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[doc.id].focused).toBe(summaryEntryKey)
+
+    // 0-set pure-DDL run in Stacked layout keeps Summary navigable via Go to Result 1.
+    await f.settings.choose('queryResults.grid.layout', 'stacked')
+    const ddlDoc = f.documents.create('ddl-nav.sql', 'CREATE TABLE #t (id int)', 'SalesDB')
+    f.documents.activate(ddlDoc.id)
+    f.results.begin(ddlDoc.id, 'q-ddl', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(ddlDoc.id, 'q-ddl', {
+      multiSummary: multiSummaryOf(sqlTargets.slice(0, 2).map(target => multiOutcome(target, { status: 'committed' })), [], { mode: 'transaction' })
+    })
+    expect(jumpResult(f.results.getSnapshot()[ddlDoc.id], 1, true)).toBe(summaryEntryKey)
+    await act(async () => { await f.commands.execute('output.goToResult1', undefined, 'keybinding') })
+    expect(f.results.getSnapshot()[ddlDoc.id].focused).toBe(summaryEntryKey)
+  })
+
+  it('R2-2: CompareService.run() does not persist memory.exact so mixed Cross-Engine tabs keep exact defaults until setExact() is toggled', async () => {
+    const { results } = serviceFixture()
+    const compare = new CompareService(results)
+    cleanups.add(() => compare.dispose())
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    const targets: MultiTargetIdentity[] = [
+      { targetKey: 'sql-1', connectionId: 'c1', provider: 'sqlserver', label: 'sql-1' },
+      { targetKey: 'sql-2', connectionId: 'c2', provider: 'sqlserver', label: 'sql-2' },
+      { targetKey: 'bq-1', connectionId: 'c3', provider: 'bigquery', label: 'bq-1' }
+    ]
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets } })
+    const sets = targets.map((target, index) => descriptor(index + 1, { index, targetKey: target.targetKey, statementSlot: 0, columns: cols }))
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(targets.map((target, index) => multiOutcome(target, { resultSetIds: [index + 1] })), sets, { mode: 'crossEngineReadOnly' })
+    })
+    const [sql1Key, sql2Key, bqKey] = results.getSnapshot().t1.sets.map(entry => entry.key)
+
+    // 1. Run a cross-engine diff (sql-2 -> bq-1): defaults exact: true, does NOT lock memory.exact.
+    compare.open('t1', bqKey)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(true)
+    expect(await compare.run('t1')).toBeDefined()
+
+    // 2. Re-open on same-engine pair (sql-2 -> sql-1): still defaults exact: false!
+    compare.open('t1', sql2Key)
+    expect(compare.getSnapshot().pickers.t1.target).toBe(sql1Key)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(false)
+    expect(await compare.run('t1')).toBeDefined()
+
+    // 3. Re-open same-engine pair and hit Show It (existing comparison branch): still does not lock memory.exact.
+    compare.open('t1', sql2Key)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(false)
+    expect(await compare.run('t1')).toBeDefined()
+
+    // 4. Re-open cross-engine pair (bq-1): still defaults exact: true!
+    compare.open('t1', bqKey)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(true)
+
+    // 5. Explicit setExact(false) persists memory.exact across subsequent opens.
+    compare.setExact('t1', false)
+    compare.close('t1')
+    compare.open('t1', bqKey)
+    expect(compare.getSnapshot().pickers.t1.exact).toBe(false)
+  })
+
+  it('R2-3: BigQuery samples are excluded from combinedTargetCount, markCombinedStaleFor, and combinedSourcesOf', async () => {
+    const baseClient = fakeResultClient()
+    const combine = vi.fn<(...args: unknown[]) => Promise<ResultsCombineResult>>(async () => ({
+      descriptor: descriptor(999, { kind: 'combined', index: 0, statementSlot: 0, rowsRead: 2, rowsStored: 2, rowsAvailable: 2 })
+    }))
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+      remoteQuery: vi.fn<VariaApi['remoteQuery']>()
+    }
+    const sample = vi.fn(async () => descriptor(88, { index: 5, kind: 'rows', targetKey: 'bq-1', statementSlot: 0, residence: 'memory', rowsRead: 100, rowsStored: 100, rowsAvailable: 100 }))
+    const results = new ResultsService({ client, api, events, remote: { sample } as unknown as RemoteViews, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    const targets: MultiTargetIdentity[] = [
+      { targetKey: 'sql-1', connectionId: 'c1', provider: 'sqlserver', label: 'sql-1' },
+      { targetKey: 'sql-2', connectionId: 'c2', provider: 'sqlserver', label: 'sql-2' },
+      { targetKey: 'sql-3', connectionId: 'c3', provider: 'sqlserver', label: 'sql-3' },
+      { targetKey: 'bq-1', connectionId: 'c4', provider: 'bigquery', label: 'bq-1' }
+    ]
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets } })
+    const sql1 = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const sql2 = descriptor(2, { index: 1, targetKey: 'sql-2', statementSlot: 0 })
+    const sql3 = descriptor(3, { index: 2, targetKey: 'sql-3', statementSlot: 0 })
+    const bqRemote = descriptor(4, { index: 3, targetKey: 'bq-1', statementSlot: 0, residence: 'remote', rowsRead: 50000, rowsStored: 0, rowsAvailable: 50000 })
+    const comb = descriptor(10, { index: 4, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(targets[0], { resultSetIds: [1] }),
+          multiOutcome(targets[1], { resultSetIds: [2] }),
+          multiOutcome(targets[2], { resultSetIds: [3] }),
+          multiOutcome(targets[3], { resultSetIds: [4] })
+        ],
+        [sql1, sql2, sql3, bqRemote, comb],
+        { mode: 'crossEngineReadOnly' }
+      )
+    })
+    const bqKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.resultId === 4)!.key
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+
+    // Before loading sample: Combined counts 3/4 in-memory servers.
+    expect(combinedTargetCount(results.getSnapshot().t1, 0)).toBe(3)
+
+    // Load a BigQuery sample: sample does NOT inflate Combined (k/N) to 4/4.
+    expect(await results.loadSample('t1', bqKey, 100, 'first')).toBeUndefined()
+    const sampleEntry = results.getSnapshot().t1.sets.find(entry => entry.sample)
+    expect(sampleEntry).toBeDefined()
+    expect(combinedTargetCount(results.getSnapshot().t1, 0)).toBe(3)
+
+    // Closing the sample does NOT mark Combined stale.
+    expect(results.removeEntry('t1', sampleEntry!.key)).toBe(true)
+    expect(results.getSnapshot().t1.staleCombined?.has(combinedKey) ?? false).toBe(false)
+
+    // Re-load sample, drop sql-3 (marks Combined stale), and rebuild Combined: sample is NOT fed into results.combine!
+    expect(await results.loadSample('t1', bqKey, 100, 'first')).toBeUndefined()
+    expect(results.getSnapshot().t1.sets.some(entry => entry.sample)).toBe(true)
+    expect(results.removeTargetEntries('t1', 'sql-3')).toBe(true)
+    expect(results.getSnapshot().t1.staleCombined?.has(combinedKey)).toBe(true)
+    await results.rebuildCombined('t1', combinedKey)
+    expect(combine).toHaveBeenCalledTimes(1)
+    expect(combine.mock.calls[0][0]).toEqual([baseClient.handle(1), baseClient.handle(2)])
+
+    // Dropping sql-2 leaves only 1 real server + 1 sample: sample cannot satisfy the >=2 source requirement.
+    expect(results.removeTargetEntries('t1', 'sql-2')).toBe(true)
+    expect(results.canRebuildCombined('t1', combinedKey)).toBe(false)
+  })
+
+  it('R2-4: styles.css caps expanded Stacked summary band at min(210px, 45%) so short panes never starve grids', () => {
+    const rules = stylesheetRules()
+    const bandRule = rules.find(rule => rule.selector === '.rs-multi-summary-band')
+    const openBandRule = rules.find(rule => rule.selector === '.rs-multi-summary-band[data-open]')
+    const compactRule = rules.find(rule => rule.selector === '.multi-summary-compact')
+    expect(bandRule?.declarations).toEqual(expect.arrayContaining([
+      { property: 'display', value: 'flex' },
+      { property: 'flex-direction', value: 'column' }
+    ]))
+    expect(openBandRule?.declarations).toEqual(expect.arrayContaining([
+      { property: 'max-height', value: 'min(210px, 45%)' },
+      { property: 'overflow', value: 'hidden' }
+    ]))
+    expect(compactRule?.declarations).toEqual(expect.arrayContaining([
+      { property: 'flex', value: '1 1 auto' },
+      { property: 'min-height', value: '0' },
+      { property: 'max-height', value: 'none' },
+      { property: 'overflow-y', value: 'auto' }
+    ]))
+  })
+
+  it('R2-5: settledContent accepts entries slice with full tab.sets so tabsNeed never adds phantom +28px partialCombine height on complete Combined (N/N)', () => {
+    const { results } = serviceFixture()
+    const targets = sqlTargets.slice(0, 2)
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, rowsRead: 1, rowsStored: 1, rowsAvailable: 1 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, rowsRead: 1, rowsStored: 1, rowsAvailable: 1 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0, rowsRead: 1, rowsStored: 1, rowsAvailable: 1 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(targets[0], { resultSetIds: [1] }), multiOutcome(targets[1], { resultSetIds: [2] })],
+        [comb, s1, s2]
+      )
+    })
+    const tab = results.getSnapshot().t1
+    const combEntry = tab.sets.find(entry => entry.descriptor.kind === 'combined')!
+    const eastEntry = tab.sets.find(entry => entry.descriptor.targetKey === 'prod-east')!
+
+    expect(entryNoticesHeight(tab, combEntry)).toBe(0)
+    const combSettled = settledContent(tab, undefined, undefined, [combEntry])[0]
+    const eastSettled = settledContent(tab, undefined, undefined, [eastEntry])[0]
+    expect(combSettled).toBeDefined()
+    expect(combSettled).toBe(eastSettled)
+
+    results.focusEntry('t1', combEntry.key)
+    const combinedNeed = tabsNeed(results.getSnapshot().t1)
+    results.focusEntry('t1', eastEntry.key)
+    const eastNeed = tabsNeed(results.getSnapshot().t1)
+    expect(combinedNeed).toBe(eastNeed)
+  })
+
+  it('R2-6: pivotOutOfDate immediately flags a Pivot on Combined after Combined is rebuilt in place', async () => {
+    const { results } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] }), multiOutcome(sqlTargets[2], { resultSetIds: [3] })],
+        [s1, s2, s3, comb]
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const provenance = { recipe: { rows: [0], values: [{ aggregate: 'count' }] }, filters: [], inputRows: 4, truncated: false, incomplete: false, approximate: false }
+    results.addSet('t1', descriptor(810, { kind: 'pivot', index: 3 }), 'Pivot of Combined', ['1:10'], { pivot: provenance })
+
+    const groupBefore = results.getSnapshot().t1.groups.find(group => group.table.key === combinedKey)!
+    expect(pivotOutOfDate(results.getSnapshot().t1, groupBefore)).toBe(false)
+
+    // Drop a server and rebuild Combined in place (new resultId = 999): Pivot immediately becomes out of date.
+    results.removeTargetEntries('t1', 'dev-01')
+    await results.rebuildCombined('t1', combinedKey)
+    const tabAfter = results.getSnapshot().t1
+    const groupAfter = tabAfter.groups.find(group => group.table.key === combinedKey)!
+    expect(groupAfter.table.entry.descriptor.resultId).toBe(999)
+    expect(pivotOutOfDate(tabAfter, groupAfter)).toBe(true)
+
+    // Updating the Pivot from the rebuilt Combined clears out-of-date.
+    results.addSet('t1', descriptor(811, { kind: 'pivot', index: 3 }), 'Pivot of Combined', ['1:999'], { pivot: provenance })
+    const tabUpdated = results.getSnapshot().t1
+    expect(pivotOutOfDate(tabUpdated, tabUpdated.groups.find(group => group.table.key === combinedKey)!)).toBe(false)
+  })
+
+  it('R2-7: ComparePopover resets filter on picker.active change, focuses checked radio first on search Enter, and selects unchecked radio on Enter instead of submitting hidden target', () => {
+    const { results } = serviceFixture()
+    const compare = new CompareService(results)
+    cleanups.add(() => compare.dispose())
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    const manyTargets: MultiTargetIdentity[] = Array.from({ length: 10 }, (_, index) => ({
+      targetKey: `srv-${index + 1}`, connectionId: `c-${index + 1}`, provider: 'sqlserver', label: `node-${index + 1}`
+    }))
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: manyTargets } })
+    const manySets = manyTargets.map((target, index) => descriptor(index + 1, { index, targetKey: target.targetKey, statementSlot: 0, columns: cols }))
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(manyTargets.map((target, index) => multiOutcome(target, { resultSetIds: [index + 1] })), manySets)
+    })
+    const keys = results.getSnapshot().t1.sets.map(entry => entry.key)
+    const runSpy = vi.spyOn(compare, 'run').mockResolvedValue(undefined)
+
+    compare.open('t1', keys[0], 'grid')
+    compare.pick('t1', keys[4]) // node-5 is checked (not first visible radio)
+    const workbench = { results, compare } as unknown as Workbench
+    mount(createElement(WorkbenchProvider, {
+      workbench,
+      children: createElement('div', { 'data-pane': 'results' }, createElement(ComparePopover, { tabId: 't1', tab: results.getSnapshot().t1 }))
+    }))
+
+    // 1. Enter in .compare-search focuses the checked radio first when visible.
+    const search = document.querySelector<HTMLInputElement>('input.compare-search')!
+    search.focus()
+    act(() => { search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    const checkedRadio = document.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]:checked')!
+    expect(document.activeElement).toBe(checkedRadio)
+    expect(runSpy).not.toHaveBeenCalled()
+
+    // 2. Filter out checked node-5 so only unchecked node-9 is visible; Enter in search focuses node-9.
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    act(() => {
+      setter.call(search, 'node-9')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    search.focus()
+    act(() => { search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    const visibleRadio = document.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]')!
+    expect(visibleRadio.checked).toBe(false)
+    expect(document.activeElement).toBe(visibleRadio)
+
+    // 3. Enter on unchecked visible radio selects it via click/compare.pick instead of submitting hidden node-5.
+    act(() => { visibleRadio.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    expect(runSpy).not.toHaveBeenCalled()
+    expect(compare.getSnapshot().pickers.t1.target).toBe(keys[8])
+
+    // 4. Enter again on the now-checked radio starts comparison.
+    const nowChecked = document.querySelector<HTMLInputElement>('.compare-targets input[type="radio"]:checked')!
+    act(() => { nowChecked.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    expect(runSpy).toHaveBeenCalledTimes(1)
+
+    // 5. Switching picker.active while popover stays open resets the quick search filter.
+    expect(search.value).toBe('node-9')
+    act(() => { compare.open('t1', keys[1], 'grid') })
+    expect(document.querySelector<HTMLInputElement>('input.compare-search')!.value).toBe('')
+  })
+
+  it('R2-8: ResultsTabs recovers focus inside the statement row (stmt tab -> .rt-stmt-select -> top result tab)', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('stmt-focus.sql', 'SELECT 1; SELECT 2', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, name: 'S1' })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-east', statementSlot: 1, name: 'S2' })
+    const w1 = descriptor(3, { index: 2, targetKey: 'prod-west', statementSlot: 0, name: 'S1' })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 2] }), multiOutcome(sqlTargets[1], { resultSetIds: [3] })],
+        [s1, s2, w1]
+      )
+    })
+    const [s1Key, s2Key, w1Key] = f.results.getSnapshot()[doc.id].sets.map(entry => entry.key)
+    f.results.focusEntry(doc.id, s1Key)
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const renderTabs = (tab = f.results.getSnapshot()[doc.id]) => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab })
+      }))
+    })
+    renderTabs()
+
+    // Focus Statement 1 tab inside [data-tab-row="stmt"].
+    const stmt1Tab = host.querySelector<HTMLButtonElement>(`[data-tab-row="stmt"] [data-tab-entry="${s1Key}"]`)!
+    expect(stmt1Tab).not.toBeNull()
+    act(() => { stmt1Tab.focus() })
+    expect(document.activeElement).toBe(stmt1Tab)
+
+    // External switch to Statement 2 keeps focus on the selected statement tab (not the top-level server tab).
+    f.results.focusEntry(doc.id, s2Key)
+    renderTabs()
+    const stmt2Tab = host.querySelector<HTMLButtonElement>(`[data-tab-row="stmt"] [data-tab-entry="${s2Key}"]`)!
+    expect(document.activeElement).toBe(stmt2Tab)
+
+    // Collapsing statement tabs into .rt-stmt-select (>3 statements) recovers focus onto .rt-stmt-select.
+    const baseTab = f.results.getSnapshot()[doc.id]
+    const extraGroup = (id: number, slot: number) => ({
+      ...baseTab.groups[0],
+      ordinal: id,
+      table: {
+        ...baseTab.groups[0].table,
+        key: `extra-${id}`,
+        entry: { ...baseTab.groups[0].table.entry, key: `extra-${id}`, number: id, descriptor: descriptor(id, { index: id, targetKey: 'prod-east', statementSlot: slot, name: `S${slot + 1}` }) }
+      }
+    })
+    const collapsedTab = { ...baseTab, groups: [...baseTab.groups, extraGroup(4, 2), extraGroup(5, 3)] }
+    renderTabs(collapsedTab)
+    const stmtSelect = host.querySelector<HTMLSelectElement>('select.rt-stmt-select')!
+    expect(stmtSelect).not.toBeNull()
+    expect(document.activeElement).toBe(stmtSelect)
+
+    // Switching to prod-west (no statement row) falls back to the selected top-level result tab.
+    f.results.focusEntry(doc.id, w1Key)
+    renderTabs()
+    const westTopTab = host.querySelector<HTMLButtonElement>('[data-tab-row="result"] [data-target-key="prod-west"] [role="tab"]')!
+    expect(document.activeElement).toBe(westTopTab)
   })
 })
