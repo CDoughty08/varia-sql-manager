@@ -351,9 +351,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   usual time, since status colours are never a series; a sparkline has no crosshair, so each run's start, outcome and duration
   are read in the runs list beside it.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
-  document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
-  jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
-  beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
+  document per connection replaces SSMS's Manage Schedules dialog inside a `DocumentFrame` header with connection breadcrumbs, a shared-count pill, a `Grid | Timeline` switch, `Refresh`, and primary `New schedule`: a Calm Pro grid of the shared schedules (name, when, inline `Switch` Enabled toggle, tabular Jobs count, monospace **Next Run**, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
+  beside a persisted resizable splitter the selected schedule's editor (with a leading tinted summary bar, aligned form rows, and side-by-side **Next 5 runs** and **Jobs using it** cards), Detach and Attach a
   job (only jobs the login owns, or any for sysadmin, as msdb allows, on any schedule the login can see; another login's schedule takes only these job changes), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
   the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
   user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. Below sysadmin it is
@@ -387,9 +386,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Schedules Timeline** (the Schedules document's Timeline view, `src/shared/agent/timeline.ts`, `TimelineView.ts`). A Gantt
   chart from now over the next 24 hours or 7 days: for sysadmin one row per job, from the links and each job's usual duration
   (a job without one drawn for a minute), below sysadmin one row per schedule some job uses; rows in the order they next run, disabled jobs
-  and schedules dashed. Runs of two jobs that meet are flagged and listed under the chart as "Overlap 02:30–02:48: Backup
+  and schedules dashed. Runs of two jobs that meet are flagged and listed under the chart in a collapsible **Overlaps** drawer (shown inline for a single overlap and expandable when multiple overlaps occur) as "Overlap 02:30–02:48: Backup
   starts once during Nightly." with Open on the schedule (at most 20, the rest counted), and a job whose usual run outlasts the
-  gap to its next start is called out, as Agent skips a start while the job runs. Zoom in and out (Ctrl+wheel, + and -), scroll
+  gap to its next start is called out, as Agent skips a start while the job runs. Pixel-aligned vertical gridlines track the time axis ticks; zoom in and out (Ctrl+wheel, + and -), scroll
   (the slider, Shift+wheel), Show all; hovering a run shows its times, schedule and usual run; clicking it or Enter opens the
   job, Shift+click or Shift+Enter its schedule. The chart is a grid: Up and Down move between rows, Left, Right, Home and End
   between runs, each announced. It draws at most 200 rows and 40,000 runs, shared evenly over the rows (at most 2,000 a row),
@@ -448,11 +447,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   (`AgentSql.LintProxySave`, `CredentialSql.Lint`).
 - **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
-  document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
+  document per connection ("Log File Viewer - server"), focused if open with its sources replaced. Its header offers a collapsible **Sources** toggle (with focus rescue on collapse), `Refresh`, `Delete History…`, `Recycle…` (sysadmin), and the `Live` pill. A persisted resizable **Select logs** rail includes inline source search (`Filter jobs & logs…`), grouped **Jobs** and **Agent Error Logs** counts, and a compact retention footer, listing every
   job the login may see, with All jobs; at most `historyJobs` may be checked unless all are. The runs grid (newest first) reads
   `sp_help_jobhistory` with `@mode = N'FULL'`, which every Agent role may call, for each checked job by its id (a multi-server job, which msdb answers by id with its target servers, from the every-job read) or for all, with
   `@start_run_date` for the window (24 h, Last 7 days, 30 days, All; the server's clock, read in the same sample), at most
-  `historyRows` rows (once the rows read reach it, checked jobs not yet read are left out, and the note says how many; a checked job deleted since is skipped); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
+  `historyRows` rows (once the rows read reach it, checked jobs not yet read are left out, and the note says how many; a checked job deleted since is skipped); a read that stops there says it was truncated. The backend
   groups rows into runs by each job's outcome rows: the steps after one outcome row and up to the next belong to the next
   run. Steps with no outcome row read In progress when the job is running and started at or before them, Unknown (Agent stopped
   or restarted during the run) otherwise, or In progress or unknown when the Agent XPs option is 0 and the service is not read
@@ -460,9 +459,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   their start, so a run Agent never finished stays Unknown in any window; a run that started before the read (one longer than
   about a day) has its outcome row outside it, so its later steps read Unknown too, with a message that says so and that a wider
   window reads it; steps of a run that spans a daylight-saving fall-back
-  can read as an Unknown run, as msdb stores local times. The Outcome, Message contains and Step filters regroup the last read in backend memory, without SQL; only the
-  sources and the window read msdb again. Selecting a run shows its steps (outcome row first) and the selected row's message in
-  **Message details** with Copy; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message
+  can read as an Unknown run, as msdb stores local times. A single-row filter bar (`Window` segmented control, `Outcome` select, `Message contains`, `Step #`, `Clear`) regroups the last read in backend memory, without SQL; only the
+  sources and the window read msdb again. Selecting a run shows its steps in a persisted resizable split beside the selected row's message in
+  **Message details** with monospace timestamps and `Copy`; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message
   with `agent.historyMessage` (`sysjobhistory` by instance in msdb, or, when msdb refuses that table, the job's
   `sp_help_jobhistory` rows). **Delete History…** deletes the checked jobs' history, all of it or only rows older than a number
   of days, weeks or months counted back from the server's clock, after a confirmation naming the jobs. It is the `deleteJobHistory` object action: one
