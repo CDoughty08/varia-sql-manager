@@ -143,7 +143,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     private readonly options: IndexCompletionOptions) {
     super({ errors: new Map(), indexErrors: new Map(), indexes: new Map(), refreshing: new Set() })
     this.bindings.push(monaco.languages.registerCompletionItemProvider(googleSqlLanguageId, {
-      triggerCharacters: ['.', '`'],
+      triggerCharacters: ['.', '`', '@'],
       provideCompletionItems: async (model, position, _context, token) => {
         const target = this.target(model)
         if (!target || token.isCancellationRequested) return { suggestions: [] }
@@ -262,7 +262,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
             endColumn: position.column + 1
           }) === '`'
 
-        const suggestions = list.items.map(item => suggestion(monaco, item, { insert, replace }, read.word, canExitBacktick, projectRanks))
+        const suggestions = list.items.map(item => suggestion(monaco, model, item, { insert, replace }, read.word, canExitBacktick, projectRanks))
 
         // Append deduplicated cross-project fuzzy table jump hits ranked Billing → ★ Starred → Recent → Discovered.
         if (jumpAnswer?.items.length && target.project) {
@@ -1131,12 +1131,15 @@ function jumpSuggestion(
   }
 }
 
-/** A pipeline item as Monaco shows it: structured label, icon, exact-match boost, PR #738 tier ordering, typed word ranges, and backtick exit on leaves. */
+const escapeSnippet = (value: string) => value.replace(/[\\$}]/g, '\\$&')
+
+/** A pipeline item as Monaco shows it: structured label, icon, exact-match boost, PR #738 tier ordering, typed word ranges, snippets, parameter hints, and backtick exit on leaves. */
 function suggestion(
   monaco: typeof Monaco,
+  model: Monaco.editor.ITextModel,
   item: CompletionItem,
   range: { insert: Monaco.IRange; replace: Monaco.IRange },
-  word: Pick<CompletionWord, 'typed' | 'quoted'>,
+  word: Pick<CompletionWord, 'typed' | 'quoted' | 'parenAhead'>,
   canExitBacktick: boolean,
   projectRanks?: ReadonlyMap<string, ProjectRankInfo>
 ): Monaco.languages.CompletionItem {
@@ -1159,10 +1162,35 @@ function suggestion(
     const tail = colon >= 0 ? sort.slice(colon + 1) : sort
     sort = `${head}${info.tierRank}:${String(info.order).padStart(4, '0')}:${tail}`
   }
+  const routineBacktickCall = exitBacktick && item.kind === 'routine' && !word.parenAhead
+  const insertText = routineBacktickCall
+    ? `${escapeSnippet(item.insertText)}\`($0)`
+    : exitBacktick
+      ? `${item.insertText}\``
+      : item.insertText
+  const isSnippet = item.insertTextIsSnippet === true || routineBacktickCall
+  const triggerHints = item.triggerParameterHints === true || routineBacktickCall
+  let additionalTextEdits: Monaco.editor.ISingleEditOperation[] | undefined
+  if (item.additionalDeleteSpan && item.additionalDeleteSpan.end > item.additionalDeleteSpan.start) {
+    const delStart = model.getPositionAt(item.additionalDeleteSpan.start)
+    const delEnd = model.getPositionAt(item.additionalDeleteSpan.end)
+    additionalTextEdits = [{
+      range: {
+        startLineNumber: delStart.lineNumber,
+        startColumn: delStart.column,
+        endLineNumber: delEnd.lineNumber,
+        endColumn: delEnd.column
+      },
+      text: ''
+    }]
+  }
   return {
     label: description ? { label: item.label, description } : { label: item.label },
     kind: monaco.languages.CompletionItemKind[kinds[item.kind]],
-    insertText: exitBacktick ? `${item.insertText}\`` : item.insertText,
+    insertText,
+    ...isSnippet ? { insertTextRules: monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet ?? 4 } : {},
+    ...triggerHints ? { command: { id: 'editor.action.triggerParameterHints', title: 'Trigger Parameter Hints' } } : {},
+    ...additionalTextEdits ? { additionalTextEdits } : {},
     detail: item.detail,
     documentation: item.documentation,
     sortText: `${exact ? '0' : '1'}:${sort}`,

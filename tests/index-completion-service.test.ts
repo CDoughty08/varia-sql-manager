@@ -92,6 +92,7 @@ function createFixture(options: {
       CompletionItemKind: {
         Keyword: 14, Function: 1, Module: 8, Class: 6, Interface: 7, Method: 2, Value: 12, Field: 4, Property: 9, Variable: 5, Reference: 17
       },
+      CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
       registerCompletionItemProvider: (_id: string, provider: Monaco.languages.CompletionItemProvider) => {
         completionProvider = provider
         return { dispose: () => {} }
@@ -1251,5 +1252,90 @@ describe('IndexCompletionService', () => {
     expect(reportError.mock.calls[2][0]).toContain('RAM cap')
     expect(reportError.mock.calls[3][0]).toContain('rate-limited')
     expect(reportError.mock.calls[4][0]).toBe('Hydration request timed out.')
+  })
+
+  it('wires snippets, parameter hints, @ trigger, ARRAY<STRUCT> additionalTextEdits and wildcard ordering in Monaco', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((request): LanguageLookupAnswer => {
+            const key = request.path.join('.')
+            if (key === 'varia-alpha.sales') {
+              return {
+                state: 'ready',
+                path: [...request.path],
+                truncated: false,
+                items: [
+                  { name: 'events_20261124', kind: 'bqTable', shards: { prefix: 'events_', count: 90, first: '20260827', last: '20261124' } },
+                  { name: 'orders', kind: 'bqTable' },
+                  { name: 'to_cents', kind: 'bqRoutine', subtype: 'scalar', detail: '(x NUMERIC) RETURNS INT64' }
+                ]
+              }
+            }
+            if (key === 'varia-alpha.sales.orders') {
+              return {
+                state: 'ready',
+                path: [...request.path],
+                truncated: false,
+                object: { name: 'orders', kind: 'bqTable', detailed: true },
+                items: [
+                  { name: 'id', kind: 'bqColumn', type: 'INT64', nullable: false },
+                  { name: 'items', kind: 'bqColumn', type: 'ARRAY<STRUCT>', subtype: 'struct' },
+                  { name: 'items.sku', kind: 'bqColumn', type: 'STRING' }
+                ]
+              }
+            }
+            return { state: 'ready', path: [...request.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('q1.sql', '', 'sales', bqConnId)
+
+    // `@` is registered as a trigger character; single `@` stays quiet while `@@` lists BigQuery system variables.
+    expect(f.completionProvider().triggerCharacters).toEqual(['.', '`', '@'])
+    expect((await f.completeAt(tab.id, 'SELECT @|')).suggestions).toEqual([])
+    const sys = await f.completeAt(tab.id, 'SELECT @@|')
+    const proj = sys.suggestions.find(s => labelText(s.label) === '@@project_id')!
+    expect(proj.insertText).toBe('@@project_id')
+    expect(proj.label).toEqual({ label: '@@project_id', description: 'STRING · Read-only' })
+
+    // Non-niladic functions and routines emit ($0) snippets + triggerParameterHints; niladic and paren-ahead stay bare.
+    const expr = await f.completeAt(tab.id, 'SELECT DATE_TR|')
+    const dateTrunc = expr.suggestions.find(s => labelText(s.label) === 'DATE_TRUNC')!
+    expect(dateTrunc.insertText).toBe('DATE_TRUNC($0)')
+    expect(dateTrunc.insertTextRules).toBe(4)
+    expect(dateTrunc.command).toEqual({ id: 'editor.action.triggerParameterHints', title: 'Trigger Parameter Hints' })
+
+    const niladic = (await f.completeAt(tab.id, 'SELECT CURRENT_TIME|')).suggestions.find(s => labelText(s.label) === 'CURRENT_TIMESTAMP')!
+    expect(niladic.insertText).toBe('CURRENT_TIMESTAMP')
+    expect(niladic.insertTextRules).toBeUndefined()
+    expect(niladic.command).toBeUndefined()
+
+    const parenAhead = (await f.completeAt(tab.id, 'SELECT DATE_TR|(placed, DAY)')).suggestions.find(s => labelText(s.label) === 'DATE_TRUNC')!
+    expect(parenAhead.insertText).toBe('DATE_TRUNC')
+    expect(parenAhead.insertTextRules).toBeUndefined()
+    expect(parenAhead.command).toBeUndefined()
+
+    const backtickRoutine = (await f.completeAt(tab.id, 'CALL `varia-alpha.sales.to_c|`')).suggestions.find(s => labelText(s.label) === 'to_cents')!
+    expect(backtickRoutine.insertText).toBe('to_cents`($0)')
+    expect(backtickRoutine.insertTextRules).toBe(4)
+    expect(backtickRoutine.command).toEqual({ id: 'editor.action.triggerParameterHints', title: 'Trigger Parameter Hints' })
+
+    // ARRAY<STRUCT> direct member access returns UNNEST(o.items) with atomic additionalTextEdits deleting `o.items.`.
+    const arrMember = await f.completeAt(tab.id, 'SELECT o.items.| FROM sales.orders o')
+    expect(arrMember.suggestions).toHaveLength(1)
+    expect(labelText(arrMember.suggestions[0].label)).toBe('UNNEST(o.items)')
+    expect(arrMember.suggestions[0].additionalTextEdits).toEqual([
+      { range: { startLineNumber: 1, startColumn: 8, endLineNumber: 1, endColumn: 16 }, text: '' }
+    ])
+
+    // Date-sharded wildcard ranks ahead of the latest concrete shard in Monaco and exits backticks cleanly.
+    const shards = await f.completeAt(tab.id, 'SELECT * FROM sales.ev|')
+    expect(monacoOrder(shards.suggestions, 'ev').slice(0, 2)).toEqual(['events_*', 'events_20261124'])
+    const quotedWildcard = (await f.completeAt(tab.id, 'SELECT * FROM `varia-alpha.sales.ev|`')).suggestions.find(s => labelText(s.label) === 'events_*')!
+    expect(quotedWildcard.insertText).toBe('events_*`')
   })
 })
