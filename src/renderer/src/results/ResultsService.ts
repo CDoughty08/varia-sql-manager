@@ -1454,6 +1454,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     try {
       const result = await this.client.combine(sources.map(source => source.handle), { ...old.descriptor.name ? { statementName: old.descriptor.name } : {}, signal: abort.signal })
       const current = this.runs.get(tabId)
+      const currentSources = current === run ? this.combinedSourcesOf(current, old) : []
       if (
         this.disposed
         || abort.signal.aborted
@@ -1463,7 +1464,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         || current.status === 'running'
         || current.status === 'lost'
         || result.descriptor.generation !== old.descriptor.generation
-        || !sources.every(source => current.entries.get(source.key) === source && held(source))
+        || currentSources.length !== sources.length
+        || !sources.every((source, i) => currentSources[i] === source && held(source))
       ) {
         this.discard(result.descriptor)
         return undefined
@@ -1509,9 +1511,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         run.staleCombined = nextStale
       }
       const warnings = (result as { readonly warnings?: readonly string[] }).warnings
-      if (run.multi && Array.isArray(warnings)) {
+      if (run.multi) {
         const nextWarnings = new Map(run.combineWarnings)
-        nextWarnings.set(combinedKey, [...warnings])
+        nextWarnings.set(combinedKey, Array.isArray(warnings) ? [...warnings] : [])
         run.combineWarnings = nextWarnings
         this.syncCombineWarnings(run)
       }
@@ -1554,6 +1556,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     for (const entry of run.sets) {
       if (entry.descriptor.kind !== 'combined') continue
       if (!slots.has(entry.descriptor.statementSlot ?? 0)) continue
+      const combining = run.combining.get(entry.key)
+      if (combining) {
+        combining.abort()
+        run.combining.delete(entry.key)
+      }
       if (run.staleCombined.has(entry.key)) continue
       stale ??= new Set(run.staleCombined)
       stale.add(entry.key)

@@ -242,7 +242,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const tabRow = useRef<string | undefined>(undefined)
   const trackFocus = (event: FocusEvent<HTMLDivElement>) => {
     const target = event.target as Element
-    gridFocus.current = !!target.closest?.('[data-result-grid]')
+    gridFocus.current = !!target.closest?.('[data-result-grid], [data-multi-summary]')
     tabRow.current = target.matches?.('[role="tab"]') ? target.closest('[data-tab-row]')?.getAttribute('data-tab-row') ?? undefined : target.matches?.('.rt-stmt-select') ? 'stmt' : undefined
   }
   const trackBlur = (event: FocusEvent<HTMLDivElement>) => {
@@ -266,8 +266,8 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (!gridFocus.current || !root || (active && active !== root.ownerDocument.body && active !== resultsTab() && !root.contains(active))) return
     if (active && root.querySelector('.rt-panel')?.contains(active)) return
-    root.querySelector<HTMLElement>('.rt-panel [data-result-grid]')?.focus({ preventScroll: true })
-  }, [selected?.key])
+    root.querySelector<HTMLElement>('.rt-panel [data-result-grid], .rt-panel [data-multi-summary]')?.focus({ preventScroll: true })
+  }, [selected?.key, summaryActive])
 
   const revealSeq = search?.reveal ?? 0, revealEntry = search?.revealEntry
   useLayoutEffect(() => {

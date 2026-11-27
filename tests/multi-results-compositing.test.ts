@@ -15,7 +15,7 @@ import { minGridHeight, setFloors, stackLayout } from '../src/renderer/src/grid/
 import ResultsTabs, { tabsFold, tabsNeed } from '../src/renderer/src/grid/ResultsTabs'
 import ResultsStack, { entryNotices, entryNoticesHeight, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
 import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRequests, pickerRows, shortenDistinct, stackReveals, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
-import { CompareService } from '../src/renderer/src/results/CompareService'
+import { CompareService, isCrossEnginePair } from '../src/renderer/src/results/CompareService'
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
 import MessagesView from '../src/renderer/src/results/MessagesView'
 import MultiRunSummary from '../src/renderer/src/results/MultiRunSummary'
@@ -26,7 +26,7 @@ import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsS
 import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
 import { stylesheetRules } from './fixtures/css-rules'
-import { descriptor, fakeResultClient } from './fixtures/results'
+import { descriptor, fakeResultClient, type FakeHandle } from './fixtures/results'
 import { workbenchFixture } from './fixtures/workbench'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -2046,5 +2046,320 @@ describe('Round 3 adversarial regression fixes (R3-1 through R3-12)', () => {
     )
     expect(forcedBorders.some(rule => rule.selector.includes('.multi-env-pill'))).toBe(true)
     expect(forcedBorders.some(rule => rule.selector.includes('.multi-phase-pill'))).toBe(true)
+  })
+})
+
+describe('Round 4 adversarial regression checks (Domain 4: Results & CSS)', () => {
+  it('R4-1: markCombinedStaleFor aborts in-flight combine and rebuildCombined discards stale result if currentSources changed', async () => {
+    const baseClient = fakeResultClient()
+    const combine = vi.fn<(...args: unknown[]) => Promise<ResultsCombineResult>>()
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+      remoteQuery: vi.fn<NonNullable<VariaApi['remoteQuery']>>()
+    }
+    const rerun = vi.fn(async () => descriptor(77, { index: 2, targetKey: 'dev-01', statementSlot: 0, residence: 'memory', rowsRead: 5, rowsStored: 5, rowsAvailable: 5 }))
+    const results = new ResultsService({ client, api, events, remote: { rerun } as unknown as RemoteViews, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3Remote = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0, residence: 'remote', rowsRead: 5000, rowsStored: 0, rowsAvailable: 5000 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0, name: 'Orders' })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3Remote, comb]
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const s3Key = results.getSnapshot().t1.sets.find(entry => entry.descriptor.targetKey === 'dev-01')!.key
+
+    // Part A: Re-running a previously-remote source into memory while rebuildCombined is in flight aborts the combine
+    // via markCombinedStaleFor and keeps staleCombined set when the late combine response arrives.
+    let resolveInFlight!: (res: ResultsCombineResult) => void
+    let capturedSignal: AbortSignal | undefined
+    combine.mockImplementationOnce((_handles, opts) => {
+      capturedSignal = (opts as { signal?: AbortSignal } | undefined)?.signal
+      return new Promise(resolve => { resolveInFlight = resolve })
+    })
+    const rebuildPromise = results.rebuildCombined('t1', combinedKey)
+    expect(capturedSignal?.aborted).toBe(false)
+    expect(results.canRebuildCombined('t1', combinedKey)).toBe(false)
+
+    // Load s3 into memory via rerun -> calls markCombinedStaleFor(run, [entry]).
+    await results.rerun('t1', s3Key)
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(results.getSnapshot().t1.staleCombined?.has(combinedKey)).toBe(true)
+    expect(results.canRebuildCombined('t1', combinedKey)).toBe(true)
+
+    resolveInFlight({ descriptor: descriptor(601, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    expect(await rebuildPromise).toBeUndefined()
+    expect(client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 601 }])
+    expect(results.getSnapshot().t1.staleCombined?.has(combinedKey)).toBe(true)
+    expect(results.getSnapshot().t1.sets.find(entry => entry.key === combinedKey)?.descriptor.resultId).toBe(10)
+
+    // Part B: Even if a newly-in-memory source appears without aborting the signal, rebuildCombined checks
+    // currentSources vs sources after await and discards the incomplete rebuild while keeping staleCombined.
+    const s3Handle = baseClient.handle(77)!
+    s3Handle.snapshot = { ...s3Handle.snapshot, residence: 'remote' }
+    let resolveUnaborted!: (res: ResultsCombineResult) => void
+    combine.mockImplementationOnce(() => new Promise(resolve => { resolveUnaborted = resolve }))
+    const p2 = results.rebuildCombined('t1', combinedKey)
+    // Flip s3 back to memory before the combine resolves (without calling markCombinedStaleFor).
+    s3Handle.snapshot = { ...s3Handle.snapshot, residence: 'memory' }
+    resolveUnaborted({ descriptor: descriptor(602, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    expect(await p2).toBeUndefined()
+    expect(client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 602 }])
+    expect(results.getSnapshot().t1.staleCombined?.has(combinedKey)).toBe(true)
+  })
+
+  it('R4-2: ResultsTabs transfers keyboard focus cleanly between MultiRunSummary and ResultGrid on Next/Previous Result and Go to Result 1', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r4-focus.sql', 'SELECT 1', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s1, s2, comb]
+      )
+    })
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const renderTabs = () => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    renderTabs()
+
+    // Focus MultiRunSummary (starts active on Summary).
+    const summaryEl = host.querySelector<HTMLElement>('[data-multi-summary]')!
+    expect(summaryEl).not.toBeNull()
+    act(() => { summaryEl.focus() })
+    expect(document.activeElement).toBe(summaryEl)
+
+    // Next Result from Summary -> Combined: focus transfers to [data-result-grid].
+    const nextFromSummary = stepResult(f.results.getSnapshot()[doc.id], 1)!
+    act(() => { f.results.focusEntry(doc.id, nextFromSummary) })
+    renderTabs()
+    const gridEl = host.querySelector<HTMLElement>('.rt-panel [data-result-grid]')!
+    expect(gridEl).not.toBeNull()
+    expect(document.activeElement).toBe(gridEl)
+
+    // Previous Result from Combined -> Summary: focus transfers back to [data-multi-summary].
+    const prevToSummary = stepResult(f.results.getSnapshot()[doc.id], -1)!
+    expect(prevToSummary).toBe(summaryEntryKey)
+    act(() => { f.results.focusEntry(doc.id, prevToSummary) })
+    renderTabs()
+    expect(document.activeElement).toBe(host.querySelector<HTMLElement>('.rt-panel [data-multi-summary]'))
+
+    // Next Result twice -> prod-east grid, then Go to Result 1 -> Summary: focus lands on [data-multi-summary].
+    act(() => { f.results.focusEntry(doc.id, stepResult(f.results.getSnapshot()[doc.id], 1)!) })
+    renderTabs()
+    act(() => { f.results.focusEntry(doc.id, stepResult(f.results.getSnapshot()[doc.id], 1)!) })
+    renderTabs()
+    expect(document.activeElement).toBe(host.querySelector<HTMLElement>('.rt-panel [data-result-grid]'))
+    const firstResult = jumpResult(f.results.getSnapshot()[doc.id], 1)!
+    expect(firstResult).toBe(summaryEntryKey)
+    act(() => { f.results.focusEntry(doc.id, firstResult) })
+    renderTabs()
+    expect(document.activeElement).toBe(host.querySelector<HTMLElement>('.rt-panel [data-multi-summary]'))
+  })
+
+  it('R4-3: rebuildCombined clears stale pre-rebuild combineWarnings even when results.combine omits the warnings property', async () => {
+    const { results, combine } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb],
+        { combineWarnings: ['Schema drift on dev-sql-01: column LegacyNote widened to nvarchar.'] }
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toHaveLength(1)
+
+    results.removeTargetEntries('t1', 'dev-01')
+    // Return { descriptor } with NO warnings property at all (warnings === undefined).
+    combine.mockResolvedValueOnce({
+      descriptor: descriptor(701, { kind: 'combined', index: 3, statementSlot: 0, rowsRead: 4, rowsStored: 4, rowsAvailable: 4 })
+    })
+    expect(await results.rebuildCombined('t1', combinedKey)).toBe(combinedKey)
+
+    const after = results.getSnapshot().t1
+    expect(after.multi?.combineWarnings).toBeUndefined()
+    expect(after.combineWarnings?.get(combinedKey)).toEqual([])
+    const rebuiltEntry = after.sets.find(entry => entry.key === combinedKey)!
+    expect(entryNotices(after, rebuiltEntry).some(n => n.kind === 'combineWarning')).toBe(false)
+  })
+
+  it('R4-4: PivotService.resolveRecipe refuses when a rebuilt Combined column widens to text instead of silently downgrading SUM/AVG to COUNT', async () => {
+    const { results, client, combine } = serviceFixture()
+    const pivot = new PivotService(results)
+    cleanups.add(() => pivot.dispose())
+
+    const numericCols: ResultColumn[] = [
+      { name: 'Region', dataType: 'nvarchar(20)', wire: 'text', nullable: true },
+      { name: 'Amount', dataType: 'decimal(10,2)', wire: 'text', nullable: true },
+      { name: 'Score', dataType: 'int', wire: 'text', nullable: true }
+    ]
+    const widenedCols: ResultColumn[] = [
+      { name: 'Region', dataType: 'nvarchar(20)', wire: 'text', nullable: true },
+      { name: 'Amount', dataType: 'nvarchar(max)', wire: 'text', nullable: true },
+      { name: 'Score', dataType: 'int', wire: 'text', nullable: true }
+    ]
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, columns: numericCols })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, columns: numericCols })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0, columns: numericCols })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0, columns: numericCols })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb]
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+
+    // Build a Pivot with SUM(Amount) and AVG(Score).
+    pivot.open('t1', combinedKey)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'sum', column: 1 }, { aggregate: 'avg', column: 2 }] })
+    await pivot.run('t1')
+    const pivotKeyBefore = results.getSnapshot().t1.groups.find(group => group.table.key === combinedKey)?.pivot?.key
+    expect(pivotKeyBefore).toBeDefined()
+
+    // Rebuild Combined with Amount widened to nvarchar(max).
+    results.removeTargetEntries('t1', 'dev-01')
+    combine.mockResolvedValueOnce({
+      descriptor: descriptor(710, { kind: 'combined', index: 3, statementSlot: 0, columns: widenedCols, rowsRead: 4, rowsStored: 4, rowsAvailable: 4 })
+    })
+    await results.rebuildCombined('t1', combinedKey)
+    const rebuiltHandle = client.handle(710) as FakeHandle
+    const notifySpy = vi.spyOn(results, 'notify')
+
+    // Update must refuse and name Amount rather than silently downgrading SUM(Amount) to COUNT(Amount).
+    await pivot.update('t1', combinedKey)
+    expect(rebuiltHandle.pivot).not.toHaveBeenCalled()
+    const error = pivot.getSnapshot().tabs.t1.error
+    expect(error).toBeDefined()
+    expect(error).toContain('Amount')
+    expect(notifySpy).toHaveBeenCalledWith('t1', error)
+    // Existing Pivot stays intact.
+    expect(results.getSnapshot().t1.groups.find(group => group.table.key === combinedKey)?.pivot?.key).toBe(pivotKeyBefore)
+  })
+
+  it('R4-5: isCrossEnginePair infers bigquery for entry.sample so BigQuery sample pairs are not misclassified as cross-engine', () => {
+    const { results } = serviceFixture()
+    const compare = new CompareService(results)
+    cleanups.add(() => compare.dispose())
+
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    results.begin('cx', 'q-cx', undefined, { multi: { mode: 'crossEngineReadOnly', targets: crossTargets } })
+    const sqlSet = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0, columns: cols })
+    const bqSet = descriptor(2, { index: 1, targetKey: 'bq-1', statementSlot: 0, columns: cols })
+    void results.finish('cx', 'q-cx', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(crossTargets[0], { resultSetIds: [1] }), multiOutcome(crossTargets[1], { resultSetIds: [2] })],
+        [sqlSet, bqSet],
+        { mode: 'crossEngineReadOnly', status: 'completed' }
+      )
+    })
+    const tab = results.getSnapshot().cx
+    const sqlEntry = tab.sets.find(entry => entry.descriptor.targetKey === 'sql-1')!
+    const bqEntry = tab.sets.find(entry => entry.descriptor.targetKey === 'bq-1')!
+    // BigQuery samples without targetKey on their descriptor.
+    const sampleA = { ...bqEntry, key: 'sample-a', sample: true as const, descriptor: { ...bqEntry.descriptor, resultId: 90, targetKey: undefined } }
+    const sampleB = { ...bqEntry, key: 'sample-b', sample: true as const, descriptor: { ...bqEntry.descriptor, resultId: 91, targetKey: undefined } }
+
+    expect(isCrossEnginePair(tab, sampleA, sampleB)).toBe(false)
+    expect(isCrossEnginePair(tab, bqEntry, sampleA)).toBe(false)
+    expect(isCrossEnginePair(tab, sampleA, bqEntry)).toBe(false)
+    expect(isCrossEnginePair(tab, sqlEntry, sampleA)).toBe(true)
+    expect(isCrossEnginePair(tab, sampleA, sqlEntry)).toBe(true)
+  })
+
+  it('R4-6: in-flight manual Pivot build during rebuildCombined aborts cleanly via Build.sourceSet without reporting "These results were closed"', async () => {
+    const { results, client, combine } = serviceFixture()
+    const pivot = new PivotService(results)
+    cleanups.add(() => pivot.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb]
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const oldCombinedHandle = client.handle(10) as FakeHandle
+
+    // Start a manual Pivot build on Combined, held on a deferred backend response.
+    let resolvePivot!: (res: Awaited<ReturnType<FakeHandle['pivot']>>) => void
+    let pivotSignal: AbortSignal | undefined
+    vi.mocked(oldCombinedHandle.pivot).mockImplementationOnce((_spec, opts) => {
+      pivotSignal = opts?.signal
+      return new Promise(resolve => { resolvePivot = resolve })
+    })
+    pivot.open('t1', combinedKey)
+    pivot.setDraft('t1', { rows: [0], values: [{ aggregate: 'count' }] })
+    const buildPromise = pivot.run('t1')
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(pivotSignal?.aborted).toBe(false)
+
+    // While the manual Pivot build is in flight, close one server and rebuild Combined in place.
+    const notifySpy = vi.spyOn(results, 'notify')
+    results.removeTargetEntries('t1', 'dev-01')
+    combine.mockResolvedValueOnce({
+      descriptor: descriptor(720, { kind: 'combined', index: 3, statementSlot: 0, rowsRead: 4, rowsStored: 4, rowsAvailable: 4 })
+    })
+    await results.rebuildCombined('t1', combinedKey)
+
+    // Sync immediately aborts the in-flight manual Pivot because sourceSet changed.
+    expect(pivotSignal?.aborted).toBe(true)
+
+    // Late resolution of the aborted Pivot build is discarded cleanly with no "These results were closed" error.
+    resolvePivot({ descriptor: descriptor(888, { kind: 'pivot', index: 3 }), rows: 6, rowGroups: 2, columnGroups: 0, approximate: false })
+    await buildPromise
+    expect(client.release).toHaveBeenCalledWith([{ generation: 1, resultId: 888 }])
+    expect(pivot.getSnapshot().tabs.t1.error).toBeUndefined()
+    expect(notifySpy).not.toHaveBeenCalledWith('t1', expect.stringContaining('These results were closed'))
   })
 })
