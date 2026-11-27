@@ -536,4 +536,20 @@ describe('Connection library and history across both engines', () => {
     expect(await history.setBigQueryCostThreshold!(gcloud('varia-omega'), 0)).toBe(true)
     expect((await bigQuery.load()).library.profiles).toHaveLength(1)
   })
+
+  it('evicts the oldest entry rather than a newer one when connects share the same millisecond', async () => {
+    const directory = await folder()
+    const fixed = () => new Date('2026-11-26T00:00:00.000Z')
+    const store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles(), fixed)
+    await store.setEnvironment({ options: gcloud('proj-base'), environment: 'Production' })
+    for (let index = 0; index < 30; index++) await store.rememberEntry(gcloud(`proj-${index}`))
+    let profiles = (await store.load()).library.profiles
+    expect(profiles).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.project === 'proj-base')).toBe(false)
+    await store.setEnvironment({ options: gcloud('proj-base'), environment: 'Staging' })
+    profiles = (await store.load()).library.profiles
+    expect(profiles).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.project === 'proj-base' && profile.options.environment === 'Staging')).toBe(true)
+    expect(profiles.some(profile => profile.options.project === 'proj-0')).toBe(false)
+  })
 })

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using Varia.Backend.Activity;
@@ -78,10 +79,10 @@ internal static class LiveDataChecks
             "every live query at the server's band (" + band + ") returns the columns it declares, by name, in order and numeric, and its tables' columns by name and type: " + string.Join("; ", shapes));
 
         // Rates on the server's clock: a baseline with gauges only, then every series, the second within about a second
-        // (the quick second sample; the interval is 2 s). Measured once more when a tick failed (a busy shared server) or a
-        // counter went backwards: another check dropping a database a summed counter covered makes a reset, which LiveDeltas
-        // reports without values by design.
-        async Task<((Task<LiveEnd> Task, LiveRecorder Recorder, string Id) View, bool Sampled, List<LiveTickEvent> Ticks)> Overview()
+        // (the quick second sample; the interval is 2 s). Measured once more when a tick failed (a busy shared server), a
+        // counter went backwards (another check dropping a database a summed counter covered makes a reset, which LiveDeltas
+        // reports without values by design), or timing missed on a busy runner.
+        async Task<((Task<LiveEnd> Task, LiveRecorder Recorder, string Id) View, bool Sampled, List<LiveTickEvent> Ticks, long? Tick1Ms, long Probe1Ms, long? Tick2Ms, long Probe2Ms)> Overview()
         {
             // The overview excludes its own monitor session. Own the user session this assertion requires rather than
             // relying on an incidental idle connection in a pool (which an earlier check may legitimately clear).
@@ -90,21 +91,59 @@ internal static class LiveDataChecks
             {
                 var held = await Execute("SELECT @@SPID;", session);
                 check(held is { Status: "completed", Spid: > 0 }, "the overview measurement holds an explicit user query session through its baseline and rate samples");
+                async Task<(long? Ticks, long Ms)> ReadMsTicksAsync()
+                {
+                    var watch = Stopwatch.StartNew();
+                    var read = await Sql("SELECT ms_ticks FROM sys.dm_os_sys_info;", session);
+                    return (long.TryParse(read.Scalar, CultureInfo.InvariantCulture, out var value) ? value : null, watch.ElapsedMilliseconds);
+                }
                 var view = Subscribe(info.Id, 2000);
-                var sampled = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 20_000);
-                return (view, sampled, view.Recorder.Ticks.Take(3).ToList());
+                // Sample SQL Server's own ms_ticks right after ticks[1] and ticks[2]: on contended Linux containers SQLPAL's
+                // ms_ticks can jump forward relative to the host wall clock, so comparing ElapsedMs against SQL Server's own
+                // ms_ticks span directly proves the sample tracks the server's clock even across a jump.
+                long? tick1Ms = null, tick2Ms = null;
+                long probe1Ms = 0, probe2Ms = 0;
+                var sampled = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2, 20_000);
+                if (sampled) (tick1Ms, probe1Ms) = await ReadMsTicksAsync();
+                sampled = sampled && await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 20_000);
+                if (sampled) (tick2Ms, probe2Ms) = await ReadMsTicksAsync();
+                return (view, sampled, view.Recorder.Ticks.Take(3).ToList(), tick1Ms, probe1Ms, tick2Ms, probe2Ms);
             }
             finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
         }
+        const int ClockSlack = 250, QuickSlack = 500;
+        static (bool ClockOk, bool QuickOk, long Server, long ServerDelta, long Wall, long Quick, int Cost1, int Cost2) TimingOf(
+            List<LiveTickEvent> ticks, List<LiveSample> samples, long? tick1Ms, long probe1Ms, long? tick2Ms, long probe2Ms)
+        {
+            if (ticks.Count < 3 || samples.Count < 3) return (false, false, -1, -1, -1, -1, 0, 0);
+            var (cost1, cost2) = (samples[1].CostMs, samples[2].CostMs);
+            var wall = ticks[2].SampledAt - ticks[1].SampledAt;
+            var server = samples[2].ElapsedMs ?? -1;
+            var serverDelta = tick1Ms is { } t1 && tick2Ms is { } t2 ? t2 - t1 : -1;
+            // ms_ticks is read at some point while each sample runs, before the probe right after it completes, so
+            // (M2 - M1) lies between (S2 - S1) - (cost2 + probe2Ms) and (S2 - S1) + (cost1 + probe1Ms).
+            var clockOk = server > 0 && serverDelta >= 0
+                && server >= serverDelta - cost2 - probe2Ms - ClockSlack
+                && server <= serverDelta + cost1 + probe1Ms + ClockSlack;
+            var quick = ticks[1].SampledAt - ticks[0].SampledAt;
+            var quickOk = quick <= 1000 + cost1 + QuickSlack;
+            return (clockOk, quickOk, server, serverDelta, wall, quick, cost1, cost2);
+        }
         var measured = await Overview();
         var reset = measured.Ticks.Skip(1).Any(tick => tick.Samples.Any(sample => sample.Gap == "reset"));
-        if (measured.Ticks.Any(tick => tick.Errors is not null) || reset)
+        var firstSamples = measured.Ticks.Where(tick => tick.Samples.Count > 0).Select(tick => tick.Samples[0]).ToList();
+        var firstTiming = TimingOf(measured.Ticks, firstSamples, measured.Tick1Ms, measured.Probe1Ms, measured.Tick2Ms, measured.Probe2Ms);
+        if (measured.Ticks.Any(tick => tick.Errors is not null) || reset || !firstTiming.ClockOk || !firstTiming.QuickOk)
         {
-            Console.WriteLine("Timing: " + (reset ? "an activity.overview counter went backwards (a reset)" : "an activity.overview tick failed (" + string.Join(", ", measured.Ticks.SelectMany(tick => tick.Errors ?? []).Select(error => error.Code)) + ")") + "; measuring it once more.");
+            var reason = reset ? "an activity.overview counter went backwards (a reset)"
+                : measured.Ticks.Any(tick => tick.Errors is not null) ? "an activity.overview tick failed (" + string.Join(", ", measured.Ticks.SelectMany(tick => tick.Errors ?? []).Select(error => error.Code)) + ")"
+                : !firstTiming.ClockOk ? "activity.overview server clock missed (" + firstTiming.Server + " vs ms_ticks " + firstTiming.ServerDelta + " / wall " + firstTiming.Wall + " ms)"
+                : "activity.overview quick second sample missed (" + firstTiming.Quick + " ms)";
+            Console.WriteLine("Timing: " + reason + "; measuring it once more.");
             await Stop(measured.View);
             measured = await Overview();
         }
-        var (overview, sampled, ticks) = measured;
+        var (overview, sampled, ticks, tick1Ms, probe1Ms, tick2Ms, probe2Ms) = measured;
         var opened = overview.Recorder.Opened;
         var samples = ticks.Where(tick => tick.Samples.Count > 0).Select(tick => tick.Samples[0]).ToList();
         // Every series of the activity catalogue's overview: gauges from the first sample, rates from the second; a ratio (I/O
@@ -117,16 +156,11 @@ internal static class LiveDataChecks
                 && metrics[series.FindIndex(spec => spec.Id == "cpuPercent")] <= 100 && metrics[series.FindIndex(spec => spec.Id == "userSessions")] >= 1 && sample.EffectiveIntervalMs == 2000),
             "activity.overview opens on the server's band and its own session, reading uncommitted; its baseline carries its gauges only, and the next samples every series of the activity catalogue (CPU 0 to 100 %): "
             + string.Join(" | ", ticks.Select(tick => string.Join(",", tick.Errors?.Select(error => error.Code) ?? []) + string.Join(",", tick.Samples.Select(sample => sample.Gap + " " + string.Join(",", sample.Metrics ?? []))))));
-        // ms_ticks is read at some point while a statement runs, so the server's elapsed time lies between the backend's
-        // clock less the later statement's cost and plus the earlier one's (ms_ticks has the system timer's resolution).
-        var (cost1, cost2) = (samples[1].CostMs, samples[2].CostMs);
-        var wall = ticks[2].SampledAt - ticks[1].SampledAt;
-        var server = samples[2].ElapsedMs ?? -1;
-        const int Slack = 100;
-        check(server >= wall - cost2 - Slack && server <= wall + cost1 + Slack,
-            "a sample's elapsed time is the server's own (ms_ticks), within the two statements' costs of the backend's clock: " + server + " vs " + wall + " ms (costs " + cost1 + ", " + cost2 + ")");
-        var quick = ticks[1].SampledAt - ticks[0].SampledAt;
-        check(quick <= 1000 + cost2 + 250, "the second sample comes about a second after the baseline, not at the 2 s interval: " + quick + " ms (cost " + cost2 + ")");
+        var timing = TimingOf(ticks, samples, tick1Ms, probe1Ms, tick2Ms, probe2Ms);
+        check(timing.ClockOk,
+            "a sample's elapsed time is the server's own (ms_ticks), within the statements' costs of SQL Server's ms_ticks: " + timing.Server + " vs ms_ticks " + timing.ServerDelta + " / wall " + timing.Wall
+            + " ms (costs " + timing.Cost1 + ", " + timing.Cost2 + "; probes " + probe1Ms + ", " + probe2Ms + ")");
+        check(timing.QuickOk, "the second sample comes about a second after the baseline, not at the 2 s interval: " + timing.Quick + " ms (cost " + timing.Cost1 + ")");
 
         // The pool and prologue, as SQL Server sees the view's session.
         var spid = LatestSpid(overview.Recorder);

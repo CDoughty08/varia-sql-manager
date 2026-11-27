@@ -5,19 +5,32 @@ import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 
 const limit = 2_000_000
 export const connectionLibraryLimit = limit
-/** History keeps the 30 most recent connections; an entry that is not a favorite, registered, saved or recent is dropped. */
+/** History keeps the 30 most recent connections; an entry that is not a favorite, registered, saved or recent is dropped.
+ *  Entries touched in the same millisecond break ties in favour of the one appended/touched more recently. */
 function prune(library: ConnectionLibrary) {
-  const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
+  const order = new Map(library.profiles.map((item, at) => [item, at]))
+  const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) =>
+    b.lastConnected!.localeCompare(a.lastConnected!) || order.get(b)! - order.get(a)!)
   for (const item of recent.slice(30)) delete item.lastConnected
   library.profiles = library.profiles.filter(item => item.favorite || item.registered || item.saved || item.lastConnected)
   if (library.profiles.length > 200) throw new Error('The connection library supports up to 200 saved servers.')
+}
+/** Marks `profile` connected at `at` and moves it to the end so same-millisecond ties keep the newest connection. */
+function touchRecent(library: ConnectionLibrary, profile: ConnectionProfile, at: string) {
+  profile.lastConnected = at
+  delete profile.saved
+  const index = library.profiles.indexOf(profile)
+  if (index >= 0 && index < library.profiles.length - 1) {
+    library.profiles.splice(index, 1)
+    library.profiles.push(profile)
+  }
 }
 export class ConnectionStore {
   private writes: Promise<unknown> = Promise.resolve()
   /** The file was quarantined this run: the library read since is not the one the user had, so nothing keyed by its entry
    *  ids (remembered passwords) may be pruned against it until the next start, when the user may have restored the file. */
   private quarantined = false
-  constructor(private path: string) {}
+  constructor(private path: string, private now: () => Date = () => new Date()) {}
   private async read(): Promise<{ library: ConnectionLibrary; warning?: string; trusted: boolean }> {
     const read = await readJsonFile(this.path, limit)
     if (read.kind === 'missing') return { library: { version: 1, profiles: [] }, trusted: !this.quarantined }
@@ -67,7 +80,7 @@ export class ConnectionStore {
       // Saved marks only an entry that never connected; a connection makes it recent instead.
       if (input.saved && !profile.lastConnected) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
-      if (connected) { profile.lastConnected = new Date().toISOString(); delete profile.saved }
+      if (connected) touchRecent(library, profile, this.now().toISOString())
       prune(library)
       return { id: profile.id, environment: profile.options.environment }
     })
@@ -84,7 +97,7 @@ export class ConnectionStore {
     const options = savedConnection(input.options), key = connectionKey(options)
     return (await this.change(library => {
       let profile = library.profiles.find(item => connectionKey(item.options) === key)
-      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString() }; library.profiles.push(profile) }
+      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, autoReconnect: 'inherit', lastConnected: this.now().toISOString() }; library.profiles.push(profile) }
       const next = { ...profile.options }
       if (input.environment) next.environment = input.environment
       else delete next.environment

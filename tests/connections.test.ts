@@ -184,6 +184,25 @@ describe('saved connection library', () => {
     expect(second.library.profiles.find(profile => profile.id === second.id)?.options.database).toBe('Sales')
     expect(await readFile(path, 'utf8')).not.toContain('secret-marker')
   })
+  it('evicts the oldest entry rather than a newer one when connects share the same millisecond', async () => {
+    const { path } = await store()
+    const fixed = () => new Date('2026-11-26T00:00:00.000Z')
+    const library = new ConnectionStore(path, fixed)
+    const base = { ...connectionDefaults('win32'), server: 'sql01', database: 'base' }
+    await library.setEnvironment({ options: base, environment: 'Production' })
+    for (let index = 0; index < 30; index++) await library.rememberEntry({ ...base, database: `db${index}` })
+    let profiles = (await library.load()).library.profiles
+    expect(profiles).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.database === 'base')).toBe(false)
+    // Re-connecting the oldest remaining entry moves it ahead of older ties; relabelling base keeps base and evicts the next oldest.
+    await library.rememberEntry({ ...base, database: 'db0' })
+    await library.setEnvironment({ options: base, environment: 'Staging' })
+    profiles = (await library.load()).library.profiles
+    expect(profiles).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.database === 'base' && profile.options.environment === 'Staging')).toBe(true)
+    expect(profiles.some(profile => profile.options.database === 'db0')).toBe(true)
+    expect(profiles.some(profile => profile.options.database === 'db1')).toBe(false)
+  })
   it('refuses to replace a directory found at the library path', async () => {
     const { directory } = await store()
     await expect(new ConnectionStore(directory).load()).rejects.toThrow('regular file')

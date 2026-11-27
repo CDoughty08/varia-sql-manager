@@ -114,9 +114,11 @@ const sharedThreshold = (library: BigQueryLibraryFile, key: string) => library.p
 
 /** History keeps the 30 most recent connections; an entry that is not a favourite, saved or recent is dropped. A dropped
  *  entry's key file stays known by its reference (`keptKeyFiles`, newest last), so a target restored from it still finds
- *  the file; a reference an entry holds again is the entry's. */
+ *  the file; a reference an entry holds again is the entry's. Same-millisecond ties keep the most recently touched entry. */
 function prune(library: BigQueryLibraryFile) {
-  const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
+  const order = new Map(library.profiles.map((item, at) => [item, at]))
+  const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) =>
+    b.lastConnected!.localeCompare(a.lastConnected!) || order.get(b)! - order.get(a)!)
   for (const item of recent.slice(bigQueryLibraryLimits.recent)) delete item.lastConnected
   const dropped = library.profiles.filter(item => !(item.favorite || item.saved || item.lastConnected))
   library.profiles = library.profiles.filter(item => item.favorite || item.saved || item.lastConnected)
@@ -133,6 +135,16 @@ function prune(library: BigQueryLibraryFile) {
   else delete library.keptKeyFiles
   if (library.profiles.length > bigQueryLibraryLimits.profiles) throw new Error('The connection library supports up to 200 saved BigQuery connections.')
 }
+/** Marks `profile` connected at `at` and moves it to the end so same-millisecond ties keep the newest connection. */
+function touchRecent(library: BigQueryLibraryFile, profile: BigQueryStoredProfile, at: string) {
+  profile.lastConnected = at
+  delete profile.saved
+  const index = library.profiles.indexOf(profile)
+  if (index >= 0 && index < library.profiles.length - 1) {
+    library.profiles.splice(index, 1)
+    library.profiles.push(profile)
+  }
+}
 
 /**
  * BigQuery's saved connections in `bigquery-connections.json` (docs/bigquery.md, Saved connections), written atomically and
@@ -143,7 +155,7 @@ export class BigQueryConnectionStore {
   private writes: Promise<unknown> = Promise.resolve()
   /** Retained when an internal startup read (e.g. starred projects) quarantines an invalid library so the Connect dialog still surfaces the recovery warning. */
   private pendingWarning: string | undefined
-  constructor(private readonly path: string, private readonly keyFiles: BigQueryKeyFiles) {}
+  constructor(private readonly path: string, private readonly keyFiles: BigQueryKeyFiles, private readonly now: () => Date = () => new Date()) {}
 
   private async read(): Promise<{ library: BigQueryLibraryFile; warning?: string; migrated?: boolean }> {
     const read = await readJsonFile(this.path, limit)
@@ -326,7 +338,7 @@ export class BigQueryConnectionStore {
       if (input.lastConnected !== undefined && !connected) { profile.lastConnected = input.lastConnected; delete profile.saved }
       if (input.saved && !profile.lastConnected) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
-      if (connected) { profile.lastConnected = new Date().toISOString(); delete profile.saved }
+      if (connected) touchRecent(library, profile, this.now().toISOString())
       prune(library)
       return { id: profile.id, environment: profile.options.environment }
     })
@@ -356,7 +368,7 @@ export class BigQueryConnectionStore {
       if (!profile) {
         // Only the label changes: the cost preferences take their defaults until set.
         const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...plain } = options
-        profile = { id: randomUUID(), options: plain, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }
+        profile = { id: randomUUID(), options: plain, favorite: false, autoReconnect: 'inherit', lastConnected: this.now().toISOString(), ...keyPath ? { keyPath } : {} }
         library.profiles.push(profile)
       }
       const next = { ...profile.options }
@@ -391,7 +403,7 @@ export class BigQueryConnectionStore {
       if (!profile) {
         // A new entry keeps only what the options name for it: the other preferences take their defaults until set.
         const { costPrompt: _costPrompt, costThreshold: _costThreshold, ...plain } = options
-        profile = { id: randomUUID(), options: plain, favorite: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString(), ...keyPath ? { keyPath } : {} }
+        profile = { id: randomUUID(), options: plain, favorite: false, autoReconnect: 'inherit', lastConnected: this.now().toISOString(), ...keyPath ? { keyPath } : {} }
         library.profiles.push(profile)
       }
       apply(library, key)

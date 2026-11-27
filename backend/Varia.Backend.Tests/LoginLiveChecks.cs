@@ -374,14 +374,45 @@ internal static class LoginLiveChecks
             + "ALTER EVENT SESSION [" + session + "] ON SERVER STATE = START;";
         var started = await sql(definition, "master", 300);
         check(started.Status == "completed", "the Extended Events session starts: " + started.Error);
-        async Task<DateTime> ServerNow() => DateTime.Parse((await sql("SELECT CONVERT(varchar(27), SYSUTCDATETIME(), 126);", "master", 300)).Scalar!, CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+        async Task<string> Read() => await with(async connection =>
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT CONVERT(nvarchar(max), t.target_data) FROM sys.dm_xe_session_targets AS t JOIN sys.dm_xe_sessions AS s ON s.address = t.event_session_address "
+                + "WHERE s.name = @name AND t.target_name = N'ring_buffer';";
+            command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = session });
+            return (string?)await command.ExecuteScalarAsync();
+        }) ?? "";
+        // Each event: its name and every value it holds, unescaped.
+        static List<(string Name, string Text)> Events(string xml) => xml.Length == 0 ? [] : [.. XDocument.Parse(xml).Root!.Elements("event").Select(item =>
+            (item.Attribute("name")?.Value ?? "", string.Join("\n", item.Descendants("value").Select(value => value.Value))))];
+        static int CountMatching(List<(string Name, string Text)> events, string marker) => events.Count(item => item.Name == "rpc_completed"
+            && (item.Text.Contains(marker, StringComparison.Ordinal) || item.Text.Contains(Convert.ToHexString(Encoding.Unicode.GetBytes(marker)), StringComparison.OrdinalIgnoreCase)
+                || item.Text.Contains(XeMasked, StringComparison.Ordinal) || item.Text.Contains(XeMaskedStatement, StringComparison.Ordinal)));
+        // Wait for each run's own password-bearing RPC in turn rather than bracketing XE timestamps against SYSUTCDATETIME():
+        // SQL Server derives XE timestamps from ms_ticks, which can skew from SYSUTCDATETIME() on contended Linux containers.
+        var allData = new StringBuilder();
+        async Task<(bool Seen, List<(string Name, string Text)> Events)> WaitForNewAsync(string marker, int prior)
+        {
+            var waited = Stopwatch.StartNew();
+            var events = new List<(string Name, string Text)>();
+            while (true)
+            {
+                var xml = await Read();
+                events = Events(xml);
+                if (CountMatching(events, marker) > prior || waited.Elapsed > TimeSpan.FromSeconds(30))
+                {
+                    allData.Append(xml);
+                    return (CountMatching(events, marker) > prior, events);
+                }
+                await Task.Delay(250);
+            }
+        }
         var database = await scratch.CreateLoginsDatabaseAsync();
         var loginPassword = "XeLogin-" + ScratchDatabase.Throwaway() + "'";
         var keyPassword = "XeKey-" + ScratchDatabase.Throwaway() + "'";
-        var before = await ServerNow();
         var created = await actions.ExecuteAsync(create(LoginChecks.Sql(scratch.OwnLogin("xe"), false, false, false), loginPassword, ["dbcreator"], null), CancellationToken.None);
-        var between = await ServerNow();
+        var (login, afterLogin) = await WaitForNewAsync(XeLoginMarker, 0);
+        var beforeKey = CountMatching(afterLogin, XeKeyMarker);
         var keyed = await with(async connection =>
         {
             connection.ChangeDatabase(database);
@@ -391,45 +422,18 @@ internal static class LoginLiveChecks
             await command.ExecuteNonQueryAsync();
             return "done";
         });
-        var after = await ServerNow();
+        var (key, afterKey) = await WaitForNewAsync(XeKeyMarker, beforeKey);
         // Login Properties' password with Specify old password, on a login of the run's own.
         var changing = scratch.OwnLogin("xeprops");
         var oldPassword = "XeOld-" + ScratchDatabase.Throwaway() + "'";
         var newPassword = "XeNew-" + ScratchDatabase.Throwaway() + "'";
         var made = await sql("CREATE LOGIN [" + changing.Replace("]", "]]", StringComparison.Ordinal) + "] WITH PASSWORD = N'" + oldPassword.Replace("'", "''", StringComparison.Ordinal) + "', CHECK_POLICY = OFF;", "master", 300);
         var described = await actions.DescribeAsync(new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "loginProperties", new ObjectRefDto("login", Name: changing)), CancellationToken.None);
-        var propertiesStart = await ServerNow();
+        var beforeProperties = CountMatching(Events(await Read()), XeOldMarker);
         var changed = await actions.ExecuteAsync(new ActionArgs("loginProperties", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("login", Name: changing), Secrets: new(newPassword, oldPassword),
             LoginIdentity: described.Login is { } facts ? new(facts.Sid, facts.Created) : null, LoginChanges: new(Password: new(true, false, false))), CancellationToken.None);
-        var propertiesEnd = await ServerNow();
-        async Task<string> Read() => await with(async connection =>
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT CONVERT(nvarchar(max), t.target_data) FROM sys.dm_xe_session_targets AS t JOIN sys.dm_xe_sessions AS s ON s.address = t.event_session_address "
-                + "WHERE s.name = @name AND t.target_name = N'ring_buffer';";
-            command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = session });
-            return (string?)await command.ExecuteScalarAsync();
-        }) ?? "";
-        // Each event: its name, when it fired (UTC) and every value it holds, unescaped.
-        static List<(string Name, DateTime At, string Text)> Events(string xml) => xml.Length == 0 ? [] : [.. XDocument.Parse(xml).Root!.Elements("event").Select(item =>
-            (item.Attribute("name")?.Value ?? "", DateTime.Parse(item.Attribute("timestamp")?.Value ?? "", CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal),
-                string.Join("\n", item.Descendants("value").Select(value => value.Value))))];
-        static bool Seen(List<(string Name, DateTime At, string Text)> events, DateTime from, DateTime to, string marker) => events.Any(item => item.Name == "rpc_completed"
-            && item.At >= from && item.At <= to && (item.Text.Contains(marker, StringComparison.Ordinal) || item.Text.Contains(Convert.ToHexString(Encoding.Unicode.GetBytes(marker)), StringComparison.OrdinalIgnoreCase)
-                || item.Text.Contains(XeMasked, StringComparison.Ordinal) || item.Text.Contains(XeMaskedStatement, StringComparison.Ordinal)));
-        var data = "";
-        bool login = false, key = false, properties = false;
-        var waited = Stopwatch.StartNew();
-        while (true)
-        {
-            data = await Read();
-            var events = Events(data);
-            login = Seen(events, before, between, XeLoginMarker);
-            key = Seen(events, between, after, XeKeyMarker);
-            properties = Seen(events, propertiesStart, propertiesEnd, XeOldMarker);
-            if ((login && key && properties) || waited.Elapsed > TimeSpan.FromSeconds(30)) break;
-            await Task.Delay(250);
-        }
+        var (properties, _) = await WaitForNewAsync(XeOldMarker, beforeProperties);
+        var data = allData.ToString();
         static IEnumerable<string> Forms(string secret) =>
         [
             secret, secret.Replace("'", "''", StringComparison.Ordinal), System.Security.SecurityElement.Escape(secret)!, secret.Replace("'", "&apos;", StringComparison.Ordinal),
