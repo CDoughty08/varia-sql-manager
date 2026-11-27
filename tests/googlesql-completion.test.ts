@@ -499,6 +499,46 @@ describe('GoogleSQL scope reader', () => {
     expect(names(readGoogleSqlStatementSources('SELECT a-1.5e2 FROM t', 'SELECT a-1.5e2 FROM t'.length))).toEqual(['t=t'])
   })
 
+  it('reads per-segment backticked dotted paths across FROM, JOIN, DML, WITH, subqueries, completion, and hover', async () => {
+    const mixedPaths = [
+      { sql: 'SELECT t.| FROM my_proj.my_ds.`my-table` t', expectedSource: 't=my_proj.my_ds.my-table', expectedParts: ['my_proj', 'my_ds', 'my-table'] },
+      { sql: 'SELECT t.| FROM `my-proj`.`my_ds`.`my-table` t', expectedSource: 't=my-proj.my_ds.my-table', expectedParts: ['my-proj', 'my_ds', 'my-table'] },
+      { sql: 'SELECT t.| FROM `my-project-123456`.`2024e1`.orders t', expectedSource: 't=my-project-123456.2024e1.orders', expectedParts: ['my-project-123456', '2024e1', 'orders'] },
+      { sql: 'SELECT t.| FROM my_proj.`2024_sales`.orders t', expectedSource: 't=my_proj.2024_sales.orders', expectedParts: ['my_proj', '2024_sales', 'orders'] },
+      { sql: 'SELECT t.| FROM `example.com:my-proj-1`.2024e1.`orders` t', expectedSource: 't=example.com:my-proj-1.2024e1.orders', expectedParts: ['example.com:my-proj-1', '2024e1', 'orders'] },
+      { sql: 'SELECT t.| FROM my_proj.2024.`my-table` t', expectedSource: 't=my_proj.2024.my-table', expectedParts: ['my_proj', '2024', 'my-table'] }
+    ]
+    for (const entry of mixedPaths) {
+      const reading = read(entry.sql)
+      expect(reading.site, entry.sql).toEqual({ kind: 'member', qualifier: ['t'] })
+      expect(names(reading.scope.sources), entry.sql).toEqual([entry.expectedSource])
+      const bareSql = entry.sql.replace('t.|', '*').replace(/ t$/, '')
+      expect(readGoogleSqlStatementSources(bareSql, bareSql.length), bareSql).toMatchObject([{ kind: 'object', parts: entry.expectedParts }])
+    }
+
+    // End-to-end completion & hover on per-segment backticked paths (`varia-alpha`.staging.`raw-events`).
+    const mixedMember = await complete('SELECT t.| FROM `varia-alpha`.staging.`raw-events` t')
+    expect(mixedMember.labels('column')).toEqual(['payload'])
+    const mixedHover = at('SELECT t.pay|load FROM `varia-alpha`.staging.`raw-events` t')
+    expect(await hoverFromIndex(readGoogleSqlHover(mixedHover.text, mixedHover.offset)!, dialect, fakeLookup())).toMatchObject({
+      markdown: expect.stringContaining('payload')
+    })
+
+    // JOIN, UPDATE, DELETE, MERGE, WITH CTE, and subquery variants preserve full per-segment backticked paths and aliases.
+    expect(names(read('SELECT s.| FROM `varia-alpha`.sales.orders o JOIN `varia-alpha`.staging.`raw-events` s ON o.id = s.|').scope.sources))
+      .toEqual(['o=varia-alpha.sales.orders', 's=varia-alpha.staging.raw-events'])
+    expect(names(read('UPDATE my_proj.my_ds.`my-table` t SET t.| = 1').scope.sources)).toEqual(['t=my_proj.my_ds.my-table'])
+    expect(names(read('DELETE FROM my_proj.my_ds.`my-table` t WHERE t.| = 1').scope.sources)).toEqual(['t=my_proj.my_ds.my-table'])
+    expect(names(read('MERGE my_proj.my_ds.`my-table` t USING `varia-alpha`.staging.`raw-events` s ON t.| = s.payload').scope.sources))
+      .toEqual(['t=my_proj.my_ds.my-table', 's=varia-alpha.staging.raw-events'])
+    expect(names(read('WITH c AS (SELECT t.| FROM my_proj.my_ds.`my-table` t) SELECT * FROM c').scope.sources))
+      .toEqual(['t=my_proj.my_ds.my-table'])
+    expect(names(read('SELECT * FROM (SELECT t.| FROM my_proj.my_ds.`my-table` t)').scope.sources))
+      .toEqual(['t=my_proj.my_ds.my-table', ':derived'])
+    expect(read('SELECT * FROM my_proj.my_ds.`my-table` |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM my_proj.my_ds.`my-table` t |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+  })
+
   it('suppresses ON and USING after CROSS JOIN and NATURAL JOIN while keeping them on other joins', async () => {
     for (const sql of [
       'SELECT * FROM a CROSS JOIN b |',

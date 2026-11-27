@@ -372,6 +372,29 @@ internal static partial class BigQueryIndexChecks
         check(compactRes.Answers[0].Object is { Description: not null, Partitioning: not null } && compactRes.Answers[0].Items.Count > 0 && compactRes.Answers[0].Truncated
             && compactRes.Answers[1] is { Object: null, Items.Count: 0, Truncated: true },
             "EditorLookup omits Object with Items.Count == 0 and Truncated == true (never stripping Object metadata or emitting discarded Items) when full shown cannot fit");
+
+        // Tight 10-column drain in Request 0 followed by 15 max-width Case 2 skipped datasets carrying 128-char 3-byte UTF-8 Skip.Code stays <= TotalBytes.
+        var skipCodeMax = new string('え', 128);
+        var skipSegProj = new string('あ', EditorLookupLimits.SegmentChars);
+        var skipSegDs = new string('い', EditorLookupLimits.SegmentChars);
+        var tightSkipCols = Enumerable.Range(0, 10).Select(i =>
+            new BigQueryColumn($"c{i}", false, new string('あ', 416_050), true, null)).ToList();
+        var tightSkipPool = new StringPool(new IndexBudget(64 << 20));
+        var tightSkipReader = new BigQueryReader(new ObjectIndexLimits { MemoryBytes = 64 << 20, NamesReserveBytes = 0 }, tightSkipPool, null);
+        var tightSkipRead = tightSkipReader.Read("p", "d", [new("bqTable", "bqTables", null, "t_tight", 1, null,
+            Detail: new BigQueryDetail(null, null, null, tightSkipCols))], true, true)!;
+        var tightSkipLookup = new BigQueryLookup("p", [skipSegProj], [tightSkipRead], null,
+            [new ObjectIndexSkip(skipSegDs, skipCodeMax, "skipped", Project: skipSegProj)],
+            building: false, built: true, new IndexBudget(64 << 20));
+        var tightSkipRequests = new List<LanguageLookupPath> { new(["p", "d", "t_tight"], Limit: 10) };
+        for (var i = 1; i < EditorLookupLimits.Requests; i++)
+            tightSkipRequests.Add(new([skipSegProj, skipSegDs], Limit: EditorLookupLimits.Items));
+        var tightSkipRes = EditorLookup.Answer(tightSkipLookup, new LanguageLookupArgs(id, tightSkipRequests));
+        var tightSkipEncoded = Varia.Backend.Protocol.JsonBridge.Encode(new { Result = tightSkipRes }, HostChecks.Json);
+        check(tightSkipRes.Answers[0].Items.Count == 9 && tightSkipRes.Answers[0].Truncated
+            && tightSkipRes.Answers.Skip(1).All(a => a.State == "skipped" && a.Skip == skipCodeMax)
+            && tightSkipEncoded.Length <= EditorLookupLimits.TotalBytes,
+            $"EditorLookup reserves enough overhead for 128-char 3-byte UTF-8 Skip.Code across 15 skipped requests ({tightSkipEncoded.Length} B <= {EditorLookupLimits.TotalBytes} B)");
     }
 
     static bool wideReadModelCheck(string id, ObjectIndexLimits wideBaseLimits)

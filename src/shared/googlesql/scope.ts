@@ -350,7 +350,7 @@ class BlockReader {
       const first = dashed(toks, run, at)
       const parts = [...first.parts]
       at = first.next
-      while (isPunct(toks[run[at]], '.') && isPiece(toks[run[at + 1]])) {
+      while (isPunct(toks[run[at]], '.') && (isPiece(toks[run[at + 1]]) || toks[run[at + 1]]?.kind === 'quotedIdentifier')) {
         const nextSeg = dashed(toks, run, at + 1)
         for (const part of nextSeg.parts) parts.push(part)
         at = nextSeg.next

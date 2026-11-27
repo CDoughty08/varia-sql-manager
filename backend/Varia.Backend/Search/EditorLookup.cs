@@ -69,7 +69,7 @@ internal static class EditorLookup
     }
 
     private static int ReserveBytes(LanguageLookupPath request) =>
-        request.Path.Count * (5 + EditorLookupLimits.SegmentChars * 3) + 256;
+        request.Path.Count * (5 + EditorLookupLimits.SegmentChars * 3) + 640;
 
     /// <summary>Answers every request from one snapshot of a BigQuery connection's index.</summary>
     public static LanguageLookupResult Answer(BigQueryLookup lookup, LanguageLookupArgs args)

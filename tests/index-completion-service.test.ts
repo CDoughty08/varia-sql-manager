@@ -428,6 +428,18 @@ describe('IndexCompletionService', () => {
     expect(extractBigQueryRefreshScopes('SELECT a-1.5 FROM t', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
     expect(extractBigQueryRefreshScopes('SELECT a-1.5e2 FROM t', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
     expect(extractBigQueryRefreshScopes('SELECT 10-2.5', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM my-proj-1.my_ds.`my-table`', 'varia-alpha')).toEqual([
+      { project: 'my-proj-1', dataset: 'my_ds' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM `my-project-123456`.`2024e1`.orders', 'varia-alpha')).toEqual([
+      { project: 'my-project-123456', dataset: '2024e1' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM my-proj-1.`2024_sales`.orders', 'varia-alpha')).toEqual([
+      { project: 'my-proj-1', dataset: '2024_sales' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM `example.com:my-proj-1`.2024e1.`orders`', 'varia-alpha')).toEqual([
+      { project: 'example.com:my-proj-1', dataset: '2024e1' }
+    ])
   })
 
   it('shows IntelliSense refreshing during refreshCache, deduplicates, and settles cleanly on cancel/close/switch (F10)', async () => {
