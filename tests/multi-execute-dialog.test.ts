@@ -1581,4 +1581,83 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     await act(async () => { cancelBtn.click() })
     await expect(promptPromise).resolves.toEqual({ run: false })
   })
+
+  it('R12 D3 #1 & #2: BigQueryCostPrompt avoids false threshold copy on Options raise and MultiExecuteDialog skips stale queued prompts on turn handoff', async () => {
+    const listeners = new Set<() => void>()
+    let values = {
+      'queryExecution.bigQuery.showCost': 'onDemand' as 'onDemand' | 'bytes',
+      'queryExecution.bigQuery.maximumBytesBilled': 10 as number | null,
+      'queryExecution.bigQuery.costPrompt': true,
+      'queryExecution.bigQuery.costThreshold': 1,
+      'queryExecution.bigQuery.incompleteEstimateWarning': true
+    }
+    let settingsSnap = { values }
+    const settingsStub = {
+      subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
+      getSnapshot: () => settingsSnap,
+      get: <K extends keyof typeof values>(k: K) => values[k]
+    }
+    const publishSettings = (patch: Partial<typeof values>) => {
+      values = { ...values, ...patch }
+      settingsSnap = { values }
+      for (const l of listeners) l()
+    }
+    const costPrompts = new CostPromptService()
+    const multiService = new MultiExecutePromptService()
+    const estimateBigQuery = vi.fn(async () => ({ ok: true as const, value: { bytesProcessed: 1 * GiB } }))
+    const wb = { settings: settingsStub, costPrompts, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose(); multiService.dispose() })
+
+    let costPromise!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: wb,
+        children: [
+          createElement(BigQueryCostPrompt, { key: 'cost' }),
+          createElement(MultiExecuteDialog, { key: 'multi', service: multiService, estimateBigQuery })
+        ]
+      }))
+      costPromise = costPrompts.ask({
+        prompt: { kind: 'threshold', bytes: 5 * GiB },
+        connection: 'solo-bq',
+        thresholdBytes: 1 * GiB,
+        cap: 10 * GiB,
+        prices: true
+      })
+    })
+
+    // #1: Raise threshold to 100 GiB and clear maximumBytesBilled (0 -> undefined) while open:
+    // prompt clears removed cap AND never prints false "5.00 GiB, more than the 100 GiB threshold"!
+    const form = document.body.querySelector<HTMLFormElement>('form.bigquery-cost-prompt')!
+    expect(form.textContent).toContain('10.00 GiB')
+    act(() => {
+      publishSettings({ 'queryExecution.bigQuery.costThreshold': 100, 'queryExecution.bigQuery.maximumBytesBilled': 0 })
+    })
+    expect(form.textContent).not.toContain('10.00 GiB')
+    expect(form.textContent).not.toContain('more than the 100')
+    expect(form.textContent).toContain('1.00 GiB')
+
+    // #2: Queue a MultiExecuteDialog behind BigQueryCostPrompt, then invalidate it before turn handoff:
+    // closing BigQueryCostPrompt must NOT mount MultiExecuteDialog or fire BigQuery dry runs!
+    let multiValid = true
+    let multiPromise!: ReturnType<MultiExecutePromptService['ask']>
+    act(() => {
+      multiPromise = multiService.ask({
+        tabId: 'q-stale-turn',
+        provider: 'bigquery',
+        sql: 'SELECT 1;',
+        targets: [bqTarget(1), bqTarget(2)],
+        prices: true
+      }, undefined, () => multiValid)
+    })
+    multiValid = false
+    const cancelBtn = [...form.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelBtn.click() })
+    await expect(costPromise).resolves.toEqual({ run: false })
+    await expect(multiPromise).resolves.toBeUndefined()
+    expect(document.body.querySelector('form.multi-execute-dialog')).toBeNull()
+    expect(estimateBigQuery).not.toHaveBeenCalled()
+  })
 })

@@ -113,17 +113,26 @@ function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: Activ
     const livePrices = settingsSnap.values['queryExecution.bigQuery.showCost'] !== 'bytes'
     const defaultCap = gibibytes(settingsSnap.values['queryExecution.bigQuery.maximumBytesBilled'])
     const globalThresholdGiB = settingsSnap.values['queryExecution.bigQuery.costThreshold']
-    const resolveTarget = (connectionId: string | undefined, fallbackCap: number | undefined, fallbackThreshold: number, fallbackOwn: true | undefined) => {
+    const resolveTarget = (
+      connectionId: string | undefined,
+      prompt: CostPromptRequest['prompt'],
+      fallbackThreshold: number,
+      fallbackOwn: true | undefined
+    ) => {
       const connection = connectionId ? workbench.connections?.get(connectionId) : undefined
       const ownCap = connection?.options.provider === 'bigquery' ? connection.options.maximumBytesBilled : undefined
-      const cap = connectionId ? (ownCap ?? defaultCap) : (fallbackCap !== undefined ? defaultCap ?? fallbackCap : defaultCap)
+      const cap = connectionId ? (ownCap ?? defaultCap) : defaultCap
       const ownThresholdGiB = connection && workbench.costOptOut ? workbench.costOptOut.threshold(connection) : undefined
-      const thresholdBytes = connectionId ? (gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0) : (fallbackOwn ? fallbackThreshold : (gibibytes(globalThresholdGiB) ?? fallbackThreshold))
-      const ownThreshold = connectionId ? (ownThresholdGiB !== undefined ? true as const : undefined) : fallbackOwn
+      const liveThreshold = connectionId ? (gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0) : (fallbackOwn ? fallbackThreshold : (gibibytes(globalThresholdGiB) ?? fallbackThreshold))
+      const liveOwn = connectionId ? (ownThresholdGiB !== undefined ? true as const : undefined) : fallbackOwn
+      // Never produce mathematically false "X > Y" copy if Options raised threshold above prompt.bytes while already open.
+      const keepOriginalThreshold = prompt.kind === 'threshold' && liveThreshold >= prompt.bytes
+      const thresholdBytes = keepOriginalThreshold ? fallbackThreshold : liveThreshold
+      const ownThreshold = keepOriginalThreshold ? fallbackOwn : liveOwn
       return { cap, thresholdBytes, ownThreshold }
     }
     if (active.kind === 'single') {
-      const resolved = resolveTarget(active.request.connectionId, active.request.cap, active.request.thresholdBytes, active.request.ownThreshold)
+      const resolved = resolveTarget(active.request.connectionId, active.request.prompt, active.request.thresholdBytes, active.request.ownThreshold)
       const { cap: _oldCap, ownThreshold: _oldOwn, ...rest } = active.request
       return {
         kind: 'single',
@@ -144,7 +153,7 @@ function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: Activ
         ...active.request,
         prices: livePrices,
         projects: active.request.projects.map(project => {
-          const resolved = resolveTarget(project.connectionId, project.cap, project.thresholdBytes, project.ownThreshold)
+          const resolved = resolveTarget(project.connectionId, project.prompt, project.thresholdBytes, project.ownThreshold)
           const { cap: _oldCap, ownThreshold: _oldOwn, ...rest } = project
           return {
             ...rest,

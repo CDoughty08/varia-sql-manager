@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { formatBytes, formatDollars } from '../../../shared/bigquery/cost'
 import { dryRunLimits, gibibytes, incompleteText, pricedBytes, type BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
@@ -123,15 +123,20 @@ export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiE
     turnLock?.getSnapshot ?? noopSnapshot
   )
   const hasPending = !!pending
-  const isOpen = hasPending && (!turnLock || turnOwner === 'multi')
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
+  const needsRevalidate = !wasOpen.current && hasPending && (!turnLock || turnOwner === 'multi') && !service.headStillValid()
+  const isOpen = hasPending && (!turnLock || turnOwner === 'multi') && !needsRevalidate
   if (isOpen && !wasOpen.current) {
     // Ignore elements inside a closing modal (e.g. BigQueryCostPrompt unmounting in the same render);
     // MultiExecuteDialogModal re-captures focus via onBeforeInitialFocus once the closing modal's cleanup restores it.
     returnFocus.current = focusCandidate()
   }
   wasOpen.current = isOpen
+
+  useLayoutEffect(() => {
+    if (needsRevalidate) service.revalidate()
+  }, [service, needsRevalidate, pending?.id])
 
   useEffect(() => {
     if (!isOpen) return

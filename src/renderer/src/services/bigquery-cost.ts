@@ -481,7 +481,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       const kind = prompt.kind
       let applied: Promise<unknown> | undefined
       const answer = await this.deps.ask({
-        prompt, connection: connection.displayName ?? connection.server, thresholdBytes: threshold(), ...this.deps.optOut.threshold(connection) ? { ownThreshold: true as const } : {}, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
+        prompt, connection: connection.displayName ?? connection.server, connectionId: connection.id, thresholdBytes: threshold(), ...this.deps.optOut.threshold(connection) ? { ownThreshold: true as const } : {}, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
         ...this.cap(connection) ? { cap: this.cap(connection) } : {}, ...rerunOf ? { rerunOf } : {}
       }, signal, () => current()?.kind === kind,
       // Applied as the answer is given, before another tab's waiting prompt is checked: Don't ask again stops it too.

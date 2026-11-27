@@ -75,7 +75,10 @@ export interface PendingMultiExecutePrompt {
 
 interface QueuedMultiExecutePrompt extends PendingMultiExecutePrompt {
   readonly resolve: (choice: MultiExecuteChoice | undefined) => void
+  readonly stillValid?: () => boolean
 }
+
+const safeCheck = (check: () => boolean) => { try { return check() } catch { return true } }
 
 /**
  * FIFO modal queue for the same-engine Run Mode Prompt (`MultiExecuteDialog`), matching `CostPromptService` and
@@ -88,13 +91,13 @@ export class MultiExecutePromptService extends SnapshotStore<{ readonly pending?
 
   constructor() { super({}) }
 
-  ask(request: MultiExecuteDialogRequest, signal?: AbortSignal): Promise<MultiExecuteChoice | undefined> {
+  ask(request: MultiExecuteDialogRequest, signal?: AbortSignal, stillValid?: () => boolean): Promise<MultiExecuteChoice | undefined> {
     if (this.disposed || signal?.aborted) return Promise.resolve(undefined)
     return new Promise(resolve => {
-      const item: QueuedMultiExecutePrompt = { id: ++this.next, request, resolve }
+      const item: QueuedMultiExecutePrompt = { id: ++this.next, request, resolve, ...stillValid ? { stillValid } : {} }
       signal?.addEventListener('abort', () => this.settle(item, undefined), { once: true })
       this.queue.push(item)
-      if (this.queue.length === 1) this.publish({ pending: { id: item.id, request: item.request } })
+      this.show()
     })
   }
 
@@ -109,13 +112,44 @@ export class MultiExecutePromptService extends SnapshotStore<{ readonly pending?
     return this.answer(id, undefined)
   }
 
+  /** True while the published head prompt still satisfies its `stillValid` predicate (e.g. before mounting after waiting on `PromptTurnLock`). */
+  headStillValid(): boolean {
+    const head = this.queue[0]
+    return !!head && (!head.stillValid || safeCheck(head.stillValid))
+  }
+
+  /** Re-checks the head prompt's `stillValid` predicate, dropping stale queued prompts without flashing them on screen. */
+  revalidate(): void {
+    const head = this.queue[0]
+    if (!head || !head.stillValid || safeCheck(head.stillValid)) return
+    this.queue.shift()
+    head.resolve(undefined)
+    this.show()
+  }
+
   private settle(item: QueuedMultiExecutePrompt, choice: MultiExecuteChoice | undefined): void {
     const index = this.queue.indexOf(item)
     if (index < 0) return
     this.queue.splice(index, 1)
-    const next = this.queue[0]
-    this.publish(next ? { pending: { id: next.id, request: next.request } } : {})
     item.resolve(choice)
+    this.show()
+  }
+
+  private show(): void {
+    const shownId = this.getSnapshot().pending?.id
+    if (shownId !== undefined && this.queue[0]?.id === shownId) return
+    let head = this.queue[0]
+    while (head && head.id !== shownId && head.stillValid && !safeCheck(head.stillValid)) {
+      this.queue.shift()
+      head.resolve(undefined)
+      head = this.queue[0]
+    }
+    if (!head) {
+      if (shownId !== undefined) this.publish({})
+      return
+    }
+    if (head.id === shownId) return
+    this.publish({ pending: { id: head.id, request: head.request } })
   }
 
   dispose(): void {
@@ -480,8 +514,12 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
     prices,
     defaultStopOnError: deps.settings.get('queryExecution.stopOnError'),
     warnIncomplete
-  }, signal)
-  if (!choice || signal?.aborted) return { status: 'cancelled' }
+  }, signal, () => validateBeforeDispatch(tabId, 'same', targets, deps, { signal, expectedProvider: provider, capturedRevision, silent: true }).ok)
+  if (signal?.aborted) return { status: 'cancelled' }
+  if (!choice) {
+    const drifted = validateBeforeDispatch(tabId, 'same', targets, deps, { signal, expectedProvider: provider, capturedRevision })
+    return drifted.ok ? { status: 'cancelled' } : drifted.outcome
+  }
   const validated = validateBeforeDispatch(tabId, 'same', targets, deps, { signal, expectedProvider: provider, capturedRevision })
   if (!validated.ok) return validated.outcome
 

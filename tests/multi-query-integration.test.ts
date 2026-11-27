@@ -1210,4 +1210,62 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     langContrib.dispose()
     wb.dispose()
   })
+
+  it('R12 D3 #3: pure-DDL multi-server runs enable Go to Result commands for Summary navigation', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    wb.api.explorerChildren.mockImplementation(async () => ({ ok: true as const, value: { nodes: [], elapsedMs: 1, total: 0 } }))
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const sql2 = connectSql(wb, 'prod-sql-02', 'SalesDB')
+    wb.explorer.settle()
+
+    // Pure-DDL/DML multi-server run (0 result sets, Summary only in Tabs layout) enables output.goToResult / goToResult1 / goToLastResult!
+    const doc = wb.documents.openMultiQuery({
+      mode: 'same',
+      name: 'PureDdl.sql',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+        { targetId: sql2.targetId, connectionId: sql2.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+    wb.documents.activate(doc.id)
+    wb.results.begin(doc.id, uuid(1201), undefined, {
+      multi: {
+        mode: 'transaction',
+        targets: [
+          { targetKey: 's1', connectionId: sql1.info.id, provider: 'sqlserver', label: 'prod-sql-01', database: 'SalesDB' },
+          { targetKey: 's2', connectionId: sql2.info.id, provider: 'sqlserver', label: 'prod-sql-02', database: 'SalesDB' }
+        ]
+      }
+    })
+    await wb.results.finish(doc.id, uuid(1201), {
+      multiSummary: multiSummary('transaction', [
+        multiOutcome('s1', 'sqlserver', 'prod-sql-01', []),
+        multiOutcome('s2', 'sqlserver', 'prod-sql-02', [])
+      ], [])
+    })
+    const state = { ...wb.context.getState(), resultsTabs: true }
+    const commands = new CommandService({ state: () => state })
+    const outContrib = outputContribution(
+      {
+        commands,
+        results: wb.results,
+        queries: wb.queries,
+        menuTargets: wb.menuTargets,
+        documents: wb.documents,
+        settings: wb.settings,
+        resultsSearch: wb.resultsSearch,
+        panes: wb.panes
+      },
+      wb.api
+    )
+    expect(state.hasResults).toBe(true)
+    expect(state.hasResultSets).toBe(false)
+    expect(commands.isEnabled('output.goToResult', { tabId: doc.id })).toBe(true)
+    expect(commands.isEnabled('output.goToResult1', { tabId: doc.id })).toBe(true)
+    expect(commands.isEnabled('output.goToLastResult', { tabId: doc.id })).toBe(true)
+
+    outContrib.dispose()
+    wb.dispose()
+  })
 })
