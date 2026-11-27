@@ -5,7 +5,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
-import { entryOf, type SelectionFilter } from '../results/ResultsService'
+import { entryOf, hasMultiSummary, summaryEntryKey, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { jumpResult, pickerRequests, stackReveals, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
@@ -147,8 +147,9 @@ export function outputContribution({ commands, results, queries, menuTargets, do
     const tabId = target?.tabId ?? focused?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
     const tab = tabId ? results.getSnapshot()[tabId] : undefined
     // Never the run's first result for want of one: closing has no undo, so it takes a grid the user has used.
+    // The virtual Summary view is not a closable result entry.
     const key = target?.entry ?? tab?.focused
-    return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
+    return tabId && tab && key !== undefined && key !== summaryEntryKey && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
   /** The query whose results Next Result, Go to Result N, the view commands and Go to Result… act on: the focused output's,
    *  else the active query's, while it has a result to show; `tabs`, only while results show as tabs. A bare grid focused
@@ -157,7 +158,8 @@ export function outputContribution({ commands, results, queries, menuTargets, do
   const resultsRun = (args?: CommandArgs, onlyTabs = false) => {
     const target = targetOf(args), tabId = target && !target.bare ? target.tabId : documents.getSnapshot().activeId
     const tab = tabId ? results.getSnapshot()[tabId] : undefined
-    return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
+    const runnable = hasMultiSummary(tab) ? !!results.context.getSnapshot()[tabId] : !!tab && tab.sets.length > 0 && hasResultSets(tabId)
+    return tabId && tab && !tab.bare && tab.status !== 'closed' && runnable && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
   }
   const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
   /** Shows the Results view and its panel without moving the focus: in a popout, its tab; with every output panel closed

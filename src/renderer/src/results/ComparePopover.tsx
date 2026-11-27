@@ -299,7 +299,7 @@ export default function ComparePopover({ tabId, tab }: { tabId: string; tab: Tab
           <Icon name="info" />
           <span>{picker.exact
             ? 'Cross-engine comparison defaults to Exact text so SQL Server and BigQuery compare symmetrically.'
-            : 'Collation comparison follows the left (−) engine; enable Exact text for symmetric SQL Server ↔ BigQuery comparison.'}</span>
+            : 'Collation comparison follows the left (−) engine; enable Exact text for symmetric SQL Server and BigQuery comparison.'}</span>
         </p>}
         {sides && matching && <p className="compare-note compare-matching">Match rows by: {matching.text}{matching.remembered && <span className="compare-remembered"> (remembered)</span>}</p>}
         {left.length > 0 && <section className="compare-unpaired" aria-labelledby={ids + 'unpaired'}>

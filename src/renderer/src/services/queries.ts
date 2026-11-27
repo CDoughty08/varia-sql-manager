@@ -39,6 +39,7 @@ export interface MultiExecuteRequest {
   readonly mode: MultiQueryMode
   readonly sequential?: boolean
   readonly preflightDryRun?: boolean
+  readonly stopOnError?: boolean
   readonly autoCombine?: boolean
   readonly sql?: string
   readonly startLine?: number
@@ -749,7 +750,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       ...request.sequential && request.mode === 'fireAndForget' ? { sequential: true } : {},
       ...request.preflightDryRun && hasBigQuery ? { preflightDryRun: true } : {},
       ...request.autoCombine !== undefined ? { autoCombine: request.autoCombine } : { autoCombine: true },
-      ...request.mode === 'fireAndForget' && !hasBigQuery && settings['queryExecution.stopOnError'] ? { stopOnError: true } : {},
+      ...request.mode === 'fireAndForget' && !hasBigQuery && (request.stopOnError ?? settings['queryExecution.stopOnError']) ? { stopOnError: true } : {},
       timeoutSeconds: maxCommandTimeout ?? settings['queryExecution.executionTimeout'],
       maxRows: settings['queryResults.grid.maxRows'],
       maxResultSets: settings['queryResults.grid.maxResultSets'],

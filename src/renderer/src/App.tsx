@@ -17,6 +17,7 @@ import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
 import ServerFilePicker from './server-files/ServerFilePicker'
 import BigQueryCostPrompt from './BigQueryCostPrompt'
+import MultiExecuteDialog from './dialogs/MultiExecuteDialog'
 import LoadSampleDialog from './results/LoadSampleDialog'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
@@ -134,6 +135,13 @@ export default function App() {
   const connection = connections.find(value => value.id === active.connectionId)
   // Disconnecting is no longer live: the output panes and status bar must not offer it as connected meanwhile.
   const liveConnection = isLiveConnection(connection) ? connection : undefined
+  const activeMultiConnected = active.multiMode
+    ? active.multiMode === 'cross'
+      ? (active.multiTargets ?? []).some(target => target.enabled && target.provider === 'sqlserver' && !!target.connectionId && workbench.connections.isLive(target.connectionId))
+        && (active.multiTargets ?? []).some(target => target.enabled && target.provider === 'bigquery' && !!target.connectionId && workbench.connections.isLive(target.connectionId))
+      : (active.multiTargets ?? []).some(target => target.enabled && !!target.connectionId && workbench.connections.isLive(target.connectionId))
+    : false
+  const activeConnected = active.multiMode ? activeMultiConnected : !!liveConnection
   const readyGeneration = backendState.status === 'ready' ? backendState.generation : 0
   const backendDown = backendState.status !== 'ready' && backendState.status !== 'starting'
   const activeRunning = queryState[active.id]?.running
@@ -149,7 +157,7 @@ export default function App() {
   // The active query's facts are in the window's status bar. Options can bring back SSMS's query window status bar, below
   // the query unless it puts it above. Either way the tooltip names the SMO and SqlClient versions.
   const statusTop = settings['textEditor.statusBar.location'] === 'top'
-  const compactConnection = backendState.status === 'ready' && !!liveConnection && isQuery && !shell.queryStatusBar
+  const compactConnection = backendState.status === 'ready' && activeConnected && isQuery && !shell.queryStatusBar
   const backendTooltip = backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined
   const queryStatus = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} compact={compactConnection} /> : null
   const statusBar = shell.queryStatusBar ? queryStatus : null
@@ -320,8 +328,8 @@ export default function App() {
       // Ordinary reuse only selects the existing root. New Query remains an explicit independent command.
       if (opened.reused) { opened.association?.complete(); return }
       const tab = documents.active
-      // Connecting a second server must not silently retarget an existing query, and a value's document never connects.
-      if (tab && !tab.connectionId && !tab.targetId && isQueryDocument(tab) && !queries.isRunning(tab.id)) await targets.changeConnection(tab.id, info.id)
+      // Connecting a second server must not silently retarget an existing query or hijack a multi-target tab, and a value's document never connects.
+      if (tab && !tab.multiMode && !tab.connectionId && !tab.targetId && isQueryDocument(tab) && !queries.isRunning(tab.id)) await targets.changeConnection(tab.id, info.id)
       else documents.newQuery('', undefined, info.id, info.database)
       opened.association?.complete()
     } finally { opened.association?.abandon(choice === 'cancel') }
@@ -354,14 +362,14 @@ export default function App() {
         {/* Editor groups: each with its tab strip, per-query bar inside SQL documents, and editor; designers, properties and monitors render in their own panels. */}
         <EditorArea />
         {!statusTop && statusBar}
-      </main>} results={<OutputPane pane="results" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
-      messages={<OutputPane pane="messages" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
-      plan={<OutputPane pane="plan" tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />}
-      statistics={<OutputPane pane="statistics" tabId={active.id} query={isQuery} connected={!!liveConnection} />} />
+      </main>} results={<OutputPane pane="results" tabId={active.id} query={isQuery} connected={activeConnected} hint={connection?.lost ? lostHint : undefined} />}
+      messages={<OutputPane pane="messages" tabId={active.id} query={isQuery} connected={activeConnected} hint={connection?.lost ? lostHint : undefined} />}
+      plan={<OutputPane pane="plan" tabId={active.id} query={isQuery} connected={activeConnected} hint={connection?.lost ? lostHint : undefined} />}
+      statistics={<OutputPane pane="statistics" tabId={active.id} query={isQuery} connected={activeConnected} />} />
     <OutputViewSync tabId={active.id} />
     <OutputAnnouncer tabId={active.id} />
     {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}
-    <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
+    <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !activeConnected ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
       {compactConnection ? <>
         {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
         <span className="backend-status compact" title={backendTooltip}><span className="status-dot online" /><span className="visually-hidden">Ready</span></span>
@@ -384,6 +392,7 @@ export default function App() {
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     <LoadSampleDialog />
     <BigQueryCostPrompt />
+    <MultiExecuteDialog service={workbench.multiExecutePrompts} />
     {recoveryOpen && <RecoveryDialog />}
     {showAbout > 0 && <AboutDialog raise={showAbout} onClose={() => setShowAbout(0)} />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
