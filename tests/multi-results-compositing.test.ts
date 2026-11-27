@@ -22,7 +22,7 @@ import MultiRunSummary, { normalizeMultiEnvironment } from '../src/renderer/src/
 import OutputPane, { discardNotice, hasResultsView, outputViewOf, useLayoutFocus } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
-import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, slotNamed, summaryEntryKey, turnableKinds, type TabResults } from '../src/renderer/src/results/ResultsService'
+import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, resultTitle, slotNamed, summaryEntryKey, turnableKinds, type TabResults } from '../src/renderer/src/results/ResultsService'
 import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -2810,18 +2810,21 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     const results = new ResultsService({ client, api, events, frame: callback => callback() })
     cleanups.add(() => results.dispose())
 
+    let nextBase = 0
     const setupStaleTab = (tabId: string, queryId: string) => {
+      const base = nextBase
+      nextBase += 20
       results.begin(tabId, queryId, undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
-      const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
-      const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
-      const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
-      const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+      const s1 = descriptor(base + 1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+      const s2 = descriptor(base + 2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+      const s3 = descriptor(base + 3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+      const comb = descriptor(base + 10, { index: 3, kind: 'combined', statementSlot: 0 })
       void results.finish(tabId, queryId, {
         multiSummary: multiSummaryOf(
           [
-            multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
-            multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
-            multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+            multiOutcome(sqlTargets[0], { resultSetIds: [base + 1] }),
+            multiOutcome(sqlTargets[1], { resultSetIds: [base + 2] }),
+            multiOutcome(sqlTargets[2], { resultSetIds: [base + 3] })
           ],
           [s1, s2, s3, comb]
         )
@@ -4016,5 +4019,52 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
       expect(rules.find(r => r.selector === sel)?.declarations).toEqual(expect.arrayContaining([{ property: 'min-height', value: '0' }]))
     }
     expect(rules.find(r => r.selector === '.results-search:hover:not(:focus-within, [data-disabled])')).toBeDefined()
+  })
+
+  it('R15 D4 #1–#5: excludes non-complete/remote sources from combinedTargetCount & stale marking, preserves resultTitle server names, and guards disabled forced-colors/open trigger hover', () => {
+    // #1 & #2: Incomplete (state: 'open') target result is NOT counted in Combined (k/N) and closing it does NOT mark Combined stale!
+    const { results, client } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0, state: 'open' })
+    const c1 = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: s3 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { status: 'failed', resultSetIds: [3] })
+        ],
+        [s1, s2, c1]
+      )
+    })
+    const tab = results.getSnapshot().t1
+    const c1Entry = tab.sets.find(e => e.descriptor.kind === 'combined')!
+    const s3Entry = tab.sets.find(e => e.descriptor.targetKey === 'dev-01')!
+    expect(tab.combinedCounts?.get(c1Entry.key)).toBe(2)
+    expect(combinedTargetCount(tab, 0)).toBe(2)
+    expect(topItems(tab).find(i => i.combined)?.name).toBe('Combined (2/3)')
+    expect(entryNotices(tab, c1Entry).map(n => n.kind)).toEqual(['partialCombine'])
+
+    // Closing the failed dev-01 entry must NOT mark Combined stale!
+    expect(results.removeEntry('t1', s3Entry.key)).toBe(true)
+    expect(results.getSnapshot().t1.staleCombined?.has(c1Entry.key) ?? false).toBe(false)
+
+    // #4: resultTitle preserves multi-server server name and Combined label alongside Result N.
+    const s1Entry = results.getSnapshot().t1.sets.find(e => e.descriptor.targetKey === 'prod-east')!
+    expect(resultTitle(s1Entry)).toBe(`prod-sql-east-01, Result ${s1Entry.number}`)
+    expect(resultTitle(c1Entry)).toBe(`Combined, Result ${c1Entry.number}`)
+
+    // #3 & #5: forced-colors disabled toolbar guards & .multi-target-trigger hover excluding [data-open].
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.results-segments button[aria-pressed="true"]:not(:disabled)'))).toBeDefined()
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.results-choice-trigger[data-active]:not(:disabled)'))).toBeDefined()
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.results-segments button:disabled'))?.declarations).toEqual(expect.arrayContaining([
+      { property: 'color', value: 'GrayText' },
+      { property: 'opacity', value: '1' }
+    ]))
+    expect(rules.find(r => r.selector === '.multi-target-trigger:hover:not(:disabled, [data-open])')).toBeDefined()
   })
 })

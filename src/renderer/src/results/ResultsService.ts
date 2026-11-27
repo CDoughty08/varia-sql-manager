@@ -78,6 +78,9 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
 export const resultTitle = (entry: Named): string => {
   // A sample is named for what it is wherever an original result would be numbered, so its profile or copy says so.
   if (entry.sample) return entryName(entry)
+  if (entry.descriptor?.targetKey !== undefined || entry.descriptor?.kind === 'combined') {
+    return `${entryName(entry)}, ${entryNumber(entry)}`
+  }
   const name = queryName(entry)
   return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}`
 }
@@ -1338,7 +1341,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.entries.set(key, entry)
     if (record) run.slots.set(key, { ...record, revision: record.revision + 1 })
     run.shape = undefined
-    if (carried.residence !== 'remote') this.markCombinedStaleFor(run, [entry])
+    this.markCombinedStaleFor(run, [old, entry])
     const grids = this.views.get(tabId)?.grids, state = grids?.get(key)
     if (grids && state) grids.set(key, carriedState(state, uniqueNames(old.descriptor.columns, descriptor.columns), descriptor.columns.length))
     this.settle(run, descriptor)
@@ -1615,19 +1618,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return entryRolledBack === combinedRolledBack
   }
 
+  /** True when `entry` is a complete, in-memory, eligible source for `combined`. */
+  private isCombinedSource(run: Run, entry: ResultSetEntry, combined: ResultSetEntry): boolean {
+    if (!this.isEligibleForCombined(run, entry, combined)) return false
+    const snap = entry.handle.getSnapshot()
+    return snap.state === 'complete' && snap.residence !== 'remote'
+  }
+
   private combinedSourcesOf(run: Run, combined: ResultSetEntry): ResultSetEntry[] {
-    return run.sets.filter(entry =>
-      this.isEligibleForCombined(run, entry, combined)
-      && entry.handle.getSnapshot().state === 'complete'
-      && entry.handle.getSnapshot().residence !== 'remote'
-    )
+    return run.sets.filter(entry => this.isCombinedSource(run, entry, combined))
   }
 
   private combinedTargetCountFor(run: Run, combined: ResultSetEntry): number {
     const seen = new Set<string>()
-    for (const entry of run.sets) {
-      if (!this.isEligibleForCombined(run, entry, combined)) continue
-      if (entry.handle.getSnapshot().residence === 'remote') continue
+    for (const entry of this.combinedSourcesOf(run, combined)) {
       seen.add(entry.descriptor.targetKey!)
     }
     return seen.size
@@ -1647,13 +1651,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (next) run.combinedCounts = next
   }
 
-  private markCombinedStaleFor(run: Run, removed: readonly ResultSetEntry[]): void {
-    const candidates = removed.filter(entry => !entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined)
+  private markCombinedStaleFor(run: Run, changedEntries: readonly ResultSetEntry[]): void {
+    const candidates = changedEntries.filter(entry => !entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined)
     if (candidates.length === 0) return
     let stale: Set<EntryKey> | undefined
     for (const entry of run.sets) {
       if (entry.descriptor.kind !== 'combined') continue
-      if (!candidates.some(changed => this.isEligibleForCombined(run, changed, entry))) continue
+      if (!candidates.some(changed => this.isCombinedSource(run, changed, entry))) continue
       const combining = run.combining.get(entry.key)
       if (combining) {
         combining.abort()
@@ -3032,10 +3036,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.combining.get(key)?.abort()
       run.combining.delete(key)
       if (!entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined && run.combining.size > 0) {
-        const slot = entry.descriptor.statementSlot ?? 0
         for (const [combinedKey, controller] of [...run.combining]) {
           const combined = run.entries.get(combinedKey)
-          if (combined && (combined.descriptor.statementSlot ?? 0) === slot) {
+          if (combined && this.isCombinedSource(run, entry, combined)) {
             controller.abort()
             run.combining.delete(combinedKey)
           }

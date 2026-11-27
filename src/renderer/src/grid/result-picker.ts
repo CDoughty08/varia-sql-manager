@@ -86,11 +86,20 @@ export function comparisonTabLabel(slot: Pick<ResultSlot, 'entry' | 'sources'>):
 
 /** Counts distinct surviving server targets that have a complete in-memory result for `statementSlot`. */
 export function combinedTargetCount(tab: Partial<Pick<TabResults, 'sets' | 'multi'>>, statementSlot: number): number {
+  const sets = tab.sets ?? []
+  const combined = sets.find(entry => entry.descriptor.kind === 'combined' && (entry.descriptor.statementSlot ?? 0) === statementSlot)
+  const combinedRolledBack = combined ? !!(combined.descriptor.rolledBackPreview || combined.handle?.getSnapshot().rolledBackPreview) : undefined
   const seen = new Set<string>()
-  for (const entry of tab.sets ?? []) {
+  for (const entry of sets) {
     if (entry.sample || entry.descriptor.kind !== 'rows' || !entry.descriptor.targetKey) continue
     if ((entry.descriptor.statementSlot ?? 0) !== statementSlot) continue
-    if (entry.handle?.getSnapshot().residence === 'remote') continue
+    const snap = entry.handle?.getSnapshot()
+    if (snap && (snap.state !== 'complete' || snap.residence === 'remote')) continue
+    if (tab.multi?.targets.find(item => item.targetKey === entry.descriptor.targetKey)?.phase === 'commitInDoubt') continue
+    if (combinedRolledBack !== undefined) {
+      const entryRolledBack = !!(entry.descriptor.rolledBackPreview || snap?.rolledBackPreview)
+      if (entryRolledBack !== combinedRolledBack) continue
+    }
     seen.add(entry.descriptor.targetKey)
   }
   return seen.size
