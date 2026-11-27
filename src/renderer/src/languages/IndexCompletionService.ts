@@ -84,7 +84,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     private readonly options: IndexCompletionOptions) {
     super({ errors: new Map(), indexErrors: new Map(), indexes: new Map(), refreshing: new Set() })
     this.bindings.push(monaco.languages.registerCompletionItemProvider(googleSqlLanguageId, {
-      triggerCharacters: ['.', '`'],
+      triggerCharacters: ['.', '`', '@'],
       provideCompletionItems: async (model, position, _context, token) => {
         const target = this.target(model)
         if (!target || token.isCancellationRequested) return { suggestions: [] }
@@ -112,7 +112,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         const building = target.key && asksIndex ? this.caches.get(target.key)?.index !== 'ready' : false
         return {
           incomplete: list.items.length > 0 || list.incomplete || building,
-          suggestions: list.items.map(item => suggestion(monaco, item, { insert, replace }, read.word, canExitBacktick))
+          suggestions: list.items.map(item => suggestion(monaco, model, item, { insert, replace }, read.word, canExitBacktick))
         }
       }
     }), monaco.languages.registerHoverProvider(googleSqlLanguageId, {
@@ -517,12 +517,15 @@ function unquoteGoogleSqlName(value: string, quoted = false): string {
   return body.replace(/\\(.)/g, '$1')
 }
 
-/** A pipeline item as Monaco shows it: structured label, icon, exact-match boost, typed word ranges, and backtick exit on leaves. */
+const escapeSnippet = (value: string) => value.replace(/[\\$}]/g, '\\$&')
+
+/** A pipeline item as Monaco shows it: structured label, icon, exact-match boost, typed word ranges, snippets, parameter hints, and backtick exit on leaves. */
 function suggestion(
   monaco: typeof Monaco,
+  model: Monaco.editor.ITextModel,
   item: CompletionItem,
   range: { insert: Monaco.IRange; replace: Monaco.IRange },
-  word: Pick<CompletionWord, 'typed' | 'quoted'>,
+  word: Pick<CompletionWord, 'typed' | 'quoted' | 'parenAhead'>,
   canExitBacktick: boolean
 ): Monaco.languages.CompletionItem {
   const typed = word.typed
@@ -536,10 +539,35 @@ function suggestion(
         replace: { ...range.replace, endColumn: range.replace.endColumn + 1 }
       }
     : range
+  const routineBacktickCall = exitBacktick && item.kind === 'routine' && !word.parenAhead
+  const insertText = routineBacktickCall
+    ? `${escapeSnippet(item.insertText)}\`($0)`
+    : exitBacktick
+      ? `${item.insertText}\``
+      : item.insertText
+  const isSnippet = item.insertTextIsSnippet === true || routineBacktickCall
+  const triggerHints = item.triggerParameterHints === true || routineBacktickCall
+  let additionalTextEdits: Monaco.editor.ISingleEditOperation[] | undefined
+  if (item.additionalDeleteSpan && item.additionalDeleteSpan.end > item.additionalDeleteSpan.start) {
+    const delStart = model.getPositionAt(item.additionalDeleteSpan.start)
+    const delEnd = model.getPositionAt(item.additionalDeleteSpan.end)
+    additionalTextEdits = [{
+      range: {
+        startLineNumber: delStart.lineNumber,
+        startColumn: delStart.column,
+        endLineNumber: delEnd.lineNumber,
+        endColumn: delEnd.column
+      },
+      text: ''
+    }]
+  }
   return {
     label: description ? { label: item.label, description } : { label: item.label },
     kind: monaco.languages.CompletionItemKind[kinds[item.kind]],
-    insertText: exitBacktick ? `${item.insertText}\`` : item.insertText,
+    insertText,
+    ...isSnippet ? { insertTextRules: monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet ?? 4 } : {},
+    ...triggerHints ? { command: { id: 'editor.action.triggerParameterHints', title: 'Trigger Parameter Hints' } } : {},
+    ...additionalTextEdits ? { additionalTextEdits } : {},
     detail: item.detail,
     documentation: item.documentation,
     sortText: `${exact ? '0' : '1'}:${item.sortText}`,

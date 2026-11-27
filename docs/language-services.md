@@ -151,21 +151,38 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   the objects the scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, clause-specific
   keywords, how a written name becomes an index path, keywords and functions. GoogleSQL's are
   `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
-- **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
+- **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `CALL`, `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
   `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects (billing, starred
   and discovered accessible projects). `x.` lists a project's
-  datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
-  item with its range, and a wildcard (`events_*`) or one of its shards within the range reads the newest shard's columns
+  datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group suggests
+  its wildcard (`events_*`, `Wildcard · N shards, first–last`) ahead of its latest concrete shard (`events_YYYYMMDD`),
+  and querying a wildcard (`events_*`) or a concrete shard within the range reads the newest shard's columns
   (`events_*` reads the `events_YYYYMMDD` group even beside `events_summary`; `ev*` over two groups, or a group and a
   table, reads none). Hyphenated project and table identifiers (`my-proj-2`) use a hyphen-safe `wordPattern` so typing
   or filtering across `-` keeps suggestions anchored without breaking subtraction expressions.
-- **Clause keywords and alias safety.** After a `FROM` or `JOIN` table, subquery, `UNNEST`, or alias (`afterFromTable`),
+- **BigQuery pseudo-columns.** Wildcard table references (`events_*`) automatically include `_TABLE_SUFFIX` (`STRING`),
+  ingestion-time partitioned tables include `_PARTITIONTIME` (`TIMESTAMP`) and `_PARTITIONDATE` (`DATE`), and external
+  tables include `_FILE_NAME` (`STRING`). Pseudo-columns are excluded from `SELECT *` expansion in CTEs and subqueries.
+- **Clause keywords, smart context sites and function snippets.** After a `FROM` or `JOIN` table, subquery, `UNNEST`, or alias (`afterFromTable`),
   only valid `FROM`-clause continuations are suggested (`AS` when unaliased, `ON`/`USING` inside `JOIN`, `WHERE`, joins,
   `GROUP BY`, `ORDER BY`, `TABLESAMPLE`, etc. — never `TABLE`, `ABORT`, or data types). At `statementStart` only statement
-  starters are suggested, and inside `CAST(… AS` / `SAFE_CAST(… AS` (`castType`) only GoogleSQL types and composite types.
-- **Expressions.** The columns of every source in scope, the scope's aliases, functions and keywords. `alias.` lists that
-  source's columns, `alias.record.` a STRUCT's fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any
-  function.
+  starters are suggested; inside `CAST(… AS` / `SAFE_CAST(… AS` (`castType`) only the 22 GoogleSQL types and
+  `ARRAY<>`/`STRUCT<>`/`RANGE<>` snippets; inside `EXTRACT(| FROM …)` and the granularity argument of
+  `DATE_TRUNC`/`DATETIME_TRUNC`/`TIMESTAMP_TRUNC`/`TIME_TRUNC`/`DATE_DIFF`/`DATETIME_DIFF`/`TIMESTAMP_DIFF`/`TIME_DIFF`/`LAST_DAY`
+  (`datePart`) only the valid date/time parts for that function; after `@@` (`systemVar`, with `@` as a trigger character
+  while keeping single `@` query parameters quiet) curated BigQuery system variables (`@@project_id`, `@@dataset_id`,
+  `@@script.bytes_billed`, `@@error.message`, etc., plus dotted namespace members after `@@script.`/`@@error.`); and after
+  `INFORMATION_SCHEMA.` (`infoSchema`) curated metadata views filtered and badged by dataset vs. region scope.
+  Non-niladic functions and routines insert `NAME($0)` (skipping `(` if already ahead on the same line) and trigger
+  Signature Help (`editor.action.triggerParameterHints`); niladic functions (`CURRENT_DATE`, `CURRENT_TIMESTAMP`, etc.)
+  stay bare.
+- **Expressions, joins and `ARRAY<STRUCT>` / `UNNEST`.** The columns of every source in scope, the scope's aliases, functions and keywords.
+  When two or more in-scope sources share a column name (`id`), unqualified completion emits qualified items (`o.id`, `c.id`,
+  each filterable by `id`) instead of dropping the second source's column. `alias.` lists that source's columns,
+  `alias.record.` a `STRUCT`'s fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any function.
+  Direct dot access on an `ARRAY<STRUCT>` column (`o.items.`) blocks invalid field suggestions and offers an actionable
+  `UNNEST(o.items)` replacement instead; inside `UNNEST(…)` (`unnestArg` and `UNNEST(o.|)`), `ARRAY<…>` columns rank at
+  the top ahead of scalar columns and keywords.
 - **Scope.** `FROM` and `JOIN` items with or without `AS` (after `FOR SYSTEM_TIME AS OF` and `TABLESAMPLE` too), dashed
   projects written without backticks, comma joins, `UNNEST(…) AS x` and an earlier item's array (`FROM orders o, o.items`), subqueries (by their select
   list's names and stars), `WITH` queries (each sees only the ones before it, so one may read the table it shadows), set operations and outer queries' sources.

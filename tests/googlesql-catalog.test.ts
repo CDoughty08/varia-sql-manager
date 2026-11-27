@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  googleSqlCategories, googleSqlFunction, googleSqlFunctions, googleSqlKeywords, googleSqlNiladicFunctions, googleSqlOperatorWords, googleSqlReservedKeywords,
-  googleSqlTypes, parameterFor, signatureLabel
+  googleSqlCategories, googleSqlDateParts, googleSqlDatePartsFor, googleSqlFunction, googleSqlFunctions, googleSqlInformationSchemaViews,
+  googleSqlKeywords, googleSqlNiladicFunctions, googleSqlOperatorWords, googleSqlReservedKeywords, googleSqlSystemVariables, googleSqlTypes,
+  parameterFor, signatureLabel
 } from '../src/shared/googlesql/catalog'
 import { renderGoogleSqlDocs } from '../src/shared/googlesql/docs'
 import { googleSqlCallContext, scanGoogleSql } from '../src/shared/googlesql/lexer'
@@ -42,6 +43,30 @@ describe('GoogleSQL catalogue', () => {
     for (const category of Object.keys(googleSqlCategories)) expect(googleSqlFunctions.some(entry => entry.category === category), category).toBe(true)
     // Each function without parentheses is in the catalogue too.
     for (const name of googleSqlNiladicFunctions) expect(googleSqlFunction(name), name).toBeDefined()
+  })
+
+  it('validates curated date parts, system variables and INFORMATION_SCHEMA views', () => {
+    expect(unique(googleSqlDateParts)).toBe(true)
+    for (const part of googleSqlDateParts) expect(part, part).toMatch(/^[A-Z][A-Z0-9_]*$/)
+    expect(googleSqlDatePartsFor('DATE_TRUNC')).toContain('MONTH')
+    expect(googleSqlDatePartsFor('DATE_TRUNC')).not.toContain('HOUR')
+    expect(googleSqlDatePartsFor('TIME_TRUNC')).toContain('HOUR')
+    expect(googleSqlDatePartsFor('TIME_TRUNC')).not.toContain('DAY')
+    expect(googleSqlDatePartsFor('SAFE.TIMESTAMP_DIFF')).toContain('SECOND')
+
+    expect(unique(googleSqlSystemVariables.map(v => v.name))).toBe(true)
+    for (const entry of googleSqlSystemVariables) {
+      expect(entry.name, entry.name).toMatch(/^@@[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*$/)
+      expect(entry.summary, entry.name).toMatch(/^[A-Z].*\.$/)
+      expect(entry.type.length, entry.name).toBeGreaterThan(0)
+    }
+
+    expect(unique(googleSqlInformationSchemaViews.map(v => v.name))).toBe(true)
+    for (const view of googleSqlInformationSchemaViews) {
+      expect(view.name, view.name).toMatch(/^[A-Z][A-Z0-9_]*$/)
+      expect(['dataset', 'region', 'both']).toContain(view.scope)
+      expect(view.summary, view.name).toMatch(/^[A-Z].*\.$/)
+    }
   })
 
   it('finds a function in any case, with its namespace, and through SAFE.', () => {
