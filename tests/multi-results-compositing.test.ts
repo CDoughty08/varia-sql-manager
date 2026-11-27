@@ -4206,4 +4206,33 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     expect(f.results.getSnapshot()[doc.id].focused).toBe(s1Key)
     expect(document.activeElement).toBe(host.querySelector(`[data-caption-entry="${s1Key}"]`))
   })
+
+  it('R18 D4 #1–#5: inset focus rings & forced-colors outlines on stmt/filter controls, sample exclusion from entrySecondary/distinctName, Stacked selectStmt scrollTop reset, and chip/guard CSS bounds', () => {
+    // #2: Multi-server BigQuery sample carrying targetKey does NOT get duplicated "Result N" from entrySecondary / distinctName.
+    const sampleEntry = {
+      number: 5,
+      label: 'Sample: 1,000 of 50,000 rows (Result 5)',
+      sample: true as const,
+      descriptor: descriptor(5, { targetKey: 'bq-1', statementSlot: 0 })
+    }
+    expect(entrySecondary(sampleEntry)).toBeUndefined()
+    expect(numberedName(sampleEntry)).toBe('Sample: 1,000 of 50,000 rows (Result 5)')
+
+    // #1, #4, #5: CSS inset focus rings, forced-colors pressed outlines, target chip truncation, and guard button min-height: 0.
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector.includes('.rs-stmt-btn:focus-visible') && r.selector.includes('.messages-filter-pill:focus-visible'))?.declarations)
+      .toEqual(expect.arrayContaining([{ property: 'outline-offset', value: '-1px' }]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.rs-stmt-btn[aria-pressed="true"]:focus-visible') && r.selector.includes('.messages-filter-pill[aria-pressed="true"]:focus-visible'))?.declarations)
+      .toEqual(expect.arrayContaining([{ property: 'outline-color', value: 'HighlightText' }]))
+    expect(rules.find(r => r.selector === '.multi-exec-target-chip')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'min-width', value: '0' },
+      { property: 'overflow', value: 'hidden' }
+    ]))
+    expect(rules.find(r => r.selector === '.multi-exec-target-label')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'text-overflow', value: 'ellipsis' }
+    ]))
+    expect(rules.find(r => r.selector === '.cross-engine-guard-next, .cross-engine-guard-open')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'min-height', value: '0' }
+    ]))
+  })
 })

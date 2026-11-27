@@ -91,7 +91,7 @@ export const entryTitle = (entry: Named): string => entry.descriptor?.kind === '
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
 export const entrySecondary = (entry: Named): string | undefined =>
-  queryName(entry) !== undefined || entry.descriptor?.targetKey !== undefined || entry.descriptor?.kind === 'combined' ? entryNumber(entry) : undefined
+  entry.sample ? undefined : queryName(entry) !== undefined || entry.descriptor?.targetKey !== undefined || entry.descriptor?.kind === 'combined' ? entryNumber(entry) : undefined
 /** A named entry's name with its number ("Totals · Result 2"), an unnamed one's name alone: for places that list results
  *  and must tell two of one name apart without room for secondary text. */
 export const numberedName = (entry: Named): string => {
@@ -109,7 +109,7 @@ export const distinctName = (entry: Named, sets: readonly Named[]): string => {
   const name = entryName(entry)
   // Only a name the query gave (or a multi-server target/combined label) takes the number on collision: an unnamed
   // single-server result keeps "Result 2" even when a marker named another result "Result 2", which then reads "Result 2 (Result 1)".
-  if (queryName(entry) === undefined && entry.descriptor?.targetKey === undefined && entry.descriptor?.kind !== 'combined') return name
+  if (entry.sample || (queryName(entry) === undefined && entry.descriptor?.targetKey === undefined && entry.descriptor?.kind !== 'combined')) return name
   return sets.some(other => other.number !== entry.number && entryName(other) === name) ? `${name} (${entryNumber(entry)})` : name
 }
 /** An entry's accessible name: a named result's name with its number ("Totals, Result 3"), so two tabs, captions or

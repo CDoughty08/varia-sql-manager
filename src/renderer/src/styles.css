@@ -4516,7 +4516,7 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .cross-engine-guard-icon { flex: none; }
 .cross-engine-guard-text { flex: 1 1 200px; min-width: 0; }
 .cross-engine-guard-actions { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; flex: none; }
-.cross-engine-guard-next, .cross-engine-guard-open { height: 22px; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); }
+.cross-engine-guard-next, .cross-engine-guard-open { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); }
 .server-drop-overlay[data-cross-dialect] { border-radius: var(--varia-radius-sm); }
 
 /* Multi-Server Run Mode Prompt (MultiExecuteDialog) & Multi-Project BigQuery Cost Prompt. */
@@ -4526,10 +4526,10 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .multi-exec-engine-icon { flex: none; color: var(--varia-icon-foreground); }
 .multi-exec-scroll { display: flex; flex-direction: column; gap: var(--varia-space-3); }
 .multi-exec-targets { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
-.multi-exec-target-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; padding: var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+.multi-exec-target-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; min-width: 0; overflow: hidden; padding: var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .multi-exec-target-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.multi-exec-target-label { font-weight: 600; }
-.multi-exec-target-scope { color: var(--varia-descriptionForeground); }
+.multi-exec-target-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.multi-exec-target-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); }
 .multi-exec-more-toggle { padding: var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
 .multi-exec-detected { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); font-size: var(--varia-size-xs); }
 .multi-exec-detected-label { color: var(--varia-descriptionForeground); font-weight: 600; }
@@ -4677,12 +4677,14 @@ button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[ar
 .messages-filter-select { height: 22px; max-width: 100%; min-width: 0; padding: 0 var(--varia-space-2); line-height: 20px; font-size: var(--varia-size-xs); }
 .message-target-tag { display: inline-block; margin-right: var(--varia-space-2); padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-weight: 600; }
 
+.rs-stmt-btn:focus-visible, .rs-stmt-select:focus-visible, .messages-filter-pill:focus-visible, .messages-filter-select:focus-visible, .multi-grid-notice-btn:focus-visible, .multi-target-link:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+
 @media (forced-colors: active) {
   .multi-target-trigger, .multi-target-popover, .multi-target-row, .cross-engine-chip, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-phase-pill { border-color: CanvasText; }
   .multi-target-trigger[data-open], .multi-exec-mode-card.is-picked { border-color: Highlight; }
   button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cross-engine-stack-btn[aria-pressed="true"], button.ui-button.cross-engine-view-btn[aria-pressed="true"]:hover:not(:disabled), button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:hover:not(:disabled), button.rs-stmt-btn[aria-pressed="true"], button.rs-stmt-btn[aria-pressed="true"]:hover:not(:disabled), button.rt-stmt-tab[aria-selected="true"], button.rt-stmt-tab[aria-selected="true"]:hover:not(:disabled), button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
   button.messages-filter-pill[aria-pressed="true"] .messages-filter-err { background: HighlightText; color: Highlight; }
-  .rt-stmt-tab[aria-selected="true"]:focus-visible, button.ui-button.cross-engine-view-btn[aria-pressed="true"]:focus-visible, button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:focus-visible { outline-color: HighlightText; }
+  .rt-stmt-tab[aria-selected="true"]:focus-visible, .rs-stmt-btn[aria-pressed="true"]:focus-visible, .messages-filter-pill[aria-pressed="true"]:focus-visible, button.ui-button.cross-engine-view-btn[aria-pressed="true"]:focus-visible, button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:focus-visible { outline-color: HighlightText; }
   .compare-search-row:focus-within { border-color: Highlight; outline: 2px solid Highlight; outline-offset: -1px; }
   .tab-swatch, .multi-swatch, .multi-target-swatch, .multi-target-dot, .rt-server-dot, .rs-server-dot, .cross-engine-chip-dot, .multi-exec-target-dot { forced-color-adjust: none; }
   button.multi-grid-notice-btn[aria-disabled="true"], button.multi-grid-notice-btn[aria-disabled="true"]:hover:not(:disabled), button.multi-grid-notice-btn:disabled, button.multi-target-link:disabled { color: GrayText; opacity: 1; }

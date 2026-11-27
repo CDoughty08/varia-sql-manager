@@ -680,6 +680,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
 
   const selectStmt = (next: number | 'all') => {
     setSelectedStmt(next)
+    if (stackRef.current) stackRef.current.scrollTop = 0
+    view.stackScrollTop = 0
+    setScrollTop(0)
     const nextSets = orderedMultiSets(tab, next)
     if (nextSets.length > 0 && !nextSets.some(entry => entry.key === tab.focused)) {
       results.focusEntry(tabId, nextSets[0].key)
