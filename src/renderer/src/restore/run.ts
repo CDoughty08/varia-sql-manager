@@ -7,6 +7,7 @@ import type { ActionError, ActionStep, RestoredDatabase } from '../../../shared/
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { StepProgress } from '../actions/ActionProgressService'
 import type { StepItem } from '../kit/StepList'
+import { lastBackupTaken } from '../../../shared/actions/restore-plan.ts'
 import { closesConnections, destinationOf, draftPlan, fileRows, sameDatabase, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
 
 /** A step the run will take, as the backend titles it; `set` marks a RESTORE, which the overall percent counts. */
@@ -147,11 +148,14 @@ export function outcomeOf(error: ActionError | undefined, lost: boolean): RunOut
 
 /** The sections' one-line summaries while a run is on, so the Run panel and the steps stay in view. */
 export function sectionSummaries(draft: RestoreDraft, facts: RestoreFacts): { readonly general: string; readonly files: string; readonly options: string } {
-  const plan = draftPlan(draft, facts), byId = new Map(sourceSets(draft, facts).map(set => [set.id, set]))
+  const plan = draftPlan(draft, facts), allSets = sourceSets(draft, facts), byId = new Map(allSets.map(set => [set.id, set]))
   const sets = plan.ids.flatMap(id => byId.get(id) ?? [])
   const first = sets[0], from = first ? setWhere(first) + (sets.length > 1 ? ` + ${sets.length - 1} more` : '') : sourceDatabase(draft, facts)
   const exists = !!destinationOf(facts, draft.destination)
-  const general = `From ${show(from)} · to ${show(draft.destination)}${exists ? '' : ' (new)'} · ${draft.stopAt ? draft.stopAt.replace('T', ' ') : 'the last backup taken'}`
+  const last = !draft.stopAt ? lastBackupTaken(allSets, plan.ids) : undefined
+  const skippedCopyOnly = !draft.manual && !!last && allSets.some(set => set.type === 'log' && set.copyOnly && !set.problem && !set.damaged && set.finish > last)
+  const point = draft.stopAt ? draft.stopAt.replace('T', ' ') : skippedCopyOnly ? 'the latest supported recovery point (skips later copy-only log)' : 'the last backup taken'
+  const general = `From ${show(from)} · to ${show(draft.destination)}${exists ? '' : ' (new)'} · ${point}`
   const rows = fileRows(draft, facts), moved = rows.filter(row => row.typed || draft.relocate).length
   const files = `${draft.relocate ? `Relocated to ${show(draft.dataFolder)}` : moved ? `${moved} moved` : 'Default locations'} · ${plural(rows.length, 'file', 'files')}`
   const tail = tailLogPossible(draft, facts) ? draft.tailLog ? 'tail-log backup on' : 'no tail-log backup' : exists ? 'no tail-log backup possible' : 'no tail-log backup (new database)'

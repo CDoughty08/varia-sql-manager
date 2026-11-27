@@ -536,4 +536,28 @@ describe('Connection library and history across both engines', () => {
     expect(await history.setBigQueryCostThreshold!(gcloud('varia-omega'), 0)).toBe(true)
     expect((await bigQuery.load()).library.profiles).toHaveLength(1)
   })
+
+  it('evicts the oldest entry rather than a newer one when connects share the same millisecond, without reordering favorites', async () => {
+    const directory = await folder()
+    const fixed = () => new Date('2026-11-26T00:00:00.000Z')
+    const store = new BigQueryConnectionStore(join(directory, 'bigquery-connections.json'), new BigQueryKeyFiles(), fixed)
+    await store.upsert({ options: gcloud('fav-alpha'), favorite: true })
+    await store.upsert({ options: gcloud('fav-beta'), favorite: true })
+    await store.rememberEntry(gcloud('fav-alpha'))
+    expect((await store.load()).library.profiles.filter(profile => profile.favorite).map(profile => profile.options.project)).toEqual(['fav-alpha', 'fav-beta'])
+    await store.setEnvironment({ options: gcloud('proj-base'), environment: 'Production' })
+    for (let index = 0; index < 30; index++) await store.rememberEntry(gcloud(`proj-${index}`))
+    let profiles = (await store.load()).library.profiles
+    expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.project === 'proj-base')).toBe(false)
+    // Re-connecting the oldest remaining entry keeps it while evicting the next oldest, and preserves favorite order.
+    await store.rememberEntry(gcloud('proj-0'))
+    await store.setEnvironment({ options: gcloud('proj-base'), environment: 'Staging' })
+    profiles = (await store.load()).library.profiles
+    expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
+    expect(profiles.filter(profile => profile.favorite).map(profile => profile.options.project)).toEqual(['fav-alpha', 'fav-beta'])
+    expect(profiles.some(profile => profile.options.project === 'proj-base' && profile.options.environment === 'Staging')).toBe(true)
+    expect(profiles.some(profile => profile.options.project === 'proj-0')).toBe(true)
+    expect(profiles.some(profile => profile.options.project === 'proj-1')).toBe(false)
+  })
 })

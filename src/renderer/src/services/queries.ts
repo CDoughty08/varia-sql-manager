@@ -664,7 +664,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         if (state?.running?.queryId === queryId && !state.running.jobId) this.update(tabId, { ...state, running: { ...state.running, jobId: job.jobId } })
         reported.set(job.jobId, { jobId: job.jobId, project: job.project, ...job.location ? { location: job.location } : {}, state: job.state, transaction: job.transaction, createdAt: reported.get(job.jobId)?.createdAt ?? this.now() }) } } : {} })
       this.events.emit({ type: 'query.started', tabId, queryId })
-      const target = !bigQuery ? { database: document.database } : /^\w{1,1024}$/.test(document.database) ? { dataset: document.database } : {}
+      const target = !bigQuery ? { database: document.database } : /^\w{1,1024}$/.test(document.database) ? { dataset: document.database } : { noDefaultDataset: true as const }
       // A BigQuery error names a column too, so a selection's first column maps it back to the editor.
       const response = attach ? await this.attachRequest(tabId, queryId, connection.id, jobKey!, attach, options, follow)
         : await this.api.execute({ connectionId: connection.id, sessionId: tabId, ...target, sql, startLine, ...bigQuery && startColumn > 1 ? { startColumn } : {}, queryId, ...jobKey ? { jobKey } : {},

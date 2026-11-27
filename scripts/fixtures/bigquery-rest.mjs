@@ -23,6 +23,10 @@ export async function startBigQueryRest({ project = 'varia-emulator', dataset = 
   /** jobs.getQueryResults pages: the job's result table and the first row asked for (query.execute, Load into memory). */
   const results = []
   const unanswered = []
+  /** tables.get, routines.get and models.get calls of the fixture dataset's objects: the object's name. */
+  const gets = []
+  /** While set, the fixture dataset's tables.list waits for it (hold()). */
+  let tablesHeld
   let next = 0
   const reference = jobId => ({ projectId: project, jobId, location: 'US' })
   const destination = table => ({ projectId: project, datasetId: '_anon_fake', tableId: table })
@@ -74,7 +78,7 @@ export async function startBigQueryRest({ project = 'varia-emulator', dataset = 
     if (method === 'GET' && match) return [200, objects && match[1] === dataset ? { [match[2]]: Object.values(catalog[match[2]]).map(entry => brief(match[2], entry)) } : { kind: 'bigquery#list' }]
     match = /^\/datasets\/([^/]+)\/(tables|routines|models)\/([^/]+)(\/data)?$/.exec(rest)
     if (method === 'GET' && match && objects && match[1] === dataset && catalog[match[2]][match[3]]) {
-      if (!match[4]) return [200, catalog[match[2]][match[3]]]
+      if (!match[4]) { gets.push(match[3]); return [200, catalog[match[2]][match[3]]] }
       if (match[3] === 'orders') {
         reads.push({ table: 'orders', start: Number(query.get('startIndex') ?? 0), max: Number(query.get('maxResults') ?? 0) })
         return [200, { kind: 'bigquery#tableDataList', totalRows: String(orders.length), rows: orders.map(([id, customer, city]) => ({ f: [{ v: id }, { v: customer }, { v: { f: [{ v: city }] } }] })) }]
@@ -118,8 +122,9 @@ export async function startBigQueryRest({ project = 'varia-emulator', dataset = 
   const server = createServer((request, response) => {
     const chunks = []
     request.on('data', chunk => { chunks.push(chunk) })
-    request.on('end', () => {
+    request.on('end', async () => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+      if (request.method === 'GET' && tablesHeld && url.pathname.replace(/\/+$/, '') === `/bigquery/v2/projects/${project}/datasets/${dataset}/tables`) await tablesHeld.promise
       let status, json
       try {
         // Google's client gzips its request bodies.
@@ -135,7 +140,9 @@ export async function startBigQueryRest({ project = 'varia-emulator', dataset = 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
   return {
-    endpoint: `http://127.0.0.1:${port}`, project, dataset, inserted, reads, results, unanswered,
+    endpoint: `http://127.0.0.1:${port}`, project, dataset, inserted, reads, results, unanswered, gets,
+    /** Holds the fixture dataset's tables.list until the returned function is called. */
+    hold: () => { tablesHeld = Promise.withResolvers(); const held = tablesHeld; return () => { if (tablesHeld === held) tablesHeld = undefined; held.resolve() } },
     /** The result table the latest job wrote, by its statement's text (a substring). */
     tableOf: text => [...jobs.values()].reverse().find(entry => entry.query.includes(text))?.table,
     expire: table => { expired.add(table) },

@@ -69,6 +69,10 @@ export function createQueryEditor(workbench: Pick<Workbench, 'monaco' | 'editorO
     // A middle-drag selects a column on Linux too, as elsewhere. Not a paste guard (standalone Monaco has no selection
     // clipboard): core/primary-selection.ts keeps Linux's PRIMARY selection out.
     selectionClipboard: false,
+    // SQL completion comes from SqlLanguageService / IndexCompletionService; document-word noise pollutes SQL dropdowns.
+    wordBasedSuggestions: 'off',
+    // Enter inserts a newline instead of accepting quick-suggested clause keywords over table aliases (Tab/click still accept).
+    acceptSuggestionOnEnter: 'off',
     // OVR (the Insert key) shows a block caret, as Visual Studio does.
     overtypeCursorStyle: 'block',
     ...readOnly ? { readOnly: true, readOnlyMessage: { value: readOnly.message }, tabFocusMode: true } : {},

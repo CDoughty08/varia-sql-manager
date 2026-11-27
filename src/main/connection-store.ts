@@ -5,19 +5,37 @@ import { quarantine, readJsonFile, writeJsonAtomic } from './json-file'
 
 const limit = 2_000_000
 export const connectionLibraryLimit = limit
-/** History keeps the 30 most recent connections; an entry that is not a favorite, registered, saved or recent is dropped. */
-function prune(library: ConnectionLibrary) {
-  const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
+/** History keeps the 30 most recent connections; an entry that is not a favorite, registered, saved or recent is dropped.
+ *  Same-millisecond ties keep `touched` (if given), then entries later in `library.profiles`. */
+function prune(library: ConnectionLibrary, touched?: ConnectionProfile) {
+  const order = new Map(library.profiles.map((item, at) => [item, at]))
+  const recent = library.profiles.filter(item => item.lastConnected).sort((a, b) =>
+    b.lastConnected!.localeCompare(a.lastConnected!)
+    || (b === touched ? 1 : a === touched ? -1 : 0)
+    || order.get(b)! - order.get(a)!)
   for (const item of recent.slice(30)) delete item.lastConnected
   library.profiles = library.profiles.filter(item => item.favorite || item.registered || item.saved || item.lastConnected)
   if (library.profiles.length > 200) throw new Error('The connection library supports up to 200 saved servers.')
+}
+/** A recency timestamp strictly newer than existing same-millisecond entries without reordering `library.profiles`
+ *  (which preserves Favorites order and duplicate-key lookup order). Bounded to 60 s ahead of `now()` so a far-future
+ *  timestamp on disk cannot skew new writes. */
+function recentTimestamp(profiles: readonly ConnectionProfile[], now: () => Date): string {
+  const current = now().getTime(), cap = current + 60_000
+  let latest = current
+  for (const item of profiles) {
+    if (!item.lastConnected) continue
+    const ms = Date.parse(item.lastConnected)
+    if (Number.isFinite(ms) && ms >= latest && ms <= cap) latest = Math.min(ms + 1, cap)
+  }
+  return new Date(latest).toISOString()
 }
 export class ConnectionStore {
   private writes: Promise<unknown> = Promise.resolve()
   /** The file was quarantined this run: the library read since is not the one the user had, so nothing keyed by its entry
    *  ids (remembered passwords) may be pruned against it until the next start, when the user may have restored the file. */
   private quarantined = false
-  constructor(private path: string) {}
+  constructor(private path: string, private now: () => Date = () => new Date()) {}
   private async read(): Promise<{ library: ConnectionLibrary; warning?: string; trusted: boolean }> {
     const read = await readJsonFile(this.path, limit)
     if (read.kind === 'missing') return { library: { version: 1, profiles: [] }, trusted: !this.quarantined }
@@ -67,8 +85,8 @@ export class ConnectionStore {
       // Saved marks only an entry that never connected; a connection makes it recent instead.
       if (input.saved && !profile.lastConnected) profile.saved = true
       if (input.autoReconnect !== undefined) profile.autoReconnect = input.autoReconnect
-      if (connected) { profile.lastConnected = new Date().toISOString(); delete profile.saved }
-      prune(library)
+      if (connected) { profile.lastConnected = recentTimestamp(library.profiles, this.now); delete profile.saved }
+      prune(library, profile)
       return { id: profile.id, environment: profile.options.environment }
     })
     return { library: changed.library, ...changed.value }
@@ -84,12 +102,12 @@ export class ConnectionStore {
     const options = savedConnection(input.options), key = connectionKey(options)
     return (await this.change(library => {
       let profile = library.profiles.find(item => connectionKey(item.options) === key)
-      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, autoReconnect: 'inherit', lastConnected: new Date().toISOString() }; library.profiles.push(profile) }
+      if (!profile) { profile = { id: randomUUID(), options, favorite: false, registered: false, autoReconnect: 'inherit', lastConnected: recentTimestamp(library.profiles, this.now) }; library.profiles.push(profile) }
       const next = { ...profile.options }
       if (input.environment) next.environment = input.environment
       else delete next.environment
       profile.options = next
-      prune(library)
+      prune(library, profile)
       if (!library.profiles.includes(profile)) throw new Error('The connection could not be kept in the saved connections.')
     })).library
   }

@@ -63,13 +63,13 @@ export const requestSchemas = {
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({
-    connectionId, sessionId: z.uuid(), database: database.optional(), dataset: dataset.optional(), sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
+    connectionId, sessionId: z.uuid(), database: database.optional(), dataset: dataset.optional(), noDefaultDataset: z.literal(true).optional(), sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
     startLine: z.number().int().min(1).max(1_000_000).optional(), startColumn: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
     maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional(),
     residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional(), jobKey: jobKeySchema.optional()
-  }).strict(),
+  }).strict().refine(params => !(params.dataset !== undefined && params.noDefaultDataset), 'A query cannot name both a dataset and no default dataset.'),
   'query.cancel': z.object({ queryId: z.uuid(), detach: z.literal(true).optional() }).strict(),
   // A BigQuery job by its reference (docs/bigquery.md, Re-attaching to jobs); C# checks the bounds again.
   'query.attach': queryAttachParamsSchema.refine(params => params.maxRows <= limits.maxRows && params.maxResultSets >= limits.maxResultSets.min && params.maxResultSets <= limits.maxResultSets.max, 'Row limits are out of range.'),

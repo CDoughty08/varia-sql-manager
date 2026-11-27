@@ -49,7 +49,7 @@ internal static class BigQueryIndexLimits
     public const int Details = 64;
     /// <summary>Columns, nested fields included, one table keeps; the rest are left out and the table counts as cut.</summary>
     public const int Columns = 10_000;
-    /// <summary>The longest column description or routine signature kept.</summary>
+    /// <summary>The longest column or object description, layout text, or routine signature kept.</summary>
     public const int FactChars = 1024;
     /// <summary>The default number of accessible projects projects.list discovery keeps in one build.</summary>
     public const int MaxProjects = 500;
@@ -141,10 +141,13 @@ internal sealed class BigQueryDetailAdmission(int permits)
 }
 
 /// <summary>A BigQuery build's explorer.index.progress EVENT: <c>Growing</c> while projects still being listed may add datasets to
-/// the total, <c>Throttled</c> while BigQuery refuses the principal for its rate; both are left out when false.</summary>
+/// the total, <c>Throttled</c> while BigQuery refuses the principal for its rate; both are left out when false. <c>SavedAt</c>
+/// (UTC): when the oldest dataset loaded from the saved index that the build has not checked yet was read.</summary>
 internal sealed record BigQueryIndexProgress(int Done, int Total, int Objects, string Phase,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Growing = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Throttled = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Throttled = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SavedAt = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Full = null)
 {
     public string Type => "explorer.index.progress";
 }
@@ -164,14 +167,14 @@ internal sealed record BigQueryColumn(string Path, bool Record, string Type, boo
 /// <c>TextLeftOut</c>: carried from a read that left the object's text out for memory, which the read holding it still counts.
 internal sealed record BigQueryDetail(string? Subtype, long? Modified, string? Definition, IReadOnlyList<BigQueryColumn> Columns, long? Rows = null, long? Bytes = null,
     string? Partitioning = null, string? Clustering = null, string? Signature = null, bool ColumnsCut = false, bool DefinitionCut = false, bool Bulk = false, bool Carried = false,
-    bool Stale = false, bool TextLeftOut = false);
+    bool Stale = false, bool TextLeftOut = false, string? Description = null);
 
 /// <summary>An object's facts beside its entry: when it was created (what a refresh compares), whether pass 2 read it, and what it read.</summary>
 /// <c>Whole</c>: the read kept all pass 2 gave (its text was not left out for memory, <c>TextLeftOut</c>), so a later build may reuse it.
 /// <c>Listed</c>: the listing's last change to the millisecond (routines and models), which the index's dates keep only to the second.
 /// <c>Stale</c>: its details are carried from an earlier generation of the object (<see cref="BigQueryDetail.Stale"/>).
 internal readonly record struct BigQueryObjectFacts(long Created, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null, string? Signature = null,
-    bool Whole = true, bool ColumnsCut = false, long? Listed = null, bool Stale = false, bool TextLeftOut = false);
+    bool Whole = true, bool ColumnsCut = false, long? Listed = null, bool Stale = false, bool TextLeftOut = false, string? Description = null);
 
 /// <summary>
 /// A BigQuery read's facts beside its <see cref="ObjectTable"/> (by entry): creation times and whether details were read, rows, size,
@@ -333,10 +336,11 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
                 var signature = detail?.Signature is { } sig ? Clip(sig) : null;
                 var partitioning = detail?.Partitioning is { } part ? Clip(part) : null;
                 var clustering = detail?.Clustering is { } cluster ? Clip(cluster) : null;
+                var tableDescription = detail?.Description is { Length: > 0 } desc ? Clip(desc) : null;
                 Charge(BigQueryFacts.ObjectBytes);
                 // What pass 2 read of it is a detail, kept above the details' floor like its columns.
-                if (signature is not null || partitioning is not null || clustering is not null) ChargeDetail(Strings(signature, partitioning, clustering));
-                facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature, ColumnsCut: detail?.ColumnsCut == true, Listed: entry.Modified);
+                if (signature is not null || partitioning is not null || clustering is not null || tableDescription is not null) ChargeDetail(Strings(signature, partitioning, clustering, tableDescription));
+                facts[at] = new(entry.Created, detail is not null, detail?.Rows, detail?.Bytes, partitioning, clustering, signature, ColumnsCut: detail?.ColumnsCut == true, Listed: entry.Modified, Description: tableDescription);
                 if (entry.Shards is { } group)
                 {
                     Charge(BigQueryFacts.ShardBytes + Strings(group.Prefix, group.First, group.Last));
@@ -424,15 +428,21 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
         return true;
     }
 
-    private static string Clip(string text) => text.Length <= BigQueryIndexLimits.FactChars ? text : text[..(BigQueryIndexLimits.FactChars - 1)] + "…";
+    private static string Clip(string text)
+    {
+        if (text.Length <= BigQueryIndexLimits.FactChars) return text;
+        // Never split a surrogate pair at the cut.
+        var cut = char.IsHighSurrogate(text[BigQueryIndexLimits.FactChars - 2]) ? BigQueryIndexLimits.FactChars - 2 : BigQueryIndexLimits.FactChars - 1;
+        return text[..cut] + "…";
+    }
 
     /// <summary>What a detail's own records cost a read (its columns with their descriptions, its signature and layout): not its
     /// texts, which the pool holds, nor the type and text slots a dataset's objects share. What tells a detail that grew from
     /// one that did not.</summary>
     internal static long Weight(BigQueryDetail detail)
     {
-        static long Text(string? value) => value is null ? 0 : IndexMemory.StringBytes(Math.Min(value.Length, BigQueryIndexLimits.FactChars));
-        var bytes = Text(detail.Signature) + Text(detail.Partitioning) + Text(detail.Clustering);
+        static long Text(string? value) => value is { Length: > 0 } ? IndexMemory.StringBytes(Math.Min(value.Length, BigQueryIndexLimits.FactChars)) : 0;
+        var bytes = Text(detail.Signature) + Text(detail.Partitioning) + Text(detail.Clustering) + Text(detail.Description);
         foreach (var column in detail.Columns)
             bytes += IndexMemory.RecordBytes + IndexMemory.TypedBytes + (column.Description is { Length: > 0 } text ? BigQueryFacts.DescriptionBytes + Text(text) : 0);
         return bytes;
@@ -522,6 +532,41 @@ internal static partial class BigQueryEntries
         return entries;
     }
 
+    /// <summary>A digest of what a listing says of a dataset (each entry's kind, subtype, name, creation time, last change and
+    /// shard group, in key order, and whether the listing was cut): two listings with the same digest make the same names.
+    /// What pass 2 reads is compared object by object (<see cref="Known"/>), not here. 16 bytes of SHA-256, as lower-case hex.</summary>
+    public static string ListingDigest(IReadOnlyList<BigQueryEntry> listed, bool cut)
+    {
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var number = new byte[8];
+        void Long(long value)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(number, value);
+            hash.AppendData(number);
+        }
+        void Text(string? value)
+        {
+            // Length-prefixed (-1 for none), so no two lists of fields run together.
+            Long(value?.Length ?? -1);
+            if (value is not null) hash.AppendData(System.Text.Encoding.UTF8.GetBytes(value));
+        }
+        Long(cut ? 1 : 0);
+        Long(listed.Count);
+        foreach (var entry in listed.OrderBy(entry => entry.Kind, StringComparer.Ordinal).ThenBy(entry => entry.Name, StringComparer.Ordinal))
+        {
+            Text(entry.Kind);
+            Text(entry.Subtype);
+            Text(entry.Name);
+            Long(entry.Created);
+            Long(entry.Modified ?? long.MinValue);
+            Text(entry.Shards?.Prefix);
+            Long(entry.Shards?.Count ?? -1);
+            Text(entry.Shards?.First);
+            Text(entry.Shards?.Last);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset().AsSpan(0, 16));
+    }
+
     private static bool IsDate(string text) => DateTime.TryParseExact(text, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) && date.Year >= 1900;
 
     /// <summary>Whether pass 2 reads the object: tables, views, materialized views, external tables and routines; models have nothing it keeps.</summary>
@@ -561,7 +606,7 @@ internal static partial class BigQueryEntries
             var modified = table.Modified(at) is { } date ? (long)(date - DateTime.UnixEpoch).TotalMilliseconds : (long?)null;
             var subtype = table.Subtype(at) == "clone" ? "clone" : null;
             known[Key(table.Kind(at), table.Name(at), facts.Shards(at))] = (fact.Created, fact.Listed, new BigQueryDetail(subtype, modified, Definition(at), columns.GetValueOrDefault(at) ?? [],
-                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole, Stale: fact.Stale, TextLeftOut: fact.TextLeftOut));
+                fact.Rows, fact.Bytes, fact.Partitioning, fact.Clustering, fact.Signature, fact.ColumnsCut, table.DefinitionCut(at), Carried: bare || !fact.Whole, Stale: fact.Stale, TextLeftOut: fact.TextLeftOut, Description: fact.Description));
         }
         return known;
     }
@@ -595,7 +640,10 @@ internal static partial class BigQueryEntries
             : table.RangePartitioning is { } range ? "integer range on " + range.Field : null;
         var clustering = table.Clustering?.Fields is { Count: > 0 } fields ? string.Join(", ", fields) : null;
         var subtype = table.Type == "TABLE" && table.CloneDefinition is not null ? "clone" : table.Type == "SNAPSHOT" ? "snapshot" : null;
-        return new(subtype, (long?)table.LastModifiedTime, definition, columns, table.NumRows is { } rows ? (long)rows : null, table.NumBytes, partitioning, clustering, ColumnsCut: cut);
+        var rows = table.NumRows is { } numRows && numRows <= long.MaxValue ? (long)numRows : (long?)null;
+        var bytes = table.NumBytes is >= 0 ? table.NumBytes : null;
+        var description = string.IsNullOrEmpty(table.Description) ? null : table.Description;
+        return new(subtype, (long?)table.LastModifiedTime, definition, columns, rows, bytes, partitioning, clustering, ColumnsCut: cut, Description: description);
     }
 
     /// <summary>routines.get as a detail: its body and its signature (arguments and return type).</summary>

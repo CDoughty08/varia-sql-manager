@@ -39,7 +39,7 @@ static class OfflineSuites
         ["View"] = 22.0, ["BigQuerySession"] = 20.0, ["PageFilter"] = 19.0, ["IdlePacker"] = 19.0,
         ["FusedWhole.Faults"] = 15.0, ["Explorer"] = 13.0, ["FusedWhole.MixedServices"] = 12.0, ["SealPacking"] = 11.0,
         ["LoginDelete"] = 11.0, ["Profile"] = 10.0, ["Store"] = 9.0, ["Ssis"] = 9.0, ["LiveScheduler"] = 8.5,
-        ["Search"] = 8.4, ["IndexFile"] = 8.0, ["Live"] = 7.8, ["AgentActions"] = 7.1, ["SqlLanguage"] = 6.2,
+        ["Search"] = 8.4, ["IndexFile"] = 8.0, ["BigQueryReload"] = 8.0, ["Live"] = 7.8, ["AgentActions"] = 7.1, ["SqlLanguage"] = 6.2,
         ["BigQueryExecution.ViewsCopySave"] = 6.0, ["Packer"] = 5.8, ["RoomPool"] = 5.6, ["Restore"] = 5.5, ["Page"] = 5.5,
         ["Seam"] = 5.1, ["LiveTable"] = 5.0, ["Plan"] = 4.8, ["ActionProgress"] = 4.6, ["ServerFiles"] = 4.2,
         ["SqlLanguageDiagnostics"] = 4.2, ["BigQueryExecution.Core"] = 4.0, ["ActivityAction"] = 4.0, ["Agent"] = 3.9,

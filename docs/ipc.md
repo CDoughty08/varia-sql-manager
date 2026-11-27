@@ -250,7 +250,7 @@ noted where it matters.
 | `language.complete`, `language.hover`, `language.diagnostics` | invoke | unary | metadata | 30 s |
 | `language.refresh` | invoke | unary | control | 30 s; on the control lane so it can cancel stale language work while the metadata slots are full |
 | `language.definition` | invoke (F12, Alt+F12, Ctrl+hover, Ctrl+click) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
-| `language.lookup` | invoke | unary | metadata | 10 s, BigQuery only. The editor's read of the Search Objects index by path: `{ connectionId, requests: { path: string[] ≤ 3 (each 1 – 1,024), prefix? ≤ 4,608, exact?, limit? 1 – 2,000 (default 500), details? }[1..16] }` (`exact` needs `prefix`). Answers `{ index: 'none' \| 'building' \| 'ready', answers: { state, path, items, truncated, object?, skip? }[] }`, at most 4,000 items in all, from memory: nothing reaches BigQuery ([Completion from the index](language-services.md#completion-from-the-index)) |
+| `language.lookup` | invoke | unary | metadata | 10 s, BigQuery only. The editor's read of the Search Objects index by path: `{ connectionId, requests: { path: string[] ≤ 3 (each 1 – 1,024), prefix? ≤ 4,608, exact?, limit? 1 – 2,000 (default 500), details? }[1..16] }` (`exact` needs `prefix`). Answers `{ index: 'none' \| 'building' \| 'ready', answers: { state, path, items, truncated, object?, skip? }[] }` (items and objects may carry `tier`, `namesOnly`, `partial`, `rows`, `bytes`, `partitioning`, `clustering`, and clipped `description`), at most 4,000 items or 12 MiB estimated UTF-8/MessagePack bytes in all, from memory: nothing reaches BigQuery ([Completion from the index](language-services.md#completion-from-the-index)) |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
@@ -1353,8 +1353,10 @@ view is an order of some or all of a result's base rows, read through the result
   result; a ninth drops the oldest.
 - **Order.** Stable, as ORDER BY: NULL and unreadable cells lowest; exact numerics by value, real/float as doubles,
   uniqueidentifier in SQL Server's byte order, datetimeoffset by UTC instant, other date/time types by fixed-width text,
-  binary bytewise, character columns by collation (code points for _BIN/_BIN2) ignoring trailing spaces, other types by
-  display text code points. `chars`/`bytes` order character, xml, json (and binary, for `bytes`) by cell length
+  binary bytewise, character columns by collation (non-Unicode `SQL_*` collations with string sort, Unicode and Windows
+  collations with word sort, legacy Unicode `_BIN` in SQL Server's legacy binary order, `_BIN2` by code points) ignoring
+  trailing spaces, other types by display text code points. `chars`/`bytes` order character, xml, json (and binary, for
+  `bytes`) by cell length
   ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); other columns ignore the mode.
 - **Progress (`op.progress`).** `results.view`, `.profile`, `.distinct` (open), `.pivot` and `.diff` send droppable
   `{ type: 'op.progress', phase, percent? }` EVENTs (`OperationProgress.cs`). Phases: `filter`, `keys`, `sort`, `unpack`,
@@ -1841,7 +1843,7 @@ escaping is ASCII (plus U+2028/U+2029 as their three bytes).
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
-| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits, otherwise a string; bit as `true`/`false`; everything else a string |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as a JSON number (using the page's exact finite double for real/float when available so extreme values round-trip, otherwise the display text when it is a finite JSON number of at most 15 significant digits) or a string; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
 | Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
 
