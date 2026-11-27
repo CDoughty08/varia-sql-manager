@@ -1337,7 +1337,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rt-close, .rt-save { flex: none; }
 .rt-close { height: 18px; color: inherit; opacity: .75; }
 .rt-close:hover:not(:disabled) { opacity: 1; }
-.rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.rt-tab > [role="tab"]:focus-visible, .rt-view > [role="tab"]:focus-visible, .rt-stmt-tab:focus-visible, .rt-close:focus-visible, .rt-save:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .rt-panel { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
 /* A short pane folds the rows of tabs (tabsFold): side by side in one row, without the facts; or none, the grid alone. */
 .rt-root[data-fold="one"] { display: grid; grid-template-columns: minmax(0, 1fr) fit-content(55%); grid-template-rows: auto minmax(0, 1fr); }
@@ -4628,6 +4628,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-grid-notice-text { flex: 1 1 200px; min-width: 0; }
 .multi-grid-notice-actions { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; flex: none; }
 .multi-grid-notice-btn { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 1px solid currentColor; border-radius: var(--varia-radius-sm); background: transparent; color: inherit; font-size: var(--varia-size-xs); font-weight: 600; }
+.multi-grid-notice-btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 
 /* Multi-server Stacked layout summary band & statement selector. */
 .rs-multi-root { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }

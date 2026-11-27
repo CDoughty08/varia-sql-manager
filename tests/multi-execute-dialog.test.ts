@@ -708,7 +708,7 @@ describe('MultiExecuteDialog', () => {
     expect(allError.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Estimates unavailable')
     allError.unmount()
 
-    // 4. 1 faked + 1 real estimate -> doneCount === 1 -> shows Total for the real estimate.
+    // 4. 1 faked + 1 real estimate -> doneCount === 1 < 2 targets -> shows qualified Total (1 of 2 estimated).
     const mixedReal = await mountDialog({
       tabId: 'tab-faked-real',
       provider: 'bigquery',
@@ -721,7 +721,7 @@ describe('MultiExecuteDialog', () => {
         : { ok: true, value: { bytesProcessed: 2 * GiB } })
     })
     await flush()
-    expect(mixedReal.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Total: 2.00 GiB')
+    expect(mixedReal.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Total (1 of 2 estimated): 2.00 GiB')
   })
 
   it('R5 D3 #1: renders multi-batch SQL Server "N batches" chip once without duplicating classification.tags', async () => {
@@ -826,6 +826,128 @@ describe('MultiExecuteDialog', () => {
     version++
     await act(async () => { themeListeners.forEach(fn => fn()) })
     expect(dot().style.backgroundColor).toBe('rgb(180, 40, 50)')
+  })
+
+  it('R7 #2: MultiExecuteDialog defers mounting and focus capture while BigQueryCostPrompt has a pending single or multi prompt', async () => {
+    const trigger = document.body.appendChild(document.createElement('button'))
+    trigger.textContent = 'Run Query'
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const costPrompts = new CostPromptService()
+    const multiService = new MultiExecutePromptService()
+    const workbench = { costPrompts, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench,
+        children: [
+          createElement(BigQueryCostPrompt, { key: 'cost' }),
+          createElement(MultiExecuteDialog, { key: 'multi', service: multiService })
+        ]
+      }))
+    })
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose(); multiService.dispose() })
+
+    // 1. Single-project BigQueryCostPrompt open while MultiExecuteDialog has a pending request: MultiExecuteDialog stays unmounted.
+    let singleCost!: ReturnType<CostPromptService['ask']>
+    let multiPrompt!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      singleCost = costPrompts.ask({
+        prompt: { kind: 'threshold', bytes: 15 * GiB },
+        connection: 'solo-analytics',
+        thresholdBytes: 10 * GiB,
+        prices: true
+      })
+      multiPrompt = multiService.ask({
+        tabId: 'q-deferred',
+        provider: 'sqlserver',
+        sql: 'SELECT 1;',
+        targets: [sqlTarget(1), sqlTarget(2)],
+        prices: true
+      })
+    })
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).not.toBeNull()
+    expect(document.body.querySelector('form.multi-execute-dialog')).toBeNull()
+    const costCancel = [...document.body.querySelectorAll<HTMLButtonElement>('form.bigquery-cost-prompt button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    expect(document.activeElement).toBe(costCancel)
+
+    // Dismissing BigQueryCostPrompt lets MultiExecuteDialog mount, capture return focus, and focus its radio!
+    await act(async () => { costCancel.click() })
+    await expect(singleCost).resolves.toEqual({ run: false })
+    const multiForm = document.body.querySelector<HTMLFormElement>('form.multi-execute-dialog')
+    expect(multiForm).not.toBeNull()
+    expect(document.activeElement).toBe(multiForm!.querySelector('input[type="radio"][value="fireAndForget"]'))
+
+    // Cancelling MultiExecuteDialog restores focus cleanly back to trigger.
+    const multiCancel = [...multiForm!.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { multiCancel.click() })
+    await expect(multiPrompt).resolves.toBeUndefined()
+    expect(document.activeElement).toBe(trigger)
+
+    // 2. Multi-project BigQueryCostPrompt (pendingMulti) also blocks MultiExecuteDialog until dismissed.
+    let multiCost!: ReturnType<CostPromptService['askMulti']>
+    let multiPrompt2!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      multiCost = costPrompts.askMulti({
+        kind: 'multi',
+        prices: true,
+        totalBytes: 25 * GiB,
+        projects: [{ connectionId: 'c1', label: 'prod-analytics', prompt: { kind: 'threshold', bytes: 25 * GiB }, thresholdBytes: 10 * GiB }]
+      })
+      multiPrompt2 = multiService.ask({
+        tabId: 'q-deferred-2',
+        provider: 'sqlserver',
+        sql: 'SELECT 2;',
+        targets: [sqlTarget(1), sqlTarget(2)],
+        prices: true
+      })
+    })
+    expect(document.body.querySelector('form.bigquery-cost-prompt-multi')).not.toBeNull()
+    expect(document.body.querySelector('form.multi-execute-dialog')).toBeNull()
+
+    const multiCostCancel = [...document.body.querySelectorAll<HTMLButtonElement>('form.bigquery-cost-prompt-multi button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { multiCostCancel.click() })
+    await expect(multiCost).resolves.toEqual({ run: false })
+    expect(document.body.querySelector('form.multi-execute-dialog')).not.toBeNull()
+
+    const multiCancel2 = [...document.body.querySelectorAll<HTMLButtonElement>('form.multi-execute-dialog button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { multiCancel2.click() })
+    await expect(multiPrompt2).resolves.toBeUndefined()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('R7 #3: qualifies BigQuery Total label when doneCount < targets.length and keeps unqualified Total when all targets succeed', async () => {
+    // 2 of 3 estimated (1 dry-run error) with prices: true -> "Total (2 of 3 estimated): ... (about ... on demand)"
+    const partialPriced = await mountDialog({
+      tabId: 'tab-partial-priced',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2), bqTarget(3)],
+      prices: true
+    }, {
+      estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async req => req.connectionId === bqTarget(3).connectionId
+        ? { ok: false, error: 'Access denied' }
+        : { ok: true, value: { bytesProcessed: 1 * GiB } })
+    })
+    await flush()
+    const summaryPartial = partialPriced.form().querySelector('.multi-exec-cost-summary')?.textContent ?? ''
+    expect(summaryPartial).toMatch(/^Total \(2 of 3 estimated\): 2\.00 GiB \(about \$/)
+    partialPriced.unmount()
+
+    // 2 of 2 estimated with prices: false -> unqualified "Total: 2.00 GiB"
+    const fullUnpriced = await mountDialog({
+      tabId: 'tab-full-unpriced',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: false
+    }, {
+      estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async () => ({ ok: true, value: { bytesProcessed: 1 * GiB } }))
+    })
+    await flush()
+    expect(fullUnpriced.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Total: 2.00 GiB')
   })
 })
 

@@ -987,4 +987,135 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     queries.dispose()
     wb.dispose()
   })
+
+  it('R7 #1: output.saveResultsAs works immediately in Stacked layout via saveEntry and unavailableReason distinguishes Summary vs no results for find and saveResultsAs', async () => {
+    const wb = workbenchFixture()
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const sql2 = connectSql(wb, 'prod-sql-02', 'SalesDB')
+    const doc = wb.documents.openMultiQuery({
+      mode: 'same',
+      name: 'R7Save.sql',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+        { targetId: sql2.targetId, connectionId: sql2.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+    wb.documents.activate(doc.id)
+
+    const client = fakeResultClient()
+    const settingsStore = new SnapshotStore({
+      values: { ...defaultSettings, 'queryResults.grid.layout': 'tabs' as 'stacked' | 'tabs' }
+    })
+    const results = new ResultsService({
+      client,
+      api: wb.api,
+      events: wb.events,
+      documents: wb.documents,
+      frame: cb => cb(),
+      layout: () => settingsStore.getSnapshot().values['queryResults.grid.layout'],
+      onLayoutChange: listener => settingsStore.subscribe(listener)
+    })
+    const saveAsSpy = vi.spyOn(results, 'saveAs').mockResolvedValue(undefined)
+    const queries = new QueryService(wb.documents, wb.api, id => wb.connections.get(id), wb.events, results)
+    const resultsSearch = new ResultsSearchService({ results })
+    const panes = new PaneService()
+    const menuTargets = new MenuTargetService()
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const settings = {
+      getSnapshot: () => settingsStore.getSnapshot(),
+      subscribe: (l: () => void) => settingsStore.subscribe(l),
+      choose: vi.fn(async () => true),
+      toggle: vi.fn(async () => true)
+    }
+    const outContrib = outputContribution(
+      { commands, results, queries, menuTargets, documents: wb.documents, settings: settings as unknown as typeof wb.settings, resultsSearch, panes },
+      wb.api
+    )
+
+    // Before any results exist: both commands report the no-results reason.
+    expect(commands.isEnabled('output.find', { tabId: doc.id })).toBe(false)
+    expect(commands.isEnabled('output.saveResultsAs', { tabId: doc.id })).toBe(false)
+    expect(commands.unavailableReason('output.find', { tabId: doc.id })).toBe('Execute a query that returns results first.')
+    expect(commands.unavailableReason('output.saveResultsAs', { tabId: doc.id })).toBe('Execute a query that returns results first.')
+
+    const q1 = uuid(907)
+    const sqlDesc = descriptor(1, { targetKey: 'sql1', statementSlot: 0 })
+    results.begin(doc.id, q1, undefined, {
+      multi: {
+        mode: 'fireAndForget',
+        targets: [
+          { targetKey: 'sql1', connectionId: sql1.info.id, provider: 'sqlserver', label: 'prod-sql-01', database: 'SalesDB' },
+          { targetKey: 'sql2', connectionId: sql2.info.id, provider: 'sqlserver', label: 'prod-sql-02', database: 'SalesDB' }
+        ]
+      }
+    })
+    client.emit(q1, { type: 'resultSet.opened', descriptor: sqlDesc })
+    client.emit(q1, { type: 'resultSet.closed', descriptor: sqlDesc })
+    await results.finish(doc.id, q1, {
+      multiSummary: multiSummary('fireAndForget', [
+        multiOutcome('sql1', 'sqlserver', 'prod-sql-01', [1]),
+        multiOutcome('sql2', 'sqlserver', 'prod-sql-02', [])
+      ], [sqlDesc])
+    })
+
+    const firstKey = results.getSnapshot()[doc.id]!.sets[0]!.key
+
+    // Tabs layout with Summary active: hasResultSets is true, so both disabled commands say 'Select a result grid first.'
+    results.focusEntry(doc.id, summaryEntryKey)
+    expect(commands.isEnabled('output.find', { tabId: doc.id })).toBe(false)
+    expect(commands.isEnabled('output.saveResultsAs', { tabId: doc.id })).toBe(false)
+    expect(commands.unavailableReason('output.find', { tabId: doc.id })).toBe('Select a result grid first.')
+    expect(commands.unavailableReason('output.saveResultsAs', { tabId: doc.id })).toBe('Select a result grid first.')
+
+    // Stacked layout with activeSummary still set (before ResultsStack focuses a grid): saveResultsAs falls back to sets[0] and saves immediately!
+    settingsStore['publish']({ values: { ...defaultSettings, 'queryResults.grid.layout': 'stacked' } })
+    expect(results.focusedEntry(doc.id)).toBeUndefined()
+    expect(commands.isEnabled('output.saveResultsAs', { tabId: doc.id })).toBe(true)
+    await commands.execute('output.saveResultsAs', { tabId: doc.id }, 'palette')
+    expect(saveAsSpy).toHaveBeenCalledWith(doc.id, firstKey, 'R7Save')
+
+    outContrib.dispose()
+    results.dispose()
+    queries.dispose()
+    wb.dispose()
+  })
+
+  it('R7 #4: edit.refreshIntelliSense unavailableReason explains suspended Cross-Engine File view vs disconnected query', () => {
+    const wb = workbenchFixture()
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const bq1 = connectBq(wb, 'prod-bq-01', 'analytics')
+    const crossDoc = wb.documents.openMultiQuery({
+      mode: 'cross',
+      name: 'CrossSuspended.sql',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+        { targetId: bq1.targetId, connectionId: bq1.info.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    expect(wb.documents.setCrossView(crossDoc.id, 'file')).toEqual({ ok: true })
+    wb.documents.activate(crossDoc.id)
+
+    const disconnectedDoc = wb.documents.create('Disconnected.sql', 'SELECT 1;', 'master')
+
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const contrib = languagesContribution({
+      commands,
+      documents: wb.documents,
+      connections: wb.connections,
+      sqlLanguage: { refreshCache: vi.fn(async () => true) }
+    })
+
+    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: crossDoc.id })).toBe(false)
+    expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: crossDoc.id }))
+      .toBe('Switch to Split view for per-dialect IntelliSense and syntax checking.')
+
+    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: disconnectedDoc.id })).toBe(false)
+    expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: disconnectedDoc.id }))
+      .toBe('Connect this query before refreshing its IntelliSense cache.')
+
+    contrib.dispose()
+    wb.dispose()
+  })
 })

@@ -19,7 +19,7 @@ import { CompareService, isCrossEnginePair } from '../src/renderer/src/results/C
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
 import MessagesView from '../src/renderer/src/results/MessagesView'
 import MultiRunSummary, { normalizeMultiEnvironment } from '../src/renderer/src/results/MultiRunSummary'
-import OutputPane, { discardNotice, hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
+import OutputPane, { discardNotice, hasResultsView, outputViewOf, useLayoutFocus } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
 import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, slotNamed, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
@@ -2658,7 +2658,8 @@ describe('Round 6 adversarial regression checks (Domain 4: Results & CSS)', () =
     }))
     const rebuildBtn = () => host.querySelector<HTMLButtonElement>('.multi-grid-notice-btn')!
     expect(rebuildBtn().textContent).toContain('Rebuilding…')
-    expect(rebuildBtn().disabled).toBe(true)
+    expect(rebuildBtn().disabled).toBe(false)
+    expect(rebuildBtn().getAttribute('aria-disabled')).toBe('true')
 
     // Switch to comb1 in ResultsTabs: comb1 must NOT inherit comb0's rebuilding state!
     results.focusEntry('t1', comb1Key)
@@ -2790,5 +2791,290 @@ describe('Round 6 adversarial regression checks (Domain 4: Results & CSS)', () =
     const notice = hostLost.querySelector<HTMLElement>('.multi-notice.multi-notice-err[role="status"]')
     expect(notice).not.toBeNull()
     expect(notice!.textContent).toContain('The SQL backend restarted while executing.')
+  })
+})
+
+describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () => {
+  it('R7 #7: EntryNoticeBars keeps focus on Rebuild via aria-disabled, restores focus via onRebuiltFocus when stale clears, and wires Close through ResultsTabs/ResultsStack focus handoff', async () => {
+    const baseClient = fakeResultClient()
+    let resolveCombine!: (value: ResultsCombineResult) => void
+    const combine = vi.fn(() => new Promise<ResultsCombineResult>(resolve => { resolveCombine = resolve }))
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
+    }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    const setupStaleTab = (tabId: string, queryId: string) => {
+      results.begin(tabId, queryId, undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+      const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+      const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+      const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+      const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+      void results.finish(tabId, queryId, {
+        multiSummary: multiSummaryOf(
+          [
+            multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+            multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+            multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+          ],
+          [s1, s2, s3, comb]
+        )
+      })
+      const tab = results.getSnapshot()[tabId]
+      const combKey = tab.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+      const devKey = tab.sets.find(entry => entry.descriptor.targetKey === 'dev-01')!.key
+      expect(results.removeEntry(tabId, devKey)).toBe(true)
+      results.focusEntry(tabId, combKey)
+      return combKey
+    }
+
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const wb = { ...f, results } as unknown as Workbench
+
+    // 1. ResultsTabs: Rebuild keeps focus via aria-disabled, ignores duplicate clicks, and moves focus to grid when stale clears.
+    const tabsCombKey = setupStaleTab('t-tabs', 'q-tabs')
+    const hostTabs = document.body.appendChild(document.createElement('div'))
+    const rootTabs = createRoot(hostTabs)
+    cleanups.add(() => { act(() => rootTabs.unmount()); hostTabs.remove() })
+    const renderTabs = () => {
+      act(() => {
+        rootTabs.render(createElement(WorkbenchProvider, {
+          workbench: wb,
+          children: createElement(ResultsTabs, { tabId: 't-tabs', tab: results.getSnapshot()['t-tabs'] })
+        }))
+      })
+    }
+    renderTabs()
+    const tabsRebuildBtn = () => hostTabs.querySelector<HTMLButtonElement>('[data-notice-kind="staleCombined"] .multi-grid-notice-btn')!
+    tabsRebuildBtn().focus()
+    expect(document.activeElement).toBe(tabsRebuildBtn())
+
+    act(() => { tabsRebuildBtn().click() })
+    renderTabs()
+    expect(combine).toHaveBeenCalledTimes(1)
+    expect(tabsRebuildBtn().disabled).toBe(false)
+    expect(tabsRebuildBtn().getAttribute('aria-disabled')).toBe('true')
+    expect(document.activeElement).toBe(tabsRebuildBtn())
+
+    // Extra click while aria-disabled is ignored.
+    act(() => { tabsRebuildBtn().click() })
+    expect(combine).toHaveBeenCalledTimes(1)
+
+    // Resolve combine -> stale clears -> focus moves to the active grid (not document.body).
+    await act(async () => {
+      resolveCombine({ descriptor: descriptor(101, { kind: 'combined', index: 3, statementSlot: 0 }) })
+      await Promise.resolve()
+    })
+    renderTabs()
+    expect(hostTabs.querySelector('[data-notice-kind="staleCombined"]')).toBeNull()
+    expect(document.activeElement).toBe(hostTabs.querySelector(`[data-result-grid][data-result-entry="${tabsCombKey}"]`))
+
+    // 2. ResultsTabs: Close button in EntryNoticeBars wires ResultsTabs.close so focus moves to the next selected tab.
+    const tabsCloseKey = setupStaleTab('t-tabs-close', 'q-tabs-close')
+    const hostTabsClose = document.body.appendChild(document.createElement('div'))
+    const rootTabsClose = createRoot(hostTabsClose)
+    cleanups.add(() => { act(() => rootTabsClose.unmount()); hostTabsClose.remove() })
+    const renderTabsClose = () => {
+      act(() => {
+        rootTabsClose.render(createElement(WorkbenchProvider, {
+          workbench: wb,
+          children: createElement(ResultsTabs, { tabId: 't-tabs-close', tab: results.getSnapshot()['t-tabs-close'] })
+        }))
+      })
+    }
+    renderTabsClose()
+    const tabsCloseBtn = [...hostTabsClose.querySelectorAll<HTMLButtonElement>('[data-notice-kind="staleCombined"] .multi-grid-notice-btn')]
+      .find(btn => btn.textContent?.includes('Close'))!
+    tabsCloseBtn.focus()
+    act(() => { tabsCloseBtn.click() })
+    renderTabsClose()
+    expect(results.getSnapshot()['t-tabs-close'].sets.some(entry => entry.key === tabsCloseKey)).toBe(false)
+    expect(document.activeElement).toBe(hostTabsClose.querySelector('[data-tab-row="result"] [role="tab"][aria-selected="true"]'))
+
+    // 3. ResultsStack: Rebuild restores focus to grid/caption when stale clears; does NOT steal focus if user moved focus away; Close moves focus to next caption.
+    const stackCombKey = setupStaleTab('t-stack', 'q-stack')
+    const hostStack = document.body.appendChild(document.createElement('div'))
+    const rootStack = createRoot(hostStack)
+    cleanups.add(() => { act(() => rootStack.unmount()); hostStack.remove() })
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 500 })
+    cleanups.add(() => {
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    })
+    const renderStack = () => {
+      act(() => {
+        rootStack.render(createElement(WorkbenchProvider, {
+          workbench: wb,
+          children: createElement(ResultsStack, { tabId: 't-stack', tab: results.getSnapshot()['t-stack'] })
+        }))
+      })
+    }
+    renderStack()
+    const stackRebuildBtn = () => hostStack.querySelector<HTMLButtonElement>('[data-notice-kind="staleCombined"] .multi-grid-notice-btn')!
+    stackRebuildBtn().focus()
+    act(() => { stackRebuildBtn().click() })
+    renderStack()
+    expect(document.activeElement).toBe(stackRebuildBtn())
+    await act(async () => {
+      resolveCombine({ descriptor: descriptor(102, { kind: 'combined', index: 3, statementSlot: 0 }) })
+      await Promise.resolve()
+    })
+    renderStack()
+    const stackGridOrCaption = hostStack.querySelector(`[data-result-grid][data-result-entry="${stackCombKey}"]`)
+      ?? hostStack.querySelector(`[data-caption-entry="${stackCombKey}"]`)
+    expect(document.activeElement).toBe(stackGridOrCaption)
+
+    // External focus during rebuild must not be stolen when rebuild finishes.
+    const stackNoStealKey = setupStaleTab('t-stack-nosteal', 'q-stack-nosteal')
+    const outsideBtn = document.body.appendChild(document.createElement('button'))
+    outsideBtn.textContent = 'Editor'
+    const hostNoSteal = document.body.appendChild(document.createElement('div'))
+    const rootNoSteal = createRoot(hostNoSteal)
+    cleanups.add(() => { act(() => rootNoSteal.unmount()); hostNoSteal.remove(); outsideBtn.remove() })
+    const renderNoSteal = () => {
+      act(() => {
+        rootNoSteal.render(createElement(WorkbenchProvider, {
+          workbench: wb,
+          children: createElement(ResultsStack, { tabId: 't-stack-nosteal', tab: results.getSnapshot()['t-stack-nosteal'] })
+        }))
+      })
+    }
+    renderNoSteal()
+    const noStealBtn = hostNoSteal.querySelector<HTMLButtonElement>('[data-notice-kind="staleCombined"] .multi-grid-notice-btn')!
+    noStealBtn.focus()
+    act(() => { noStealBtn.click() })
+    renderNoSteal()
+    outsideBtn.focus()
+    expect(document.activeElement).toBe(outsideBtn)
+    await act(async () => {
+      resolveCombine({ descriptor: descriptor(103, { kind: 'combined', index: 3, statementSlot: 0 }) })
+      await Promise.resolve()
+    })
+    renderNoSteal()
+    expect(results.getSnapshot()['t-stack-nosteal'].sets.some(entry => entry.key === stackNoStealKey)).toBe(true)
+    expect(document.activeElement).toBe(outsideBtn)
+
+    // ResultsStack Close in EntryNoticeBars moves focus to the next item's caption toggle.
+    const stackCloseKey = setupStaleTab('t-stack-close', 'q-stack-close')
+    const hostStackClose = document.body.appendChild(document.createElement('div'))
+    const rootStackClose = createRoot(hostStackClose)
+    cleanups.add(() => { act(() => rootStackClose.unmount()); hostStackClose.remove() })
+    const renderStackClose = () => {
+      act(() => {
+        rootStackClose.render(createElement(WorkbenchProvider, {
+          workbench: wb,
+          children: createElement(ResultsStack, { tabId: 't-stack-close', tab: results.getSnapshot()['t-stack-close'] })
+        }))
+      })
+    }
+    renderStackClose()
+    const stackCloseBtn = [...hostStackClose.querySelectorAll<HTMLButtonElement>('[data-notice-kind="staleCombined"] .multi-grid-notice-btn')]
+      .find(btn => btn.textContent?.includes('Close'))!
+    stackCloseBtn.focus()
+    act(() => { stackCloseBtn.click() })
+    renderStackClose()
+    expect(results.getSnapshot()['t-stack-close'].sets.some(entry => entry.key === stackCloseKey)).toBe(false)
+    expect(document.activeElement?.matches('[data-caption-entry]')).toBe(true)
+  })
+
+  it('R7 #8: useLayoutFocus detects and restores focus on [data-multi-summary] across Tabs <-> Stacked layout switches', () => {
+    function LayoutFocusHarness({ tabs }: { tabs: boolean }) {
+      const { mainRef } = useLayoutFocus(tabs, () => undefined)
+      return createElement('div', { ref: mainRef },
+        createElement('div', { key: tabs ? 'tabs-summary' : 'stack-summary', 'data-multi-summary': '', tabIndex: -1 },
+          createElement('button', { type: 'button', className: 'summary-btn' }, 'Target')
+        )
+      )
+    }
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+
+    act(() => { root.render(createElement(LayoutFocusHarness, { tabs: true })) })
+    const initialBtn = host.querySelector<HTMLButtonElement>('.summary-btn')!
+    initialBtn.focus()
+    expect(document.activeElement).toBe(initialBtn)
+
+    // Switch Tabs -> Stacked: old [data-multi-summary] unmounts, new [data-multi-summary] receives focus (not document.body).
+    act(() => { root.render(createElement(LayoutFocusHarness, { tabs: false })) })
+    const stackedSummary = host.querySelector<HTMLElement>('[data-multi-summary]')!
+    expect(document.activeElement).toBe(stackedSummary)
+
+    // Switch Stacked -> Tabs: focus stays on the newly mounted [data-multi-summary].
+    act(() => { root.render(createElement(LayoutFocusHarness, { tabs: true })) })
+    const tabsSummary = host.querySelector<HTMLElement>('[data-multi-summary]')!
+    expect(document.activeElement).toBe(tabsSummary)
+  })
+
+  it('R7 #9 & #10 & #11: ResultsTabs speaks multi-statement Combined counts, sets named: true on per-server tabs, and styles .rt-stmt-tab:focus-visible with inset outline', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r7-tabs.sql', 'SELECT 1; SELECT 2;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1a = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2a = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const combA = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    const s1b = descriptor(3, { index: 3, targetKey: 'prod-east', statementSlot: 1 })
+    const s2b = descriptor(4, { index: 4, targetKey: 'prod-west', statementSlot: 1 })
+    const combB = descriptor(11, { index: 5, kind: 'combined', statementSlot: 1 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 3] }), multiOutcome(sqlTargets[1], { resultSetIds: [2, 4] })],
+        [s1a, s2a, combA, s1b, s2b, combB]
+      )
+    })
+    const tab = f.results.getSnapshot()[doc.id]
+
+    // R7 #10: per-server TopItems carry named: true so long labels truncate at --varia-resultTab.
+    const items = topItems(tab)
+    const serverItems = items.filter(item => item.targetKey)
+    expect(serverItems).toHaveLength(2)
+    expect(serverItems.every(item => item.named === true)).toBe(true)
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsTabs, { tabId: doc.id, tab })
+    }))
+
+    // R7 #9: Multi-statement Combined tab gets spoken aria-label including result set count.
+    const combinedTabBtn = host.querySelector<HTMLButtonElement>('.rt-tab[data-combined] [role="tab"]')!
+    expect(combinedTabBtn.getAttribute('aria-label')).toBe('Combined (2/2), 2 result sets')
+
+    // R7 #10: Per-server .rt-tab elements carry data-named="true".
+    const serverTabs = [...host.querySelectorAll<HTMLElement>('.rt-tab[data-target-key]')]
+    expect(serverTabs).toHaveLength(2)
+    expect(serverTabs.every(el => el.getAttribute('data-named') === 'true')).toBe(true)
+
+    // Single-statement Combined tab does not add redundant aria-label.
+    const docSingle = f.documents.create('r7-single-comb.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(docSingle.id, 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(docSingle.id, 'q2', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s1a, s2a, combA]
+      )
+    })
+    const hostSingle = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsTabs, { tabId: docSingle.id, tab: f.results.getSnapshot()[docSingle.id] })
+    }))
+    const singleCombinedBtn = hostSingle.querySelector<HTMLButtonElement>('.rt-tab[data-combined] [role="tab"]')!
+    expect(singleCombinedBtn.getAttribute('aria-label')).toBeNull()
+
+    // R7 #11: styles.css includes .rt-stmt-tab:focus-visible in the inset focus outline rule.
+    const rules = stylesheetRules()
+    const stmtFocus = rules.find(rule => rule.selector.split(',').map(part => part.trim()).includes('.rt-stmt-tab:focus-visible'))
+    expect(stmtFocus?.declarations).toEqual(expect.arrayContaining([
+      { property: 'outline', value: '1px solid var(--varia-focusBorder)' },
+      { property: 'outline-offset', value: '-1px' }
+    ]))
   })
 })

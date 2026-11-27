@@ -1305,4 +1305,36 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     expect(h.multiAskSpy).toHaveBeenCalledTimes(16)
     expect(h.executeMultiCalls).toHaveLength(0)
   })
+
+  it('R7 #6: resolves target environment from connection.environment ?? connection.options.environment for both dialog items and query targets', async () => {
+    const s1 = sqlConnection(1, { environment: undefined, options: { ...sqlConnection(1).options, environment: 'Production' } })
+    const s2 = sqlConnection(2, { environment: 'Staging', options: { ...sqlConnection(2).options, environment: 'Development' } })
+    const b1 = bqConnection(1, { environment: undefined, options: { provider: 'bigquery', project: 'bq-proj-01', authentication: 'gcloud', environment: 'Production' } })
+    const h = createHarness({ connections: [s1, s2, b1] })
+
+    const sameDoc = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'sqlserver',
+      sql: 'SELECT 1;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: s2.targetId, connectionId: s2.id, database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+    expect(await executeMultiTab(sameDoc.id, h.deps)).toMatchObject({ status: 'executed', targetCount: 2 })
+    expect(h.dialogRequests[0]?.targets.map(t => t.environment)).toEqual(['Production', 'Staging'])
+    expect(h.executeMultiCalls[0]?.request.targets?.map(t => t.environment)).toEqual(['Production', 'Staging'])
+
+    const crossDoc = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    expect(await executeMultiTab(crossDoc.id, h.deps)).toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly', targetCount: 2 })
+    expect(h.executeMultiCalls[1]?.request.targets?.map(t => t.environment)).toEqual(['Production', 'Production'])
+  })
 })

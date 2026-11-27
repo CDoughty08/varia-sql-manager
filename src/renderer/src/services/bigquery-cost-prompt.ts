@@ -86,13 +86,14 @@ export interface CostPromptSnapshot {
 export class CostPromptService extends SnapshotStore<CostPromptSnapshot> {
   private readonly queue: QueueItem[] = []
   private next = 0
+  private disposed = false
   constructor() { super({}) }
   /** Shows a single-project prompt (after any shown before it); `signal` (Cancel, or the tab closing) closes it as Cancel would.
    *  `stillAsks` is checked again when a waiting prompt's turn comes: an answer to the one before it (Don't ask again)
    *  may have made it moot, and it then resolves `moot` without showing (the caller works out what to ask, if anything). `onAnswer` applies an answer (its Don't ask again) before
    *  the next prompt's turn, so that check sees it. */
   ask(request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void): Promise<CostPromptAnswer> {
-    if (signal?.aborted) return Promise.resolve({ run: false })
+    if (this.disposed || signal?.aborted) return Promise.resolve({ run: false })
     return new Promise(resolve => {
       const item: QueueItem = { kind: 'single', id: ++this.next, request, resolve, ...stillAsks ? { stillAsks } : {}, ...onAnswer ? { onAnswer } : {} }
       signal?.addEventListener('abort', () => this.settle(item, { run: false }), { once: true })
@@ -102,7 +103,7 @@ export class CostPromptService extends SnapshotStore<CostPromptSnapshot> {
   }
   /** Shows a single multi-project prompt listing all flagged BigQuery projects together (never stacking N modals). */
   askMulti(request: MultiProjectCostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void): Promise<CostPromptAnswer> {
-    if (signal?.aborted || !request.projects.length) return Promise.resolve({ run: false })
+    if (this.disposed || signal?.aborted || !request.projects.length) return Promise.resolve({ run: false })
     return new Promise(resolve => {
       const item: QueueItem = { kind: 'multi', id: ++this.next, request, resolve, ...stillAsks ? { stillAsks } : {}, ...onAnswer ? { onAnswer } : {} }
       signal?.addEventListener('abort', () => this.settle(item, { run: false }), { once: true })
@@ -143,7 +144,12 @@ export class CostPromptService extends SnapshotStore<CostPromptSnapshot> {
     if (head.kind === 'single') this.publish({ pending: head })
     else this.publish({ pendingMulti: head })
   }
-  dispose(): void { for (const item of this.queue.splice(0)) item.resolve({ run: false }); this.publish({}); this.clearListeners() }
+  dispose(): void {
+    this.disposed = true
+    for (const item of this.queue.splice(0)) item.resolve({ run: false })
+    this.publish({})
+    this.clearListeners()
+  }
 }
 
 const safe = (check: () => boolean) => { try { return check() } catch { return true } }

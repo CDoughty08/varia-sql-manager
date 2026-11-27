@@ -154,6 +154,9 @@ function tabKey(event: KeyboardEvent, at: number, count: number): number {
 /** Accessible spoken label for a top-level tab item (including multi-server status and statement count). */
 function spokenTopItem(item: TopItem): string {
   if (item.summary) return 'Summary'
+  if (item.combined && item.statementCount && item.statementCount > 1) {
+    return `${item.name}, ${formatCount(item.statementCount)} ${plural(item.statementCount, 'result set')}`
+  }
   if (item.targetKey && item.targetPhase) {
     const phase = targetPhaseInfo(item.targetPhase).label
     const count = item.statementCount && item.statementCount > 1 ? `, ${formatCount(item.statementCount)} ${plural(item.statementCount, 'result set')}` : ''
@@ -449,7 +452,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
           const tip = [item.number ? `${item.name} · ${item.number}` : item.short ? item.name : item.targetPhase ? `${item.name} · ${targetPhaseInfo(item.targetPhase).label}` : '', batch].filter(Boolean).join(' · ')
           const spoken = spokenTopItem(item)
           const phase = item.targetPhase ? targetPhaseInfo(item.targetPhase) : undefined
-          const needsAriaLabel = !!(item.number || item.short || item.targetKey)
+          const needsAriaLabel = !!(item.number || item.short || item.targetKey || (item.combined && (item.statementCount ?? 0) > 1))
           return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}
             data-summary={item.summary || undefined} data-combined={item.combined || undefined} data-target-key={item.targetKey}>
             <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...needsAriaLabel ? { 'aria-label': spoken } : {}}
@@ -516,7 +519,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
             if (firstSet) select(firstSet.key)
           }} />
         : selected && <>
-            <EntryNoticeBars key={selected.key} tabId={tabId} tab={tab} entry={selected} running={running} />
+            <EntryNoticeBars key={selected.key} tabId={tabId} tab={tab} entry={selected} running={running}
+              onClose={!tab.bare ? (key, event) => close(key, 'result', event) : undefined}
+              onRebuiltFocus={() => (panelGrid() ?? rootRef.current?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]') ?? resultsTab())?.focus({ preventScroll: true })} />
             <ResultGrid key={setKey(selected.descriptor)} tabId={tabId} entry={selected} count={tab.numbered} focused budget={budget} sort={sort}
               view={group?.planSet ? 'plan' : selectedSlot?.view} group={group?.ordinal} onFocus={select} />
           </>}

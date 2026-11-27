@@ -39,6 +39,8 @@ export interface MultiExecuteDialogModalProps {
   readonly estimateBigQuery?: BigQueryDryRunEstimator
   /** When false, suppresses per-instance focus capture/return (managed by an outer modal queue wrapper). */
   readonly manageReturnFocus?: boolean
+  /** Invoked on mount right before initial focus is placed (after any closing modal's cleanup has restored focus). */
+  readonly onBeforeInitialFocus?: () => void
 }
 
 type TargetEstimateState =
@@ -98,6 +100,8 @@ export function transactionDisableReason(
 }
 
 const defaultEstimator: BigQueryDryRunEstimator = request => window.varia.bigQueryDryRun(request)
+const noopSubscribe = () => () => {}
+const noopSnapshot = () => undefined
 
 /**
  * Connected Run Mode Prompt modal mounted once in App.tsx's modal layer. Subscribes to `MultiExecutePromptService`
@@ -105,11 +109,21 @@ const defaultEstimator: BigQueryDryRunEstimator = request => window.varia.bigQue
  */
 export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiExecuteDialogProps) {
   const { pending } = useSyncExternalStore(service.subscribe, service.getSnapshot, service.getSnapshot)
-  const isOpen = !!pending
+  const costPrompts = useOptionalWorkbench()?.costPrompts
+  const costPromptState = useSyncExternalStore(
+    costPrompts?.subscribe ?? noopSubscribe,
+    costPrompts?.getSnapshot ?? noopSnapshot,
+    costPrompts?.getSnapshot ?? noopSnapshot
+  )
+  const blockedByCostPrompt = !!(costPromptState?.pending || costPromptState?.pendingMulti)
+  const isOpen = !!pending && !blockedByCostPrompt
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
   if (isOpen && !wasOpen.current) {
-    returnFocus.current = focusToReturn()
+    const candidate = focusToReturn()
+    // Ignore elements inside a closing modal (e.g. BigQueryCostPrompt unmounting in the same render);
+    // MultiExecuteDialogModal re-captures focus via onBeforeInitialFocus once the closing modal's cleanup restores it.
+    returnFocus.current = candidate && !candidate.closest('[aria-modal="true"]') ? candidate : null
   } else if (!isOpen) {
     returnFocus.current = null
   }
@@ -121,13 +135,19 @@ export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiE
     return () => returnFocusTo(target)
   }, [isOpen])
 
-  if (!pending) return null
+  if (!pending || blockedByCostPrompt) return null
   return (
     <MultiExecuteDialogModal
       key={pending.id}
       request={pending.request}
       estimateBigQuery={estimateBigQuery}
       manageReturnFocus={false}
+      onBeforeInitialFocus={() => {
+        if (!returnFocus.current?.isConnected) {
+          const candidate = focusToReturn()
+          if (candidate && !candidate.closest('[aria-modal="true"]')) returnFocus.current = candidate
+        }
+      }}
       onConfirm={choice => service.answer(pending.id, choice)}
       onCancel={() => service.cancel(pending.id)}
     />
@@ -147,7 +167,8 @@ export function MultiExecuteDialogModal({
   onConfirm,
   onCancel,
   estimateBigQuery = defaultEstimator,
-  manageReturnFocus = true
+  manageReturnFocus = true,
+  onBeforeInitialFocus
 }: MultiExecuteDialogModalProps) {
   const { ownerDocument } = useDialogWindow()
   const titleId = useId()
@@ -221,6 +242,7 @@ export function MultiExecuteDialogModal({
 
   // Initial focus lands on the active radio input (never on Execute); focus returns on unmount when managed locally.
   useEffect(() => {
+    onBeforeInitialFocus?.()
     const initialRadio = mode === 'transaction' && !txDisabled ? txRadioRef.current : fafRadioRef.current
     initialRadio?.focus()
     if (!manageReturnFocus) return
@@ -506,9 +528,7 @@ export function MultiExecuteDialogModal({
                   {costSummary.estimating > 0
                     ? `Estimating ${request.targets.length - costSummary.estimating} of ${request.targets.length} projects…`
                     : costSummary.doneCount > 0
-                      ? request.prices
-                        ? `Total: ${formatBytes(costSummary.totalBytes)} (about ${formatDollars(costSummary.totalBytes)} on demand)`
-                        : `Total: ${formatBytes(costSummary.totalBytes)}`
+                      ? `${costSummary.doneCount < request.targets.length ? `Total (${costSummary.doneCount} of ${request.targets.length} estimated)` : 'Total'}: ${formatBytes(costSummary.totalBytes)}${request.prices ? ` (about ${formatDollars(costSummary.totalBytes)} on demand)` : ''}`
                       : costSummary.fakedCount > 0
                         ? 'Emulator (estimates unavailable)'
                         : 'Estimates unavailable'}
@@ -552,9 +572,6 @@ export function MultiExecuteDialogModal({
 
   return createPortal(dialog, ownerDocument.body)
 }
-
-const noopSubscribe = () => () => {}
-const noopSnapshot = () => undefined
 
 function TargetChip({ target }: { readonly target: MultiExecuteTargetItem }) {
   const theme = useOptionalWorkbench()?.theme

@@ -211,6 +211,7 @@ function resolveLiveTargets(
     if (seenKeys.has(targetKey)) targetKey = connection.id
     seenKeys.add(targetKey)
     const label = connection.displayName || connection.server
+    const environment = connection.environment ?? connection.options.environment
     const database = provider === 'sqlserver' ? (target.database || connection.database || 'master') : undefined
     const dataset = provider === 'bigquery' && /^\w{1,1024}$/.test(target.database) ? target.database : undefined
     const ownCap = connection.options.provider === 'bigquery' ? connection.options.maximumBytesBilled : undefined
@@ -227,7 +228,7 @@ function resolveLiveTargets(
       label,
       ...database ? { database } : {},
       ...dataset ? { dataset } : {},
-      ...connection.environment ? { environment: connection.environment } : {},
+      ...environment ? { environment } : {},
       ...connection.color ? { color: connection.color } : {},
       ...emulator ? { emulator: true } : {},
       ...asks !== undefined ? { costPrompt: asks } : {},
@@ -240,7 +241,7 @@ function resolveLiveTargets(
       targetKey,
       connectionId: connection.id,
       label,
-      ...connection.environment ? { environment: connection.environment } : {},
+      ...environment ? { environment } : {},
       ...database ? { database } : {},
       ...dataset ? { dataset } : {},
       ...cap !== undefined ? { maximumBytesBilled: cap } : {}

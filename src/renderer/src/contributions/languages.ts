@@ -34,7 +34,14 @@ export function languagesContribution({ commands, documents, connections, sqlLan
       }
       return !!document.connectionId && connections.isLive(document.connectionId)
     },
-    unavailable: () => 'Connect this query before refreshing its IntelliSense cache.',
+    unavailable: args => {
+      const document = target(args?.tabId)
+      const model = document && isQueryDocument(document) ? documents.getModel(document.id) : undefined
+      if (model && documents.languageContext?.(model, id => connections.isLive(id))?.suspended) {
+        return 'Switch to Split view for per-dialect IntelliSense and syntax checking.'
+      }
+      return 'Connect this query before refreshing its IntelliSense cache.'
+    },
     run: async args => { const document = target(args?.tabId); if (document) await sqlLanguage.refreshCache(document.id) }
   })
   const next = commands.register('edit.nextSqlIssue', { run: () => triggerEditorAction(documents, 'editor.action.marker.next') })

@@ -209,7 +209,7 @@ export function useLayoutFocus(tabs: boolean, focused: () => string | undefined)
   if (layout.current === tabs) held.current = undefined
   else if (held.current?.tabs !== tabs) {
     const main = mainRef.current, active = main?.ownerDocument.activeElement
-    held.current = { tabs, grid: !!main && !!active && main.contains(active) && !!active.closest('[data-result-grid]') }
+    held.current = { tabs, grid: !!main && !!active && main.contains(active) && !!active.closest('[data-result-grid], [data-multi-summary]') }
   }
   // Drawn now in place of the other layout while a grid had the focus: the stack brings the focused view into view.
   const switching = layout.current !== tabs && !!held.current?.grid
@@ -224,6 +224,7 @@ export function useLayoutFocus(tabs: boolean, focused: () => string | undefined)
       if (active && active !== doc.body) return true
       const key = focused()
       const grid = [...main.querySelectorAll<HTMLElement>('[data-result-grid]')].find(element => key === undefined || element.getAttribute('data-result-entry') === key)
+        ?? main.querySelector<HTMLElement>('[data-multi-summary]')
       grid?.focus({ preventScroll: true })
       return !!grid && doc.activeElement === grid
     }

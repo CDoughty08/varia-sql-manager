@@ -65,11 +65,27 @@ export function entryNoticesHeight(tab: Partial<Pick<TabResults, 'multi' | 'sets
 }
 
 /** Renders the notice strip(s) above a multi-server result grid, including Rebuild / Close actions for stale Combined views. */
-export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry, running }: {
-  readonly tabId: string; readonly tab: TabResults; readonly entry: ResultSetEntry; readonly running: boolean
+export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry, running, onClose, onRebuiltFocus }: {
+  readonly tabId: string
+  readonly tab: TabResults
+  readonly entry: ResultSetEntry
+  readonly running: boolean
+  readonly onClose?: (key: EntryKey, event: MouseEvent<HTMLButtonElement>) => void
+  readonly onRebuiltFocus?: () => void
 }) {
   const { results } = useWorkbench()
   const notices = entryNotices(tab, entry)
+  const stale = notices.some(notice => notice.kind === 'staleCombined')
+  const actionFocus = useRef(false)
+  const ownerDocRef = useRef<Document | null>(null)
+  const rebuiltFocusRef = useRef(onRebuiltFocus)
+  rebuiltFocusRef.current = onRebuiltFocus
+  useLayoutEffect(() => {
+    if (stale || !actionFocus.current) return
+    actionFocus.current = false
+    const doc = ownerDocRef.current ?? globalThis.document
+    if (!doc.activeElement || doc.activeElement === doc.body) rebuiltFocusRef.current?.()
+  }, [stale])
   if (notices.length === 0) return null
   const rebuilding = !!tab.combining?.has(entry.key)
   const canRebuild = !running && !rebuilding && results.canRebuildCombined(tabId, entry.key)
@@ -77,11 +93,20 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
     {notices.map(notice => <div key={notice.kind} className={`multi-grid-notice multi-grid-notice-${notice.tone}`} role="status" data-notice-kind={notice.kind}>
       <Icon name={notice.tone === 'warn' ? 'warning' : 'info'} />
       <span className="multi-grid-notice-text">{notice.text}</span>
-      {notice.kind === 'staleCombined' && <span className="multi-grid-notice-actions">
-        <button type="button" className="multi-grid-notice-btn" disabled={!canRebuild} onClick={() => void results.rebuildCombined(tabId, entry.key)}>
+      {notice.kind === 'staleCombined' && <span className="multi-grid-notice-actions"
+        onFocus={event => {
+          actionFocus.current = true
+          ownerDocRef.current = event.currentTarget.ownerDocument
+        }}
+        onBlur={event => {
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) actionFocus.current = false
+        }}>
+        <button type="button" className="multi-grid-notice-btn" disabled={!rebuilding && !canRebuild} aria-disabled={rebuilding || undefined}
+          onClick={() => { if (canRebuild) void results.rebuildCombined(tabId, entry.key) }}>
           <Icon name={rebuilding ? 'loading' : 'refresh'} spin={rebuilding} /><span>{rebuilding ? 'Rebuilding…' : 'Rebuild'}</span>
         </button>
-        <button type="button" className="multi-grid-notice-btn" disabled={running || rebuilding} onClick={() => results.removeEntry(tabId, entry.key)}>
+        <button type="button" className="multi-grid-notice-btn" disabled={running || rebuilding}
+          onClick={event => onClose ? onClose(entry.key, event) : results.removeEntry(tabId, entry.key)}>
           <Icon name="close" /><span>Close</span>
         </button>
       </span>}
@@ -440,6 +465,15 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     pendingFocus.current = { closed: key, next: moved ?? next.key }
   }, [results, tabId, slots, sets])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
+  const focusRebuilt = useCallback((key: EntryKey) => {
+    const stack = stackRef.current
+    if (!stack) return
+    const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(key) : key
+    const target = stack.querySelector<HTMLElement>(`[data-result-grid][data-result-entry="${escaped}"]`)
+      ?? stack.querySelector<HTMLElement>(`[data-caption-entry="${escaped}"]`)
+      ?? resultsTab()
+    target?.focus({ preventScroll: true })
+  }, [])
   useLayoutEffect(() => {
     const pending = pendingFocus.current
     if (!pending || sets.some(entry => entry.key === pending.closed)) return
@@ -582,7 +616,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const plain = bare || captionless
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
       {!plain && <ResultCaption tabId={tabId} tab={tab} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} named={!!slot?.named} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, pivotSource: slot.source, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
-      {!shut && <EntryNoticeBars tabId={tabId} tab={tab} entry={entry} running={tab.status === 'running'} />}
+      {!shut && <EntryNoticeBars tabId={tabId} tab={tab} entry={entry} running={tab.status === 'running'} onClose={closable ? close : undefined} onRebuiltFocus={() => focusRebuilt(entry.key)} />}
       {!shut && mounted.has(entry.key) && <ResultGrid key={setKey(entry.descriptor)} tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={budget} sort={sort}
         view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} />}
     </div>)

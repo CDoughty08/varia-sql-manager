@@ -189,9 +189,10 @@ export function outputContribution({ commands, results, queries, menuTargets, do
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
   /** Find in Results is disabled while a multi-server run's Summary view is active in Tabs layout (no grid is shown). */
   const canSearchTab = (tabId: string | undefined) => !!hasResultSets(tabId) && !(tabs() && isSummaryActive(results.getSnapshot()[tabId!]))
+  const saveEntry = (tabId: string | undefined) => !tabId ? undefined : results.focusedEntry(tabId) ?? (!tabs() ? results.getSnapshot()[tabId]?.sets[0] : undefined)
   const registrations = [
     commands.register('output.find', {
-      unavailable: args => liveOf(args) ? undefined : noResults,
+      unavailable: args => liveOf(args) ? undefined : hasResultSets(searchTab(args)) ? 'Select a result grid first.' : noResults,
       // A query's result sets (no hasResultSets precondition: a live view's grid finds through its owner's filter box).
       when: args => { const live = liveOf(args); return live ? live.canFind() : canSearchTab(searchTab(args)) },
       run: args => {
@@ -280,15 +281,19 @@ export function outputContribution({ commands, results, queries, menuTargets, do
       }
     }),
     commands.register('output.saveResultsAs', {
-      unavailable: args => liveOf(args) ? undefined : noResults,
+      unavailable: args => {
+        if (liveOf(args)) return undefined
+        const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
+        return hasResultSets(tabId) ? 'Select a result grid first.' : noResults
+      },
       // A query's result sets, or a live view's grid with rows (which has no query, so no hasResultSets precondition).
-      // Non-live, non-grid invocations require a focused saveable entry so Summary never exposes Save Results As as a no-op.
+      // Non-live, non-grid invocations require a focused saveable entry (or first set in Stacked) so Summary never exposes Save Results As as a no-op.
       when: args => {
         const live = liveOf(args)
         if (live) return live.hasRows() && (live.canSave?.() ?? true)
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         if (!hasResultSets(tabId)) return false
-        return target?.view === 'grid' ? target.entry !== undefined : results.focusedEntry(tabId) !== undefined
+        return target?.view === 'grid' ? target.entry !== undefined : saveEntry(tabId) !== undefined
       },
       run: async args => {
         const live = liveOf(args)
@@ -296,8 +301,8 @@ export function outputContribution({ commands, results, queries, menuTargets, do
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         const tab = results.getSnapshot()[tabId]
         if (!tab?.sets.length) return
-        // The grid the menu or the caption's button names, else the one that last had the focus.
-        const key = target?.view === 'grid' ? target.entry : results.focusedEntry(tabId)?.key
+        // The grid the menu or the caption's button names, else the one that last had the focus (or the first set in Stacked).
+        const key = target?.view === 'grid' ? target.entry : saveEntry(tabId)?.key
         if (key === undefined) return
         const name = documents.getSnapshot().documents.find(document => document.id === tabId)?.name ?? ''
         const failure = await results.saveAs(tabId, key, baseName(name))

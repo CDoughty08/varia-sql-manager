@@ -342,4 +342,32 @@ describe('BigQueryCostService: multi-server and Cross-Engine live diagnostics (F
 
     h.service.dispose()
   })
+
+  it('R7 #5: CostPromptService short-circuits ask() and askMulti() immediately after dispose()', async () => {
+    const prompts = new CostPromptService()
+    const pendingBefore = prompts.ask({
+      prompt: { kind: 'threshold', bytes: 15 * 1024 ** 3 },
+      connection: 'proj-before',
+      thresholdBytes: 10 * 1024 ** 3,
+      prices: true
+    })
+    prompts.dispose()
+    await expect(pendingBefore).resolves.toEqual({ run: false })
+
+    const afterSingle = await prompts.ask({
+      prompt: { kind: 'threshold', bytes: 15 * 1024 ** 3 },
+      connection: 'proj-after',
+      thresholdBytes: 10 * 1024 ** 3,
+      prices: true
+    })
+    const afterMulti = await prompts.askMulti({
+      kind: 'multi',
+      prices: true,
+      totalBytes: 20 * 1024 ** 3,
+      projects: [{ connectionId: 'c1', label: 'proj-after', prompt: { kind: 'threshold', bytes: 20 * 1024 ** 3 }, thresholdBytes: 10 * 1024 ** 3 }]
+    })
+    expect(afterSingle).toEqual({ run: false })
+    expect(afterMulti).toEqual({ run: false })
+    expect(prompts.getSnapshot()).toEqual({})
+  })
 })

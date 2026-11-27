@@ -140,6 +140,7 @@ export function topItems(tab: MultiTabShape, includeSummary = true): TopItem[] {
     items.push({
       key: picked.table.key,
       name: target.label,
+      named: true,
       targetKey: target.targetKey,
       targetIndex,
       targetPhase: target.phase,
