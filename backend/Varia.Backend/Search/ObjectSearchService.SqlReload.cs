@@ -46,7 +46,7 @@ internal sealed partial class ObjectSearchService
     /// much changed. A saved read is never searchable before one of these passes.
     /// </summary>
     private async Task<Reloaded?> ReloadAsync(SqlConnection connection, State state, string database, SqlRender render, bool definitions, bool perDatabase, bool children,
-        CancellationToken token)
+        CancellationToken token, CancellationToken stop)
     {
         if (state.Index.Sink?.Scope is not { } scope || Store.Find(scope, IndexUnitKind.Database, database) is not { } unit) return null;
         if (SqlSync.From(unit.Sync) is not { } saved) return Count(ref reloadUnverifiable, database, "unverifiable");
@@ -126,7 +126,7 @@ internal sealed partial class ObjectSearchService
             }
             kept = null;
             // Verified against the fingerprint taken before the listing (now), as a whole read is against its own.
-            await HoldVerifiedAsync(connection, database, render, perDatabase, now, merged, reader.Listing, definitions, children, Holding(state.Index, children), token);
+            await HoldVerifiedAsync(connection, database, render, perDatabase, now, merged, reader.Listing, definitions, children, Holding(state.Index, children), stop);
             state.Index.Abandon(loaded);
             Interlocked.Increment(ref reloadReread);
             Interlocked.Add(ref reloadRereadIds, plan.Reread.Count);
@@ -185,9 +185,11 @@ internal sealed partial class ObjectSearchService
 
     /// <summary>Holds <paramref name="read"/> with the fingerprint taken before it (and its listing) only where one taken after it
     /// is the same: a change that landed meanwhile, committed or still open (the read sees uncommitted DDL; the fingerprint waits
-    /// on it), leaves the read held with nothing to compare, so the next build reads the database whole. Held whatever happens.</summary>
+    /// on it), leaves the read held with nothing to compare, so the next build reads the database whole. Held whatever happens.
+    /// <paramref name="stop"/> is the build's own stop, not the database's budget: a read already made is never turned into a
+    /// timeout by the check after it, which has its own budget (<see cref="FingerprintBudget"/>).</summary>
     private async Task HoldVerifiedAsync(SqlConnection connection, string database, SqlRender render, bool perDatabase, SqlFingerprint? before, DatabaseIndex read,
-        byte[]? listing, bool definitions, bool children, Action<DatabaseIndex> put, CancellationToken token)
+        byte[]? listing, bool definitions, bool children, Action<DatabaseIndex> put, CancellationToken stop)
     {
         SqlFingerprint? after = null;
         try
@@ -195,7 +197,7 @@ internal sealed partial class ObjectSearchService
             if (before is not null)
             {
                 if (AfterRead is { } hook) await hook(database);
-                after = await TryFingerprintAsync(connection, database, render, perDatabase, token);
+                after = await TryFingerprintAsync(connection, database, render, perDatabase, stop);
             }
         }
         finally

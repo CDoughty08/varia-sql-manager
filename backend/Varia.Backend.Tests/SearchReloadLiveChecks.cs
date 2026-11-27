@@ -109,7 +109,7 @@ internal static class SearchReloadLiveChecks
 
             // A listing and selective read past their deadline: the database is read whole, within its budget.
             await Run("CREATE TABLE rl.Late (id int);", "create a table");
-            service.Search.SelectiveBudget = TimeSpan.FromMilliseconds(1);
+            service.Search.SelectiveBudget = TimeSpan.Zero;
             try { await Session(); }
             finally { service.Search.SelectiveBudget = null; }
             check(outcomes.GetValueOrDefault(database) == "failed" && (await Names("Late")).Contains("table:rl.Late"),
@@ -172,6 +172,27 @@ internal static class SearchReloadLiveChecks
             check(outcomes.GetValueOrDefault(database) == "unverifiable" && (await Names("Midway")).Contains("table:rl.Midway"),
                 "and the next build reads it whole (" + outcomes.GetValueOrDefault(database) + ")");
 
+            // The database's budget running out during the check after a read: the read is held (unverified), not a timeout.
+            await Run("CREATE TABLE rl.Slow (id int);", "create a table");
+            var budget = service.Search.Limits.DatabaseBudget;
+            service.Search.Limits.DatabaseBudget = TimeSpan.FromSeconds(2);
+            service.Search.AfterRead = name =>
+            {
+                if (name == database) service.Search.ReloadFingerprint = render => "WAITFOR DELAY '00:00:04';\n" + ObjectSearchSql.Fingerprint(render);
+                return Task.CompletedTask;
+            };
+            ObjectIndexResult slow;
+            try { slow = await Session(); }
+            finally
+            {
+                service.Search.AfterRead = null;
+                service.Search.ReloadFingerprint = ObjectSearchSql.Fingerprint;
+                service.Search.Limits.DatabaseBudget = budget;
+            }
+            check(outcomes.GetValueOrDefault(database) is { } late && late.StartsWith("reread:", StringComparison.Ordinal) && !slow.Status.Skipped.Any(skip => skip.Database == database)
+                && (await Names("Slow")).Contains("table:rl.Slow"),
+                "a read whose check runs past the database's budget is held, not reported as a timeout (" + string.Join(", ", slow.Status.Skipped.Where(skip => skip.Database == database).Select(skip => skip.Code)) + ")");
+
             // Dropped and created again under the same name: another database, read whole.
             SqlConnection.ClearAllPools();
             var dropped = await sql("ALTER DATABASE " + Bracket(database) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE " + Bracket(database) + "; CREATE DATABASE " + Bracket(database) + ";", "master");
@@ -203,6 +224,7 @@ internal static class SearchReloadLiveChecks
             service.Search.FingerprintBudget = TimeSpan.FromSeconds(15);
             service.Search.SelectiveBudget = null;
             service.Search.AfterRead = null;
+            service.Search.Limits.DatabaseBudget = TimeSpan.FromSeconds(120);
             service.Search.Store.Configure(new("disabled", storeFolder, IndexStoreLimits.DefaultDiskMiB));
             await service.Search.Store.Idle();
             try { Directory.Delete(storeRoot, recursive: true); }

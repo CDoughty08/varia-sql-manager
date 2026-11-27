@@ -613,7 +613,7 @@ internal sealed partial class ObjectSearchService : IDisposable
             // Nothing held yet (the connection's first build, or a database it could not read before): what was saved of it stands
             // in only once its fingerprint says it still may, or once what changed has been read again.
             // A read again without children (WithFallbackAsync) follows a reload that already answered for the database.
-            if (held is null && children && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token) is { } reloaded) return reloaded.Skip;
+            if (held is null && children && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token, token) is { } reloaded) return reloaded.Skip;
             // The fingerprint is taken before the batch, and again after it (HoldVerifiedAsync), only where a file would keep it; one
             // that fails leaves the read as it was, with nothing to compare next time.
             var fingerprint = state.Index.Sink?.Scope is not null && Store.Saves ? await TryFingerprintAsync(connection, database, render, perDatabase, budgetSource.Token) : null;
@@ -631,7 +631,7 @@ internal sealed partial class ObjectSearchService : IDisposable
                 throw;
             }
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
-            await HoldVerifiedAsync(connection, database, render, perDatabase, fingerprint, index, reader.Listing, definitions, children, Put, budgetSource.Token);
+            await HoldVerifiedAsync(connection, database, render, perDatabase, fingerprint, index, reader.Listing, definitions, children, Put, token);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
