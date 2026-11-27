@@ -24,6 +24,8 @@ internal static class FreshnessChecks
         SqlMarks(check);
         Skips(check);
         SqlDue(check);
+        ServerDue(check);
+        await Registered(check);
         await Arguments(check);
         await BigQueryDue(check);
         await DetailsRead(check);
@@ -70,7 +72,7 @@ internal static class FreshnessChecks
         string[] changes =
         [
             "CREATE TABLE dbo.t (id int)", "alter view v as select 1", "drop procedure p", "EXEC dbo.p", "execute('select 1')", "GRANT SELECT ON t TO u",
-            "select 1; commit", "rollback tran", "ENABLE TRIGGER tr ON t", "exec sp_rename 'a', 'b'", "sp_addextendedproperty 'x'", "select * into dbo.copy from t",
+            "select 1; commit", "rollback tran", "ENABLE TRIGGER tr ON t", "exec sp_rename 'a', 'b'", "RESTORE DATABASE Sales FROM DISK = N'x.bak'", "DBCC CLONEDATABASE (Sales, SalesClone)", "sp_addextendedproperty 'x'", "select * into dbo.copy from t",
             "select 1 /* outer /* nested */ still a comment */ create table t (id int)", "select '--' as a; drop table t",
         ];
         string[] reads =
@@ -155,11 +157,28 @@ internal static class FreshnessChecks
         check(Find(search, id, "orders").Index is { Stale: 2 } again && again.StaleMark > waiting && Find(search, id, "orders").Index.StaleMark == again.StaleMark,
             "a due database whose check never passed is asked again once its threshold passes again, once");
         search.MarkSqlStale(id, "Ops");
+        check(search.DueOf(id) is ["Sales"] && Find(search, id, "orders").Index.Stale == 2, "DDL in a due database replaces its due mark: it is counted once");
         var ddl = Find(search, id, "orders").Index.StaleMark;
         clock.Now += ObjectSearchService.SqlCheckAfter - TimeSpan.FromMinutes(1);
         var soon = Find(search, id, "orders").Index.StaleMark;
         clock.Now += TimeSpan.FromMinutes(1);
         check(soon == ddl && Find(search, id, "orders").Index.StaleMark > ddl, "a DDL mark whose check failed is asked again a threshold after it was made, not before");
+    }
+
+    private static void ServerDue(Action<bool, string> check)
+    {
+        var clock = new Clock(Start);
+        using var search = new ObjectSearchService(new ProfileHost()) { UtcNow = () => clock.Now };
+        var id = Guid.NewGuid().ToString();
+        search.Held(id).Put(Read("Sales"));
+        search.Held(id).PutServer(new DatabaseIndex("", ObjectTable.Of([new IndexedObject("login", "logins", "", "app_login")]), 0, 0, 0, readAt: Start));
+        Find(search, id, "orders");
+        clock.Now += ObjectSearchService.SqlCheckAfter;
+        Find(search, id, "orders", database: "Sales");
+        check(search.DueOf(id) is ["Sales"], "a search of one database leaves the server's own objects alone");
+        var all = Find(search, id, "orders");
+        check(search.DueOf(id).Order(StringComparer.Ordinal).SequenceEqual([ObjectSearchService.ServerScope, "Sales"]) && all.Index.Stale == 1,
+            "a search of every database marks the server's own objects due too (checked with the databases, not counted as one)");
     }
 
     private static async Task Arguments(Action<bool, string> check)
@@ -178,6 +197,41 @@ internal static class FreshnessChecks
             "a check's database or checkAll needs stale, not both, and a database name within an identifier's length");
         check(await search.IndexAsync(new(id, request, Stale: true, Database: "Sales"), CancellationToken.None) is { Status.State: "none" or "ready" },
             "a check of a connection with no index answers its status and connects to nothing");
+    }
+
+    /// <summary>A host whose connections open only when released, then fail: a check waits in its database list.</summary>
+    private sealed class GatedHost : IObjectSearchHost
+    {
+        public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ServerProfile Profile(string connectionId) => new(17, null, 3, null, false, true, true, 16);
+        public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId, string? database) => new();
+        public async Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token)
+        {
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(token);
+            throw new InvalidOperationException("No server in the offline checks.");
+        }
+    }
+
+    private static async Task Registered(Action<bool, string> check)
+    {
+        var host = new GatedHost();
+        using var search = new ObjectSearchService(host);
+        var id = Guid.NewGuid().ToString();
+        search.Held(id).Put(Read("Sales"));
+        search.MarkSqlStale(id, "Sales");
+        var request = Guid.NewGuid().ToString();
+        var first = search.IndexAsync(new(id, request, Stale: true), CancellationToken.None);
+        await host.Entered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        string? code = null;
+        try { await search.IndexAsync(new(id, request, Stale: true), CancellationToken.None); }
+        catch (RequestException error) { code = error.Code; }
+        host.Release.SetResult();
+        try { await first; } catch (InvalidOperationException) { }
+        var after = search.IndexStatus(new(id)).Status;
+        check(code == "DUPLICATE_REQUEST" && after.Checking is null && after.State != "building",
+            "a check the request registry refuses leaves the running check, and the state, as they were (" + code + ", " + after.State + ")");
     }
 
     // ---- BigQuery: due datasets, details read anyway, the background re-read ----

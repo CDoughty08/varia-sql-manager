@@ -64,6 +64,8 @@ internal sealed partial class ObjectSearchService
             // A mark on a database the index neither holds nor listed would be read by no check, and would never be spent.
             if (key.Length > 0 && state.Index.Get(key) is null && !state.Listed.Contains(key)) return;
             state.SqlStale[key] = ++state.StaleMarks;
+            // Marked for DDL now, so no longer only due by age: one database is counted once.
+            state.Due.Remove(key);
             // Asked now: a check that fails is asked again once the threshold has passed since (DueOnUseLocked).
             state.Tried[key] = UtcNow().Ticks;
         }
@@ -114,11 +116,17 @@ internal sealed partial class ObjectSearchService
         if (state.Building && !state.Checking) return;
         var now = UtcNow().Ticks;
         var after = (state.BigQuery ? BigQueryCheckAfter : SqlCheckAfter).Ticks;
-        foreach (var read in state.Index.Databases)
+        // The server's own objects (and Agent's, read with them) are a unit too, used by a search of every database.
+        IEnumerable<DatabaseIndex> reads = state.Index.Databases;
+        if (!state.BigQuery && database is null && state.Index.Server is { } server) reads = reads.Append(server);
+        foreach (var read in reads)
         {
+            var isServer = !state.BigQuery && ReferenceEquals(read, state.Index.Server);
+            if (isServer) goto Unit;
             if (state.BigQuery ? read.Dataset is null || project is not null && read.Database != project || dataset is not null && read.Dataset != dataset
                 : read.Dataset is not null || database is not null && read.Database != database) continue;
-            var key = read.Key;
+            Unit:
+            var key = isServer ? ServerScope : read.Key;
             // A loaded read no listing has checked yet is the running (or a failed) full build's: the status already says so.
             if (state.BigQuery && state.Saved.ContainsKey(key)) continue;
             if (!state.Tried.TryGetValue(key, out var tried)) { state.Tried[key] = now; continue; }
@@ -176,9 +184,17 @@ internal sealed partial class ObjectSearchService
         HashSet<string> targets;
         long seen;
         bool definitions;
+        // Registered before the state is touched: a request the registry refuses (BUSY, a duplicate id) leaves the running build
+        // or check, and the state, as they were.
+        var entry = running.Register(args.RequestId, args.ConnectionId, source);
+        ObjectIndexResult Early()
+        {
+            running.Unregister(args.RequestId, entry);
+            return new(Status(state), watch.ElapsedMilliseconds);
+        }
         lock (state.Gate)
         {
-            if (state.Building && !state.Checking || !state.Built && state.Index.Databases.Count == 0) return new(Status(state), watch.ElapsedMilliseconds);
+            if (state.Building && !state.Checking || !state.Built && state.Index.Databases.Count == 0) return Early();
             targets = [.. state.SqlStale.Keys, .. state.Due.Keys];
             if (args.Database is { } asked) targets.Add(asked);
             else if (args.CheckAll == true)
@@ -186,7 +202,7 @@ internal sealed partial class ObjectSearchService
                 targets.Add(ServerScope);
                 foreach (var read in state.Index.Databases) targets.Add(read.Database);
             }
-            if (targets.Count == 0) return new(Status(state), watch.ElapsedMilliseconds);
+            if (targets.Count == 0) return Early();
             seen = state.StaleMarks;
             definitions = state.Definitions;
             try { state.Build?.Cancel(); } catch (ObjectDisposedException) { }
@@ -194,7 +210,6 @@ internal sealed partial class ObjectSearchService
             state.Building = true;
             state.Checking = true;
         }
-        var entry = running.Register(args.RequestId, args.ConnectionId, source);
         bool Current() => ReferenceEquals(state.Build, source);
         // The check's answer: its status once it has ended, so the status it answers is not still building or checking.
         ObjectIndexResult Answer()

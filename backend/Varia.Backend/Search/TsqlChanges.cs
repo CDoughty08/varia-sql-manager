@@ -12,7 +12,7 @@ internal static class TsqlChanges
 {
     private static readonly HashSet<string> Words = new(StringComparer.OrdinalIgnoreCase)
     {
-        "CREATE", "ALTER", "DROP", "EXEC", "EXECUTE", "GRANT", "REVOKE", "DENY", "COMMIT", "ROLLBACK", "ENABLE", "DISABLE", "RENAME"
+        "CREATE", "ALTER", "DROP", "EXEC", "EXECUTE", "GRANT", "REVOKE", "DENY", "COMMIT", "ROLLBACK", "ENABLE", "DISABLE", "RENAME", "RESTORE", "DBCC"
     };
 
     /// <summary>The longest script scanned: a longer one is taken to change objects without being read.</summary>

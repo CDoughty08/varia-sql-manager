@@ -456,8 +456,9 @@ and BigQuery's background re-read is scheduled by the backend.
 - **Failures are values.** A fingerprint that fails, is denied or takes too long keeps the held read searchable and its
   mark. That mark is not asked again at once: the database is checked at its next mark, Refresh, or the first search
   15 minutes after the mark (or the failed check), which renumbers it so the window asks again. A database or dataset
-  found gone takes its marks with it. A full build stops a running check; a check never stops a full build: one asked while it runs
-  waits for it. DDL that lands while a check reads keeps its mark for the next check.
+  found gone takes its marks with it. A full build stops a running check; a check never stops a full build. The window that runs a
+  build asks its checks after it; a check asked while a build runs answers at once, and what it was asked for is checked
+  by that build, or asked again 15 minutes on. DDL that lands while a check reads keeps its mark for the next check.
 - **Details read anyway (BigQuery).** An object's details read for Properties, Peek or the details pane replace what
   the index holds of it when they differ (its columns, text, partitioning, clustering or signature; never only its
   size), and its dataset is saved again.
@@ -469,7 +470,7 @@ and BigQuery's background re-read is scheduled by the backend.
   runs, and stops when the connection closes. A dataset whose objects changed is held and saved again; an object gone
   marks its dataset due.
 - **What is missed until a check.** DDL run outside Varia (another tool, a job, a deployment) is seen at the next due
-  search or Refresh; DDL in a Varia script that names another database (`OtherDb.dbo.Object`) than the ones it started
+  search (one of every database, for the server's own objects and Agent's) or Refresh; DDL in a Varia script that names another database (`OtherDb.dbo.Object`) than the ones it started
   and ended in likewise. On BigQuery an in-place change is seen at the next background pass over its dataset, or when its
   details are read. What the fingerprint misses ([Reloading a SQL Server index](#reloading-a-sql-server-index)) is seen
   only by Rebuild Search Index.
