@@ -723,6 +723,110 @@ describe('MultiExecuteDialog', () => {
     await flush()
     expect(mixedReal.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Total: 2.00 GiB')
   })
+
+  it('R5 D3 #1: renders multi-batch SQL Server "N batches" chip once without duplicating classification.tags', async () => {
+    const { form, unmount } = await mountDialog({
+      tabId: 'tab-batches-dedup',
+      provider: 'sqlserver',
+      sql: 'ALTER TABLE dbo.Orders ADD Flag bit;\nGO\nUPDATE dbo.Orders SET Flag = 1;',
+      targets: [sqlTarget(1), sqlTarget(2)],
+      prices: true
+    })
+
+    const tags = [...form().querySelectorAll('.multi-exec-stmt-tag')].map(el => el.textContent?.trim())
+    expect(tags.filter(tag => tag === '2 batches')).toHaveLength(1)
+    expect(tags).toEqual(['2 batches', '1 DDL (ALTER TABLE)', '1 DML (UPDATE)'])
+    unmount()
+
+    // Custom classification with batchCount > 1 not yet in tags still prepends the batch chip once.
+    const customMount = await mountDialog({
+      tabId: 'tab-batches-custom',
+      provider: 'sqlserver',
+      sql: 'UPDATE dbo.Orders SET Flag = 1;',
+      classification: {
+        provider: 'sqlserver',
+        batchCount: 3,
+        statements: [],
+        hasNonTransactionalTSql: false,
+        hasBigQueryPermanentDdl: false,
+        blocksBigQueryTransaction: false,
+        tags: ['1 DML (UPDATE)']
+      },
+      targets: [sqlTarget(1), sqlTarget(2)],
+      prices: true
+    })
+    const customTags = [...customMount.form().querySelectorAll('.multi-exec-stmt-tag')].map(el => el.textContent?.trim())
+    expect(customTags).toEqual(['3 batches', '1 DML (UPDATE)'])
+  })
+
+  it('R5 D3 #2: transactionDisableReason blames the permanent DDL statement when CALL precedes CREATE TABLE in BigQuery', async () => {
+    const sql = 'CALL core.my_proc();\nCREATE TABLE core.t (id INT64);'
+    const classification = classifyStatements(sql, 'bigquery')
+    expect(classification.hasBigQueryPermanentDdl).toBe(true)
+    expect(classification.firstBlockingStatement).toMatchObject({ line: 1, keyword: 'CALL', permanentDdl: false })
+
+    const reason = transactionDisableReason('bigquery', classification, false)
+    expect(reason).toContain('permanent BigQuery DDL (Line 2: CREATE TABLE)')
+    expect(reason).not.toContain('Line 1: CALL')
+
+    const offsetReason = transactionDisableReason('bigquery', classification, false, 5)
+    expect(offsetReason).toContain('permanent BigQuery DDL (Line 6: CREATE TABLE)')
+
+    const { form } = await mountDialog({
+      tabId: 'tab-bq-call-create',
+      provider: 'bigquery',
+      sql,
+      startLine: 10,
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: true
+    }, { estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async () => ({ ok: true, value: { bytesProcessed: 1024 } })) })
+    await flush()
+    const bannerText = form().querySelector('.multi-exec-banner')?.textContent ?? ''
+    expect(bannerText).toContain('Line 11: CREATE TABLE')
+    expect(bannerText).not.toContain('CALL')
+  })
+
+  it('R5 D3 #3: TargetChip resolves target.color through theme.accent when WorkbenchProvider is present and falls back outside it', async () => {
+    const themeListeners = new Set<() => void>()
+    let version = 0
+    let accentValue = 'var(--varia-connection-red)'
+    const theme = {
+      subscribe: (listener: () => void) => { themeListeners.add(listener); return () => { themeListeners.delete(listener) } },
+      getSnapshot: () => version,
+      accent: vi.fn((color: string | undefined) => color === '#e66b73' ? accentValue : color)
+    }
+    const workbench = { theme } as unknown as Workbench
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove() })
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench,
+        children: createElement(MultiExecuteDialogModal, {
+          request: {
+            tabId: 'tab-theme-chip',
+            provider: 'sqlserver',
+            sql: 'SELECT 1;',
+            targets: [sqlTarget(1, { color: '#e66b73' }), sqlTarget(2)],
+            prices: true
+          },
+          onConfirm: vi.fn(),
+          onCancel: vi.fn()
+        })
+      }))
+    })
+
+    const dot = () => document.body.querySelector<HTMLElement>('.multi-exec-target-dot')!
+    expect(theme.accent).toHaveBeenCalledWith('#e66b73')
+    expect(dot().style.backgroundColor).toBe('var(--varia-connection-red)')
+
+    // Theme updates re-render TargetChip with the updated resolved color.
+    accentValue = 'rgb(180, 40, 50)'
+    version++
+    await act(async () => { themeListeners.forEach(fn => fn()) })
+    expect(dot().style.backgroundColor).toBe('rgb(180, 40, 50)')
+  })
 })
 
 describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {

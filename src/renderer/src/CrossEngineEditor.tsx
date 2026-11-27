@@ -120,7 +120,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
   const secondaryEditorRef = useRef<QueryEditorInstance | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [manualStacked, setManualStacked] = useState<boolean | undefined>(undefined)
-  const [switchError, setSwitchError] = useState<string | undefined>(undefined)
+  const [switchError, setSwitchError] = useState<{ readonly target: 'split' | 'file'; readonly reason: string } | undefined>(undefined)
   const [guard, setGuard] = useState<CrossEngineGuardState>({ sqlViolations: [], bqViolations: [] })
   const nextIndexRef = useRef<{ sqlserver: number; bigquery: number; file: number }>({ sqlserver: 0, bigquery: 0, file: 0 })
 
@@ -228,6 +228,10 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
     }
   }, [runGuard, documents, tabId, monaco])
 
+  useEffect(() => {
+    setSwitchError(undefined)
+  }, [crossView, tabId])
+
   const resolvedTargets = useMemo(
     () => tab ? resolveMultiTargets(tab, connections, rememberedTargets) : [],
     [tab, connections, rememberedTargets]
@@ -238,10 +242,10 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
   if (!tab) return null
 
   const switchView = (nextView: 'split' | 'file') => {
-    if (nextView === crossView) return
+    if (nextView === crossView || docSnapshot.busy) return
     const result = documents.setCrossView(tabId, nextView)
     if (!result.ok) {
-      setSwitchError(result.reason)
+      setSwitchError({ target: nextView, reason: result.reason })
       return
     }
     setSwitchError(undefined)
@@ -304,7 +308,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
       documents.create(name, sql, first.database || (dialect === 'bigquery' ? '' : 'master'), first.connectionId, sql.length > 0, undefined, eol)
       return
     }
-    documents.reopen({
+    const opened = documents.reopen({
       name,
       kind: 'sql',
       text: sql,
@@ -315,6 +319,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
       ...first?.lastServer ? { server: first.lastServer } : {},
       ...first?.targetId ? { targetId: first.targetId, ...first.attachWanted !== undefined ? { attachWanted: first.attachWanted } : {} } : {}
     })
+    if (opened.sessionNotice) documents.update(opened.id, { sessionNotice: undefined })
   }
 
   const renderTargetChips = (dialect: ProviderId, items: typeof resolvedTargets, emptyLabel: string) => {
@@ -372,6 +377,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
           type="button"
           className="ui-button cross-engine-view-btn"
           aria-pressed={crossView === 'split'}
+          disabled={docSnapshot.busy}
           onClick={() => switchView('split')}>
           <Icon name="split-horizontal" /><span>Dual-Dialect Split</span>
         </button>
@@ -379,6 +385,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
           type="button"
           className="ui-button cross-engine-view-btn"
           aria-pressed={crossView === 'file'}
+          disabled={docSnapshot.busy}
           onClick={() => switchView('file')}>
           <Icon name="file-code" /><span>-- #Dialect File</span>
         </button>
@@ -398,7 +405,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
 
     {switchError && <div className="cross-engine-info-strip is-warning" role="alert">
       <Icon name="warning" />
-      <span>{`Cannot switch to Split view: ${switchError}`}</span>
+      <span>{`Cannot switch to ${switchError.target === 'file' ? 'File' : 'Split'} view: ${switchError.reason}`}</span>
       <button type="button" className="icon-button cross-engine-strip-dismiss" aria-label="Dismiss notice" onClick={() => setSwitchError(undefined)}>
         <Icon name="close" />
       </button>
@@ -437,7 +444,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
         <div className="cross-engine-info-strip" role="status">
           <Icon name="info" />
           <span>Switch to Split view for per-dialect IntelliSense and syntax checking.</span>
-          <button type="button" className="ui-button cross-engine-switch-btn" onClick={() => switchView('split')}>Switch to Split view</button>
+          <button type="button" className="ui-button cross-engine-switch-btn" disabled={docSnapshot.busy} onClick={() => switchView('split')}>Switch to Split view</button>
         </div>
         {guard.parseError && <div className="cross-engine-info-strip is-warning" role="status">
           <Icon name="warning" />

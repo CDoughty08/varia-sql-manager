@@ -2085,6 +2085,7 @@ describe('Round 4 Editor Surfaces regressions', () => {
     expect(openedSql.targetId).toBe(targetId)
     expect(openedSql.attachWanted).toBe(true)
     expect(openedSql.lastServer).toBe('offline-sql-01')
+    expect(openedSql.sessionNotice).toBeUndefined()
     expect(documents.getModel(openedSql.id)?.getEOL()).toBe('\r\n')
 
     // Click Open in BigQuery tab -> preserves dataset, targetId, attachWanted: false, lastServer, and CRLF EOL.
@@ -2098,6 +2099,127 @@ describe('Round 4 Editor Surfaces regressions', () => {
     expect(openedBq.targetId).toBe('00000000-0000-4000-8000-000000000098')
     expect(openedBq.attachWanted).toBe(false)
     expect(openedBq.lastServer).toBe('offline-bq-proj')
+    expect(openedBq.sessionNotice).toBeUndefined()
     expect(documents.getModel(openedBq.id)?.getEOL()).toBe('\r\n')
+  })
+
+  it('R5 D2 #1: MultiTargetPopover falls back to targetId for offlineConn when target.connectionId is stale', async () => {
+    const { connections, documents, databaseList, commands, mount } = uiFixture()
+    connections.add(
+      { ...connectionInfo('lost-sql-2'), generation: 1, displayName: 'Recovered Prod SQL', server: 'prod.corp.local', database: 'SalesDB', color: 'red' },
+      { ...connectionOptions, server: 'prod.corp.local', database: 'SalesDB', displayName: 'Recovered Prod SQL', color: 'red', environment: 'Production' }
+    )
+    const sharedTargetId = connections.get('lost-sql-2')!.targetId!
+    connections.markLostBefore(2)
+    connections.add(
+      { ...connectionInfo('sql-live'), generation: 2, displayName: 'Live SQL', server: 'live.corp.local', database: 'SalesDB' },
+      { ...connectionOptions, server: 'live.corp.local', database: 'SalesDB', displayName: 'Live SQL' }
+    )
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([['sql-live', [{ name: 'SalesDB', isSystem: false, isSnapshot: false }]]]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    // Target carries a stale connectionId ('stale-sql-1') that is no longer in connections, plus matching targetId.
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'stale-sql-1', targetId: sharedTargetId, provider: 'sqlserver', database: 'SalesDB', enabled: true, lastServer: 'prod.corp.local' },
+        { connectionId: 'sql-live', provider: 'sqlserver', database: 'SalesDB', enabled: true }
+      ]
+    })
+
+    const onReconnect = vi.fn()
+    const { host, rerender } = await mount(createElement(MultiTargetPopover, { tabId: tab.id, onReconnectTarget: onReconnect }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    const dialog = document.body.querySelector<HTMLElement>('.multi-target-popover')!
+    expect(dialog.textContent).toContain('Recovered Prod SQL')
+    expect(dialog.textContent).toContain('PROD')
+
+    const reconnectBtn = dialog.querySelector<HTMLButtonElement>('.multi-target-reconnect')!
+    await act(async () => { reconnectBtn.click() })
+    expect(onReconnect).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'stale-sql-1', targetId: sharedTargetId }), 'lost-sql-2')
+
+    // Without onReconnectTarget, targeted connection.reconnect receives the lost connection's id ('lost-sql-2').
+    const isEnabledSpy = vi.spyOn(commands, 'isEnabled').mockReturnValue(true)
+    const executeSpy = vi.spyOn(commands, 'execute').mockResolvedValue(true)
+    await rerender(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+    const reconnectBtn2 = document.body.querySelector<HTMLButtonElement>('.multi-target-reconnect')!
+    await act(async () => { reconnectBtn2.click() })
+    expect(isEnabledSpy).toHaveBeenCalledWith('connection.reconnect', expect.objectContaining({
+      target: expect.objectContaining({ node: expect.objectContaining({ connectionId: 'lost-sql-2', lost: true }) })
+    }))
+    expect(executeSpy).toHaveBeenCalledWith('connection.reconnect', expect.objectContaining({
+      target: expect.objectContaining({ node: expect.objectContaining({ connectionId: 'lost-sql-2', lost: true }) })
+    }), 'toolbar')
+  })
+
+  it('R5 D2 #2: CrossEngineEditor disables view-switch buttons while busy, names the target view in switchError, and clears it on view or tab change', async () => {
+    const { documents, mount } = uiFixture()
+    const tab1 = documents.openMultiQuery({
+      mode: 'cross',
+      name: 'One.sql',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: []
+    })
+    const tab2 = documents.openMultiQuery({
+      mode: 'cross',
+      name: 'Two.sql',
+      sql: 'SELECT 3;',
+      bigQuerySql: 'SELECT 4;',
+      targets: []
+    })
+    documents.activate(tab1.id)
+
+    const primarySlot = createRef<HTMLDivElement>()
+    const setCrossViewSpy = vi.spyOn(documents, 'setCrossView')
+
+    // 1. Busy state disables toolbar view-switch buttons and blocks switching.
+    const snapSpy = vi.spyOn(documents, 'getSnapshot').mockReturnValue({ ...documents.getSnapshot(), busy: true })
+    const { host, rerender } = await mount(createElement(CrossEngineEditor, { tabId: tab1.id, visible: true, primarySlotRef: primarySlot }))
+    const splitBtn = () => [...host.querySelectorAll<HTMLButtonElement>('.cross-engine-view-btn')].find(b => b.textContent?.includes('Split'))!
+    const fileBtn = () => [...host.querySelectorAll<HTMLButtonElement>('.cross-engine-view-btn')].find(b => b.textContent?.includes('#Dialect File'))!
+    expect(splitBtn().disabled).toBe(true)
+    expect(fileBtn().disabled).toBe(true)
+    await act(async () => { fileBtn().click() })
+    expect(setCrossViewSpy).not.toHaveBeenCalled()
+
+    // 2. Switching to File fails -> banner says "Cannot switch to File view: ...".
+    snapSpy.mockRestore()
+    await rerender(createElement(CrossEngineEditor, { tabId: tab1.id, visible: true, primarySlotRef: primarySlot }))
+    expect(fileBtn().disabled).toBe(false)
+    setCrossViewSpy.mockReturnValueOnce({ ok: false, reason: 'Document operation in progress.' })
+    await act(async () => { fileBtn().click() })
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Cannot switch to File view: Document operation in progress.')
+
+    // 3. Switching tabId clears switchError automatically.
+    await rerender(createElement(CrossEngineEditor, { tabId: tab2.id, visible: true, primarySlotRef: primarySlot }))
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+
+    // 4. In File mode, busy disables the inline "Switch to Split view" button too; failure names Split view; external view change clears error.
+    await rerender(createElement(CrossEngineEditor, { tabId: tab1.id, visible: true, primarySlotRef: primarySlot }))
+    await act(async () => { fileBtn().click() })
+    expect(documents.get(tab1.id)?.crossView).toBe('file')
+
+    const busyFileSnap = vi.spyOn(documents, 'getSnapshot').mockReturnValue({ ...documents.getSnapshot(), busy: true })
+    await rerender(createElement(CrossEngineEditor, { tabId: tab1.id, visible: true, primarySlotRef: primarySlot }))
+    const inlineSplitBtn = () => host.querySelector<HTMLButtonElement>('.cross-engine-switch-btn')!
+    expect(inlineSplitBtn().disabled).toBe(true)
+    expect(splitBtn().disabled).toBe(true)
+    expect(fileBtn().disabled).toBe(true)
+    busyFileSnap.mockRestore()
+    await rerender(createElement(CrossEngineEditor, { tabId: tab1.id, visible: true, primarySlotRef: primarySlot }))
+    expect(inlineSplitBtn().disabled).toBe(false)
+
+    // Corrupt header so switching to Split fails -> banner says "Cannot switch to Split view: ...".
+    const primaryModel = documents.getModel(tab1.id)! as unknown as { edit(text: string): void }
+    await act(async () => { primaryModel.edit('SELECT 1;') })
+    await act(async () => { inlineSplitBtn().click() })
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Cannot switch to Split view:')
+
+    // Fixing headers and switching crossView externally clears switchError via the [crossView, tabId] effect.
+    await act(async () => { primaryModel.edit(serializeCrossEngineSql('SELECT 1;', 'SELECT 2;')) })
+    await act(async () => { documents.setCrossView(tab1.id, 'split') })
+    expect(host.querySelector('[role="alert"]')).toBeNull()
   })
 })

@@ -157,9 +157,11 @@ function DropCard({ hover, drag, mode }: { hover: DropHover; drag: ServerDrag; m
     title = `Change ${toName}'s ${dragProvider === 'bigquery' ? 'dataset' : 'database'} to ${drag.database} in ${docName}`
   } else if (hover.verdict.action === 'addTarget') {
     title = `Add ${toName} to ${docName}`
-    const dbText = drag.database
-      ? `${dragProvider === 'bigquery' ? 'Default dataset' : 'Database'}: ${drag.database}.`
-      : `${dragProvider === 'bigquery' ? 'Default dataset' : 'Database'}: ${to?.database || (dragProvider === 'bigquery' ? 'none' : 'master')}.`
+    const targets = document?.multiTargets ?? []
+    const existing = targets.find(item => item.connectionId === drag.connectionId)
+      ?? (to?.targetId ? targets.find(item => item.targetId === to.targetId) : undefined)
+    const previewDb = drag.database ?? existing?.database ?? to?.database
+    const dbText = `${dragProvider === 'bigquery' ? 'Default dataset' : 'Database'}: ${previewDb || (dragProvider === 'bigquery' ? 'none' : 'master')}.`
     const paneNote = document?.multiMode === 'cross'
       ? ` Targets the ${dragProvider === 'bigquery' ? 'GoogleSQL' : 'Transact-SQL'} pane.`
       : ''

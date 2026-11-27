@@ -407,11 +407,8 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     for (let index = 0; index < tabTargets.length; index++) {
       if (matchedTargetIndices.has(index)) continue
       const target = tabTargets[index]!
-      const offlineConn = target.connectionId
-        ? connections.find(c => c.id === target.connectionId)
-        : target.targetId
-          ? connections.find(c => c.targetId === target.targetId)
-          : undefined
+      const offlineConn = (target.connectionId ? connections.find(c => c.id === target.connectionId) : undefined)
+        ?? (target.targetId ? connections.find(c => c.targetId === target.targetId) : undefined)
       const remembered = target.targetId ? rememberedTargets.find(item => item.id === target.targetId) : undefined
       const host = (remembered ? targetServerName(remembered.options) : undefined) ?? offlineConn?.server ?? target.lastServer
       const name = remembered?.details.displayName ?? offlineConn?.displayName ?? host ?? (target.provider === 'bigquery' ? 'BigQuery project' : 'SQL Server')
