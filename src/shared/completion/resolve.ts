@@ -88,12 +88,23 @@ export function boundedLookup(lookup: IndexLookup): IndexLookup {
   }
 }
 
+/** One prefix or exact column name to ask again by when the first answer for an object was cut short. */
+export type NarrowPrefix = string | { readonly prefix: string; readonly exact?: boolean }
 /** Prefixes to ask again by, per object (its path's key), when the first answer for it was cut short. */
-export type Narrowing = ReadonlyMap<string, readonly string[]>
+export type Narrowing = ReadonlyMap<string, readonly NarrowPrefix[]>
 
 /** The same prefixes for every object in `paths`; an empty prefix would only repeat the first ask. */
-export function narrowing(paths: ReadonlySet<string>, prefixes: readonly string[]): Narrowing {
-  const kept = [...new Set(prefixes.filter(prefix => prefix.length > 0))]
+export function narrowing(paths: ReadonlySet<string>, prefixes: readonly NarrowPrefix[]): Narrowing {
+  const seen = new Set<string>()
+  const kept: NarrowPrefix[] = []
+  for (const entry of prefixes) {
+    const text = typeof entry === 'string' ? entry : entry.prefix
+    if (!text.length) continue
+    const id = `${typeof entry === 'string' || !entry.exact ? 'p' : 'e'}:${text}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    kept.push(entry)
+  }
   return new Map([...paths].map(path => [path, kept]))
 }
 
@@ -165,22 +176,33 @@ export class ScopeResolver {
     }
     // One request per object (by its first prefix when asked again), then the further prefixes: past the request cap those go
     // unasked before any object does.
-    const asks: { path: string[]; prefix?: string }[] = []
-    const more: { path: string[]; prefix: string }[] = []
+    const asks: { path: string[]; prefix?: string; exact?: boolean }[] = []
+    const more: { path: string[]; prefix: string; exact?: boolean }[] = []
     let dropped = false
     for (const path of paths.values()) {
       const all = this.narrow?.get(key(path)) ?? []
       dropped ||= all.length > resolverLimits.narrowPrefixes
       const prefixes = all.slice(0, resolverLimits.narrowPrefixes)
-      asks.push(prefixes.length ? { path, prefix: prefixes[0] } : { path })
-      for (const prefix of prefixes.slice(1)) more.push({ path, prefix })
+      const toAsk = (entry: NarrowPrefix) => typeof entry === 'string'
+        ? { path, prefix: entry }
+        : { path, prefix: entry.prefix, ...entry.exact ? { exact: true } : {} }
+      asks.push(prefixes.length ? toAsk(prefixes[0]) : { path })
+      for (const prefix of prefixes.slice(1)) more.push(toAsk(prefix))
     }
     for (const ask of more) asks.push(ask)
     const kept = asks.slice(0, Math.max(0, languageLookupLimits.requests - extra.length))
     this.cut = dropped || kept.length < asks.length
-    // Each request gets its share of the answer's total, so a later one is not left with nothing.
-    const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / Math.max(1, kept.length))))
-    const wanted: LanguageLookupPath[] = kept.map(ask => ({ path: ask.path, limit: share, ...ask.prefix !== undefined ? { prefix: ask.prefix } : {}, ...details ? { details } : {} }))
+    // Exact ancestor checks take 1 item; remaining requests share the rest of the answer budget.
+    const exactCount = kept.filter(ask => ask.exact).length
+    const prefixCount = Math.max(1, kept.length - exactCount)
+    const share = Math.max(1, Math.min(languageLookupLimits.items, Math.floor((languageLookupLimits.totalItems - exactCount - extra.reduce((sum, request) => sum + (request.limit ?? languageLookupLimits.defaultItems), 0)) / prefixCount)))
+    const wanted: LanguageLookupPath[] = kept.map(ask => ({
+      path: ask.path,
+      limit: ask.exact ? 1 : share,
+      ...ask.prefix !== undefined ? { prefix: ask.prefix } : {},
+      ...ask.exact ? { exact: true } : {},
+      ...details ? { details } : {}
+    }))
     const requests = [...extra, ...wanted]
     if (!requests.length) return []
     const answers = await this.lookup(requests)

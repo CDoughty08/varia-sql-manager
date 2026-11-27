@@ -66,7 +66,7 @@ const caseSensitiveKinds = new Set<CompletionKind>(['container', 'table', 'view'
 
 function shardSummary(shards: NonNullable<LanguageLookupItem['shards']>): string {
   const count = shards.count === 1 ? '1 shard' : `${shards.count.toLocaleString('en-US')} shards`
-  return `${count}, ${shards.first}–${shards.last}`
+  return shards.first && shards.last ? `${count}, ${shards.first}–${shards.last}` : count
 }
 
 function isGoogleSqlArrayType(type: string | undefined): boolean {
@@ -76,7 +76,7 @@ function isGoogleSqlArrayType(type: string | undefined): boolean {
 function googleSqlPseudoColumns(object: LanguageLookupObject, writtenParts: readonly string[]): readonly DialectColumn[] {
   const out: DialectColumn[] = []
   const lastPart = writtenParts.at(-1)
-  if (lastPart?.endsWith('*') && (object.kind === 'bqTable' || object.kind === 'bqExternalTable')) {
+  if (lastPart?.endsWith('*') && object.kind === 'bqTable') {
     out.push({ name: '_TABLE_SUFFIX', type: 'STRING', description: 'Wildcard table suffix matched by `*`.', pseudo: true })
   }
   if (object.partitioning && /\bon\s+_PARTITIONTIME\b/i.test(object.partitioning)) {
@@ -185,17 +185,18 @@ function googleSqlSiteItems(site: CompletionSite, word: CompletionWord, insert: 
   }
 }
 
-function googleSqlArrayMemberHint(targetParts: readonly string[], childFields: readonly string[], qualifierSpan?: TextSpan): CompletionItem {
+function googleSqlArrayMemberHint(targetParts: readonly string[], childFields: readonly string[], arrayType?: string, qualifierSpan?: TextSpan): CompletionItem {
   const target = targetParts.map(quoteGoogleSqlName).join('.')
   const expr = `UNNEST(${target})`
+  const typeLabel = arrayType?.trim() || 'ARRAY'
   const sample = childFields.slice(0, 6)
   const fieldsText = sample.length ? ` (fields: ${sample.join(', ')}${childFields.length > sample.length ? ', …' : ''})` : ''
   return {
     label: expr,
     kind: 'function',
     insertText: expr,
-    detail: 'ARRAY<STRUCT> · use UNNEST',
-    documentation: `\`${target}\` is \`ARRAY<STRUCT>\`${fieldsText}. Direct field access (\`${target}.field\`) is invalid in GoogleSQL — unnest it in \`FROM\` (\`FROM …, ${expr} AS item\`) or a subquery.`,
+    detail: `${typeLabel} · use UNNEST`,
+    documentation: `\`${target}\` is \`${typeLabel}\`${fieldsText}. Direct field access (\`${target}.field\`) is invalid in GoogleSQL — unnest it in \`FROM\` (\`FROM …, ${expr} AS item\`) or a subquery.`,
     sortText: `000:${expr.toLowerCase()}`,
     filterText: [expr, ...childFields.slice(0, 16)].join(' '),
     ...qualifierSpan ? { additionalDeleteSpan: qualifierSpan } : {}

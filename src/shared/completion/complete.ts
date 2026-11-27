@@ -3,7 +3,7 @@
 // keywords; a dotted name lists an alias's columns or a STRUCT's fields. Nothing here knows an engine.
 import { languageLookupLimits, type LanguageLookupPath } from '../language-lookup'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionList, CompletionRead, DialectFunction, IndexLookup, ScopeSource } from './model'
-import { ScopeResolver, boundedLookup, childrenOf, columnAt, narrowing, resolverLimits, sameName, type ScopeColumn, type SourceColumns } from './resolve'
+import { ScopeResolver, boundedLookup, childrenOf, columnAt, narrowing, resolverLimits, sameName, type NarrowPrefix, type ScopeColumn, type SourceColumns } from './resolve'
 
 /** Groups order the list ahead of the editor's fuzzy score among equals: what the scope gives first, the dialect's words last. */
 const group: Readonly<Record<CompletionKind, string>> = { column: '1', field: '1', alias: '2', cte: '2', table: '3', view: '3', routine: '4', model: '4', container: '5', function: '6', keyword: '7' }
@@ -92,7 +92,24 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       if (cutShort.size && (field ? field.columns.truncated : !namespace)) {
         const { prefix, object } = field ? await resolver.prefixThrough(field.source, field.path, typed) : { prefix: [...site.qualifier, typed].join('.'), object: undefined }
         if (prefix) {
-          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix]))
+          const prefixes: NarrowPrefix[] = [prefix]
+          // Also fetch exact ancestor column entries (e.g. `z_items`) so wide-table narrowing still detects ARRAY<...> parents.
+          const ancestorSeen = new Set<string>()
+          const addAncestor = (name: string) => {
+            if (!name || ancestorSeen.has(name.toLowerCase()) || prefixes.length >= resolverLimits.narrowPrefixes) return
+            ancestorSeen.add(name.toLowerCase())
+            prefixes.push({ prefix: name, exact: true })
+          }
+          if (field && field.path.length) {
+            for (let k = 1; k <= field.path.length; k++) {
+              const ancestor = await resolver.prefixThrough(field.source, field.path.slice(0, k), '')
+              const base = ancestor.prefix.endsWith('.') ? ancestor.prefix.slice(0, -1) : ancestor.prefix
+              addAncestor(base)
+            }
+          } else if (!field && site.qualifier.length) {
+            for (let k = 1; k <= site.qualifier.length; k++) addAncestor(site.qualifier.slice(0, k).join('.'))
+          }
+          resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, prefixes]]) : narrowing(cutShort, prefixes))
           await resolver.load()
           field = await resolver.field(site.qualifier) ?? field
         }
@@ -101,17 +118,19 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       if (field) {
         incomplete ||= field.columns.truncated
         let arrayDepth = -1
+        let arrayType: string | undefined
         for (let k = 1; k <= field.path.length; k++) {
           const col = columnAt(field.columns.columns, field.path.slice(0, k))
-          if (col && dialect.isArrayType?.(col.type)) { arrayDepth = k; break }
+          if (col && dialect.isArrayType?.(col.type)) { arrayDepth = k; arrayType = col.type; break }
         }
         if (arrayDepth > 0) {
-          if (!read.preferArray) {
+          // Never rewrite inside backticked identifiers (`o.items.`sk|`` or `` `o.items.|` ``), and never double-UNNEST inside `UNNEST(...)`.
+          if (!read.preferArray && !word.quoted) {
             const arrayPath = field.path.slice(0, arrayDepth)
             const childFields = childrenOf(field.columns.columns, arrayPath).map(col => col.path.split('.').slice(arrayDepth).join('.'))
             const targetParts = site.qualifier.slice(0, Math.max(1, site.qualifier.length - field.path.length + arrayDepth))
             const qualifierSpan = read.qualifierStart !== undefined ? { start: read.qualifierStart, end: word.start } : undefined
-            const hint = dialect.arrayMemberHint?.(targetParts, childFields, qualifierSpan)
+            const hint = dialect.arrayMemberHint?.(targetParts, childFields, arrayType, qualifierSpan)
             if (hint) add(hint)
           }
         } else {
@@ -179,7 +198,14 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
         }
         let top = topByCols.get(columns)
         if (!top) {
-          top = childrenOf(columns.columns, [])
+          const seenInCols = new Set<string>()
+          top = []
+          for (const col of childrenOf(columns.columns, [])) {
+            const lower = col.path.toLowerCase()
+            if (seenInCols.has(lower)) continue
+            seenInCols.add(lower)
+            top.push(col)
+          }
           topByCols.set(columns, top)
         }
         if (!top.length) continue

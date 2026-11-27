@@ -817,15 +817,30 @@ function chainBefore(statement: Statement, end: number, allowDigitSegment = fals
   return { parts: reversed.reverse().flat(), first: at + 1, usedDigitSegment }
 }
 
-/** Attaches `parenAhead` / `angleAhead` when `(` or `<` already follows `word` on the same line. */
+/** Attaches `parenAhead` / `angleAhead` when `(` or `<` already follows `word` on the same line, without slicing the document. */
 function withAheadFlags(text: string, offset: number, word: CompletionWord): CompletionWord {
-  const after = Math.max(word.end, offset)
-  const checkFrom = word.quoted && text[after] === '`' ? after + 1 : after
-  const rest = text.slice(checkFrom)
-  const parenAhead = /^[ \t]*\(/.test(rest)
-  const angleAhead = /^[ \t]*</.test(rest)
-  if (!parenAhead && !angleAhead) return word
-  return { ...word, ...parenAhead ? { parenAhead: true } : {}, ...angleAhead ? { angleAhead: true } : {} }
+  let at = Math.max(word.end, offset)
+  if (word.quoted && text.charCodeAt(at) === 96) at++
+  while (at < text.length) {
+    const code = text.charCodeAt(at)
+    if (code === 32 || code === 9) { at++; continue }
+    if (code === 40) return { ...word, parenAhead: true }
+    if (code === 60) return { ...word, angleAhead: true }
+    return word
+  }
+  return word
+}
+
+/** Whether an unclosed `[` sits at `open`'s level before token `endIndex` (e.g. inside an array literal `[1, |]`). */
+function hasUnclosedSquareBracket(statement: Statement, open: number, endIndex: number): boolean {
+  let depth = 0
+  for (const index of statement.top(open)) {
+    if (index >= endIndex) break
+    const token = statement.toks[index]
+    if (isPunct(token, '[')) depth++
+    else if (isPunct(token, ']') && depth > 0) depth--
+  }
+  return depth > 0
 }
 
 /** What completion finds at `offset` in `text`. */
@@ -844,7 +859,9 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
     const token = toks[current]
     if (token.kind === 'punctuation' && token.text === '@' && offset === token.end) {
       const prev = toks[current - 1]
-      if (prev && prev.kind === 'punctuation' && prev.text === '@' && prev.end === token.start) {
+      const prev2 = toks[current - 2]
+      const threeAts = prev && prev2 && prev2.kind === 'punctuation' && prev2.text === '@' && prev2.end === prev.start
+      if (prev && prev.kind === 'punctuation' && prev.text === '@' && prev.end === token.start && !threeAts) {
         const sysWord: CompletionWord = { start: prev.start, end: token.end, typed: '@@', quoted: false }
         return { site: { kind: 'systemVar' }, scope: scopeAt(statement, statement.parentAt(sysWord.start), offset), word: sysWord }
       }
@@ -961,7 +978,7 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
       ? { kind: 'infoSchema', qualifier: parts.slice(0, -1) }
       : { kind: 'object', qualifier: parts }
   }
-  else if (place === 'alias') site = castCalls.has(googleSqlCallContext(text, offset)?.name.toUpperCase() ?? '') ? { kind: 'castType' } : { kind: 'none' }
+  else if (place === 'alias') site = open >= 0 && toks[open - 1]?.kind === 'word' && castCalls.has(toks[open - 1].upper) ? { kind: 'castType' } : { kind: 'none' }
   else if (parts.length) {
     site = { kind: 'member', qualifier: parts }
     if (!word.quoted && chain.parts.length > 0 && toks[chain.first]) qualifierStart = toks[chain.first].start
@@ -974,15 +991,21 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   } else if (place === 'statementStart') site = { kind: 'statementStart' }
   else if (inUnnest) site = { kind: 'unnestArg' }
   else {
-    const before = prevAtLevel(statement, chain.first, open)
-    const call = googleSqlCallContext(text, offset)
-    const callFn = call?.name.toUpperCase().replace(/^SAFE\./, '')
-    if (callFn && castCalls.has(callFn) && before >= 0 && isPunct(toks[before], '<') && isWord(toks[prevAtLevel(statement, before, open)], 'ARRAY', 'RANGE')) {
-      site = { kind: 'castType' }
-    } else if (callFn === 'EXTRACT' && call?.argument === 0 && before < 0) {
-      site = { kind: 'datePart', functionName: 'EXTRACT' }
-    } else if (callFn && datePartArgIndex.get(callFn) === call?.argument && before >= 0 && isPunct(toks[before], ',')) {
-      site = { kind: 'datePart', functionName: callFn }
+    const callee = open >= 0 && toks[open - 1]?.kind === 'word' ? toks[open - 1].upper : undefined
+    const mayNeedCallContext = !!callee && (castCalls.has(callee) || callee === 'EXTRACT' || datePartArgIndex.has(callee))
+    if (mayNeedCallContext && !hasUnclosedSquareBracket(statement, open, chain.first)) {
+      const before = prevAtLevel(statement, chain.first, open)
+      const call = googleSqlCallContext(text, offset)
+      const callFn = call?.name.toUpperCase().replace(/^SAFE\./, '')
+      if (callFn && castCalls.has(callFn) && before >= 0 && isPunct(toks[before], '<') && isWord(toks[prevAtLevel(statement, before, open)], 'ARRAY', 'RANGE')) {
+        site = { kind: 'castType' }
+      } else if (callFn === 'EXTRACT' && call?.argument === 0 && before < 0) {
+        site = { kind: 'datePart', functionName: 'EXTRACT' }
+      } else if (callFn && datePartArgIndex.get(callFn) === call?.argument && before >= 0 && isPunct(toks[before], ',')) {
+        site = { kind: 'datePart', functionName: callFn }
+      } else {
+        site = { kind: 'expression' }
+      }
     } else {
       site = { kind: 'expression' }
     }

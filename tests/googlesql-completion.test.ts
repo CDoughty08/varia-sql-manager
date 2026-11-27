@@ -20,7 +20,8 @@ const names = (sources: readonly ScopeSource[]) => sources.map(source => source.
 // A fake index with the backend's language.lookup semantics (EditorLookup.cs): projects, datasets, objects, columns by field path.
 interface FakeObject { kind: string; subtype?: string; rows?: number; bytes?: number; partitioning?: string; clustering?: string; signature?: string; columns?: { name: string; type: string; nullable?: boolean; description?: string; record?: boolean }[] }
 const wideColumns = [...Array.from({ length: 2500 }, (_, index) => ({ name: `c${String(index).padStart(4, '0')}`, type: 'INT64' })),
-  { name: 'zrec', type: 'STRUCT', record: true }, { name: 'zrec.alpha', type: 'STRING' }, { name: 'zrec.beta', type: 'STRING' }]
+  { name: 'zrec', type: 'STRUCT', record: true }, { name: 'zrec.alpha', type: 'STRING' }, { name: 'zrec.beta', type: 'STRING' },
+  { name: 'zitems', type: 'ARRAY<STRUCT>', record: true }, { name: 'zitems.sku', type: 'STRING' }, { name: 'zitems.qty', type: 'INT64' }]
 const index: Record<string, Record<string, Record<string, FakeObject>>> = {
   'varia-alpha': {
     sales: {
@@ -931,6 +932,14 @@ describe('completion from the index', () => {
     // Concrete shard prefix drops the non-matching wildcard while keeping the concrete shard.
     const concrete = await complete('SELECT * FROM analytics.events_2026|', shardedLookup)
     expect(concrete.labels('table')).toEqual(['events_20261124'])
+
+    // Empty shard date bounds omit the date range without a dangling separator.
+    const noRangeLookup: IndexLookup = async requests => requests.map(request => request.path.join('.') === 'varia-alpha.analytics'
+      ? { state: 'ready', path: [...request.path], truncated: false, items: [{ name: 'logs_20261124', kind: 'bqTable', shards: { prefix: 'logs_', count: 3, first: '', last: '' } }] }
+      : { state: 'ready', path: [...request.path], truncated: false, items: [] })
+    const noRange = await complete('SELECT * FROM analytics.lo|', noRangeLookup)
+    expect(noRange.item('logs_*')?.detail).toBe('Wildcard · 3 shards')
+    expect(noRange.item('logs_20261124')?.detail).toBe('Latest shard · 3 shards')
   })
 
   it('auto-injects BigQuery pseudo-columns (_TABLE_SUFFIX, _PARTITIONTIME/_PARTITIONDATE, _FILE_NAME) without leaking into SELECT *', async () => {
@@ -954,7 +963,7 @@ describe('completion from the index', () => {
           items: [{ name: 'message', kind: 'bqColumn', type: 'STRING' }]
         }
       }
-      if (key === 'varia-alpha.analytics.gcs_ext') {
+      if (key === 'varia-alpha.analytics.gcs_ext' || key === 'varia-alpha.analytics.gcs_ext_*') {
         return {
           state: 'ready',
           path: [...request.path],
@@ -985,10 +994,12 @@ describe('completion from the index', () => {
     expect(ingest.item('_PARTITIONDATE')?.detail).toBe('DATE · Pseudo-column')
     expect((await complete('SELECT o.| FROM sales.orders o')).labels()).not.toContain('_PARTITIONTIME')
 
-    // External table gets _FILE_NAME.
+    // External table gets _FILE_NAME (never _TABLE_SUFFIX, even with a wildcard-shaped name).
     const ext = await complete('SELECT x.| FROM analytics.gcs_ext x', pseudoLookup)
     expect(ext.labels()).toEqual(['raw_line', '_FILE_NAME'])
     expect(ext.item('_FILE_NAME')?.detail).toBe('STRING · Pseudo-column')
+    const extWild = await complete('SELECT x.| FROM analytics.gcs_ext_* x', pseudoLookup)
+    expect(extWild.labels()).toEqual(['raw_line', '_FILE_NAME'])
 
     // SELECT * in a CTE does not expand pseudo-columns.
     const cte = await complete('WITH c AS (SELECT * FROM analytics.events_*) SELECT c.| FROM c', pseudoLookup)
@@ -1026,6 +1037,10 @@ describe('completion from the index', () => {
     // Self-join qualifies every shared column under both aliases.
     const selfJoin = await complete('SELECT | FROM sales.orders a JOIN sales.orders b ON a.id = b.id')
     expect(selfJoin.items.filter(item => item.filterText === 'id').map(item => item.label)).toEqual(['a.id', 'b.id'])
+
+    // Duplicate column names emitted by a single CTE/subquery do not trigger false ambiguous join qualification.
+    const dupSingle = await complete('WITH j AS (SELECT o.id, d.id FROM sales.orders o JOIN sales.daily d ON TRUE) SELECT id| FROM j')
+    expect(dupSingle.items.filter(item => item.filterText === 'id').map(item => item.label)).toEqual(['id'])
   })
 
   it('blocks direct field completion on ARRAY<STRUCT> with an UNNEST hint and ranks ARRAY columns first inside UNNEST()', async () => {
@@ -1038,6 +1053,21 @@ describe('completion from the index', () => {
     })
     expect(direct.item('UNNEST(o.items)')?.filterText).toContain('sku')
     expect(direct.item('UNNEST(o.items)')?.documentation).toContain('sku')
+
+    // Scalar arrays render their actual type (e.g. ARRAY<STRING>) instead of ARRAY<STRUCT>.
+    const scalarArr = await complete('SELECT o.tags.| FROM sales.orders o')
+    expect(scalarArr.labels()).toEqual(['UNNEST(o.tags)'])
+    expect(scalarArr.item('UNNEST(o.tags)')?.detail).toBe('ARRAY<STRING> · use UNNEST')
+    expect(scalarArr.item('UNNEST(o.tags)')?.documentation).toContain('`ARRAY<STRING>`')
+
+    // Wide-table narrowing still blocks ARRAY<STRUCT> direct field access (aliased, typed, and bare).
+    expect((await complete('SELECT w.zitems.| FROM `varia-wide.lab.wide` w')).labels()).toEqual(['UNNEST(w.zitems)'])
+    expect((await complete('SELECT w.zitems.sk| FROM `varia-wide.lab.wide` w')).labels()).toEqual(['UNNEST(w.zitems)'])
+    expect((await complete('SELECT zitems.| FROM `varia-wide.lab.wide`')).labels()).toEqual(['UNNEST(zitems)'])
+
+    // Quoted member access blocks invalid fields without injecting UNNEST(...) inside backticks.
+    expect((await complete('SELECT o.items.`sk|` FROM sales.orders o')).items).toEqual([])
+    expect((await complete('SELECT `o.items.|` FROM sales.orders o')).items).toEqual([])
 
     // Chained access past an ARRAY<STRUCT> is also blocked with the array target.
     const chained = await complete('SELECT o.items.sku.| FROM sales.orders o')
@@ -1069,12 +1099,15 @@ describe('completion from the index', () => {
     expect((await complete('SELECT CAST(total AS ARR|<INT64>)')).item('ARRAY')).toMatchObject({ insertText: 'ARRAY' })
     expect((await complete('SELECT CAST(total AS ARR|<INT64>)')).item('ARRAY')?.insertTextIsSnippet).toBeUndefined()
     expect(read('SELECT CAST(total AS ARRAY<|>)').site).toEqual({ kind: 'castType' })
+    expect(read('SELECT CAST((total + 1) AS |)').site).toEqual({ kind: 'castType' })
 
-    // EXTRACT and *_TRUNC / *_DIFF date parts per function.
+    // EXTRACT and *_TRUNC / *_DIFF date parts per function (and not inside unclosed array literals).
     expect(read('SELECT EXTRACT(| FROM placed) FROM sales.orders').site).toEqual({ kind: 'datePart', functionName: 'EXTRACT' })
     expect(read('SELECT EXTRACT(YE| FROM placed) FROM sales.orders').site).toEqual({ kind: 'datePart', functionName: 'EXTRACT' })
     expect(read('SELECT EXTRACT(YEAR | FROM placed) FROM sales.orders').site).toEqual({ kind: 'expression' })
     expect(read('SELECT DATE_TRUNC(placed, |) FROM sales.orders').site).toEqual({ kind: 'datePart', functionName: 'DATE_TRUNC' })
+    expect(read('SELECT DATE_TRUNC([d1, d2][OFFSET(0)], |)').site).toEqual({ kind: 'datePart', functionName: 'DATE_TRUNC' })
+    expect(read('SELECT DATE_TRUNC(d, [1, |])').site).toEqual({ kind: 'expression' })
     expect(read('SELECT SAFE.DATE_TRUNC(placed, MO|) FROM sales.orders').site).toEqual({ kind: 'datePart', functionName: 'DATE_TRUNC' })
     expect(read('SELECT TIMESTAMP_TRUNC(placed, DAY, |) FROM sales.orders').site).toEqual({ kind: 'expression' })
     expect(read('SELECT DATE_DIFF(d1, d2, |)').site).toEqual({ kind: 'datePart', functionName: 'DATE_DIFF' })
@@ -1093,8 +1126,9 @@ describe('completion from the index', () => {
     const extractParts = await complete('SELECT EXTRACT(| FROM placed) FROM sales.orders')
     expect(extractParts.labels()).toEqual(expect.arrayContaining(['YEAR', 'MONTH', 'DAY', 'DAYOFWEEK', 'HOUR', 'DATE', 'TIME']))
 
-    // @@ system variables (top-level and dotted namespaces); single `@` stays quiet.
+    // @@ system variables (top-level and dotted namespaces); single `@` and triple `@@@` stay quiet.
     expect(read('SELECT @|').site).toEqual({ kind: 'none' })
+    expect(read('SELECT @@@|').site).toEqual({ kind: 'none' })
     expect(read('SELECT @@|')).toMatchObject({ site: { kind: 'systemVar' }, word: { start: 7, end: 9, typed: '@@' } })
     expect(read('SELECT @@proj|')).toMatchObject({ site: { kind: 'systemVar' }, word: { start: 7, end: 13, typed: '@@proj' } })
     expect(read('SELECT @@script.|')).toMatchObject({ site: { kind: 'systemVar', qualifier: ['script'] }, word: { typed: '' } })
@@ -1116,13 +1150,17 @@ describe('completion from the index', () => {
     expect(read('SELECT * FROM `varia-alpha.region-us.INFORMATION_SCHEMA.JO|`').site).toEqual({ kind: 'infoSchema', qualifier: ['varia-alpha', 'region-us'] })
 
     const dsInfo = await complete('SELECT * FROM sales.INFORMATION_SCHEMA.|')
-    expect(dsInfo.labels('view')).toEqual(expect.arrayContaining(['TABLES', 'COLUMNS', 'COLUMN_FIELD_PATHS', 'TABLE_STORAGE', 'VIEWS', 'ROUTINES']))
-    expect(dsInfo.labels('view')).not.toContain('JOBS_BY_PROJECT')
-    expect(dsInfo.labels('view')).not.toContain('SCHEMATA')
+    expect(dsInfo.labels('view')).toEqual(expect.arrayContaining(['TABLES', 'COLUMNS', 'COLUMN_FIELD_PATHS', 'PARTITIONS', 'VIEWS', 'ROUTINES']))
+    expect(dsInfo.item('PARTITIONS')?.detail).toBe('Dataset view')
+    for (const regionOnly of ['JOBS_BY_PROJECT', 'SCHEMATA', 'TABLE_STORAGE', 'TABLE_STORAGE_TIMELINE', 'SEARCH_INDEXES', 'SEARCH_INDEX_COLUMNS', 'VECTOR_INDEXES', 'OBJECT_PRIVILEGES']) {
+      expect(dsInfo.labels('view'), regionOnly).not.toContain(regionOnly)
+    }
 
     const regionInfo = await complete('SELECT * FROM `varia-alpha.region-us`.INFORMATION_SCHEMA.|')
-    expect(regionInfo.labels('view')).toEqual(expect.arrayContaining(['JOBS_BY_PROJECT', 'SCHEMATA', 'TABLES', 'COLUMNS', 'TABLE_STORAGE']))
+    expect(regionInfo.labels('view')).toEqual(expect.arrayContaining(['JOBS_BY_PROJECT', 'SCHEMATA', 'TABLES', 'COLUMNS', 'TABLE_STORAGE', 'TABLE_STORAGE_TIMELINE', 'SEARCH_INDEXES', 'VECTOR_INDEXES', 'OBJECT_PRIVILEGES']))
+    expect(regionInfo.labels('view')).not.toContain('PARTITIONS')
     expect(regionInfo.item('JOBS_BY_PROJECT')?.detail).toBe('Region view')
+    expect(regionInfo.item('OBJECT_PRIVILEGES')?.detail).toBe('Region view')
 
     const bareInfo = await complete('SELECT * FROM INFORMATION_SCHEMA.|')
     expect(bareInfo.labels('view')).toEqual(expect.arrayContaining(['TABLES', 'JOBS_BY_PROJECT']))

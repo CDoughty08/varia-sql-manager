@@ -117,10 +117,10 @@ export const googleSqlInformationSchemaViews: readonly GoogleSqlInfoSchemaView[]
   { name: 'COLUMN_FIELD_PATHS', scope: 'both', summary: 'Nested STRUCT field paths, data types, descriptions and policy tags.' },
   { name: 'VIEWS', scope: 'both', summary: 'SQL definitions of views in the dataset or region.' },
   { name: 'MATERIALIZED_VIEWS', scope: 'both', summary: 'SQL definitions and refresh metadata for materialized views.' },
-  { name: 'PARTITIONS', scope: 'both', summary: 'Partition IDs, row counts and storage sizes for partitioned tables.' },
-  { name: 'TABLE_STORAGE', scope: 'both', summary: 'Active, long-term, logical and physical storage bytes per table.' },
+  { name: 'PARTITIONS', scope: 'dataset', summary: 'Partition IDs, row counts and storage sizes for partitioned tables.' },
+  { name: 'TABLE_STORAGE', scope: 'region', summary: 'Active, long-term, logical and physical storage bytes per table.' },
   { name: 'TABLE_STORAGE_BY_ORGANIZATION', scope: 'region', summary: 'Table storage usage across every project in the organization.' },
-  { name: 'TABLE_STORAGE_TIMELINE', scope: 'both', summary: 'Daily historical storage usage per table.' },
+  { name: 'TABLE_STORAGE_TIMELINE', scope: 'region', summary: 'Daily historical storage usage per table.' },
   { name: 'ROUTINES', scope: 'both', summary: 'Metadata and definitions for UDFs, table functions and stored procedures.' },
   { name: 'ROUTINE_OPTIONS', scope: 'both', summary: 'Options configured on routines.' },
   { name: 'PARAMETERS', scope: 'both', summary: 'Input and output parameters of routines.' },
@@ -137,10 +137,10 @@ export const googleSqlInformationSchemaViews: readonly GoogleSqlInfoSchemaView[]
   { name: 'SESSIONS_BY_USER', scope: 'region', summary: 'Active and recent BigQuery sessions for the current user.' },
   { name: 'RESERVATIONS', scope: 'region', summary: 'Slot reservations configured in the administration project.' },
   { name: 'RESERVATION_ASSIGNMENTS', scope: 'region', summary: 'Project, folder and organization assignments to slot reservations.' },
-  { name: 'SEARCH_INDEXES', scope: 'both', summary: 'Search indexes defined on tables.' },
-  { name: 'SEARCH_INDEX_COLUMNS', scope: 'both', summary: 'Columns covered by search indexes.' },
-  { name: 'VECTOR_INDEXES', scope: 'both', summary: 'Vector indexes defined on tables.' },
-  { name: 'OBJECT_PRIVILEGES', scope: 'both', summary: 'Access privileges granted on datasets, tables and routines.' }
+  { name: 'SEARCH_INDEXES', scope: 'region', summary: 'Search indexes defined on tables.' },
+  { name: 'SEARCH_INDEX_COLUMNS', scope: 'region', summary: 'Columns covered by search indexes.' },
+  { name: 'VECTOR_INDEXES', scope: 'region', summary: 'Vector indexes defined on tables.' },
+  { name: 'OBJECT_PRIVILEGES', scope: 'region', summary: 'Access privileges granted on datasets, tables and routines.' }
 ]
 
 /** The function reference's sections, in its order. */

@@ -129,8 +129,8 @@ export interface CompletionDialect {
   pseudoColumns?(object: LanguageLookupObject, writtenParts: readonly string[]): readonly DialectColumn[]
   /** Whether a column type is an ARRAY type (for `UNNEST` ranking and blocking direct field access on `ARRAY<STRUCT>`). */
   isArrayType?(type: string | undefined): boolean
-  /** Actionable replacement suggestion when the user attempts direct `.` field access on an `ARRAY<STRUCT>` expression. */
-  arrayMemberHint?(targetParts: readonly string[], childFields: readonly string[], qualifierSpan?: TextSpan): CompletionItem | undefined
+  /** Actionable replacement suggestion when the user attempts direct `.` field access on an `ARRAY<...>` expression. */
+  arrayMemberHint?(targetParts: readonly string[], childFields: readonly string[], arrayType?: string, qualifierSpan?: TextSpan): CompletionItem | undefined
   /** Deduplication identity for completion items (default: case-insensitive `kind:label`). */
   itemKey?(kind: CompletionKind, label: string): string
   /** An object's kind as hover names it (Table, View). */
