@@ -416,21 +416,23 @@ export default function ResultsToolbar({ tabId }: { tabId: string }) {
     <span className="results-divider results-show" aria-hidden="true" />
     {/* Icons only, so the toolbar folds as little as it can in a narrow pane (the Show group folds last). */}
     <div className="results-segments results-show" role="group" aria-label="Show">
-      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} disabled={gridDisabled} title="Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column"
+      <button type="button" className="results-icon-toggle" aria-label="Profile" aria-pressed={profile} tabIndex={-1} disabled={gridDisabled}
+        title={gridDisabled ? 'Column profile: unavailable on Summary' : 'Column profile: NULLs, distinct values, lowest and highest, lengths and a histogram for each column'}
         onClick={() => void commands.execute('output.toggleColumnProfile', undefined, 'toolbar')}><Icon name="graph" /></button>
-      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} disabled={gridDisabled} title="Row size: a bar behind each row number; hover it for the exact bytes"
+      <button type="button" className="results-icon-toggle" aria-label="Row size" aria-pressed={rowSize} tabIndex={-1} disabled={gridDisabled}
+        title={gridDisabled ? 'Row size: unavailable on Summary' : 'Row size: a bar behind each row number; hover it for the exact bytes'}
         onClick={() => void commands.execute('output.toggleRowSize', undefined, 'toolbar')}><Icon name="list-flat" /></button>
       <button type="button" className="results-icon-toggle" aria-label="Pivot" aria-pressed={pivotOpen} tabIndex={-1} disabled={gridDisabled || (!pivotOpen && !canPivot)}
-        title="Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"
+        title={gridDisabled ? 'Pivot: unavailable on Summary' : "Pivot: group the focused grid's rows by columns and summarize them (count, sum, average, min, max) as a new result"}
         onClick={() => { if (pivotOpen) pivot.close(tabId); else void commands.execute('output.pivot', { tabId }, 'toolbar') }}><Icon name="pivot" /></button>
       <button type="button" className="results-icon-toggle results-compare" aria-label="Compare" aria-haspopup="dialog" aria-expanded={compareOpen} tabIndex={-1} disabled={!compareOpen && !canCompare}
         title="Compare: compare the focused grid's result with another result of this run"
         onClick={event => { if (compareOpen) compare.close(tabId); else void commands.execute('output.compare', { tabId, anchor: event.currentTarget }, 'toolbar') }}><Icon name="git-compare" /></button>
       <button type="button" className="results-icon-toggle results-transpose" aria-label="Transposed" aria-pressed={!!turned} tabIndex={-1} disabled={gridDisabled || !canTranspose}
-        title="Transposed: draw the focused grid's columns as rows and its rows as columns. Nothing is copied; the grid follows its sort and filters"
+        title={gridDisabled ? 'Transposed: unavailable on Summary' : "Transposed: draw the focused grid's columns as rows and its rows as columns. Nothing is copied; the grid follows its sort and filters"}
         onClick={() => void commands.execute('output.transpose', { tabId }, 'toolbar')}><Icon name="transpose" /></button>
       {turned && <button type="button" className="results-transpose results-headers" aria-haspopup="listbox" tabIndex={-1} disabled={gridDisabled || !canTranspose}
-        title={`Using Column as Headers: the drawn columns are headed by ${headerColumn ? `the values of ${headers}` : 'row numbers'}. Choose another column`}
+        title={gridDisabled ? 'Headers: unavailable on Summary' : `Using Column as Headers: the drawn columns are headed by ${headerColumn ? `the values of ${headers}` : 'row numbers'}. Choose another column`}
         onClick={event => void commands.execute('output.transposeChooseHeaders', { tabId, anchor: event.currentTarget }, 'toolbar')}><span>Headers: {headers}</span><Icon name="chevron-down" /></button>}
     </div>
     <span className="results-divider results-show" aria-hidden="true" />

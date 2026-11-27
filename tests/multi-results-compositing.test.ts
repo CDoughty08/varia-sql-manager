@@ -4067,4 +4067,70 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     ]))
     expect(rules.find(r => r.selector === '.multi-target-trigger:hover:not(:disabled, [data-open])')).toBeDefined()
   })
+
+  it('R16 D4 #1–#5: deduplicates multi-statement combine warnings, disables Rebuild on backend loss, updates Summary toolbar titles, and fixes open trigger & forced-colors disabled rules', () => {
+    // #1: Duplicate combineWarnings from multiple statement slots are deduplicated per entry & in baseWarnings.
+    const { results, client } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const c1 = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    const drift = 'Schema drift: 1 column(s) were missing on one or more servers and filled with NULL.'
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, c1],
+        { combineWarnings: [drift, drift] }
+      )
+    })
+    const c1Entry = results.getSnapshot().t1.sets.find(e => e.descriptor.kind === 'combined')!
+    expect(results.getSnapshot().t1.combineWarnings?.get(c1Entry.key)).toEqual([drift])
+
+    // #2: Backend loss (`client.lose()`) re-renders EntryNoticeBars immediately, disabling Rebuild with the backend-restart tooltip!
+    const devKey = results.getSnapshot().t1.sets.find(e => e.descriptor.targetKey === 'dev-01')!.key
+    results.removeEntry('t1', devKey)
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const wb = { ...f, results } as unknown as Workbench
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: wb,
+      children: createElement(EntryNoticeBars, { tabId: 't1', tab: results.getSnapshot().t1, entry: results.getSnapshot().t1.sets.find(e => e.key === c1Entry.key)!, running: false })
+    }))
+    const rebuildBtn = () => [...host.querySelectorAll<HTMLButtonElement>('.multi-grid-notice-btn')].find(b => b.textContent?.includes('Rebuild'))!
+    expect(rebuildBtn().disabled).toBe(false)
+    act(() => { client.lose() })
+    expect(rebuildBtn().disabled).toBe(true)
+    expect(rebuildBtn().title).toContain('SQL backend restarted')
+
+    // #5: ResultsToolbar swaps Profile/Row size/Pivot/Transposed titles when gridDisabled on Summary.
+    const doc = f.documents.create('r16-toolbar.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(doc.id, 'q2', {
+      multiSummary: multiSummaryOf([multiOutcome(sqlTargets[0]), multiOutcome(sqlTargets[1])], [])
+    })
+    const tbHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsToolbar, { tabId: doc.id })
+    }))
+    expect(tbHost.querySelector<HTMLButtonElement>('button[aria-label="Profile"]')?.title).toBe('Column profile: unavailable on Summary')
+    expect(tbHost.querySelector<HTMLButtonElement>('button[aria-label="Transposed"]')?.title).toBe('Transposed: unavailable on Summary')
+
+    // #3 & #4: Open trigger hover rule & forced-colors native disabled buttons.
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector.includes('button.multi-target-trigger[data-open]:hover:not(:disabled)'))?.declarations).toEqual(expect.arrayContaining([
+      { property: 'transition', value: 'none' },
+      { property: 'background', value: 'var(--varia-input-background)' }
+    ]))
+    const forcedDisabled = rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('button.multi-grid-notice-btn:disabled'))
+    expect(forcedDisabled?.selector).toContain('button.multi-target-link:disabled')
+    expect(forcedDisabled?.declarations).toEqual(expect.arrayContaining([
+      { property: 'color', value: 'GrayText' },
+      { property: 'opacity', value: '1' }
+    ]))
+  })
 })

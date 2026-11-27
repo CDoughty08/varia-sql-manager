@@ -874,12 +874,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       this.recordCombinedCounts(run)
       const combinedEntries = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+      const pushUnique = (list: string[], value: string) => { if (!list.includes(value)) list.push(value) }
       if (combinedEntries.length > 0) {
         const perEntryMap = new Map<EntryKey, string[]>(combinedEntries.map(entry => [entry.key, []]))
         const baseWarnings: string[] = []
         for (const warning of multiSummary.combineWarnings ?? []) {
           if (warning.startsWith('Combined view ') || warning.startsWith('Skipped Combined view')) {
-            baseWarnings.push(warning)
+            pushUnique(baseWarnings, warning)
             continue
           }
           const skippedMatch = /^Skipped (.+): (?:result is windowed in BigQuery\.|source result was closed\.)/.exec(warning)
@@ -904,19 +905,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
                 })
               : []
             if (matched.length > 0) {
-              for (const entry of matched) perEntryMap.get(entry.key)!.push(warning)
+              for (const entry of matched) pushUnique(perEntryMap.get(entry.key)!, warning)
             } else {
-              baseWarnings.push(warning)
+              pushUnique(baseWarnings, warning)
             }
             continue
           }
-          for (const entry of combinedEntries) perEntryMap.get(entry.key)!.push(warning)
+          for (const entry of combinedEntries) pushUnique(perEntryMap.get(entry.key)!, warning)
         }
         run.combineWarnings = perEntryMap
         run.baseCombineWarnings = baseWarnings
         this.syncCombineWarnings(run)
       } else if (multiSummary.combineWarnings?.length) {
-        run.baseCombineWarnings = [...multiSummary.combineWarnings]
+        const baseWarnings: string[] = []
+        for (const warning of multiSummary.combineWarnings) pushUnique(baseWarnings, warning)
+        run.baseCombineWarnings = baseWarnings
         this.syncCombineWarnings(run)
       }
       this.refreshSorts(tabId, run)

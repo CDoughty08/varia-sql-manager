@@ -75,6 +75,7 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
   readonly onRebuiltFocus?: () => void
 }) {
   const { results } = useWorkbench()
+  const entryState = useSyncExternalStore(entry.handle.subscribe, () => entry.handle.getSnapshot().state)
   const notices = entryNotices(tab, entry)
   const stale = notices.some(notice => notice.kind === 'staleCombined')
   const actionFocus = useRef(false)
@@ -89,7 +90,15 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
   }, [stale])
   if (notices.length === 0) return null
   const rebuilding = !!tab.combining?.has(entry.key)
-  const canRebuild = !running && !rebuilding && results.canRebuildCombined(tabId, entry.key)
+  const lost = entryState === 'lost' || entryState === 'released'
+  const canRebuild = !running && !rebuilding && !lost && results.canRebuildCombined(tabId, entry.key)
+  const rebuildTitle = !rebuilding && !canRebuild
+    ? (running
+      ? 'Unavailable while the query runs.'
+      : entryState === 'lost'
+        ? 'These results are no longer available because the SQL backend restarted.'
+        : 'At least two complete in-memory server result sets are needed to rebuild Combined.')
+    : undefined
   return <div className="multi-grid-notices">
     {notices.map(notice => <div key={notice.kind} className={`multi-grid-notice multi-grid-notice-${notice.tone}`} role="status" data-notice-kind={notice.kind}>
       <Icon name={notice.tone === 'warn' ? 'warning' : 'info'} />
@@ -103,7 +112,7 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
           if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) actionFocus.current = false
         }}>
         <button type="button" className="multi-grid-notice-btn" disabled={!rebuilding && !canRebuild} aria-disabled={rebuilding || undefined}
-          title={!rebuilding && !canRebuild ? (running ? 'Unavailable while the query runs.' : 'At least two complete in-memory server result sets are needed to rebuild Combined.') : undefined}
+          title={rebuildTitle}
           onClick={() => { if (canRebuild) void results.rebuildCombined(tabId, entry.key) }}>
           <Icon name={rebuilding ? 'loading' : 'refresh'} spin={rebuilding} /><span>{rebuilding ? 'Rebuilding…' : 'Rebuild'}</span>
         </button>

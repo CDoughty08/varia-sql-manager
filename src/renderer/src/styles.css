@@ -4443,7 +4443,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 /* Multi-Server & Cross-Engine Query Execution (Calm Pro, zero left-border accent rails). */
 .multi-target-trigger { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; height: 26px; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-size: var(--varia-size-sm); white-space: nowrap; }
 .multi-target-trigger:hover:not(:disabled, [data-open]) { border-color: var(--varia-descriptionForeground); background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
-.multi-target-trigger[data-open] { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); transition: none; }
+.multi-target-trigger[data-open], button.multi-target-trigger[data-open]:hover:not(:disabled) { border-color: var(--varia-focusBorder); box-shadow: 0 0 0 1px var(--varia-focusBorder); background: var(--varia-input-background); color: var(--varia-input-foreground); transition: none; }
 .multi-swatch-stack { display: inline-flex; align-items: center; flex: none; }
 .multi-swatch { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px var(--varia-input-background); }
 .multi-swatch + .multi-swatch { margin-left: -2px; }
@@ -4683,5 +4683,5 @@ button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[ar
   .rt-stmt-tab[aria-selected="true"]:focus-visible, button.ui-button.cross-engine-view-btn[aria-pressed="true"]:focus-visible, button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:focus-visible { outline-color: HighlightText; }
   .compare-search-row:focus-within { border-color: Highlight; outline: 2px solid Highlight; outline-offset: -1px; }
   .tab-swatch, .multi-swatch, .multi-target-swatch, .multi-target-dot, .rt-server-dot, .rs-server-dot, .cross-engine-chip-dot, .multi-exec-target-dot { forced-color-adjust: none; }
-  button.multi-grid-notice-btn[aria-disabled="true"], button.multi-grid-notice-btn[aria-disabled="true"]:hover:not(:disabled) { color: GrayText; opacity: 1; }
+  button.multi-grid-notice-btn[aria-disabled="true"], button.multi-grid-notice-btn[aria-disabled="true"]:hover:not(:disabled), button.multi-grid-notice-btn:disabled, button.multi-target-link:disabled { color: GrayText; opacity: 1; }
 }
