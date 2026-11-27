@@ -872,8 +872,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.recordCombinedCounts(run)
       if (multiSummary.combineWarnings?.length) {
         const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
-        const runLevel = multiSummary.combineWarnings.filter(warning => warning.startsWith('Combined view '))
-        const perEntry = multiSummary.combineWarnings.filter(warning => !warning.startsWith('Combined view '))
+        const isRunLevel = (warning: string) => warning.startsWith('Combined view ') || warning.startsWith('Skipped Combined view')
+        const runLevel = multiSummary.combineWarnings.filter(isRunLevel)
+        const perEntry = multiSummary.combineWarnings.filter(warning => !isRunLevel(warning))
         if (combined.length > 0) {
           run.combineWarnings = new Map(combined.map(entry => [entry.key, [...perEntry]]))
           run.baseCombineWarnings = [...runLevel]
@@ -2989,7 +2990,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.sorting.delete(key)
       run.combining.get(key)?.abort()
       run.combining.delete(key)
-      if (entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined && run.combining.size > 0) {
+      if (!entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined && run.combining.size > 0) {
         const slot = entry.descriptor.statementSlot ?? 0
         for (const [combinedKey, controller] of [...run.combining]) {
           const combined = run.entries.get(combinedKey)

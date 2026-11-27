@@ -3680,4 +3680,75 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
       { property: 'color', value: 'HighlightText' }
     ]))
   })
+
+  it('R11 D4 #1–#5: budget-skip warnings stay run-level, BigQuery sample drop does not abort rebuildCombined, and CSS select/db/forced-colors rules hold', async () => {
+    // #1: "Skipped Combined view: ..." stays in run-level baseCombineWarnings (survives close/rebuild) and never suppresses partialCombine.
+    const { results, combine } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const c1 = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    const budgetWarning = 'Skipped Combined view: not enough result memory remained for the combined rows. Individual server results were kept intact.'
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { status: 'failed' })
+        ],
+        [s1, s2, c1],
+        { combineWarnings: [budgetWarning] }
+      )
+    })
+    const tab1 = results.getSnapshot().t1
+    const c1Entry = tab1.sets.find(entry => entry.descriptor.kind === 'combined')!
+    expect(tab1.multi?.combineWarnings).toEqual([budgetWarning])
+    expect(tab1.combineWarnings?.get(c1Entry.key)).toEqual([])
+    expect(entryNotices(tab1, c1Entry).map(n => n.kind)).toEqual(['partialCombine'])
+    // Even if a budgetWarning were ever passed directly, it does NOT suppress partialCombine.
+    expect(entryNotices({ ...tab1, combineWarnings: new Map([[c1Entry.key, [budgetWarning]]]) }, c1Entry).map(n => n.kind)).toEqual(['combineWarning', 'partialCombine'])
+
+    // #4: Closing a BigQuery sample while rebuildCombined is in flight for the same slot does NOT abort the rebuild.
+    let resolveRebuild!: (res: ResultsCombineResult) => void
+    let rebuildSignal: AbortSignal | undefined
+    combine.mockImplementationOnce((_handles, opts) => {
+      rebuildSignal = (opts as { signal?: AbortSignal } | undefined)?.signal
+      return new Promise(resolve => { resolveRebuild = resolve })
+    })
+    const sampleDesc = descriptor(88, { index: 3, kind: 'rows', targetKey: 'dev-01', statementSlot: 0 })
+    results.addSet('t1', sampleDesc, 'Sample', ['1:1'])
+    const sampleEntry = results.getSnapshot().t1.sets.find(entry => entry.descriptor.resultId === 88)!
+    ;(sampleEntry as { sample?: boolean }).sample = true
+    const rebuilding = results.rebuildCombined('t1', c1Entry.key)
+    expect(rebuildSignal?.aborted).toBe(false)
+    results.removeEntry('t1', sampleEntry.key)
+    expect(rebuildSignal?.aborted).toBe(false)
+    resolveRebuild({ descriptor: descriptor(590, { kind: 'combined', index: 2, statementSlot: 0 }) })
+    expect(await rebuilding).toBe(c1Entry.key)
+    // Budget warning still survives rebuild & closing c1!
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toEqual([budgetWarning])
+    expect(results.removeEntry('t1', c1Entry.key)).toBe(true)
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toEqual([budgetWarning])
+
+    // #2, #3, #5: CSS compact select padding, .compare-search focus/padding, scoped .multi-target-db, and forced-colors fixes.
+    const rules = stylesheetRules()
+    for (const sel of ['.rs-stmt-select', '.rt-stmt-select', '.messages-filter-select']) {
+      expect(rules.find(r => r.selector === sel)?.declarations).toEqual(expect.arrayContaining([
+        { property: 'padding', value: '0 var(--varia-space-2)' },
+        { property: 'line-height', value: '20px' }
+      ]))
+    }
+    expect(rules.find(r => r.selector === '.compare-search')?.declarations).toEqual(expect.arrayContaining([{ property: 'padding', value: '0' }]))
+    expect(rules.find(r => r.selector === '.compare-search:focus-visible')?.declarations).toEqual(expect.arrayContaining([{ property: 'outline', value: 'none' }]))
+    expect(rules.find(r => r.selector === '.multi-target-db')).toBeUndefined()
+    expect(rules.find(r => r.selector === '.multi-target-row .multi-target-db')).toBeDefined()
+    expect(rules.find(r => r.selector === '.multi-target-card .multi-target-db')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'overflow', value: 'hidden' },
+      { property: 'text-overflow', value: 'ellipsis' }
+    ]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector === '.rt-stmt-tab[aria-selected="true"]:focus-visible')?.declarations)
+      .toEqual(expect.arrayContaining([{ property: 'outline-color', value: 'HighlightText' }]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.multi-target-swatch'))?.declarations)
+      .toEqual(expect.arrayContaining([{ property: 'forced-color-adjust', value: 'none' }]))
+  })
 })

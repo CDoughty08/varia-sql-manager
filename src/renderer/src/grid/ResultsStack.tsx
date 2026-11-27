@@ -48,7 +48,7 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
       if (warnings && warnings.length > 0) {
         notices.push({ kind: 'combineWarning', tone: 'info', text: warnings.join(' ') })
       }
-      if (!stale && !warnings?.some(warning => warning.startsWith('Skipped '))) {
+      if (!stale && !warnings?.some(warning => warning.startsWith('Skipped ') && !warning.startsWith('Skipped Combined view'))) {
         const slot = entry.descriptor.statementSlot ?? 0
         const k = tab.combinedCounts?.get(entry.key) ?? combinedTargetCount(tab, slot), total = tab.multi!.targets.length
         if (k < total) {
