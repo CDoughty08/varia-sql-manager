@@ -195,6 +195,97 @@ describe('Create several: the table', () => {
     expect(edited.rows.map(row => row.result?.state)).toEqual([undefined, 'unknown'])
     expect(withSeveralEdited(table, 'r1', severalRowDraft(context, table.rows[0]!).draft).rows[0]!.result).toBeUndefined()
   })
+  it('distinguishes inherited cells from explicit empty overrides and real "(none)" or "__inherit__" operator names', () => {
+    const context = contextOf(model({
+      job: record({ emailLevel: 2, emailOperator: 'DBA team' }),
+      operators: [operator('DBA team'), operator('Ops'), operator('__inherit__'), operator('(none)')]
+    }))
+    const column = context.columns.find(item => item.id === 'emailOperator')!
+    let table = startSeveral(context)
+
+    // Explicit empty override '' when template has 'DBA team'
+    table = withSeveralCell(context, table, 'r1', 'emailOperator', '')
+    expect(table.rows[0]!.cells.emailOperator).toBe('')
+    expect(severalCell(context, table.rows[0]!, column)).toEqual({ value: '', inherited: false, changed: true })
+    expect(severalRowDraft(context, table.rows[0]!).draft.emailOperator).toBe('')
+    expect(severalDifferences(context, table, table.rows[0]!)).toEqual([
+      { id: 'emailOperator', label: 'E-mail · operator', template: 'DBA team', value: '(none)', inColumn: false }
+    ])
+    expect(severalChecks(context, table).get('r1')?.blocking).toContain('Choose the operator to notify.')
+
+    // Real operator named '(none)' is distinct from empty ''
+    table = withSeveralCell(context, table, 'r1', 'emailOperator', '(none)')
+    expect(severalRowDraft(context, table.rows[0]!).draft.emailOperator).toBe('(none)')
+    expect(severalChecks(context, table).get('r1')?.blocking).not.toContain('Choose the operator to notify.')
+
+    // Real operator named '__inherit__' does not revert to template
+    table = withSeveralCell(context, table, 'r1', 'emailOperator', '__inherit__')
+    expect(severalRowDraft(context, table.rows[0]!).draft.emailOperator).toBe('__inherit__')
+
+    // undefined reverts to template inherit
+    table = withSeveralCell(context, table, 'r1', 'emailOperator', undefined)
+    expect(table.rows[0]!.cells).not.toHaveProperty('emailOperator')
+    expect(severalCell(context, table.rows[0]!, column)).toEqual({ value: 'DBA team', inherited: true, changed: false })
+    expect(severalRowDraft(context, table.rows[0]!).draft.emailOperator).toBe('DBA team')
+  })
+  it('normalizes pasted select labels and case-variants matching template base back to inherited while preserving literal "(none)" and rejecting unknown values', () => {
+    // 1. base === 'DBA', no literal '(none)' operator, shared schedule (base === 'share')
+    const baseDba = contextOf(model({
+      job: record({ emailLevel: 2, emailOperator: 'DBA' }),
+      operators: [operator('DBA'), operator('Ops')]
+    }))
+    const emailCol = baseDba.columns.find(item => item.id === 'emailOperator')!
+    const schedCol = baseDba.columns.find(item => item.id === 'schedule:9')!
+    let table = withSeveralColumn(baseDba, startSeveral(baseDba), 'emailOperator', true)
+    const schedAt = table.columns.indexOf('schedule:9')
+    const emailAt = table.columns.indexOf('emailOperator')
+    const rowLine = (emailVal: string, schedVal: string, name: string) =>
+      table.columns.map((_, idx) => idx === 0 ? name : idx === emailAt ? emailVal : idx === schedAt ? schedVal : '').join('\t')
+
+    const pasted = pasteSeveralRows(table, `${rowLine('dba', 'Share', 'JobA')}\n${rowLine('bogus', 'Share', 'JobB')}`, baseDba)
+    const rowA = pasted.table.rows[1]!, rowB = pasted.table.rows[2]!
+    expect(rowA.cells.emailOperator).toBeUndefined()
+    expect(rowA.cells['schedule:9']).toBeUndefined()
+    expect(severalCell(baseDba, rowA, emailCol)).toEqual({ value: 'DBA', inherited: true, changed: false })
+    expect(severalCell(baseDba, rowA, schedCol)).toEqual({ value: 'share', inherited: true, changed: false })
+    expect(severalRowDraft(baseDba, rowA).draft.emailOperator).toBe('DBA')
+    expect(severalDifferences(baseDba, pasted.table, rowA).map(d => d.id)).toEqual(['name'])
+
+    expect(rowB.cells.emailOperator).toBe('bogus')
+    expect(severalCell(baseDba, rowB, emailCol)).toEqual({ value: 'bogus', inherited: false, changed: true })
+    expect(severalChecks(baseDba, pasted.table).get(rowB.key)?.cellErrors.emailOperator).toContain('Choose one of:')
+
+    // Even when 2-arg pasteSeveralRows (without context) puts raw 'Share'/'dba', severalCell normalizes to base and changed: false
+    const rawPasted = pasteSeveralRows(table, rowLine('dba', 'Share', 'JobRaw'))
+    expect(severalCell(baseDba, rawPasted.table.rows[1]!, emailCol)).toEqual({ value: 'DBA', inherited: true, changed: false })
+    expect(severalCell(baseDba, rawPasted.table.rows[1]!, schedCol)).toEqual({ value: 'share', inherited: true, changed: false })
+
+    // 2. base === '' without literal '(none)' operator -> pasted '(none)' resolves to inherited ''
+    const baseEmptyNoLiteral = contextOf(model({
+      job: record({ emailLevel: 0, emailOperator: '' }),
+      operators: [operator('DBA'), operator('Ops')]
+    }))
+    const emptyCol = baseEmptyNoLiteral.columns.find(item => item.id === 'emailOperator')!
+    const emptyTable = withSeveralColumn(baseEmptyNoLiteral, startSeveral(baseEmptyNoLiteral), 'emailOperator', true)
+    const pastedEmpty = pasteSeveralRows(emptyTable, `JobC\t\t${'(none)'}`, baseEmptyNoLiteral)
+    const rowC = pastedEmpty.table.rows[1]!
+    expect(rowC.cells.emailOperator).toBeUndefined()
+    expect(severalCell(baseEmptyNoLiteral, rowC, emptyCol)).toEqual({ value: '', inherited: true, changed: false })
+
+    // 3. base === '' WITH literal '(none)' operator -> pasted '(none)' resolves to literal '(none)' operator
+    const baseEmptyWithLiteral = contextOf(model({
+      job: record({ emailLevel: 2, emailOperator: '' }),
+      operators: [operator('DBA'), operator('(none)')]
+    }))
+    const literalCol = baseEmptyWithLiteral.columns.find(item => item.id === 'emailOperator')!
+    const literalTable = withSeveralColumn(baseEmptyWithLiteral, startSeveral(baseEmptyWithLiteral), 'emailOperator', true)
+    const pastedLiteral = pasteSeveralRows(literalTable, `JobD\t\t${'(none)'}`, baseEmptyWithLiteral)
+    const rowD = pastedLiteral.table.rows[1]!
+    expect(rowD.cells.emailOperator).toBe('(none)')
+    expect(severalCell(baseEmptyWithLiteral, rowD, literalCol)).toEqual({ value: '(none)', inherited: false, changed: true })
+    expect(severalRowDraft(baseEmptyWithLiteral, rowD).draft.emailOperator).toBe('(none)')
+    expect(severalChecks(baseEmptyWithLiteral, pastedLiteral.table).get(rowD.key)?.blocking).not.toContain('Choose the operator to notify.')
+  })
 })
 
 /** A workbench whose describe answers the source job and New Job's model; executes answer in order from `answers`. */
