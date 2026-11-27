@@ -151,9 +151,14 @@ export class TimelineView implements Disposable {
       this.options.root.style.setProperty('--agent-timeline-grid-offset', `${offsetPx}px`)
       for (let at = first; at <= start + seconds; at += step) {
         const element = this.pooled(this.ticks, tick++, 'agent-timeline-tick', this.options.axis)
+        const x = (at - start) / seconds * width
         element.style.left = `${(at - start) / seconds * 100}%`
+        const label = timelineClock(model, at)
         const text = element.firstChild as Text
-        text.nodeValue = timelineClock(model, at)
+        text.nodeValue = label
+        const clearance = Math.max(44, label.length * 7 + 9)
+        const measured = element.offsetWidth
+        if (measured > 0 ? x + measured > width : x > width - clearance) text.nodeValue = ''
       }
       // Midnights (the start of each day) as faint lines across the axis.
       for (let at = Math.ceil((origin + start) / 86_400) * 86_400 - origin; at <= start + seconds; at += 86_400) {

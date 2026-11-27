@@ -4624,7 +4624,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-job-schedules-main .property-field-control > select:not(:focus-visible), .agent-job-schedules-main select.property-input:not(:focus-visible) { outline: 1px solid var(--varia-input-border); outline-offset: -1px; }
 .agent-job-schedules-main .property-field-control > select:focus-visible, .agent-job-schedules-main select.property-input:focus-visible { outline: var(--varia-space-0) solid var(--varia-focusBorder); outline-offset: calc(-1 * var(--varia-space-0)); }
 .agent-job-schedules-main .property-field-control > .switch-field { min-height: var(--varia-control); }
-.agent-job-schedules-main .agent-schedule-sentence { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); font-size: var(--varia-size-sm); }
+.agent-job-schedules-main .agent-schedule-sentence { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
 .agent-job-schedules-main .agent-schedule-facts > section { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
 
 /* Job › History (scoped under .agent-job-history-fill so FlowRunPanel.tsx keeps its 240px cap). */
@@ -4853,11 +4853,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-schedule-editor .property-field-label { min-height: var(--varia-control); align-items: center; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .agent-schedule-row { width: 100%; min-width: 0; }
 .agent-schedule-row > .property-input:not(.agent-schedule-number), .agent-schedule-presets > .property-input { width: auto; max-width: 100%; flex: 0 1 auto; }
-.agent-schedule-sentence { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
-.agent-schedule-facts { gap: var(--varia-space-2); }
-.agent-schedule-facts > section { display: flex; flex-direction: column; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); min-width: 0; }
-.agent-schedule-facts > section > h4 { display: flex; align-items: baseline; justify-content: space-between; gap: var(--varia-space-2); margin: 0 0 var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-.agent-schedule-facts > section > h4 > .field-note, .agent-schedule-facts > section > h4 > .agent-mono { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.agent-schedules-detail .agent-schedule-sentence { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.agent-schedules-detail .agent-schedule-facts { gap: var(--varia-space-2); }
+.agent-schedules-detail .agent-schedule-facts > section { display: flex; flex-direction: column; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-editor-background); min-width: 0; }
+.agent-schedules-detail .agent-schedule-facts > section > h4 { display: flex; align-items: baseline; justify-content: space-between; gap: var(--varia-space-2); margin: 0 0 var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.agent-schedules-detail .agent-schedule-facts > section > h4 > .field-note, .agent-schedules-detail .agent-schedule-facts > section > h4 > .agent-mono { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .agent-schedule-jobs > li { min-width: 0; }
 .agent-schedule-job-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-schedule-runs li { font-size: var(--varia-size-xs); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
