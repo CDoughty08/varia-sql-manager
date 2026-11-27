@@ -278,11 +278,11 @@ export class ScopeResolver {
   /** A source's columns: the index's for an object, the select list's (with `*` expanded) for a WITH query or subquery. The grammar
    *  has already said which names are WITH queries (kind cte); an object is always the index's. */
   columns(source: ScopeSource, hops = 0): Promise<SourceColumns> {
-    if (source.kind === 'object') return Promise.resolve(this.objectColumns(source))
     if (this.reading.has(source)) return Promise.resolve(unread)
     const kept = this.cache.get(source)
     if (serves(kept, hops)) return kept.found
     if (hops > resolverLimits.starHops || this.depth >= resolverLimits.readDepth) return Promise.resolve({ columns: [], truncated: true, budget: true })
+    if (source.kind === 'object') return Promise.resolve(this.objectColumns(source))
     this.reading.add(source)
     const entry: Kept = { hops, found: Promise.resolve(unread) }
     this.depth++
@@ -342,7 +342,12 @@ export class ScopeResolver {
     const seenGiven = new Set<SourceColumns>()
     for (const star of shape.stars) {
       if (this.spent > resolverLimits.work) { this.overBudget = true; return { columns, truncated: true, budget: true } }
-      const given = star.kind === 'object' ? this.objectColumns(star) : await this.columns(star, hops + 1)
+      const nextHops = hops + 1
+      const given = star.kind === 'object'
+        ? (nextHops > resolverLimits.starHops || this.depth >= resolverLimits.readDepth
+            ? { columns: [], truncated: true, budget: true as const }
+            : this.objectColumns(star))
+        : await this.columns(star, nextHops)
       this.spent += given.columns.length
       truncated ||= given.truncated
       budget ||= given.budget === true

@@ -673,6 +673,13 @@ describe('completion from the index', () => {
   it('keeps a WITH query cut short deep in a chain from standing for it nearer the top, and reads many bare UNNESTs quickly', async () => {
     const chain = 'WITH ' + Array.from({ length: 70 }, (_, index) => `w${index} AS (SELECT * FROM ${index ? `w${index - 1}` : 'sales.orders'})`).join(', ') + ' SELECT  FROM w69, w5'
     expect((await complete(chain.replace('SELECT  FROM', 'SELECT | FROM'))).labels('column')).toContain('customer')
+    // Exact boundary: an object at hop 65 (past starHops = 64) still marks incomplete and budget-cuts so a shallower read of w0 re-reads it.
+    const chain65 = 'WITH ' + Array.from({ length: 65 }, (_, index) => `w${index} AS (SELECT * FROM ${index ? `w${index - 1}` : 'sales.orders'})`).join(', ')
+    const atHop65 = await complete(`${chain65} SELECT | FROM w64`)
+    expect(atHop65.incomplete).toBe(true)
+    const hop65WithShallow = await complete(`${chain65} SELECT | FROM w64, w0`)
+    expect(hop65WithShallow.incomplete).toBe(true)
+    expect(hop65WithShallow.labels('column')).toContain('customer')
     const timed = performance.now()
     const bare = 'SELECT c24| FROM `varia-wide.lab.wide` w' + ', UNNEST(zrec) u'.repeat(11000)
     await complete(bare)
