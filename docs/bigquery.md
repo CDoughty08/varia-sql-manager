@@ -235,6 +235,20 @@ it. Early results show while the script runs. A listing that fails between polls
 needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
 rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
 
+### Named result sets
+
+BigQuery queries and scripts support `#Name="…"` marker comments just before a query statement (`SELECT`, `WITH`, `FROM`
+pipe syntax, or a parenthesized query) without altering the SQL sent to BigQuery
+([Named result sets › BigQuery](named-result-sets-scope.md#bigquery-googlesql)). Markers work in `-- #Name="…"`,
+`/* #Name="…" */`, `# #Name="…"` and bare `#Name="…"` comments (requiring `=` after `#Name`, so `#Names` and prose
+comments like `#Name: orders` are ignored). Single queries keep their name whether in memory, read via Storage Read,
+windowed in BigQuery, loaded into memory, re-run in place, or re-attached via `query.attach`. Multi-statement scripts
+match child jobs using `statistics.scriptStatistics.stackFrames` (`startLine`/`startColumn`, without keeping child SQL
+text), with a safe positional fallback when stack frames are absent and no control-flow or dynamic statement precedes the
+query. Markers on or inside `IF`, `LOOP`, `WHILE`, `REPEAT`, `FOR`, `BEGIN … END`, `CASE`, `CALL` or `EXECUTE IMMEDIATE`,
+on non-result statements, on oversized scripts (> 262,144 characters), or when child jobs cannot be listed leave the
+result unnamed and emit bounded informational notes in Messages (up to 20 per run).
+
 ### Sessions
 
 Each query tab has its own BigQuery session, so temp tables, variables and transactions carry from one Execute to the
