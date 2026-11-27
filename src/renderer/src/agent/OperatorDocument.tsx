@@ -100,7 +100,7 @@ function DutySection({ state, draft, editable, problems, service }: Props) {
         {days.map(day => <label key={day.bit}><input type="checkbox" checked={(draft.pagerDays & day.bit) !== 0} disabled={!editable} onChange={() => update({ pagerDays: draft.pagerDays ^ day.bit })} /> {day.label}</label>)}
       </span>
     </PropertyField>
-    <table className="properties-table" aria-label="Pager duty hours">
+    <table className="agent-table" aria-label="Pager duty hours">
       <thead><tr><th scope="col">Days</th><th scope="col">Start</th><th scope="col">End</th></tr></thead>
       <tbody>{[hoursRow('Weekdays', 'weekday'), hoursRow('Saturday', 'saturday'), hoursRow('Sunday', 'sunday')]}</tbody>
     </table>
@@ -117,7 +117,7 @@ function NotificationsSection({ state, model, draft, editable, problems, service
   const jobs = (model.jobs ?? []).filter(job => model.operator && (job.email === model.operator.name || job.page === model.operator.name || job.netSend === model.operator.name))
   return <div className="agent-operator-notifications">
     {!alerts ? <p className="field-note">{model.platform === 'windows' ? agentAlertText.readAlertsDenied : agentAlertText.platformAlerts}</p> : alerts.length === 0 ? <p className="field-note">The server has no alerts.</p>
-      : <table className="properties-table" aria-label="Alerts that notify this operator">
+      : <table className="agent-table" aria-label="Alerts that notify this operator">
         <thead><tr><th scope="col">Alert</th>{methodChoices.slice(0, 2).map(choice => <th key={choice.bit} scope="col">{choice.label}</th>)}</tr></thead>
         <tbody>{alerts.map(alert => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
           <th scope="row">{alert.name}</th>

@@ -1965,7 +1965,10 @@ function agentOperatorDocument(params) {
   const operator = params.target.kind === 'agent' ? undefined : agentOperatorRows.find(row => row.name === params.target.name)
   return { agentOperatorDocument: { ...agentObjectsBase(), alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [], ...operator ? { operator } : {} }, elapsedMs: 1 }
 }
-const agentOperatorsGrid = () => ({ agentOperators: { ...agentObjectsBase(), operators: agentOperatorRows, alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [] }, elapsedMs: 1 })
+const agentOperatorJobs = () => controlDirectory && existsSync(join(controlDirectory, 'agent-operator-jobs'))
+  ? agentJobs.slice(0, 2).map(job => ({ id: job.id, name: job.name, email: agentJobDoc(job).emailOperator, page: '', netSend: '' }))
+  : []
+const agentOperatorsGrid = () => ({ agentOperators: { ...agentObjectsBase(), operators: agentOperatorRows, alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: agentOperatorJobs() }, elapsedMs: 1 })
 function agentObjectSave(params) {
   if (params.action === 'agentAlert') {
     const save = params.agentAlert

@@ -99,7 +99,7 @@ export function LastRunPanel({ state, model, run, service, select }: { readonly 
       </dl>
     </section>
     {run.reading ? <p className="document-status" role="status"><Icon name="loading" spin />Reading the run's steps…</p>
-      : run.passes.length > 0 && <table className="properties-table agent-flow-passes" aria-label="Steps of the run, in the order they ran">
+      : run.passes.length > 0 && <table className="agent-table agent-flow-passes" aria-label="Steps of the run, in the order they ran">
         <thead><tr><th scope="col">#</th><th scope="col">Step</th><th scope="col">Outcome</th><th scope="col">Duration</th></tr></thead>
         <tbody>{run.passes.map((pass, index) => {
           const last = pass.rows[pass.rows.length - 1]!
@@ -119,7 +119,7 @@ export function LastRunPanel({ state, model, run, service, select }: { readonly 
         <button type="button" disabled={text === undefined} onClick={() => void history.copyMessage(state.id)}><Icon name="copy" />Copy</button></span></h4>
       {view.message?.state === 'reading' && <p className="document-status" role="status"><Icon name="loading" spin />Reading the whole message…</p>}
       {view.message?.state === 'failed' && <p className="field-note"><Icon name="warning" />{jobHistoryText.messageFailed}</p>}
-      <pre className="agent-history-message-text">{text}</pre>
+      <pre className="agent-job-history-message-text">{text}</pre>
       {view.notice && <p className="document-status" role="status">{view.notice}</p>}
     </section>}
     <p className="field-note">Numbers on the edges are the order the run took them; a step that ran more than once shows {'×'}N and its last passes, and the table lists every pass. The box above the graph and History's list share one selected run.</p>
@@ -137,7 +137,7 @@ export function LiveRunPanel({ state, model, run, flow, service }: { readonly st
   return <>
     <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-live`}>
       <h4 id={`agent-flow-${state.id}-live`}>This run<span className="agent-flow-sec-right">{progress.text}</span></h4>
-      {progress.share !== undefined && <div className="agent-history-progress" role="progressbar" aria-label="This run against the usual time" aria-valuemin={0} aria-valuemax={100}
+      {progress.share !== undefined && <div className="agent-job-history-progress" role="progressbar" aria-label="This run against the usual time" aria-valuemin={0} aria-valuemax={100}
         aria-valuenow={Math.round(progress.share * 100)} aria-valuetext={progress.text}><i style={{ width: `${Math.round(progress.share * 100)}%` }} /></div>}
     </section>
     <section className="agent-flow-sec" aria-labelledby={`agent-flow-${state.id}-current`}>
@@ -153,7 +153,7 @@ export function LiveRunPanel({ state, model, run, flow, service }: { readonly st
       </>}
       {run.reading ? <p className="document-status" role="status"><Icon name="loading" spin />Reading the run's steps…</p> : !run.known && <p className="field-note">{jobHistoryCopy.runningUnknown}</p>}
     </section>
-    <p className="agent-history-actions">
+    <p className="agent-job-history-actions">
       <button type="button" className="danger" disabled={!service.canStop(state.id)} onClick={() => void commands.execute('agentJob.stop', { tabId: state.id }, 'toolbar')}><Icon name="debug-stop" />Stop job</button>
       <span className="field-note">Stop sends sp_stop_job; the run is recorded as Canceled.</span>
     </p>

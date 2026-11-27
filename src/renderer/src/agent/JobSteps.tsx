@@ -303,7 +303,7 @@ function SsisSection({ state, step, editable, update, service, id }: { readonly 
       <h4 id={`${id}-params-h`}>Parameters</h4>
       {!rows ? <p className="field-note"><Icon name="loading" spin />Reading the package's parameters…</p>
         : rows.length === 0 ? <p className="field-note">The package and its project have no parameters.</p>
-          : <table className="properties-table" aria-label="Parameters">
+          : <table className="agent-table" aria-label="Parameters">
             <thead><tr><th scope="col">Parameter</th><th scope="col">Value</th><th scope="col">Comes from</th></tr></thead>
             <tbody>{rows.map(row => {
               const missing = row.required && row.source === 'none'
