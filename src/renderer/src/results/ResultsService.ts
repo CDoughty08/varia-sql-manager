@@ -232,13 +232,17 @@ export function shownFilters(tab: Pick<TabResults, 'sorts'>, key: EntryKey): rea
   return tab.sorts.get(key)?.view?.filters ?? []
 }
 /**
- * Whether a group's Pivot is out of date: the Table's resolved filters, as its grid shows them now, differ from those the
- * Pivot's last build recorded (its provenance). Row order changes no aggregate, so a sort alone does not count, nor does a
- * filter's label being named later. A Pivot with no provenance (none is published without one) is never marked.
+ * Whether a group's Pivot is out of date: the Table's stored result was replaced in place (e.g. a rebuilt Combined view)
+ * or the Table's resolved filters, as its grid shows them now, differ from those the Pivot's last build recorded (its
+ * provenance). Row order changes no aggregate, so a sort alone does not count, nor does a filter's label being named
+ * later. A Pivot with no provenance (none is published without one) is never marked.
  */
 export function pivotOutOfDate(tab: Pick<TabResults, 'sorts'>, group: Pick<ResultGroup, 'table' | 'pivot'> | undefined): boolean {
   const built = group?.pivot?.pivot
-  return !!group && !!built && !sameFilters(built.filters, shownFilters(tab, group.table.key))
+  if (!group || !built) return false
+  const sourceSet = group.pivot?.sources[0]?.set
+  if (sourceSet !== undefined && sourceSet !== setKey(group.table.entry.descriptor)) return true
+  return !sameFilters(built.filters, shownFilters(tab, group.table.key))
 }
 /** Whether a tab run has multi-server summary cards to show (live or settled). */
 export const hasMultiSummary = (tab: Pick<TabResults, 'multi'> | undefined): boolean => !!tab?.multi && tab.multi.targets.length > 0
@@ -1507,7 +1511,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private combinedSourcesOf(run: Run, combined: ResultSetEntry): ResultSetEntry[] {
     const slot = combined.descriptor.statementSlot ?? 0
     return run.sets.filter(entry =>
-      entry.descriptor.kind === 'rows'
+      !entry.sample
+      && entry.descriptor.kind === 'rows'
       && entry.descriptor.targetKey !== undefined
       && (entry.descriptor.statementSlot ?? 0) === slot
       && entry.handle.getSnapshot().state === 'complete'
@@ -1518,7 +1523,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private markCombinedStaleFor(run: Run, removed: readonly ResultSetEntry[]): void {
     const slots = new Set<number>()
     for (const entry of removed) {
-      if (entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined) slots.add(entry.descriptor.statementSlot ?? 0)
+      if (!entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined) slots.add(entry.descriptor.statementSlot ?? 0)
     }
     if (slots.size === 0) return
     let stale: Set<EntryKey> | undefined

@@ -140,8 +140,8 @@ function orderedMultiSets(tab: TabResults, selectedStmt: number | 'all'): readon
  * transposed (`turned`) is sized by the rows it draws, which are its columns, with the strip it shows past the cap.
  * Multi-server notice strips above a grid are included in its settled height.
  */
-export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>): (number | undefined)[] {
-  return tab.sets.map(entry => {
+export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>, entries: readonly ResultSetEntry[] = tab.sets): (number | undefined)[] {
+  return entries.map(entry => {
     const set = tab.settled.get(setKey(entry.descriptor))
     if (!set) return undefined
     const isTurned = !!turned?.has(entry.key)
@@ -354,7 +354,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const sorts = tab.sorts
-  const content = useMemo(() => settledContent({ sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined }, narrow, turned), [sets, settled, sorts, tab.multi, tab.staleCombined, narrow, turned])
+  const content = useMemo(() => settledContent({ sets: tab.sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined }, narrow, turned, sets), [tab.sets, settled, sorts, tab.multi, tab.staleCombined, narrow, turned, sets])
   // By place, for the layout: what the stack keeps by entry key, over the entries as they are drawn.
   const weights = useMemo(() => weightsOf(sets, entryWeights), [sets, entryWeights])
   const collapsed = useMemo(() => collapsedPlaces(sets, collapsedEntries), [sets, collapsedEntries])

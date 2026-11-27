@@ -592,8 +592,8 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const shown = this.existing(tabId, sides.old.key, sides.neu.key)
     // Show It on a pair the run has applies the popover's Exact text (D13): it only focuses the comparison when that
     // matches, else Update replaces it, with its progress, Cancel and failure in the popover as a first run's are.
-    if (shown && this.stateOf(tabId, shown)?.exact === picker.exact && o.context === undefined) { this.remember(tabId, picker, true); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
-    this.choose(tabId, { error: undefined, cancelled: false, refusedRows: false }, true)
+    if (shown && this.stateOf(tabId, shown)?.exact === picker.exact && o.context === undefined) { this.remember(tabId, picker, false); this.close(tabId); this.results.focusEntry(tabId, shown.key); return shown.key }
+    this.choose(tabId, { error: undefined, cancelled: false, refusedRows: false }, false)
     const context = o.context === undefined ? {} : { context: o.context }
     // A first run from the popover takes the match remembered for its pair of names.
     const outcome = shown ? await this.replace(tabId, shown.key, { exact: picker.exact, ...context }, { quiet: true })
@@ -1181,7 +1181,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     this.publish({ ...this.getSnapshot(), running })
   }
   /** Keeps the popover's choice for the next open on its group (a target that closed is not one); `persistExact` records
-   *  `memory.exact` only when the user explicitly toggled Exact text or ran a comparison. */
+   *  `memory.exact` only when the user explicitly toggled Exact text via `setExact()`. */
   private remember(tabId: string, picker: ComparePicker, persistExact = false): void {
     let memory = this.remembered.get(tabId)
     if (!memory) this.remembered.set(tabId, memory = { groups: new Map() })
