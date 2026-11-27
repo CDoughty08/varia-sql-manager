@@ -409,6 +409,96 @@ describe('GoogleSQL scope reader', () => {
     expect(names(readGoogleSqlStatementSources('SELECT a-1.5 FROM t', 'SELECT a-1.5 FROM t'.length))).toEqual(['t=t'])
   })
 
+  it('completes dashed identifiers with -<digits><letters> and scientific-like datasets without breaking aliases or arithmetic', async () => {
+    // [Medium 1] -<digits><letters> mid-segment and end-of-segment in object sites.
+    expect(read('SELECT * FROM gcp-123abc|')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 24, typed: 'gcp-123abc', quoted: false }
+    })
+    expect(read('SELECT * FROM gcp-123a|bc')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 24, typed: 'gcp-123a', quoted: false }
+    })
+    expect(read('SELECT * FROM gcp-123a|bc-def')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 28, typed: 'gcp-123a', quoted: false }
+    })
+    expect(read('SELECT * FROM gcp-123-456abc|')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 28, typed: 'gcp-123-456abc', quoted: false }
+    })
+    expect(read('SELECT * FROM my-proj.123-456_tbl|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-proj'] },
+      word: { start: 22, end: 33, typed: '123-456_tbl', quoted: false }
+    })
+
+    // End-to-end project completion for `gcp-123a` / `gcp-123abc` returns project item, not afterFromTable keywords.
+    const gcpLookup: IndexLookup = async requests => requests.map(request => request.path.length === 0
+      ? { state: 'ready', path: [], truncated: false, items: [{ name: 'gcp-123abc', kind: 'bqProject' }] }
+      : { state: 'ready', path: [...request.path], truncated: false, items: [] })
+    expect((await complete('SELECT * FROM gcp-123a|', gcpLookup)).labels('container')).toEqual(['gcp-123abc'])
+    expect((await complete('SELECT * FROM gcp-123abc|', gcpLookup)).labels('container')).toEqual(['gcp-123abc'])
+
+    // hasFromAlias after trailing space on dashed -<digits><letters> segments vs real aliases.
+    for (const sql of [
+      'SELECT * FROM gcp-123abc |',
+      'SELECT * FROM my-proj-123_tbl |',
+      'SELECT * FROM my-proj.123-456_tbl |',
+      'SELECT * FROM my-proj-1.2024_01-2b |'
+    ]) {
+      expect(read(sql).site, sql).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+      expect((await complete(sql)).labels('keyword'), sql).toContain('AS')
+    }
+    expect(read('SELECT * FROM gcp-123abc t |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('SELECT * FROM my-proj.tbl AS t |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+
+    // Non-object arithmetic / expression sites must not turn into object or member sites.
+    expect(read('SELECT a-1.|').site).toEqual({ kind: 'none' })
+    expect(read('SELECT a-1.b|').site).toEqual({ kind: 'none' })
+    expect(read('SELECT a-1abc.b| FROM t').site).toEqual({ kind: 'none' })
+    expect(read('SELECT t.x-1abc| FROM t').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT gcp-123abc| FROM t').site).toEqual({ kind: 'expression' })
+
+    // [Low 1] Scientific-notation-like segment after a dashed-digit project (`my-project-123456.2024e1`).
+    expect(read('SELECT * FROM my-project-123456.2024e1|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 38, typed: '2024e1', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.2024e1.|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456', '2024e1'] },
+      word: { start: 39, end: 39, typed: '', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.2024e10|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 39, typed: '2024e10', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.2024E2|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 38, typed: '2024E2', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.e1|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 34, typed: 'e1', quoted: false }
+    })
+    const sciSql = 'SELECT * FROM my-project-123456.2024e1.orders'
+    expect(readGoogleSqlStatementSources(sciSql, sciSql.length)).toEqual([
+      { kind: 'object', name: 'orders', parts: ['my-project-123456', '2024e1', 'orders'], span: { start: 14, end: 45 } }
+    ])
+    const sciHover = at('SELECT * FROM my-project-123456.2024e1.ord|ers')
+    expect(readGoogleSqlHover(sciHover.text, sciHover.offset)).toMatchObject({
+      parts: ['my-project-123456', '2024e1', 'orders'],
+      at: 2,
+      object: true
+    })
+
+    // Scientific-notation arithmetic negatives stay non-completable with no spurious hover or sources.
+    for (const sql of ['SELECT a-1.5e2|', 'SELECT a-1.5e2| FROM t', 'SELECT 10-2.5e1|']) {
+      expect(read(sql).site, sql).toEqual({ kind: 'none' })
+    }
+    expect(readGoogleSqlHover('SELECT a-1.5e2 FROM t', 'SELECT a-1.'.length)).toBeUndefined()
+    expect(names(readGoogleSqlStatementSources('SELECT a-1.5e2 FROM t', 'SELECT a-1.5e2 FROM t'.length))).toEqual(['t=t'])
+  })
+
   it('suppresses ON and USING after CROSS JOIN and NATURAL JOIN while keeping them on other joins', async () => {
     for (const sql of [
       'SELECT * FROM a CROSS JOIN b |',

@@ -127,25 +127,34 @@ class Statement {
           continue
         }
       }
-      // `my-project-123456.2024_sales`, `my-proj.123-456.789`: the scanner reads `123456.2024` as one number; split at `.` when adjacent to `-` (after a piece) or `.`.
+      // `my-project-123456.2024_sales`, `my-project-123456.2024e1`, `my-proj.123-456.789`: the scanner reads `123456.2024e1` as one number;
+      // split at `.` when adjacent to `-` (after a piece) or `.` and the right side has no exponent sign (`[+-]`).
       if (token.kind === 'number') {
         const prev = scanned[i - 1]
         const afterDash = prev?.kind === 'punctuation' && text.charCodeAt(prev.start) === 45 && prev.end === token.start
           && toks.length >= 2 && isPiece(toks.at(-2)) && toks.at(-2)!.end === prev.start
         const afterDot = prev?.kind === 'punctuation' && text.charCodeAt(prev.start) === 46 && prev.end === token.start
         if (afterDash || afterDot) {
-          let dot = -1, valid = true
-          for (let c = token.start; c < token.end; c++) {
-            const code = text.charCodeAt(c)
-            if (code === 46) {
-              if (dot >= 0) { valid = false; break }
-              dot = c
-            } else if (code < 48 || code > 57) { valid = false; break }
-          }
-          if (valid && dot > token.start && dot < token.end - 1) {
-            toks.push({ kind: 'number', start: token.start, end: dot, text: text.slice(token.start, dot), upper: '' })
+          const slice = text.slice(token.start, token.end)
+          const match = /^([0-9]+)\.([0-9]+(?:[eE][0-9]+)?|[eE][0-9]+)$/.exec(slice)
+          if (match) {
+            const dot = token.start + match[1].length
+            toks.push({ kind: 'number', start: token.start, end: dot, text: match[1], upper: '' })
             toks.push({ kind: 'punctuation', start: dot, end: dot + 1, text: '.', upper: '' })
-            toks.push({ kind: 'number', start: dot + 1, end: token.end, text: text.slice(dot + 1, token.end), upper: '' })
+            const rightText = match[2]
+            const rightFirst = rightText.charCodeAt(0)
+            if (rightFirst === 69 || rightFirst === 101) {
+              const next = scanned[i + 1]
+              if (next?.kind === 'word' && next.start === token.end && next.end <= end) {
+                const merged = rightText + text.slice(next.start, next.end)
+                toks.push({ kind: 'word', start: dot + 1, end: next.end, text: merged, upper: merged.toUpperCase() })
+                i++
+              } else {
+                toks.push({ kind: 'word', start: dot + 1, end: token.end, text: rightText, upper: rightText.toUpperCase() })
+              }
+            } else {
+              toks.push({ kind: 'number', start: dot + 1, end: token.end, text: rightText, upper: '' })
+            }
             continue
           }
         }
@@ -684,12 +693,8 @@ function hasFromAlias(statement: Statement, before: number, open: number, first:
   }
   if (at < 0 || !isName(toks[at])) return false
   if (toks[at].kind === 'word' && notAliases.has(toks[at].upper)) return false
-  let prev2 = prevAtLevel(statement, at, open)
-  // An adjacent `2024` + `_sales` after `.` (`FROM my-proj.2024_sales `) is one segment, not `2024` aliased as `_sales`.
-  if (prev2 >= 0 && toks[prev2].kind === 'number' && toks[prev2].end === toks[at].start) {
-    const beforeNum = prevAtLevel(statement, prev2, open)
-    if (beforeNum >= 0 && isPunct(toks[beforeNum], '.')) return false
-  }
+  const segStart = isPiece(toks[at]) ? segmentSpan(toks, at)[0] : at
+  const prev2 = prevAtLevel(statement, segStart, open)
   const prev2Tok = prev2 >= 0 ? toks[prev2] : undefined
   if (!prev2Tok || isPunct(prev2Tok, '.') || isPunct(prev2Tok, '-') || isPunct(prev2Tok, ',')) return false
   if (isWord(toks[at], 'OFFSET') && isWord(prev2Tok, 'WITH')) return false
@@ -791,8 +796,10 @@ function chainBefore(statement: Statement, end: number, allowDigitSegment = fals
     if (toks[lo].kind === 'number') {
       if (!allowDigitSegment || !isPunct(toks[lo - 1], '.') || toks[lo - 1].end !== toks[lo].start) return undefined
       usedDigitSegment = true
-    } else if (toks[hi].kind === 'number' && lo < hi) {
-      usedDigitSegment = true
+    } else if (lo < hi) {
+      for (let k = lo + 1; k <= hi; k++) {
+        if (toks[k].kind === 'number') { usedDigitSegment = true; break }
+      }
     }
     reversed.push([text.slice(toks[lo].start, toks[hi].end)])
     at = lo - 1
@@ -842,6 +849,14 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
           }
         }
         return none(empty)
+      }
+      if (lo < hi) {
+        const open = statement.parentAt(toks[lo].start)
+        const chain = chainBefore(statement, lo, true)
+        if (chain && placeOf(statement, chain.first, open) === 'object') {
+          word = { start: toks[lo].start, end: toks[hi].end, typed: text.slice(toks[lo].start, offset), quoted: false }
+          return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
+        }
       }
     }
     if (token.kind === 'number' || token.kind === 'string' || token.kind === 'parameter' || token.kind === 'systemVariable') return none(empty)

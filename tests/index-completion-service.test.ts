@@ -413,7 +413,20 @@ describe('IndexCompletionService', () => {
     expect(extractBigQueryRefreshScopes('SELECT * FROM my-project-123456.2024_sales.', 'varia-alpha')).toEqual([
       { project: 'my-project-123456', dataset: '2024_sales' }
     ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM my-project-123456.2024e1.orders', 'varia-alpha')).toEqual([
+      { project: 'my-project-123456', dataset: '2024e1' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM my-project-123456.2024e1.', 'varia-alpha')).toEqual([
+      { project: 'my-project-123456', dataset: '2024e1' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM gcp-123abc.2024_01.2024_01-2b', 'varia-alpha')).toEqual([
+      { project: 'gcp-123abc', dataset: '2024_01' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM gcp-123abc.2024_01.', 'varia-alpha')).toEqual([
+      { project: 'gcp-123abc', dataset: '2024_01' }
+    ])
     expect(extractBigQueryRefreshScopes('SELECT a-1.5 FROM t', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
+    expect(extractBigQueryRefreshScopes('SELECT a-1.5e2 FROM t', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
     expect(extractBigQueryRefreshScopes('SELECT 10-2.5', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
   })
 
