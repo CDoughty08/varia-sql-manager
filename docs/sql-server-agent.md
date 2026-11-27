@@ -6,8 +6,8 @@ SQL Server Agent ships in 0.10.0 ([docs/agent-plan.md](agent-plan.md), UI in
 Start Job at Step…, Stop Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and
 Properties; Search Objects finds jobs, alerts and operators, Script As scripts jobs, alerts, operators and proxies, Job
 Activity Monitor follows the jobs live, the Log File Viewer reads and deletes job history and reads Agent's error logs, the
-job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job and shows its
-History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
+job document edits a job's General (including Targets), Steps, Schedules, Notifications & Alerts, and History tabs or
+creates a job and shows its History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
 notifications grid edit and create alerts, operators and who is notified, and the proxy and credential documents edit and
 create proxies and credentials. Help › Getting Started has a guide, Schedule work with SQL Server Agent, with a fictional
 schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
@@ -161,14 +161,18 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the
-  server's jobs). The header shows the job's live state from `agent.jobs.watched` (running and its step, or idle with the last
-  outcome), Start with a step menu (Start once at step, which leaves the job's start step alone), Stop while it runs, Reload
-  and Save. Sections: **General** (name, owner, category, description, enabled; only sysadmin changes the owner),
-  **Notifications** (e-mail, page, net send, Windows event log and delete, each a level and an operator; whether Database Mail
-  can send, read through `sysmail_help_profile_sp` where the login may, and an operator's missing address or pager duty hours
-  as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
-  Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New alert for this job… opens New Alert with the job as its response).
-  **Steps** is a master/detail page: the list shows each step's number, type and where it goes on success and on failure, marks
+  server's jobs). The `ObjectInspectorFrame` header shows breadcrumbs, live status from `agent.jobs.watched` (running and
+  its step, or idle with the last outcome), Start with a step menu (Start once at step, which leaves the job's start step
+  alone), Stop while it runs, a toggleable Vitals right rail (`Live Status`, `Identity`, `Problems`), Reload and Save, above
+  a Hero KPI strip (`Last Run`, `Duration`, `Next Run`, `Owner`). Tabs (`Ctrl+1`..`6`): **General** (name, owner, category,
+  description, enabled, and **Targets**—this server only; multi-server targets come later; only sysadmin changes the owner),
+  **Steps**, **Schedules**, **Notifications & Alerts** (e-mail, page, net send, Windows event log and delete, each a level
+  and an operator; whether Database Mail can send, read through `sysmail_help_profile_sp` where the login may, and an
+  operator's missing address or pager duty hours as warnings, plus the alerts that run the job with Remove for sysadmin only,
+  since msdb grants `sp_update_alert` to no Agent role, and `+ New alert for this job…` opening New Alert with the job as
+  its response), and **History**.
+  **Steps** is a persisted resizable master/detail page (`ResizableSplit`): the list shows each step's number, compact type
+  badge (`TSQL`, `SSIS`, `PS`, `Cmd`, `SSAS`, `Repl`) and equal-width columns for where it goes on success and on failure, marks
   the Start step, and reorders by drag, Move up and Move down, or Alt+Up and Alt+Down (Move Step Up and Move Step Down, in the
   Steps section but not in a field or the step's command editor, where the keys open a list or move lines); moving the step shown
   keeps it shown. Go-to targets follow the step they name, since the draft keys

@@ -112,6 +112,10 @@ export const googleSqlLanguage: Monaco.languages.IMonarchLanguage = {
 export const googleSqlConfiguration: Monaco.languages.LanguageConfiguration = {
   comments: { lineComment: '--', blockComment: ['/*', '*/'] },
   brackets: [['(', ')'], ['[', ']']],
+  // Hyphens stay inside dashed identifiers (including trailing `my-project-` while typing/backspacing, excluding `--` comments)
+  // because Monaco's SuggestModel._onNewContext cancels or breaks incomplete retriggers whenever `leadingWord` turns empty.
+  // Static `wordPattern` cannot distinguish `a-b` in expressions from `my-proj`, while `readGoogleSqlCompletion` still scopes `a-b` properly.
+  wordPattern: /(?<![A-Za-z0-9_`])(-?\d*\.\d\w*)|((?:[A-Za-z_][A-Za-z0-9_]*|\d+[A-Za-z_][A-Za-z0-9_]*|(?<=\.)\d+)(?:(?:-[A-Za-z0-9_]+)+(?:-(?![A-Za-z0-9_-]))?|-(?![A-Za-z0-9_-]))|(?<![A-Za-z0-9_-])\d+(?:-\d+)*-\d*[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*(?:-(?![A-Za-z0-9_-]))?)|([^\`\~\!\@\#\$\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
   autoClosingPairs: [
     { open: '(', close: ')' },
     { open: '[', close: ']' },

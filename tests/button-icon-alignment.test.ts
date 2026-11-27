@@ -174,6 +174,9 @@ describe('button-icon alignment DOM structure', () => {
     expect(splitButtons[1].textContent).toBe('')
     expect(directIcon(splitButtons[1]).map(el => el.getAttribute('data-icon'))).toEqual(['chevron-down'])
 
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[role="tab"][data-inspector-tab="notifications"]')?.click()
+    })
     const alertNewButton = host.querySelector<HTMLButtonElement>('.agent-job-alerts-new > button')!
     expect(alertNewButton.textContent).toBe(agentJobText.alertsNew)
     expect(directIcon(alertNewButton).map(el => el.getAttribute('data-icon'))).toEqual(['add'])
@@ -261,12 +264,12 @@ describe('capture-agent-polish CLI validation', () => {
     expect(emptyLane.status).toBe(1)
     expect(emptyLane.stderr).toContain('Missing value for --lane')
 
-    const uncreated = join(tmpdir(), `varia-ap2-does-not-write-${Date.now()}`)
+    const uncreated = join(tmpdir(), `varia-ap6-does-not-write-${Date.now()}`)
     expect(existsSync(uncreated)).toBe(false)
     try {
-      const unimplemented = runCli(['--lane', 'ap-2', '--out', uncreated])
+      const unimplemented = runCli(['--lane', 'ap-6', '--out', uncreated])
       expect(unimplemented.status).toBe(1)
-      expect(unimplemented.stderr).toContain('Lane ap-2 capture will be implemented in AP-2.')
+      expect(unimplemented.stderr).toContain('Lane ap-6 capture will be implemented in AP-6.')
       expect(existsSync(uncreated)).toBe(false)
     } finally {
       rmSync(uncreated, { recursive: true, force: true })

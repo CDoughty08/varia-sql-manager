@@ -699,7 +699,9 @@ function completionSuggestions(monaco: typeof Monaco, model: Monaco.editor.IText
     const quote = typed[0] === '[' || typed[0] === '"' ? typed[0] : undefined
     const bare = item.filterText ?? unquoteSqlName(item.label)
     const filterText = exact ? typed : quote && !bare.startsWith(quote) ? quote + bare : item.filterText
-    return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
+    const description = item.detail?.trim() || undefined
+    return [{ label: description ? { label: item.label, description } : { label: item.label },
+      kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
       detail: item.detail, documentation: item.documentation,
       // Exact matches first, then columns ahead of general SQL names of equal match quality, then the provider's order.
       sortText: `${exact ? '0' : '1'}${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,

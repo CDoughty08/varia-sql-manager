@@ -17,33 +17,70 @@ internal sealed class BigQueryLookup
     private readonly IndexBudget budget;
     /// <summary>What a lookup array leaves free of the budget: BigQuery's names floor, as its reads do.</summary>
     private readonly long keepFree;
+    private readonly string billing;
+    private readonly HashSet<string> starred;
     private readonly Action? arraysBuilt;
     private readonly Dictionary<string, Dictionary<string, DatabaseIndex>> reads = new(StringComparer.Ordinal);
+    private readonly HashSet<string> projectSet;
+    private readonly Dictionary<string, string?> projectIgnoreCase = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> namesOnly;
     private readonly HashSet<string> partialProjects;
     private readonly Dictionary<string, ObjectIndexSkip> projectListingSkips;
     private readonly Dictionary<(string Project, string Dataset), ObjectIndexSkip> datasetSkips;
     private readonly List<ObjectIndexSkip> skips;
+    private readonly HashSet<string> projectsWithListingSkip = new(StringComparer.Ordinal);
+    private readonly HashSet<string> projectsWithAnyDatasetSkip = new(StringComparer.Ordinal);
+    private readonly HashSet<string> projectsWithUnreadDatasetSkip = new(StringComparer.Ordinal);
     private readonly bool building, built;
 
     internal BigQueryLookup(string billing, IReadOnlyList<string> extras, IEnumerable<DatabaseIndex> held, IEnumerable<string>? namesOnly, IEnumerable<ObjectIndexSkip> skips,
         bool building, bool built, IndexBudget budget, Action? arraysBuilt = null, IEnumerable<string>? partialProjects = null,
         IReadOnlyDictionary<string, ObjectIndexSkip>? projectListingSkips = null, IReadOnlyDictionary<(string Project, string Dataset), ObjectIndexSkip>? datasetSkips = null,
-        long keepFree = 0)
+        long keepFree = 0, IEnumerable<string>? starredProjects = null)
     {
+        this.billing = billing;
+        this.starred = new HashSet<string>(starredProjects ?? [], StringComparer.Ordinal);
         this.keepFree = keepFree;
         Projects = [billing, .. extras.Where(extra => extra != billing).Distinct(StringComparer.Ordinal)];
+        this.projectSet = new HashSet<string>(Projects, StringComparer.Ordinal);
+        foreach (var project in Projects)
+        {
+            if (projectIgnoreCase.TryGetValue(project, out var existing))
+            {
+                if (existing is not null && existing != project) projectIgnoreCase[project] = null;
+            }
+            else
+            {
+                projectIgnoreCase[project] = project;
+            }
+        }
         foreach (var read in held)
         {
             if (read.Dataset is not { } dataset) continue;
             if (!reads.TryGetValue(read.Database, out var datasets)) reads[read.Database] = datasets = new(StringComparer.Ordinal);
             datasets[dataset] = read;
         }
-        this.namesOnly = [.. namesOnly ?? []];
+        this.namesOnly = new HashSet<string>(namesOnly ?? [], StringComparer.Ordinal);
         this.partialProjects = new HashSet<string>(partialProjects ?? [], StringComparer.Ordinal);
         this.projectListingSkips = projectListingSkips is null ? new(StringComparer.Ordinal) : new(projectListingSkips, StringComparer.Ordinal);
         this.datasetSkips = datasetSkips is null ? new() : new(datasetSkips);
         this.skips = [.. skips];
+        foreach (var project in this.projectListingSkips.Keys) projectsWithListingSkip.Add(project);
+        foreach (var key in this.datasetSkips.Keys)
+        {
+            projectsWithAnyDatasetSkip.Add(key.Project);
+            if (!reads.TryGetValue(key.Project, out var datasets) || !datasets.ContainsKey(key.Dataset)) projectsWithUnreadDatasetSkip.Add(key.Project);
+        }
+        foreach (var skip in this.skips)
+        {
+            if (skip.Project is not { } proj) continue;
+            if (skip.Database == "") projectsWithListingSkip.Add(proj);
+            else
+            {
+                projectsWithAnyDatasetSkip.Add(proj);
+                if (!reads.TryGetValue(proj, out var datasets) || !datasets.ContainsKey(skip.Database)) projectsWithUnreadDatasetSkip.Add(proj);
+            }
+        }
         (this.building, this.built, this.budget, this.arraysBuilt) = (building, built, budget, arraysBuilt);
     }
 
@@ -56,8 +93,14 @@ internal sealed class BigQueryLookup
     /// <summary>Whether a project's datasets were read by name only (no columns, view text or signatures).</summary>
     public bool NamesOnly(string project) => namesOnly.Contains(project);
 
+    /// <summary>The project's discovery tier: billing, starred, or discovered.</summary>
+    public string ProjectTier(string project) =>
+        string.Equals(project, billing, StringComparison.Ordinal) ? "billing"
+        : starred.Contains(project) ? "starred"
+        : "discovered";
+
     /// <summary>The project as the connection names it: exact, else the one that differs only in case; null when the connection has none such.</summary>
-    public string? Project(string name) => Resolve(Projects, name);
+    public string? Project(string name) => projectSet.TryGetValue(name, out var exact) ? exact : projectIgnoreCase.GetValueOrDefault(name);
 
     /// <summary>The state of a project as a whole: Absent when the connection has no such project, Skipped when its datasets could
     /// not be listed and none was read, Partial when its list may be short (a listing or a dataset's read failed), Building while a
@@ -65,18 +108,14 @@ internal sealed class BigQueryLookup
     public LookupState ProjectState(string project)
     {
         if (Project(project) is not { } known) return LookupState.Absent;
-        var listing = projectListingSkips.ContainsKey(known) || skips.Any(skip => skip.Project == known && skip.Database == "");
+        var listing = projectsWithListingSkip.Contains(known);
         // Datasets read before a listing that failed (or was cut) still answer, but the list may be short; so it is when a dataset
         // listed but never read is left out of it.
-        if (reads.TryGetValue(known, out var held))
-            return listing || partialProjects.Contains(known)
-                || datasetSkips.Keys.Any(key => key.Project == known && !held.ContainsKey(key.Dataset))
-                || skips.Any(skip => skip.Project == known && skip.Database != "" && !held.ContainsKey(skip.Database)) ? LookupState.Partial : LookupState.Ready;
+        if (reads.ContainsKey(known))
+            return listing || partialProjects.Contains(known) || projectsWithUnreadDatasetSkip.Contains(known) ? LookupState.Partial : LookupState.Ready;
         if (listing) return LookupState.Skipped;
         // Listed, but every dataset's read failed (or was refused for the budget): none answers.
-        if (partialProjects.Contains(known)
-            || datasetSkips.Keys.Any(key => key.Project == known)
-            || skips.Any(skip => skip.Project == known && skip.Database != "")) return building ? LookupState.Building : LookupState.Partial;
+        if (partialProjects.Contains(known) || projectsWithAnyDatasetSkip.Contains(known)) return building ? LookupState.Building : LookupState.Partial;
         return building ? LookupState.Building : Index == "none" ? LookupState.Absent : LookupState.Ready;
     }
 
@@ -136,10 +175,56 @@ internal sealed class BigQueryLookup
         var exact = named.Where(at => table.Name(at) == name).ToList();
         var at = exact.Count > 0 ? exact[0] : named.Count == 1 ? named[0] : -1;
         if (at >= 0) return new(dataset.Project, table, at, read);
-        // A wildcard reads tables only: routines and models neither match nor stand in its way.
-        var entries = Objects(dataset).Where(entry => entry.Kind is not ("bqRoutine" or "bqModel")).ToList();
-        var pick = PickShardGroup(name, [.. entries.Select(entry => (entry.Name, Shards(entry)))]);
-        return pick >= 0 ? entries[pick] : null;
+        // Fast exit: only datasets with shard groups can match a wildcard (*) or an 8-digit shard suffix.
+        var shardGroups = read.Facts?.ShardGroups;
+        if (shardGroups is null || shardGroups.Count == 0) return null;
+        var isWildcard = name.EndsWith('*');
+        if (!isWildcard && !HasEightDigitSuffix(name)) return null;
+        if (!isWildcard)
+        {
+            // A concrete 8-digit shard name can only match a shard group (never a plain table).
+            int found = -1, matches = 0;
+            foreach (var (index, shards) in shardGroups)
+            {
+                if (table.Kind(index) is "bqDataset" or "bqRoutine" or "bqModel" || !ValidShards(shards)) continue;
+                if (Shard(shards, name))
+                {
+                    found = index;
+                    if (++matches > 1) return null;
+                }
+            }
+            return matches == 1 ? new(dataset.Project, table, found, read) : null;
+        }
+        // Wildcard (*): check shard groups first; a whole-group match beats plain tables without scanning them.
+        var stem = name[..^1];
+        int whole = -1, begun = -1, wholes = 0, begins = 0;
+        foreach (var (index, shards) in shardGroups)
+        {
+            if (table.Kind(index) is "bqDataset" or "bqRoutine" or "bqModel" || !ValidShards(shards)) continue;
+            if (Shard(shards, name)) { whole = index; wholes++; }
+            else if (shards.Prefix.Length > stem.Length && shards.Prefix.StartsWith(stem, StringComparison.Ordinal)) { begun = index; begins++; }
+        }
+        if (wholes > 0) return wholes == 1 ? new(dataset.Project, table, whole, read) : null;
+        if (begins != 1) return null;
+        // One group begins with stem: verify no plain table also begins with stem, without materializing all objects.
+        for (var i = 0; i < table.Count; i++)
+        {
+            if (table.Parent(i) >= 0) continue;
+            var kind = table.Kind(i);
+            if (kind is "bqDataset" or "bqRoutine" or "bqModel" || (shardGroups.TryGetValue(i, out var group) && ValidShards(group))) continue;
+            if (table.Name(i).StartsWith(stem, StringComparison.Ordinal)) return null;
+        }
+        return new(dataset.Project, table, begun, read);
+    }
+
+    private static bool ValidShards(BigQueryShardsDto shards) => shards is { First.Length: 8, Last.Length: 8 };
+
+    private static bool HasEightDigitSuffix(string name)
+    {
+        if (name.Length < 9) return false;
+        for (var i = name.Length - 8; i < name.Length; i++)
+            if (!char.IsAsciiDigit(name[i])) return false;
+        return true;
     }
 
     /// <summary>Which shard group a written name means, by its index among <paramref name="entries"/> (a dataset's objects, each

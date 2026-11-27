@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
 import { recordPage } from './fixtures/recording.mjs'
-import { connectDialogWindow, documentFrame, documentState, documentTab, gridPart, liveGrid, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentState, documentTab, gridPart, inspectorPanel, inspectorTab, liveGrid, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'agent-flow-run-profile-'))
@@ -33,14 +33,7 @@ const item = n => tree.getByRole('treeitem').nth(n - 1)
 const show = job.getByRole('radiogroup', { name: 'Show', exact: true })
 const passes = job.getByRole('table', { name: 'Steps of the run, in the order they ran', exact: true })
 const runBox = job.getByRole('combobox', { name: 'Run to draw', exact: true })
-// The Steps section scrolled to its top, so the toolbar's Show switch and the graph are both in the picture.
 const shot = async name => {
-  await job.getByRole('group', { name: 'Steps', exact: true }).evaluate(section => {
-    // Only the document's own scroller moves: scrollIntoView would also shift the window's overflow-hidden shell.
-    let scroller = section.parentElement
-    while (scroller && !(scroller.scrollHeight > scroller.clientHeight && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement
-    if (scroller) scroller.scrollTop += section.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-  })
   await page.screenshot({ path: `artifacts/agent-flow-${name}.png` })
 }
 const theme = mode => page.evaluate(value => window.varia.setThemePreference({ mode: value }), mode)
@@ -55,6 +48,7 @@ try {
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
   await liveGrid(page, 'Jobs').locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^Nightly$/ }) }).locator(gridPart.cell).nth(2).dblclick()
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
+  await inspectorTab(job, 'Steps').click()
   await job.getByRole('radiogroup', { name: 'Steps view', exact: true }).getByRole('radio', { name: 'Flow' }).click()
   await expect(tree.getByRole('treeitem')).toHaveCount(4)
 
@@ -74,8 +68,8 @@ try {
   await passes.getByRole('button', { name: '3 · Update statistics' }).click()
   // ...and selects its step on the graph, whose summary stays under the run's panel.
   await expect(item(3)).toHaveAttribute('aria-selected', 'true')
-  await expect(job.getByRole('group', { name: 'Steps', exact: true }).getByRole('button', { name: 'Start at step 3' })).toBeVisible()
-  await expect(job.getByRole('group', { name: 'Steps', exact: true }).getByRole('region', { name: 'Step 3 message', exact: true })).toContainText('Lock request time out period exceeded.')
+  await expect(inspectorPanel(job).getByRole('button', { name: 'Start at step 3' })).toBeVisible()
+  await expect(inspectorPanel(job).getByRole('region', { name: 'Step 3 message', exact: true })).toContainText('Lock request time out period exceeded.')
   await shot('lastrun-dark')
   await theme('light')
   await shot('lastrun-light')
@@ -90,7 +84,8 @@ try {
   step = 'show in flow'
   // Open in History goes to the same run there; History's Show in Flow brings the newest run back to Run.
   await job.getByRole('button', { name: 'Open in History', exact: true }).click()
-  const history = job.getByRole('group', { name: 'History', exact: true })
+  await expect(inspectorTab(job, 'History')).toHaveAttribute('aria-selected', 'true')
+  const history = inspectorPanel(job)
   await history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button', { name: /Failed/ }).click()
   await history.getByRole('button', { name: 'Show in Flow', exact: true }).click()
   await expect(show.getByRole('radio', { name: 'Run', exact: true })).toHaveAttribute('aria-checked', 'true')

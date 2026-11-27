@@ -274,7 +274,8 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   private historyShows(id: string): boolean {
     const state = this.get(id)
     if (this.options.documents.getSnapshot().activeId !== id || !state) return false
-    return !state.frame.collapsed.includes('history') || (state.stepsView === 'flow' && !state.frame.collapsed.includes('steps') && !!this.flowOverlayOf(id))
+    return (state.frame.section === 'history' && !state.frame.collapsed.includes('history'))
+      || (state.frame.section === 'steps' && state.stepsView === 'flow' && !state.frame.collapsed.includes('steps') && !!this.flowOverlayOf(id))
   }
   /** The overlay Flow draws now: Live run only while the job runs (else the one before it). */
   flowOverlayOf(id: string): 'last' | 'live' | undefined {
@@ -522,8 +523,12 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   /** An Edit step link from elsewhere in the document (History's failed step, the copy review): the step with its editor, which List always
    *  shows and Flow docks beside the graph. */
   editStep(id: string, key: string): void {
-    if (this.get(id)?.stepsView === 'flow') this.openStepEditor(id, key)
+    const state = this.get(id)
+    if (!state) return
+    if (state.stepsView === 'flow') this.openStepEditor(id, key)
     else this.selectStep(id, key)
+    const updated = this.get(id)
+    if (updated) this.setFrame(id, revealSection(updated.frame, jobSections, 'steps'))
   }
   closeStepEditor(id: string): void { if (this.get(id)?.stepEditor) this.patch(id, { stepEditor: undefined }) }
   /** Start job at this step: once, from a saved step (sp_start_job takes its saved name), while the job is not running. */
@@ -1397,7 +1402,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
     const table = change(several.table, context)
     if (table !== several.table || Object.keys(patch).length) this.patchSeveral(id, { table, notice: undefined, ...patch })
   }
-  setSeveralCell(id: string, key: string, columnId: string, value: string): void { this.editTable(id, (table, context) => withSeveralCell(context, table, key, columnId, value), { selected: key }) }
+  setSeveralCell(id: string, key: string, columnId: string, value: string | undefined): void { this.editTable(id, (table, context) => withSeveralCell(context, table, key, columnId, value), { selected: key }) }
   selectSeveralRow(id: string, key: string | undefined): void {
     const several = this.get(id)?.several
     if (several && several.selected !== key && (!key || several.table.rows.some(row => row.key === key))) this.patchSeveral(id, { selected: key })
@@ -1434,7 +1439,7 @@ export class JobDocumentService extends SnapshotStore<JobDocumentSnapshot> imple
   pasteSeveral(id: string, text = this.get(id)?.several?.paste ?? ''): void {
     const several = this.get(id)?.several
     if (!several || !this.canEditSeveral(id)) return
-    const pasted = pasteSeveralRows(several.table, text)
+    const pasted = pasteSeveralRows(several.table, text, this.severalContextOf(id))
     if (!pasted.added && !pasted.cut) return
     this.patchSeveral(id, { table: pasted.table, panel: undefined, paste: undefined, notice: createSeveralText.pasted(pasted.added, pasted.cut), selected: pasted.table.rows.at(-1)?.key })
   }

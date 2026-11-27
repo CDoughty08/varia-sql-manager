@@ -25,7 +25,7 @@ internal sealed partial class SqlService
         if (args.Project != connection.Options.Project)
             throw new RequestException("AUTH_IDENTITY", "This BigQuery job ran in project " + args.Project + ", not in this connection's project. Connect to " + args.Project + " to re-attach to it.");
         var query = new QueryArgs(args.ConnectionId, args.SessionId, null, "", args.QueryId, args.MaxRows, 0, MaxResultSets: args.MaxResultSets,
-            DiscardResults: args.Detached, Prices: args.Prices, Residence: args.Residence, WindowCacheMiB: args.WindowCacheMiB, JobKey: args.JobKey);
+            DiscardResults: args.Detached, Prices: args.Prices, Residence: args.Residence, WindowCacheMiB: args.WindowCacheMiB, JobKey: args.JobKey, NoDefaultDataset: true);
         return ExecuteBigQueryAsync(query, connection, context, args);
     }
 

@@ -87,7 +87,7 @@ internal static class IndexFileUnit
     private const ushort ChildrenLeftOutFlag = 1, DefinitionsLeftOutFlag = 2, DetailedFlag = 4, FailedPartFlag = 8, CaseKnownFlag = 16, CaseSensitiveFlag = 32, DottedIFlag = 64,
         FactsFlag = 128, DatasetFlag = 256, UnitFlags = 511;
     private const ushort FactDetailed = 1, FactWhole = 2, FactColumnsCut = 4, FactRows = 8, FactBytes = 16, FactListed = 32, FactPartitioning = 64, FactClustering = 128,
-        FactSignature = 256, FactStale = 512, FactTextLeftOut = 1024, FactFlags = 2047;
+        FactSignature = 256, FactStale = 512, FactTextLeftOut = 1024, FactDescription = 2048, FactFlags = 4095;
     private const byte EntryFlags = ObjectTable.SystemFlag | ObjectTable.CutFlag | ObjectTable.ChildFlag;
     private const byte OwnUses = (byte)(TextUse.Name | TextUse.Definition), Uses5 = 31;
     /// <summary>What a read's charge may exceed its content's by: rows it charged and then left out (a child whose parent the
@@ -266,7 +266,7 @@ internal static class IndexFileUnit
     private static bool FactFits(in BigQueryObjectFacts fact, bool definitionsLeftOut) =>
         !(fact.Stale || fact.TextLeftOut) || fact.Detailed && !fact.Whole && !(fact.TextLeftOut && definitionsLeftOut);
 
-    private static long FactBytesOf(in BigQueryObjectFacts fact) => BigQueryFacts.ObjectBytes + StringBytes(fact.Signature) + StringBytes(fact.Partitioning) + StringBytes(fact.Clustering);
+    private static long FactBytesOf(in BigQueryObjectFacts fact) => BigQueryFacts.ObjectBytes + StringBytes(fact.Signature) + StringBytes(fact.Partitioning) + StringBytes(fact.Clustering) + StringBytes(fact.Description);
     private static long ShardBytesOf(Varia.Backend.BigQueryShardsDto group) => BigQueryFacts.ShardBytes + StringBytes(group.Prefix) + StringBytes(group.First) + StringBytes(group.Last);
     private static long DescriptionBytesOf(string description) => BigQueryFacts.DescriptionBytes + IndexMemory.StringBytes(description.Length);
     private static long StringBytes(string? value) => value is null ? 0 : IndexMemory.StringBytes(value.Length);
@@ -367,7 +367,7 @@ internal static class IndexFileUnit
             foreach (var (at, fact) in facts)
             {
                 if ((uint)at >= (uint)entries.Length || (entries[at].Flags & ObjectTable.ChildFlag) != 0 || !FactFits(fact, unit.DefinitionsLeftOut)) throw Corrupt();
-                if (Long(fact.Signature) || Long(fact.Partitioning) || Long(fact.Clustering)) throw Limits();
+                if (Long(fact.Signature) || Long(fact.Partitioning) || Long(fact.Clustering) || Long(fact.Description)) throw Limits();
             }
             foreach (var (at, description) in descriptions)
             {
@@ -502,13 +502,15 @@ internal static class IndexFileUnit
                 writer.Int64(fact.Created);
                 writer.UInt16((ushort)((fact.Detailed ? FactDetailed : 0) | (fact.Whole ? FactWhole : 0) | (fact.ColumnsCut ? FactColumnsCut : 0) | (fact.Rows is not null ? FactRows : 0)
                     | (fact.Bytes is not null ? FactBytes : 0) | (fact.Listed is not null ? FactListed : 0) | (fact.Partitioning is not null ? FactPartitioning : 0)
-                    | (fact.Clustering is not null ? FactClustering : 0) | (fact.Signature is not null ? FactSignature : 0) | (fact.Stale ? FactStale : 0) | (fact.TextLeftOut ? FactTextLeftOut : 0)));
+                    | (fact.Clustering is not null ? FactClustering : 0) | (fact.Signature is not null ? FactSignature : 0) | (fact.Stale ? FactStale : 0) | (fact.TextLeftOut ? FactTextLeftOut : 0)
+                    | (fact.Description is not null ? FactDescription : 0)));
                 if (fact.Rows is { } rows) writer.Int64(rows);
                 if (fact.Bytes is { } bytes) writer.Int64(bytes);
                 if (fact.Listed is { } listed) writer.Int64(listed);
                 if (fact.Partitioning is { } partitioning) writer.Text(partitioning);
                 if (fact.Clustering is { } clustering) writer.Text(clustering);
                 if (fact.Signature is { } signature) writer.Text(signature);
+                if (fact.Description is { } description) writer.Text(description);
             }
             writer.Int32(plan.Descriptions.Length);
             foreach (var (at, description) in plan.Descriptions)
@@ -1030,7 +1032,8 @@ internal static class IndexFileUnit
                 var partitioning = Stated(FactPartitioning) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var clustering = Stated(FactClustering) ? reader.Text(IndexFileLimits.FactChars) : null;
                 var signature = Stated(FactSignature) ? reader.Text(IndexFileLimits.FactChars) : null;
-                var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed, Stated(FactStale), Stated(FactTextLeftOut));
+                var description = Stated(FactDescription) ? reader.Text(IndexFileLimits.FactChars) : null;
+                var fact = new BigQueryObjectFacts(created, Stated(FactDetailed), rows, size, partitioning, clustering, signature, Stated(FactWhole), Stated(FactColumnsCut), listed, Stated(FactStale), Stated(FactTextLeftOut), description);
                 if (!FactFits(fact, Has(DefinitionsLeftOutFlag))) throw Corrupt();
                 // Facts are an object's, never a column's, so a load without children keeps them all.
                 if (Moved(at) < 0 || (entries[Moved(at)].Flags & ObjectTable.ChildFlag) != 0) throw Corrupt();

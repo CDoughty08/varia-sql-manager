@@ -24,7 +24,7 @@ export interface QueryShape {
  */
 export type ScopeSource =
   | { readonly kind: 'object'; readonly name: string; readonly parts: readonly string[]; readonly span?: TextSpan }
-  | { readonly kind: 'cte'; readonly name: string; readonly cte: string; readonly span?: TextSpan }
+  | { readonly kind: 'cte'; readonly name: string; readonly cte: string; readonly shape?: QueryShape; readonly span?: TextSpan }
   | { readonly kind: 'derived'; readonly name?: string; readonly shape: QueryShape }
   | { readonly kind: 'unnest'; readonly name?: string; readonly path: readonly string[] }
 
@@ -40,14 +40,28 @@ export interface QueryScope { readonly sources: readonly ScopeSource[]; readonly
  * - object: a name where a table goes (FROM, JOIN, UPDATE, INTO): `qualifier` holds the parts written before the one typed.
  * - member: a name after dots in an expression (`o.address.ci`): an alias, table or column, then fields.
  * - expression: a bare name in an expression: columns, aliases, functions and keywords.
- * - keyword: a clause position where only keywords fit (after a table and its alias).
+ * - afterFromTable: after a FROM/JOIN table, subquery, CTE or alias: only valid FROM-clause continuations.
+ * - statementStart: the start of a statement or parenthesized query block.
+ * - castType: inside `CAST(... AS |)` or `SAFE_CAST(... AS |)` (and type arguments).
+ * - datePart: a granularity argument in `EXTRACT`, `DATE_TRUNC`, `DATE_DIFF`, etc.
+ * - systemVar: a `@@` system variable (`@@project_id`, `@@script.bytes_billed`, ...).
+ * - infoSchema: after `INFORMATION_SCHEMA.`, qualified by `qualifier` (dataset, project.dataset, or region).
+ * - joinCondition: inside a `JOIN ... ON` or `USING` condition.
+ * - unnestArg: inside `UNNEST(...)`, where array-typed columns rank ahead of scalars.
  */
 export type CompletionSite =
   | { readonly kind: 'none' }
   | { readonly kind: 'object'; readonly qualifier: readonly string[] }
   | { readonly kind: 'member'; readonly qualifier: readonly string[] }
   | { readonly kind: 'expression' }
-  | { readonly kind: 'keyword' }
+  | { readonly kind: 'afterFromTable'; readonly hasAlias?: boolean; readonly inJoin?: boolean; readonly mergeUsing?: boolean }
+  | { readonly kind: 'statementStart' }
+  | { readonly kind: 'castType' }
+  | { readonly kind: 'datePart'; readonly functionName?: string }
+  | { readonly kind: 'systemVar'; readonly qualifier?: readonly string[] }
+  | { readonly kind: 'infoSchema'; readonly qualifier: readonly string[] }
+  | { readonly kind: 'joinCondition'; readonly clause?: 'on' | 'using' }
+  | { readonly kind: 'unnestArg' }
 
 /**
  * The word being completed: where it starts (the replace range runs from `start` to the caret, and on to `end`, the end of the
@@ -80,11 +94,15 @@ export interface CompletionDialect {
   /** An index entry's completion kind, and the detail its item shows (its kind, a routine's signature, a sharded group). */
   itemKind(item: LanguageLookupItem): CompletionKind
   itemDetail(item: LanguageLookupItem): string | undefined
+  /** Deduplication identity for completion items (default: case-insensitive `kind:label`). */
+  itemKey?(kind: CompletionKind, label: string): string
   /** An object's kind as hover names it (Table, View). */
   objectLabel(kind: string, subtype?: string): string
   /** An object's index path as the editor writes it in hover (`project.dataset.table`). */
   pathText(path: readonly string[]): string
   readonly keywords: readonly string[]
+  /** Context-specific keywords for clause sites (e.g. `afterFromTable`, `statementStart`, `castType`). */
+  keywordsFor?(site: CompletionSite): readonly string[]
   readonly functions: readonly DialectFunction[]
   /** The function a written name calls, if the dialect knows it. */
   functionNamed(name: string): DialectFunction | undefined

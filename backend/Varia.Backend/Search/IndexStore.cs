@@ -109,6 +109,8 @@ internal sealed class IndexStore : IDisposable
     private Open? open;
     private long epochs;
     private string? currentName;
+    /// <summary>The project whose files the writer is deleting now (its stale key), which no load may take meanwhile.</summary>
+    private string? dropping;
     private CancellationTokenSource? currentStop;
     private Thread? worker;
     private TaskCompletionSource idle = Completed();
@@ -152,6 +154,8 @@ internal sealed class IndexStore : IDisposable
     }
 
     internal IndexStoreMode? Mode { get { lock (gate) return open?.Mode; } }
+    /// <summary>Whether the store saves and reads now (encrypted, or clear text by choice).</summary>
+    public bool Saves => Active() is not null;
     /// <summary>Whether main has configured the store (it then knows its folder, and Clear can delete).</summary>
     public bool Configured { get { lock (gate) return open is not null && !disposed; } }
     /// <summary>Whether the store was stopped (the checks wait on it).</summary>
@@ -359,6 +363,13 @@ internal sealed class IndexStore : IDisposable
         if (dataset is not null) Drop(scope, IndexUnitKind.Dataset, project, dataset);
     }
 
+    /// <summary>Whether DDL from any connection of the principal marked <paramref name="read"/>'s dataset or project stale after
+    /// the read began (its <see cref="DatabaseIndex.StaleSeen"/>): a held read so marked is read whole again.</summary>
+    public bool MarkedSince(IndexStoreScope scope, DatabaseIndex read)
+    {
+        lock (gate) return Stale(scope, read);
+    }
+
     /// <summary>Whether DDL marked <paramref name="read"/>'s dataset or project stale after the read began (under the gate).</summary>
     private bool Stale(IndexStoreScope scope, DatabaseIndex read)
     {
@@ -528,6 +539,7 @@ internal sealed class IndexStore : IDisposable
                     stop = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
                     (currentName, currentStop) = (work is SaveWork save ? save.Name : ((DeleteWork)work).Name, stop);
                 }
+                else if (work is DropProjectWork drop) dropping = StaleKey(drop.Scope, drop.Project, null);
             }
             try
             {
@@ -548,7 +560,7 @@ internal sealed class IndexStore : IDisposable
             }
             finally
             {
-                lock (gate) (currentName, currentStop) = (null, null);
+                lock (gate) (currentName, currentStop, dropping) = (null, null, null);
                 stop?.Dispose();
             }
         }
@@ -812,10 +824,23 @@ internal sealed class IndexStore : IDisposable
 
     /// <summary>A scope's saved units by their headers, reading no body: only files that open under the current key and whose
     /// identity is the scope's own. The names each one states are checked against its identity, so a unit is what it says.</summary>
-    public List<SavedUnit> List(IndexStoreScope scope, CancellationToken token = default) =>
-        Active() is { } at ? List(at, scope, token) : [];
+    public List<SavedUnit> List(IndexStoreScope scope, CancellationToken token = default) => List(scope, out _, token);
+
+    /// <summary>As <see cref="List(IndexStoreScope, CancellationToken)"/>, with how many of the scope's files it passed over: a
+    /// header that does not open (another key, damage) or that is not the unit its name says.</summary>
+    public List<SavedUnit> List(IndexStoreScope scope, out int unreadable, CancellationToken token = default)
+    {
+        unreadable = 0;
+        return Active() is { } at ? List(at, scope, token, ref unreadable) : [];
+    }
 
     private static List<SavedUnit> List(Open at, IndexStoreScope scope, CancellationToken token)
+    {
+        var unreadable = 0;
+        return List(at, scope, token, ref unreadable);
+    }
+
+    private static List<SavedUnit> List(Open at, IndexStoreScope scope, CancellationToken token, ref int unreadable)
     {
         var units = new List<SavedUnit>();
         if (!at.Saves || !RealFolder(at.Folder)) return units;
@@ -825,9 +850,16 @@ internal sealed class IndexStore : IDisposable
             foreach (var info in new DirectoryInfo(at.Folder).EnumerateFiles(IndexStoreNames.ScopeTag(scopeId) + "-*" + IndexStoreNames.Extension, Listing))
             {
                 token.ThrowIfCancellationRequested();
-                if (!IndexStoreNames.IsUnit(info.Name) || Describe(at, info) is not { } unit || unit.Kind == IndexUnitKind.Resource) continue;
+                if (!IndexStoreNames.IsUnit(info.Name)) continue;
+                if (Describe(at, info) is not { } unit)
+                {
+                    unreadable++;
+                    continue;
+                }
+                if (unit.Kind == IndexUnitKind.Resource) continue;
                 var unitId = IndexStoreNames.UnitId(at.NameKey!, scopeId, unit.Kind, unit.Database, unit.Dataset);
                 if (CryptographicOperations.FixedTimeEquals(unit.Identity, IndexStoreNames.Identity(unit.Kind, scopeId, unitId))) units.Add(unit);
+                else unreadable++;
             }
         }
         catch (Exception error) when (IsIo(error)) { }
@@ -875,6 +907,24 @@ internal sealed class IndexStore : IDisposable
         if (loaded.Value is { } set && set.Key != key) return new(null, IndexFileProblem.Identity, loaded.Header);
         if (loaded.Value is not null) Touch(path);
         return loaded;
+    }
+
+    /// <summary>Whether a listed BigQuery unit may stand for its dataset now: no save or deletion of it is queued or being written
+    /// (a newer read of it, or DDL that made it stale, whose deletion has not run yet), no deletion of its project's files is
+    /// queued, and no DDL has marked the dataset or its project stale since <paramref name="since"/> (<see cref="StaleSeq"/> read
+    /// before the unit was listed). A unit a load is about to hold is asked again once it is loaded.</summary>
+    public bool Settled(SavedUnit unit, IndexStoreScope scope, long since)
+    {
+        if (scope.Provider != IndexProvider.BigQuery || unit.Dataset is not { } dataset) return false;
+        lock (gate)
+        {
+            if (disposed || open is not { Saves: true } at || at.Epoch != unit.Epoch) return false;
+            if (pending.ContainsKey(unit.Name) || currentName == unit.Name || since < staleFloor) return false;
+            var project = StaleKey(scope, unit.Database, null);
+            if (dropping == project || controls.Any(work => work is DropProjectWork drop && StaleKey(drop.Scope, drop.Project, null) == project)) return false;
+            return !(staleMarks.TryGetValue(StaleKey(scope, unit.Database, dataset), out var mark) && mark > since
+                || staleMarks.TryGetValue(project, out var whole) && whole > since);
+        }
     }
 
     /// <summary>Marks a unit used now, so the 30 days and the limit count from here: for a unit a connection keeps relying on
@@ -1007,31 +1057,40 @@ internal sealed class IndexStoreSink(IndexStore store, IndexStoreScope scope)
 
 /// <summary>
 /// What a BigQuery dataset's file says beside its unit (<see cref="DatabaseIndex.Sync"/>): what the listing and the details pass
-/// left, which the unit's own facts do not say as a whole. The unit already holds, per object, what a later listing is compared
-/// with (its creation time, a routine's or model's last change, whether its details are whole, carried or stale).
-/// <code>u8 1 | u8 flags (1 the listing was cut, 2 details still to read, 4 details failed or left out) | i32 to read | i32 failed | i32 left out</code>
+/// left, which the unit's own facts do not say as a whole, and a digest of the listing the read was made from
+/// (<see cref="BigQueryEntries.ListingDigest"/>), so a later listing that is the same, of a read with nothing left to read,
+/// needs no new read and no new file. The unit already holds, per object, what a later listing is compared with (its creation
+/// time, a routine's or model's last change, whether its details are whole, carried or stale).
+/// <code>u8 2 | u8 flags (1 the listing was cut, 2 details still to read, 4 details failed or left out) | i32 to read | i32 failed | i32 left out | 16 bytes listing digest (zeros: none)</code>
 /// </summary>
-internal readonly record struct BigQuerySync(bool ListingCut, int Pending, int Failed, int LeftOut)
+internal readonly record struct BigQuerySync(bool ListingCut, int Pending, int Failed, int LeftOut, string? Listing = null)
 {
-    public const int Bytes = 14;
+    public const int Bytes = 30;
+    private const int DigestBytes = 16;
+
+    /// <summary>Whether the read left nothing to read again: no details pending, failed or left out.</summary>
+    public bool Whole => Pending == 0 && Failed == 0 && LeftOut == 0;
 
     public byte[] ToBytes()
     {
         var bytes = new byte[Bytes];
-        bytes[0] = 1;
+        bytes[0] = 2;
         bytes[1] = (byte)((ListingCut ? 1 : 0) | (Pending > 0 ? 2 : 0) | (Failed > 0 || LeftOut > 0 ? 4 : 0));
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(2), Pending);
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(6), Failed);
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(10), LeftOut);
+        if (Listing is { Length: DigestBytes * 2 } digest) Convert.FromHexString(digest).CopyTo(bytes.AsSpan(14));
         return bytes;
     }
 
-    /// <summary>Null for bytes this version did not write (a loader then reads the dataset's details again).</summary>
+    /// <summary>Null for bytes this version did not write (a loader then leaves the file and reads the dataset again).</summary>
     public static BigQuerySync? From(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length != Bytes || bytes[0] != 1 || bytes[1] > 7) return null;
+        if (bytes.Length != Bytes || bytes[0] != 2 || bytes[1] > 7) return null;
         var (pending, failed, leftOut) = (System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[2..]), System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[6..]),
             System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(bytes[10..]));
-        return pending < 0 || failed < 0 || leftOut < 0 ? null : new((bytes[1] & 1) != 0, pending, failed, leftOut);
+        var digest = bytes[14..];
+        var listing = digest.ContainsAnyExcept((byte)0) ? Convert.ToHexStringLower(digest) : null;
+        return pending < 0 || failed < 0 || leftOut < 0 ? null : new((bytes[1] & 1) != 0, pending, failed, leftOut, listing);
     }
 }

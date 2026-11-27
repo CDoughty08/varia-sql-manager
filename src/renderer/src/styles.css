@@ -4495,6 +4495,216 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-check-object { padding: 0; font-size: inherit; line-height: inherit; vertical-align: baseline; }
 
 /* === AP-2: Job Document === */
+/* Header Start split button alignment with DocumentHeader verbs (.document-verb = var(--varia-control)). */
+.agent-job-start-split > button { height: var(--varia-control); padding: 0 var(--varia-space-2); }
+.agent-job-start-split > button:first-child:not(:last-child) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.agent-job-start-split > button + button { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+.agent-job-start-split > button:focus-visible { position: relative; z-index: 1; transition: none; }
+
+/* Job Document flow tabs: General + Targets, Notifications & Alerts, Changes from source. */
+.agent-job-pane-section { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-job-targets-eyebrow, .agent-job-system-eyebrow, .agent-job-alerts-head { margin-top: var(--varia-space-3); }
+.agent-job-alerts-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); }
+.agent-job-alerts-new { text-transform: none; letter-spacing: 0; font-weight: normal; }
+.agent-job-target-val { display: inline-flex; align-items: center; gap: var(--varia-space-2); }
+.agent-job-no-steps { display: flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-warningForeground); margin: var(--varia-space-1) 0 0; }
+.agent-job-notify { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-2); width: min(100%, 420px); }
+.inspector-pane-flow .agent-job-general .property-field-control > .property-input,
+.inspector-pane-flow .agent-job-general .property-field-control > select,
+.inspector-pane-flow .agent-job-notifications .property-field-control > select,
+.inspector-pane-flow .agent-copy .property-field-control > .property-input,
+.inspector-pane-flow .agent-copy .property-field-control > select { width: min(100%, 420px); }
+.inspector-pane-flow .agent-job-notify > select { width: 100%; height: var(--varia-control); min-width: 0; padding: 0; border: 1px solid transparent; border-inline: var(--varia-space-0) solid transparent; border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.inspector-pane-flow .agent-job-notify > select:not(:focus-visible) { outline: 1px solid var(--varia-input-border); outline-offset: -1px; }
+.inspector-pane-flow .agent-job-notify > select:focus-visible { outline: var(--varia-space-0) solid var(--varia-focusBorder); outline-offset: calc(-1 * var(--varia-space-0)); }
+.inspector-pane-flow .agent-job-notify > .property-input { width: 100%; min-width: 0; }
+@container inspector-pane (max-width: 520px) {
+  .agent-job-notify { grid-template-columns: minmax(0, 1fr); width: 100%; }
+}
+.agent-job-alerts { display: flex; flex-direction: column; gap: var(--varia-space-2); }
+.agent-job-alerts tr[data-removed] td { opacity: 0.65; text-decoration: line-through; }
+
+/* Job Document Vitals rail (272px default via workbench.inspector.vitals.full). */
+.agent-job-vitals-ok { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; }
+.agent-job-vitals-problems { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.agent-job-vitals-problems li { margin: 0; }
+.agent-job-vitals-problem { display: flex; align-items: flex-start; gap: var(--varia-space-1); width: 100%; padding: var(--varia-space-0) var(--varia-space-1); border: 0; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-warningForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.agent-job-vitals-problems li[data-severity="error"] .agent-job-vitals-problem { color: var(--varia-errorForeground); }
+.agent-job-vitals-problem:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: var(--varia-warningForeground); text-decoration: underline; }
+.agent-job-vitals-problems li[data-severity="error"] .agent-job-vitals-problem:hover:not(:disabled) { color: var(--varia-errorForeground); }
+.agent-job-vitals-problem:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-job-vitals-problem > .codicon { flex: none; margin-top: var(--varia-space-0); }
+
+/* Job › Steps (fill layout + ResizableSplit + balanced 3-col step cards + full-height Monaco). */
+.inspector-pane-fill .agent-job-steps-fill { flex: 1; min-width: 0; min-height: 0; gap: 0; overflow: hidden; }
+.agent-job-steps-fill .agent-step-banner { flex: none; }
+.agent-job-steps-fill .agent-step-body-wrap { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.agent-job-steps-fill .agent-job-steps-split { flex: 1; min-width: 0; min-height: 0; }
+.agent-job-steps-fill .agent-step-list { background: var(--varia-sideBar-background); gap: 0; }
+.agent-job-steps-fill .agent-step-list-head { flex: none; padding: var(--varia-space-2) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-job-steps-fill .agent-step-list [role="listbox"] { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-1); gap: var(--varia-space-0); }
+.agent-job-steps-fill .agent-step-list-foot { flex: none; display: flex; flex-direction: column; gap: var(--varia-space-1); padding: var(--varia-space-2); border-top: 1px solid var(--varia-panel-border); }
+.agent-job-steps-fill .agent-step-list-foot .field-note { margin: 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.agent-job-steps-fill .agent-step-item { grid-template-columns: 20px minmax(0, 1fr) auto; grid-template-areas: "no name tags" "no flow flow"; gap: var(--varia-space-0) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border: 1px solid transparent; border-top: 2px solid transparent; border-radius: var(--varia-radius-sm); }
+.agent-job-steps-fill .agent-step-item[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.agent-job-steps-fill .agent-step-item:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-job-steps-fill .agent-step-no { display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; }
+.agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-no { background: var(--varia-button-background); color: var(--varia-button-foreground); }
+.agent-job-steps-fill .agent-step-name { font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 500; }
+.agent-job-steps-fill .agent-step-flow { grid-area: flow; display: grid; grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr); align-items: center; column-gap: var(--varia-space-2); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); color: var(--varia-descriptionForeground); }
+.agent-job-steps-fill .agent-step-type { box-sizing: border-box; width: 44px; padding-inline: var(--varia-space-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); }
+.agent-job-steps-fill .agent-step-ok,
+.agent-job-steps-fill .agent-step-bad { display: inline-flex; align-items: center; gap: var(--varia-space-0); min-width: 0; overflow: hidden; white-space: nowrap; }
+.agent-job-steps-fill .agent-step-target { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-job-steps-fill .agent-step-flow .codicon { flex: none; font-size: var(--varia-glyph-sm); }
+.agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-ok,
+.agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-bad { color: var(--varia-list-activeSelectionForeground); }
+
+/* Step editor inside List view fill split (Flow's .agent-flow-side .agent-step-editor keeps 220px). */
+.agent-job-steps-fill .varia-split-main .agent-step-edit { container-type: inline-size; container-name: step-edit; flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: var(--varia-space-3) var(--varia-space-4); gap: var(--varia-space-2); }
+.agent-job-steps-fill .varia-split-main .agent-step-tools { flex: none; padding-bottom: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-job-steps-fill .varia-split-main .agent-step-grid { flex: none; }
+.agent-job-steps-fill .varia-split-main .agent-step-row { grid-template-columns: 160px minmax(0, 1fr); gap: var(--varia-space-2); align-items: center; }
+.agent-job-steps-fill .varia-split-main .agent-step-row > label,
+.agent-job-steps-fill .varia-split-main .agent-step-row > span:first-child { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.agent-job-steps-fill .varia-split-main .agent-step-inline,
+.agent-job-steps-fill .varia-split-main .segmented { flex-wrap: wrap; max-width: 100%; }
+.agent-job-steps-fill .varia-split-main .agent-step-command { flex: 1 0 185px; min-height: 185px; }
+.agent-job-steps-fill .varia-split-main .agent-step-command-head { flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-2); }
+.agent-job-steps-fill .varia-split-main .agent-step-editor { flex: 1; height: auto; min-height: 110px; resize: none; }
+.agent-job-steps-fill .varia-split-main .agent-step-ssis { flex: none; overflow: visible; }
+.agent-job-steps-fill .varia-split-main .agent-step-ssis-tree { max-height: none; overflow: visible; }
+.agent-job-steps-fill .varia-split-main .agent-step-foot { flex: none; display: flex; flex-direction: column; gap: var(--varia-space-2); padding-top: var(--varia-space-2); border-top: 1px solid var(--varia-panel-border); }
+.agent-job-steps-fill .varia-split-main .agent-step-foot-targets { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--varia-space-3); }
+.agent-job-steps-fill .varia-split-main .agent-step-foot-targets .agent-step-row { grid-template-columns: max-content minmax(0, 1fr); }
+.agent-job-steps-fill .varia-split-main .agent-step-foot-ok { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-testing-iconPassed, var(--varia-successForeground)); font-weight: 600; }
+.agent-job-steps-fill .varia-split-main .agent-step-foot-bad { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-errorForeground); font-weight: 600; }
+@container step-edit (max-width: 440px) {
+  .agent-job-steps-fill .varia-split-main .agent-step-row { grid-template-columns: minmax(0, 1fr); gap: var(--varia-space-0); align-items: stretch; }
+  .agent-job-steps-fill .varia-split-main .agent-step-ssis-pick { grid-template-columns: minmax(0, 1fr); }
+  .agent-job-steps-fill .varia-split-main .agent-step-foot-targets { grid-template-columns: minmax(0, 1fr); gap: var(--varia-space-2); }
+  .agent-job-steps-fill .varia-split-main .agent-step-foot-targets .agent-step-row { grid-template-columns: minmax(0, 1fr); gap: var(--varia-space-0); }
+}
+
+/* Flow view scoped inside fill tab without disturbing styles.css:2966-2992 tests. */
+.inspector-pane-fill .agent-flow { flex: 1; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3); }
+.inspector-pane-fill .agent-flow-body { flex: 1; min-height: 0; height: auto; }
+@container agent-flow (max-width: 760px) {
+  .inspector-pane-fill .agent-flow { overflow-y: auto; }
+  .inspector-pane-fill .agent-flow-body, .inspector-pane-fill .agent-flow-body[data-wide] { flex: none; height: auto; }
+}
+@container agent-flow (min-width: 761px) and (max-width: 1040px) {
+  .inspector-pane-fill .agent-flow:has(.agent-flow-body[data-wide]) { overflow-y: auto; }
+  .inspector-pane-fill .agent-flow-body[data-wide] { flex: none; height: auto; }
+}
+
+/* Job › Schedules (scoped under .agent-job-schedules-fill so AP-3/AP-4 .agent-schedules stays untouched). */
+.agent-job-schedules-fill { flex: 1; min-width: 0; min-height: 0; }
+.agent-job-schedules-fill .agent-job-schedules-rail { background: var(--varia-sideBar-background); }
+.agent-job-schedules-fill .agent-job-schedules-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-job-schedules-fill .agent-job-schedules-head .agent-schedule-add { margin-top: 0; }
+.agent-job-schedules-fill .agent-job-schedules-search { flex: none; padding: var(--varia-space-2); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-job-schedules-fill .agent-job-schedules-search > .property-input { width: 100%; }
+.agent-job-schedules-fill .agent-job-schedules-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-2); display: flex; flex-direction: column; gap: var(--varia-space-1); }
+.agent-job-schedules-fill .agent-job-schedules-scroll ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1px; }
+.agent-job-schedules-fill .agent-job-schedules-add-head { margin-top: var(--varia-space-2); }
+.agent-job-schedules-fill .agent-schedule-item[aria-current] { transition: none; }
+.agent-job-schedules-fill .agent-schedule-item:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-job-schedules-fill .agent-job-schedules-main { container-type: inline-size; container-name: job-schedules-main; overflow-y: auto; padding: var(--varia-space-3) var(--varia-space-4); }
+.agent-job-schedules-main .property-field { grid-template-columns: minmax(156px, 28%) minmax(0, 1fr); column-gap: 0; min-height: var(--varia-control); padding: var(--varia-space-1) 0; }
+.agent-job-schedules-main .property-field-label { padding-right: var(--varia-space-4); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+@container job-schedules-main (max-width: 440px) {
+  .agent-job-schedules-main .property-field { grid-template-columns: minmax(0, 1fr); gap: var(--varia-space-0); }
+  .agent-job-schedules-main .property-field-label { padding-right: 0; }
+  .agent-job-schedules-main .property-field-note, .agent-job-schedules-main .property-field-error { grid-column: 1; }
+}
+.agent-job-schedules-main .property-field-control > .property-input,
+.agent-job-schedules-main .property-field-control > select { width: min(100%, 420px); }
+.agent-job-schedules-main .property-field-control > select, .agent-job-schedules-main select.property-input { height: var(--varia-control); min-width: 0; padding: 0; border: 1px solid transparent; border-inline: var(--varia-space-0) solid transparent; border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.agent-job-schedules-main .property-field-control > select:not(:focus-visible), .agent-job-schedules-main select.property-input:not(:focus-visible) { outline: 1px solid var(--varia-input-border); outline-offset: -1px; }
+.agent-job-schedules-main .property-field-control > select:focus-visible, .agent-job-schedules-main select.property-input:focus-visible { outline: var(--varia-space-0) solid var(--varia-focusBorder); outline-offset: calc(-1 * var(--varia-space-0)); }
+.agent-job-schedules-main .property-field-control > .switch-field { min-height: var(--varia-control); }
+.agent-job-schedules-main .agent-schedule-sentence { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); font-size: var(--varia-size-sm); }
+.agent-job-schedules-main .agent-schedule-facts > section { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+
+/* Job › History (scoped under .agent-job-history-fill so FlowRunPanel.tsx keeps its 240px cap). */
+.agent-job-history-fill { flex: 1; min-width: 0; min-height: 0; gap: 0; overflow: hidden; }
+.agent-job-history-fill .agent-job-history-running { flex: none; padding: var(--varia-space-2) var(--varia-space-4); max-height: 180px; overflow-y: auto; }
+.agent-job-history-fill .agent-job-history-topbar { flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-3); flex-wrap: wrap; padding: var(--varia-space-2) var(--varia-space-4); border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); }
+.agent-job-history-fill .agent-job-history-summary { display: flex; align-items: center; gap: var(--varia-space-3); min-width: 0; }
+.agent-job-history-fill .agent-job-history-spark { width: 170px; height: 28px; flex: none; }
+.agent-job-history-fill .agent-job-history-summary-text { display: flex; flex-direction: column; gap: 1px; font-size: var(--varia-size-sm); }
+.agent-job-history-fill .agent-job-history-summary-text .field-note { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.agent-job-history-fill .agent-job-history-controls { display: flex; align-items: center; gap: var(--varia-space-3); flex-wrap: wrap; }
+.agent-job-history-fill .agent-job-history-split { flex: 1; min-width: 0; min-height: 0; }
+.agent-job-history-fill .agent-job-history-rail { background: var(--varia-sideBar-background); }
+.agent-job-history-fill .agent-job-history-runs { flex: 1; min-height: 0; max-height: none; overflow-y: auto; padding: var(--varia-space-1); }
+.agent-job-history-fill .agent-job-history-runs button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"] .agent-job-history-run-note { color: var(--varia-list-activeSelectionForeground); }
+.agent-job-history-fill .agent-job-history-more,
+.agent-job-history-fill .agent-job-history-empty { padding: var(--varia-space-2) var(--varia-space-3); margin: 0; }
+.agent-job-history-fill .agent-job-history-main { overflow: hidden; }
+.agent-job-history-fill .agent-job-history-detail { container-type: inline-size; container-name: job-history-detail; flex: 1; min-width: 0; min-height: 0; gap: 0; overflow: hidden; }
+.agent-job-history-fill .agent-job-history-detail-top { flex: 0 1 auto; max-height: 68%; overflow-y: auto; display: flex; flex-direction: column; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); }
+.agent-job-history-fill .agent-job-history-steps-wrap { flex: none; max-width: 100%; overflow-x: auto; }
+@container job-history-detail (max-width: 440px) {
+  .agent-job-history-fill .agent-job-history-steps { font-size: var(--varia-size-xs); }
+  .agent-job-history-fill .agent-job-history-steps th,
+  .agent-job-history-fill .agent-job-history-steps td { padding-inline: var(--varia-space-1); }
+}
+.agent-job-history-fill .agent-job-history-detail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--varia-space-2); flex-wrap: wrap; }
+.agent-job-history-fill .agent-job-history-detail-meta { display: inline-flex; align-items: center; gap: var(--varia-space-2); flex-wrap: wrap; font-size: var(--varia-size-sm); }
+.agent-job-history-fill .agent-job-history-outcome { margin: 0; font-size: var(--varia-size-sm); color: var(--varia-foreground); }
+.agent-job-history-fill .agent-job-history-outcome[data-tone="error"] { color: var(--varia-errorForeground); }
+.agent-job-history-fill .agent-job-history-message { flex: 1; min-height: 80px; display: flex; flex-direction: column; overflow: hidden; }
+.agent-job-history-fill .agent-job-history-message-head { flex: none; padding: var(--varia-space-1) var(--varia-space-3); background: var(--varia-panel-background); border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); }
+.agent-job-history-fill .agent-job-history-message-text { flex: 1; min-height: 64px; max-height: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-3); border: 0; border-radius: 0; background: var(--varia-input-background); color: var(--varia-input-foreground); overflow: auto; }
+
+/* Create several full-height fill layout (removes 50vh trap & outer scroll). */
+.document-frame[data-agent-several] > .agent-several { flex: 1; min-height: 0; overflow: hidden; }
+.document-frame[data-agent-several] .agent-several-bar,
+.document-frame[data-agent-several] .agent-several-panel,
+.document-frame[data-agent-several] .agent-several-details { flex: none; }
+.document-frame[data-agent-several] .agent-several-panel { max-height: 36vh; overflow-y: auto; }
+.document-frame[data-agent-several] .agent-several-columns { max-height: none; overflow: visible; }
+.document-frame[data-agent-several] .agent-several-details { max-height: 34vh; overflow-y: auto; }
+.document-frame[data-agent-several] .agent-several-scroll { flex: 1 1 0; min-height: 120px; max-height: none; }
+.document-frame[data-agent-several] .agent-several-results { flex: 1; min-height: 0; overflow: auto; }
+
+@media (forced-colors: active) {
+  .agent-job-vitals-problem,
+  .agent-job-vitals-problems li[data-severity="error"] .agent-job-vitals-problem { color: LinkText; }
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"],
+  .agent-job-schedules-fill .agent-schedule-item[aria-current],
+  .agent-job-schedules-fill .agent-schedule-item[aria-current]:hover:not(:disabled),
+  .agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"],
+  .agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"]:hover:not(:disabled) {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-no { background: HighlightText; color: Highlight; }
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-type { background: Highlight; color: HighlightText; border-color: HighlightText; }
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-flow,
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-ok,
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-bad,
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"] .agent-step-tag,
+  .agent-job-schedules-fill .agent-schedule-item[aria-current] .agent-schedule-tag,
+  .agent-job-schedules-fill .agent-schedule-item[aria-current] .field-note,
+  .agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"] .agent-job-history-run-note,
+  .agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"] .agent-job-history-run-tag {
+    color: HighlightText;
+    border-color: HighlightText;
+  }
+  .agent-job-steps-fill .agent-step-item[aria-selected="true"]:focus-visible,
+  .agent-job-schedules-fill .agent-schedule-item[aria-current]:focus-visible,
+  .agent-job-history-fill .agent-job-history-runs button[aria-pressed="true"]:focus-visible {
+    outline: 2px solid HighlightText;
+    outline-offset: -2px;
+  }
+}
 
 /* === AP-3: JAM & Overview === */
 .agent-jobs .agent-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }

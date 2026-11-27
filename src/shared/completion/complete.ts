@@ -12,20 +12,27 @@ const sortText = (kind: CompletionKind, rank: number, label: string) => `${group
 /** Completion at a position the grammar read, from the index through `lookup`. */
 export async function completeFromIndex(read: CompletionRead, dialect: CompletionDialect, lookup: IndexLookup): Promise<CompletionList> {
   const { site, scope, word } = read
-  const insert = (name: string) => word.quoted ? name : dialect.quote(name)
+  const typed = word.quoted ? word.typed.replace(/\\(.)/g, '$1') : word.typed
+  const insert = (name: string) => word.quoted ? name.replace(/[\\`]/g, '\\$&') : dialect.quote(name)
   const items = new Map<string, CompletionItem>()
-  const add = (item: CompletionItem) => { const id = `${item.kind}:${item.label.toLowerCase()}`; if (!items.has(id)) items.set(id, item) }
+  const add = (item: CompletionItem) => { const id = dialect.itemKey ? dialect.itemKey(item.kind, item.label) : `${item.kind}:${item.label.toLowerCase()}`; if (!items.has(id)) items.set(id, item) }
   let incomplete = false
   switch (site.kind) {
     case 'none': return { items: [], incomplete: false }
-    case 'keyword':
-      for (const keyword of dialect.keywords) add(keywordItem(keyword))
+    case 'afterFromTable':
+    case 'statementStart':
+    case 'castType':
+    case 'datePart':
+      for (const keyword of dialect.keywordsFor?.(site) ?? dialect.keywords) add(keywordItem(keyword))
+      break
+    case 'systemVar':
+    case 'infoSchema':
       break
     case 'object': {
       if (!site.qualifier.length) for (const cte of scope.ctes) add({ label: cte.name, kind: 'cte', insertText: insert(cte.name), detail: 'WITH query', sortText: sortText('cte', 0, cte.name) })
       const containers = dialect.containers(site.qualifier).slice(0, languageLookupLimits.requests)
       if (!containers.length) break
-      const requests: LanguageLookupPath[] = containers.map(container => ({ path: [...container.path], ...word.typed ? { prefix: word.typed } : {}, limit: languageLookupLimits.defaultItems }))
+      const requests: LanguageLookupPath[] = containers.map(container => ({ path: [...container.path], ...typed ? { prefix: typed } : {}, limit: languageLookupLimits.defaultItems }))
       const answers = await boundedLookup(lookup)(requests)
       // No answer (the index busy or unreachable): the editor asks again as the word grows.
       if (!answers) incomplete = true
@@ -47,7 +54,7 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       const cutShort = resolver.cutShort()
       const namespace = site.qualifier.length === 1 && [...dialect.functionNamespaces, ...dialect.anyFunctionPrefixes].some(name => sameName(name, site.qualifier[0]))
       if (cutShort.size && (field ? field.columns.truncated : !namespace)) {
-        const { prefix, object } = field ? await resolver.prefixThrough(field.source, field.path, word.typed) : { prefix: [...site.qualifier, word.typed].join('.'), object: undefined }
+        const { prefix, object } = field ? await resolver.prefixThrough(field.source, field.path, typed) : { prefix: [...site.qualifier, typed].join('.'), object: undefined }
         if (prefix) {
           resolver = new ScopeResolver(scope, dialect, lookup, object && cutShort.has(object) ? new Map([[object, [prefix]]]) : narrowing(cutShort, [prefix]))
           await resolver.load()
@@ -69,24 +76,26 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
       }
       break
     }
-    case 'expression': {
+    case 'expression':
+    case 'joinCondition':
+    case 'unnestArg': {
       let resolver = new ScopeResolver(scope, dialect, lookup)
       await resolver.load()
       let given = await resolver.all(scope.sources)
       const cutShort = resolver.cutShort()
-      if (word.typed && cutShort.size) {
+      if (typed && cutShort.size) {
         // The typed names, and an UNNEST's element fields that start with them (UNNEST(w.items) asks w's table for items.<typed>).
-        const plan = new Map([...cutShort].map(path => [path, [word.typed]]))
+        const plan = new Map([...cutShort].map(path => [path, [typed]]))
         const unnests = scope.sources.filter(source => source.kind === 'unnest')
         // Past the cap an UNNEST's fields go unasked: the list is not final when one of those reads a table cut short (or a bare
         // name, which may lie in one).
         for (const source of unnests.slice(resolverLimits.narrowUnnests)) {
           if (source.kind !== 'unnest' || !source.path.length) continue
-          const { object } = await resolver.prefixThrough(source, [], word.typed)
+          const { object } = await resolver.prefixThrough(source, [], typed)
           if (!object || cutShort.has(object)) { incomplete = true; break }
         }
         for (const source of unnests.slice(0, resolverLimits.narrowUnnests)) {
-          const { prefix, object } = await resolver.prefixThrough(source, [], word.typed)
+          const { prefix, object } = await resolver.prefixThrough(source, [], typed)
           for (const [path, prefixes] of plan) if (prefix && (!object || object === path) && !prefixes.includes(prefix)) prefixes.push(prefix)
         }
         resolver = new ScopeResolver(scope, dialect, lookup, plan)

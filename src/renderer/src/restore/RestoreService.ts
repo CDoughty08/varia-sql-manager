@@ -231,7 +231,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private async loadSetFiles(id: string): Promise<void> {
     const state = this.get(id)
     if (!state?.draft || state.mode !== 'files') return
-    const wanted = filesBaseSets(state.draft, state.facts).filter(set => !state.facts.setFiles?.[set.id])
+    const wanted = filesBaseSets(state.draft, state.facts).filter(set => !(state.facts.setFiles && Object.hasOwn(state.facts.setFiles, set.id)))
     if (wanted.length === 0) { if (state.files !== 'ready') this.patch(id, { files: 'ready' }); return }
     this.patch(id, { files: 'loading' })
     for (const set of wanted) {

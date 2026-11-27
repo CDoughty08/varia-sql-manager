@@ -183,7 +183,7 @@ internal static partial class IndexFileChecks
         }
 
         public long Whole => Entries.Length * IndexMemory.RecordBytes + Texts.Count * IndexMemory.SlotBytes + (Details is null ? 0 : ObjectDetails.FromParts(Details).Bytes)
-            + (Facts ?? []).Sum(item => BigQueryFacts.ObjectBytes + Chars(item.Fact.Signature) + Chars(item.Fact.Partitioning) + Chars(item.Fact.Clustering))
+            + (Facts ?? []).Sum(item => BigQueryFacts.ObjectBytes + Chars(item.Fact.Signature) + Chars(item.Fact.Partitioning) + Chars(item.Fact.Clustering) + Chars(item.Fact.Description))
             + Descriptions.Sum(item => BigQueryFacts.DescriptionBytes + Chars(item.Text)) + Shards.Sum(item => BigQueryFacts.ShardBytes + Chars(item.Group.Prefix) + Chars(item.Group.First) + Chars(item.Group.Last));
 
         private static long Chars(string? value) => value is null ? 0 : IndexMemory.StringBytes(value.Length);
@@ -273,13 +273,14 @@ internal static partial class IndexFileChecks
                     writer.Write(fact.Created);
                     writer.Write((ushort)((fact.Detailed ? 1 : 0) | (fact.Whole ? 2 : 0) | (fact.ColumnsCut ? 4 : 0) | (fact.Rows is not null ? 8 : 0) | (fact.Bytes is not null ? 16 : 0)
                         | (fact.Listed is not null ? 32 : 0) | (fact.Partitioning is not null ? 64 : 0) | (fact.Clustering is not null ? 128 : 0) | (fact.Signature is not null ? 256 : 0)
-                        | (fact.Stale ? 512 : 0) | (fact.TextLeftOut ? 1024 : 0) | FactFlags));
+                        | (fact.Stale ? 512 : 0) | (fact.TextLeftOut ? 1024 : 0) | (fact.Description is not null ? 2048 : 0) | FactFlags));
                     if (fact.Rows is { } rows) writer.Write(rows);
                     if (fact.Bytes is { } bytes) writer.Write(bytes);
                     if (fact.Listed is { } listed) writer.Write(listed);
                     if (fact.Partitioning is { } partitioning) Text(partitioning);
                     if (fact.Clustering is { } clustering) Text(clustering);
                     if (fact.Signature is { } signature) Text(signature);
+                    if (fact.Description is { } description) Text(description);
                 }
                 writer.Write(Descriptions.Count);
                 foreach (var (at, text) in Descriptions)
@@ -647,12 +648,13 @@ internal static partial class IndexFileChecks
                     Refused("a description of no column", raw => raw.Descriptions[0] = (top, raw.Descriptions[0].Text));
                     Refused("a description of no entry", raw => raw.Descriptions[^1] = (-1, raw.Descriptions[^1].Text));
                     Refused("a shard group of a column", raw => raw.Shards[0] = (child, raw.Shards[0].Group));
-                    Refused("a fact with unknown flags", raw => raw.FactFlags = 0x800);
+                    Refused("a fact with unknown flags", raw => raw.FactFlags = 0x1000);
                     Refused("a whole fact whose text was left out", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Detailed = true, Whole = true, TextLeftOut = true }));
                     Refused("a fact left out with no details read", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Detailed = false, Whole = false, TextLeftOut = true }));
                     Refused("a whole fact carried from another generation", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Detailed = true, Whole = true, Stale = true }));
                     Refused("a shard group of fewer than none", raw => raw.Shards[0] = (raw.Shards[0].At, raw.Shards[0].Group with { Count = -1 }));
                     Refused("a fact longer than the format allows", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Signature = new string('s', IndexFileLimits.FactChars + 1) }), IndexFileProblem.Limits);
+                    Refused("a fact description longer than the format allows", raw => raw.Facts![0] = (raw.Facts[0].At, raw.Facts[0].Fact with { Description = new string('d', IndexFileLimits.FactChars + 1) }), IndexFileProblem.Limits);
                 }
                 // A BigQuery read holds no text that nothing names.
                 if (kind == IndexUnitKind.Dataset) Refused("a text nothing names", raw => raw.Texts.Add("unnamed"));
