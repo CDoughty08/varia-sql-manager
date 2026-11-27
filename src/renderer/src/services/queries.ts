@@ -714,13 +714,17 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const timeout = connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout']
       maxCommandTimeout = maxCommandTimeout === 0 || timeout === 0 ? 0 : Math.max(maxCommandTimeout ?? 0, timeout)
     }
+    const releaseGate = () => {
+      const g = this.gated.get(tabId)
+      if (g) this.stopGated(tabId, g.queryId)
+    }
     const reportLocalError = async (message: string, code?: ErrorCode): Promise<void> => {
+      this.gated.delete(tabId)
+      if (!this.disposed && this.documents.get(tabId)) this.update(tabId, { error: message })
       const errorQueryId = crypto.randomUUID()
       this.results.begin(tabId, errorQueryId)
       await this.results.finish(tabId, errorQueryId, { error: message, ...code ? { code } : {} })
       if (this.disposed || !this.documents.get(tabId)) return
-      this.gated.delete(tabId)
-      this.update(tabId, { error: message })
       this.events.emit({ type: 'query.outputSelected', tabId, view: 'messages' })
     }
     if (request.targets?.length) {
@@ -781,19 +785,19 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         })
       }
     }
-    if (!resolvedTargets.length) return
+    if (!resolvedTargets.length) { releaseGate(); return }
     if (resolvedTargets.length > maxMultiTargets) {
       await reportLocalError(`Multi-server queries support at most ${maxMultiTargets} targets per execution. Disable some targets and try again.`, 'INVALID_PARAMS')
       return
     }
-    if (request.mode === 'crossEngineReadOnly' && (!hasSqlServer || !hasBigQuery)) return
+    if (request.mode === 'crossEngineReadOnly' && (!hasSqlServer || !hasBigQuery)) { releaseGate(); return }
 
     let payload: Pick<MultiQueryOptions, 'sql' | 'startLine' | 'startColumn' | 'scripts' | 'startLines'>
     if (request.mode === 'crossEngineReadOnly') {
       const parsed = request.scripts
         ? { ok: true as const, sqlserver: request.scripts.sqlserver, bigquery: request.scripts.bigquery, sqlServerStartLine: request.startLines?.sqlserver ?? 1, bigQueryStartLine: request.startLines?.bigquery ?? 1 }
         : this.documents.getCrossEngineScripts(tabId)
-      if (!parsed.ok || !parsed.sqlserver.trim() || !parsed.bigquery.trim()) return
+      if (!parsed.ok || !parsed.sqlserver.trim() || !parsed.bigquery.trim()) { releaseGate(); return }
       payload = {
         scripts: { sqlserver: parsed.sqlserver, bigquery: parsed.bigquery },
         ...parsed.sqlServerStartLine > 1 || parsed.bigQueryStartLine > 1
@@ -803,7 +807,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const source = request.sql !== undefined
         ? { sql: request.sql, startLine: request.startLine ?? 1, startColumn: request.startColumn ?? 1 }
         : this.documents.getExecuteText(tabId)
-      if (!source.sql.trim()) return
+      if (!source.sql.trim()) { releaseGate(); return }
       payload = {
         sql: source.sql,
         ...source.startLine > 1 ? { startLine: source.startLine } : {},
@@ -1190,7 +1194,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       const connection = !multi && document?.connectionId ? this.getConnection(document.connectionId) : undefined
       const multiHandles = multi
         ? [...new Set(operation?.connectionIds ?? [])]
-          .map(connectionId => ({ connectionId, generation: this.getConnection(connectionId)?.generation }))
+          .map(connectionId => {
+            const conn = this.getConnection(connectionId)
+            return { connectionId, generation: conn?.generation, live: !!conn && !conn.lost }
+          })
         : []
       // A BigQuery query holding a job is asked only about it, in the first box (docs/bigquery.md, The prompt): its query
       // runs, or it holds jobs it does not follow, which holdsJob confirms below.
@@ -1282,7 +1289,9 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         if (tab.multi) {
           return !!document.multiMode && tab.multiHandles.every(handle => {
             const conn = this.getConnection(handle.connectionId)
-            return handle.generation !== undefined && conn !== undefined && conn.generation === handle.generation && !conn.lost
+            return handle.live
+              ? conn !== undefined && conn.generation === handle.generation && !conn.lost
+              : !conn || !!conn.lost
           })
         }
         const connection = tab.connectionId ? this.getConnection(tab.connectionId) : undefined

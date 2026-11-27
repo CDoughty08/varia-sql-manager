@@ -950,8 +950,10 @@ describe('Wave 2 Domain 1 Round 1 adversarial regression checks', () => {
     conns.delete(uuid(10))
     expect(prepared?.current()).toBe(false)
 
-    // If participating handle was already missing at prepare time (generation === undefined), current() must never be vacuously true.
+    // If participating handle was already missing at prepare time (live === false), current() stays true while still missing and invalidates if it comes back live.
     const stalePrepared = await queries.prepareSessions('disconnect', [doc.id])
+    expect(stalePrepared?.current()).toBe(true)
+    conns.set(uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 2, providerId: 'sqlserver', targetId: uuid(1) })
     expect(stalePrepared?.current()).toBe(false)
 
     execDeferred.resolve({
@@ -1506,6 +1508,181 @@ describe('Wave 2 Domain 1 Round 2 adversarial regression checks', () => {
       targets: [{ targetKey: uuid(1), connectionId: uuid(10), label: 'sql-1', database: ' Spaced ' }]
     })
     expect(executeMulti.mock.calls[1]![0].targets[0]?.database).toBe(' Spaced ')
+    queries.dispose()
+  })
+})
+
+describe('Wave 2 Domain 1 Round 3 adversarial regression checks', () => {
+  it('R3 Finding 2: PreparedSessions.current() allows disconnecting a live peer when another participating peer is already lost', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }
+      ],
+      sql: 'SELECT 1'
+    })
+    const conns = new Map<string, { id: string; server: string; database: string; serverVersion: string; generation: number; providerId: 'sqlserver'; targetId: string; lost?: true }>([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver', targetId: uuid(1) }],
+      [uuid(11), { id: uuid(11), server: 'sql-2', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver', targetId: uuid(2) }]
+    ])
+    const execDeferred = deferred<{ ok: true; value: QueryMultiResult }>()
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute: vi.fn(),
+        executeMulti: vi.fn(() => execDeferred.promise),
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => conns.get(id),
+      events,
+      { begin: vi.fn(), finish: vi.fn() }
+    )
+
+    const runPromise = queries.executeMulti(doc.id, { mode: 'fireAndForget' })
+    // Peer 2 becomes lost BEFORE user initiates disconnecting Peer 1.
+    conns.set(uuid(11), { ...conns.get(uuid(11))!, lost: true })
+
+    const prepared = await queries.prepareSessions('disconnect', [doc.id])
+    expect(prepared?.current()).toBe(true)
+
+    // Peer 2 being removed while still not live keeps current() true.
+    conns.delete(uuid(11))
+    expect(prepared?.current()).toBe(true)
+
+    // If Peer 2 comes back live, current() invalidates.
+    conns.set(uuid(11), { id: uuid(11), server: 'sql-2', database: 'Sales', serverVersion: '16.0', generation: 2, providerId: 'sqlserver', targetId: uuid(2) })
+    expect(prepared?.current()).toBe(false)
+
+    // Restoring Peer 2 to lost restores true; losing live Peer 1 invalidates current().
+    conns.set(uuid(11), { ...conns.get(uuid(11))!, lost: true })
+    expect(prepared?.current()).toBe(true)
+    conns.set(uuid(10), { ...conns.get(uuid(10))!, lost: true })
+    expect(prepared?.current()).toBe(false)
+
+    execDeferred.resolve({
+      ok: true,
+      value: {
+        status: 'cancelled', mode: 'fireAndForget', targets: [], resultSets: [], discardedResultSets: 0,
+        messages: [], messagesTruncated: false, elapsedMs: 1,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T00:00:00.0000000Z'
+      }
+    })
+    await runPromise
+    queries.dispose()
+  })
+
+  it('R3 Finding 3: reportLocalError clears gate synchronously before awaiting finish, and early-return paths release active gates', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const conns = new Map([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const }],
+      [uuid(11), { id: uuid(11), server: 'bq-1', database: 'ds', serverVersion: '', generation: 1, providerId: 'bigquery' as const }]
+    ])
+    let finishGate = deferred<void>()
+    let rejectNextFinish = false
+    const finish = vi.fn(async () => {
+      if (rejectNextFinish) {
+        rejectNextFinish = false
+        throw new Error('results finish boom')
+      }
+      await finishGate.promise
+    })
+    const executeMulti = vi.fn()
+    const queries = new QueryService(
+      f.documents,
+      { execute: vi.fn(), executeMulti, cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })), confirmSessions: vi.fn(), querySessionState: vi.fn() },
+      id => conns.get(id),
+      events,
+      { begin: vi.fn(), finish }
+    )
+
+    // 1. reportLocalError clears gate and publishes error synchronously BEFORE results.finish resolves (cancel cannot overwrite it).
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      sql: 'SELECT 1',
+      targets: [{ targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver' }]
+    })
+    const gateSignal = queries.beginMultiGate(doc.id)!
+    expect(queries.isGated(doc.id)).toBe(true)
+    const errRun = queries.executeMulti(doc.id, {
+      mode: 'fireAndForget',
+      targets: [{ targetKey: uuid(99), connectionId: uuid(999), label: 'OfflineSrv', database: 'Sales' }]
+    })
+    // Synchronously before finishGate resolves: gate is already gone and error state is already published.
+    expect(queries.isGated(doc.id)).toBe(false)
+    expect(queries.isRunning(doc.id)).toBe(false)
+    expect(queries.getSnapshot()[doc.id]?.error).toContain('OfflineSrv')
+    // Calling cancel or endMultiGate while finish is pending must NOT overwrite the error!
+    await queries.cancel(doc.id)
+    queries.endMultiGate(doc.id, true, gateSignal)
+    expect(queries.getSnapshot()[doc.id]?.error).toContain('OfflineSrv')
+    finishGate.resolve()
+    await errRun
+    expect(queries.getSnapshot()[doc.id]?.error).toContain('OfflineSrv')
+
+    // 2. If results.finish throws, gate is still cleared and error stands (no leak).
+    rejectNextFinish = true
+    queries.beginMultiGate(doc.id)
+    await expect(queries.executeMulti(doc.id, {
+      mode: 'fireAndForget',
+      targets: [{ targetKey: uuid(99), connectionId: uuid(999), label: 'BoomSrv', database: 'Sales' }]
+    })).rejects.toThrow('results finish boom')
+    expect(queries.isGated(doc.id)).toBe(false)
+    expect(queries.isRunning(doc.id)).toBe(false)
+    expect(queries.getSnapshot()[doc.id]?.error).toContain('BoomSrv')
+
+    // 3. All 4 early-return paths release an active gate via stopGated (aborting signal and clearing running/gated).
+    // Path A: !resolvedTargets.length
+    const noTargetDoc = f.documents.openMultiQuery({ mode: 'same', sql: 'SELECT 1', targets: [] })
+    const sigA = queries.beginMultiGate(noTargetDoc.id)!
+    await queries.executeMulti(noTargetDoc.id, { mode: 'fireAndForget' })
+    expect(sigA.aborted).toBe(true)
+    expect(queries.isGated(noTargetDoc.id)).toBe(false)
+    expect(queries.isRunning(noTargetDoc.id)).toBe(false)
+
+    // Path B: crossEngineReadOnly missing one engine
+    const crossMissingDoc = f.documents.openMultiQuery({
+      mode: 'cross', sql: 'SELECT 1', bigQuerySql: 'SELECT 2',
+      targets: [{ targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver' }]
+    })
+    const sigB = queries.beginMultiGate(crossMissingDoc.id)!
+    await queries.executeMulti(crossMissingDoc.id, { mode: 'crossEngineReadOnly' })
+    expect(sigB.aborted).toBe(true)
+    expect(queries.isGated(crossMissingDoc.id)).toBe(false)
+    expect(queries.isRunning(crossMissingDoc.id)).toBe(false)
+
+    // Path C: crossEngineReadOnly empty script
+    const crossEmptyDoc = f.documents.openMultiQuery({
+      mode: 'cross', sql: 'SELECT 1', bigQuerySql: '   ',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'ds', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    const sigC = queries.beginMultiGate(crossEmptyDoc.id)!
+    await queries.executeMulti(crossEmptyDoc.id, { mode: 'crossEngineReadOnly' })
+    expect(sigC.aborted).toBe(true)
+    expect(queries.isGated(crossEmptyDoc.id)).toBe(false)
+    expect(queries.isRunning(crossEmptyDoc.id)).toBe(false)
+
+    // Path D: same-engine empty SQL
+    const emptySqlDoc = f.documents.openMultiQuery({
+      mode: 'same', sql: '   ',
+      targets: [{ targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver' }]
+    })
+    const sigD = queries.beginMultiGate(emptySqlDoc.id)!
+    await queries.executeMulti(emptySqlDoc.id, { mode: 'fireAndForget' })
+    expect(sigD.aborted).toBe(true)
+    expect(queries.isGated(emptySqlDoc.id)).toBe(false)
+    expect(queries.isRunning(emptySqlDoc.id)).toBe(false)
+
+    expect(executeMulti).not.toHaveBeenCalled()
     queries.dispose()
   })
 })
