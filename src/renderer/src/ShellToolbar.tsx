@@ -3,6 +3,7 @@ import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
 import type { CommandArgs, CommandId } from './core/types'
 import type { IconId } from '../../shared/icons'
 import Icon from './Icon'
+import MultiTargetPopover from './MultiTargetPopover'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
 import BigQueryCostChip from './BigQueryCostChip'
 import { ActualPlanToggle, EstimatedPlanButton, QueryPickers, useExecutionScope, useQueryContext } from './QueryBar'
@@ -40,15 +41,20 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
   const workbench = useWorkbench()
   const { commands } = workbench
   const connections = useServiceSnapshot(workbench.connections)
-  const { tab } = useQueryContext()
+  const { tab, model } = useQueryContext()
   const scope = useExecutionScope()
+  const isMulti = !!tab?.multiMode
+  const isCross = tab?.multiMode === 'cross'
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'), saveAll: useCommandEnabled('file.saveAll'),
-    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel'), monitor: useCommandEnabled('activity.open')
+    execute: useCommandEnabled('query.execute') && (!isMulti || model.live), cancel: useCommandEnabled('query.cancel'), monitor: useCommandEnabled('activity.open')
   }
   const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute'), monitor: useKeybindingLabel('activity.open') }
   const run = (id: CommandId) => { void commands.execute(id, undefined, 'toolbar') }
-  const lost = !!connections.find(value => value.id === tab?.connectionId)?.lost
+  const lost = !isMulti && !!connections.find(value => value.id === tab?.connectionId)?.lost
+  const multiUnreadyHint = isCross
+    ? 'Select at least 1 connected SQL Server and 1 connected BigQuery target to execute.'
+    : 'Select at least 1 connected target to execute.'
 
   if (variant === 'classic') return <div className="toolbar" role="toolbar" aria-label="Standard">
     <div className="toolbar-actions">
@@ -59,9 +65,10 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
       <button type="button" className="ui-button" disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
       <button type="button" className="ui-button" disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
       <span className="toolbar-divider" />
-      <button type="button" className="ui-button execute" disabled={!enabled.execute} aria-label={scope.title} title={lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onClick={() => run('query.execute')}>
+      <button type="button" className="ui-button execute" disabled={!enabled.execute} aria-label={scope.title} title={isMulti && !model.live ? multiUnreadyHint : lost ? lostHint : withKey(scope.title === 'Execute' ? scope.title : `${scope.title} · ${scope.detail}`, keys.execute)} onClick={() => run('query.execute')}>
         <Icon name="play" />{scope.title}{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
-      <span className="query-scope">{scope.detail}</span>
+      <span className="query-scope" title={scope.tooltip}>{scope.detail}</span>
+      {isCross && <span className="query-readonly-pill" title="Cross-Engine queries are read-only (SELECT / WITH only)."><Icon name="lock" /><span className="query-readonly-label">SELECT-only</span></span>}
       <button type="button" className="ui-button" disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <BigQueryCostChip tabId={tab?.id} />
       <ActualPlanToggle classic />
@@ -73,7 +80,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
       <button type="button" className="ui-button icon-button" disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>
       <button type="button" className="ui-button" onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
     </div>
-    <div className="toolbar-context"><QueryPickers variant="classic" /></div>
+    <div className="toolbar-context">{isMulti && tab ? <MultiTargetPopover tabId={tab.id} variant="classic" /> : <QueryPickers variant="classic" />}</div>
   </div>
 
   return <div className="header-toolbar" role="toolbar" aria-label="Standard">

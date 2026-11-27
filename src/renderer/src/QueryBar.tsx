@@ -7,19 +7,31 @@ import { useCommandEnabled, useCommandsToggled, useKeybindingLabel } from './cor
 import { useTicker } from './core/useTicker'
 import { modalOpen } from './core/modal'
 import { watchModals, windows } from './core/windows'
-import { environmentTag } from '../../shared/environments'
+import { environmentPreset, environmentTag } from '../../shared/environments'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
+import MultiTargetPopover, { multiTargetTriggerSummary, resolveMultiTargets } from './MultiTargetPopover'
 import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
 import BigQueryCostChip from './BigQueryCostChip'
 import { formatElapsed, lostHint, planButtonState, queryContextModel, toolbarMove, toolbarReturn, toolbarStop, withKey, type QueryContextModel } from './query-context'
 import { documentUri } from './services/documents'
 
 /** Selection metadata only: the execution service remains the source of the SQL that actually runs. */
-export function useExecutionScope(tabId?: string): { readonly selected: boolean; readonly title: string; readonly label: string; readonly detail: string; readonly pill: string } {
+export function useExecutionScope(tabId?: string): { readonly selected: boolean; readonly title: string; readonly label: string; readonly detail: string; readonly pill: string; readonly tooltip?: string } {
   const { documents, editorStatus } = useWorkbench()
-  const { activeId } = useServiceSnapshot(documents), status = useServiceSnapshot(editorStatus)
+  const { documents: tabs, activeId } = useServiceSnapshot(documents), status = useServiceSnapshot(editorStatus)
   const targetId = tabId ?? activeId
+  const tab = tabs.find(value => value.id === targetId)
+  if (tab?.multiMode === 'cross') {
+    return {
+      selected: false,
+      title: 'Execute',
+      label: 'Execute',
+      detail: 'Both dialects',
+      pill: 'Both dialects',
+      tooltip: 'Cross-Engine always executes both full Transact-SQL and GoogleSQL panes.'
+    }
+  }
   const selection = targetId && status?.selection?.uri === documentUri(targetId) ? status.selection : undefined
   if (!selection) return { selected: false, title: 'Execute', label: 'Execute', detail: 'Entire query', pill: 'All' }
   const range = selection.startLine === selection.endLine ? `Line ${selection.startLine}` : `Lines ${selection.startLine}–${selection.endLine}`
@@ -38,11 +50,24 @@ export function useQueryContext(tabId?: string): { readonly tab: QueryTab | unde
   const tab = tabs.find(value => value.id === targetId)
   const startedAt = tab ? queryState[tab.id]?.running?.startedAt : undefined
   const running = startedAt !== undefined
-  const model = queryContextModel({
+  const baseModel = queryContextModel({
     connectionId: tab?.connectionId, targetId: tab?.targetId, target: rememberedTargets.find(target => target.id === tab?.targetId), lastServer: tab?.lastServer,
     database: tab?.database ?? 'master', connections, databases: tab?.connectionId ? databaseLists.get(tab.connectionId) ?? [] : [],
     query: !!tab && documentKind(tab) === 'sql', running, busy
   })
+  if (!tab?.multiMode) return { tab, model: baseModel, running, startedAt }
+  const summary = multiTargetTriggerSummary(tab, connections, rememberedTargets)
+  const resolved = resolveMultiTargets(tab, connections, rememberedTargets).filter(item => item.target.enabled)
+  const prod = resolved.find(item => environmentPreset(item.environment) === 'Production')
+  const color = prod ? (prod.color ?? 'red') : tab.multiMode === 'cross' ? 'purple' : resolved.find(item => item.color)?.color
+  const environment = summary.prodCount > 0 ? 'Production' : undefined
+  const model: QueryContextModel = {
+    ...baseModel,
+    live: summary.ready,
+    color,
+    environment,
+    serverName: summary.label
+  }
   return { tab, model, running, startedAt }
 }
 
@@ -305,19 +330,24 @@ export default function QueryBar({ tabId, onActivate }: { tabId?: string; onActi
   const scope = useExecutionScope(tabId)
   const now = useTicker(running, 100)
   const elapsed = running && startedAt !== undefined ? formatElapsed(now - startedAt) : undefined
+  const isMulti = !!tab?.multiMode
+  const isCross = tab?.multiMode === 'cross'
   const commandArgs: CommandArgs | undefined = tabId && tab ? {
     tabId,
     state: {
       activeDocumentIsQuery: documentKind(tab) === 'sql',
       activeDocumentProvider: documentProvider(tab),
       activeDocumentConnected: model.live,
+      activeDocumentIsMultiServer: isMulti,
+      activeDocumentCrossFile: isCross && tab.crossView === 'file',
       queryRunning: running,
-      includeActualPlan: documentKind(tab) === 'sql' && !!tab.includeActualPlan,
-      includeLivePlan: documentKind(tab) === 'sql' && !!tab.includeLivePlan,
-      includeClientStatistics: documentKind(tab) === 'sql' && !!tab.includeClientStatistics
+      includeActualPlan: documentKind(tab) === 'sql' && !isMulti && !!tab.includeActualPlan,
+      includeLivePlan: documentKind(tab) === 'sql' && !isMulti && !!tab.includeLivePlan,
+      includeClientStatistics: documentKind(tab) === 'sql' && !isMulti && !!tab.includeClientStatistics
     }
   } : undefined
-  const canExecute = useCommandEnabled('query.execute', commandArgs), canCancel = useCommandEnabled('query.cancel', commandArgs)
+  const canExecute = useCommandEnabled('query.execute', commandArgs) && (!isMulti || model.live)
+  const canCancel = useCommandEnabled('query.cancel', commandArgs)
   const keys = { execute: useKeybindingLabel('query.execute'), cancel: useKeybindingLabel('query.cancel') }
   const accent = useConnectionAccent(model.color)
   const accentStyle = accent ? { '--query-bar-accent': accent } as CSSProperties : undefined
@@ -370,7 +400,10 @@ export default function QueryBar({ tabId, onActivate }: { tabId?: string; onActi
     else if (focused.current && focused.current === (event.target as EventTarget)) focused.current = undefined
   }
   const tag = environmentTag(environment)
-  return <div className="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" data-tab-id={tabId} data-connection-accent={accent ? '' : undefined} style={accentStyle} ref={bar} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
+  const multiUnreadyHint = isCross
+    ? 'Select at least 1 connected SQL Server and 1 connected BigQuery target to execute.'
+    : 'Select at least 1 connected target to execute.'
+  return <div className="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="" data-tab-id={tabId} data-multi-server={isMulti ? '' : undefined} data-cross-engine={isCross ? '' : undefined} data-connection-accent={accent ? '' : undefined} style={accentStyle} ref={bar} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
     <div className="query-bar-actions">
       {/* Same button element across Execute ↔ Cancel so keyboard focus rides the morph without dropping to body. */}
       <button type="button"
@@ -380,23 +413,32 @@ export default function QueryBar({ tabId, onActivate }: { tabId?: string; onActi
         disabled={running ? !canCancel : !canExecute}
         title={running
           ? withKey('Cancel Executing Query', keys.cancel)
-          : model.connection?.lost ? lostHint : withKey(scope.selected ? `${scope.label} · ${scope.detail}` : scope.label, keys.execute)}
+          : isMulti && !model.live
+            ? multiUnreadyHint
+            : model.connection?.lost ? lostHint : withKey(scope.selected ? `${scope.label} · ${scope.detail}` : scope.label, keys.execute)}
         onPointerDown={keepFocus}
         onClick={() => { beforeButtonExecute(); void commands.execute(running ? 'query.cancel' : 'query.execute', commandArgs, 'toolbar') }}>
         {running
           ? <><Icon name="debug-stop" /><span className="query-bar-label">Cancel</span>{elapsed && <span className="query-elapsed" aria-hidden="true">{elapsed}</span>}</>
           : <><Icon name="play" /><span className="query-bar-label">{scope.label}</span>{keys.execute && <kbd aria-hidden="true">{keys.execute.text}</kbd>}</>}
       </button>
-      <span className="query-scope" data-selection={scope.selected ? '' : undefined} title={scope.selected ? `Execution scope: ${scope.detail}` : 'Execution scope: Entire query'}>{scope.pill}</span>
+      <span className="query-scope" data-selection={scope.selected ? '' : undefined} data-cross-scope={isCross ? '' : undefined} title={scope.tooltip ?? (scope.selected ? `Execution scope: ${scope.detail}` : 'Execution scope: Entire query')}>{scope.pill}</span>
+      {isCross && <span className="query-readonly-pill" title="Cross-Engine queries are read-only (SELECT / WITH only).">
+        <Icon name="lock" /><span className="query-readonly-label">SELECT-only</span>
+      </span>}
       <BigQueryCostChip tabId={tab?.id} />
-      <span className="query-bar-sep" aria-hidden="true" />
-      <PlanMenuButton args={commandArgs} onBeforeExecute={beforeButtonExecute} />
-      <ClientStatisticsToggle args={commandArgs} onBeforeExecute={beforeButtonExecute} />
+      {!isMulti && <>
+        <span className="query-bar-sep" aria-hidden="true" />
+        <PlanMenuButton args={commandArgs} onBeforeExecute={beforeButtonExecute} />
+        <ClientStatisticsToggle args={commandArgs} onBeforeExecute={beforeButtonExecute} />
+      </>}
     </div>
-    <div className="query-connection" role="group" aria-label="Connection" data-lost={model.connection?.lost || undefined} data-connection-accent={accent ? '' : undefined} style={accentStyle}>
-      {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
-      {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}
-      <QueryPickers variant="bar" tabId={tabId} onActivate={() => activate(false)} />
+    <div className="query-connection" role="group" aria-label={isMulti ? 'Targets' : 'Connection'} data-multi-server={isMulti ? '' : undefined} data-lost={!isMulti && model.connection?.lost || undefined} data-connection-accent={accent ? '' : undefined} style={accentStyle}>
+      {isMulti && tab ? <MultiTargetPopover tabId={tab.id} variant="bar" onActivate={() => activate(false)} /> : <>
+        {accent && <span className="connection-swatch" style={{ background: accent }} aria-hidden="true" />}
+        {tag && <span className="query-bar-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={environment} place="query" about={model.serverName} /></span>}
+        <QueryPickers variant="bar" tabId={tabId} onActivate={() => activate(false)} />
+      </>}
     </div>
   </div>
 }

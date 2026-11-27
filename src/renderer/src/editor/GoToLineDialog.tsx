@@ -25,7 +25,8 @@ export default function GoToLineDialog({ request }: { readonly request: GoToLine
     if (line === undefined) return
     editorDialogs.closeGoToLine()
     const editor = documents.boundEditor, model = editor?.getModel()
-    if (!editor || !model || documents.getSnapshot().activeId !== request.tabId || documents.getModel(request.tabId) !== model) { close(); return }
+    const expected = documents.activeModel(request.tabId)
+    if (!editor || !model || documents.getSnapshot().activeId !== request.tabId || expected !== model) { close(); return }
     // The query may have lost lines while the dialog was open.
     const lineNumber = Math.min(line, model.getLineCount())
     editor.setPosition({ lineNumber, column: 1 })

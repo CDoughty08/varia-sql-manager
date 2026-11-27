@@ -1,10 +1,12 @@
 // What a server dragged from Object Explorer shows over the editor area: the card under a query's tab, the overlay on its
-// editor, the chip that flies into the tab on a drop, and the tab's swap once the query has moved. ServerDropService
-// holds the state; bindServerDrop turns the native drag events into it.
+// editor (or Cross-Engine dialect pane), the chip that flies into the tab on a drop, and the tab's swap once the query has
+// moved. ServerDropService holds the state; bindServerDrop turns the native drag events into it.
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
+import type { ProviderId } from '../../../shared/providers'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { Disposable } from '../core/types'
+import { isBigQueryConnection } from '../services/connection-availability'
 import Icon from '../Icon'
 import EnvironmentTag from '../EnvironmentTag'
 import { explorerTargetDragType, type DropHover, type DropLanding, type DropPlace, type DropRect, type DropVerdict, type ServerDrag, type ServerDropService } from './server-drop'
@@ -14,8 +16,8 @@ const reducedMotion = (): boolean => document.documentElement.classList.contains
 const rectOf = (element: Element): DropRect => { const box = element.getBoundingClientRect(); return { left: box.left, top: box.top, width: box.width, height: box.height } }
 const pointRect = (event: DragEvent): DropRect => ({ left: event.clientX - 40, top: event.clientY - 12, width: 80, height: 24 })
 
-interface Place { readonly place: DropPlace; readonly tabId?: string; readonly element: HTMLElement }
-/** The tab, strip or query editor under a drag event inside the editor area. */
+interface Place { readonly place: DropPlace; readonly tabId?: string; readonly dialect?: ProviderId; readonly element: HTMLElement }
+/** The tab, strip, Cross-Engine dialect pane, or query editor under a drag event inside the editor area. */
 export function placeOf(root: HTMLElement, target: EventTarget | null): Place | undefined {
   if (!(target instanceof Element) || !root.contains(target)) return undefined
   const tab = target.closest<HTMLElement>('.dv-tab')
@@ -25,6 +27,13 @@ export function placeOf(root: HTMLElement, target: EventTarget | null): Place | 
   }
   const strip = target.closest<HTMLElement>('.dv-tabs-and-actions-container')
   if (strip) return target.closest('button, a, input, [role="menu"]') ? undefined : { place: 'strip', element: strip }
+  const crossPane = target.closest<HTMLElement>('[data-cross-dialect]')
+  if (crossPane) {
+    const raw = crossPane.dataset.crossDialect
+    const dialect: ProviderId | undefined = raw === 'sqlserver' || raw === 'bigquery' ? raw : undefined
+    const tabId = crossPane.dataset.documentId ?? crossPane.closest<HTMLElement>('[data-document-id]')?.dataset.documentId
+    if (tabId && dialect) return { place: 'editor', tabId, dialect, element: crossPane }
+  }
   const editor = target.closest<HTMLElement>('[data-document-id]')
   return editor?.dataset.documentId ? { place: 'editor', tabId: editor.dataset.documentId, element: editor } : undefined
 }
@@ -38,16 +47,16 @@ export interface ServerDropBindings {
 }
 /**
  * Listens on the editor area, in the capture phase so a move never reaches Monaco's own drop (which would insert the
- * name): over a query's tab or editor the drop moves the query; with the insert modifier over the editor it passes through, and
- * Monaco with bindExplorerDrop inserts the name. Over a strip's empty space it opens a new query.
+ * name): over a query's tab or editor the drop moves (or adds to) the query; with the insert modifier over the editor it
+ * passes through, and Monaco with bindExplorerDrop inserts the name. Over a strip's empty space it opens a new query.
  */
 export function bindServerDrop(root: HTMLElement, service: ServerDropService, bindings: ServerDropBindings): Disposable {
   const carried = (event: DragEvent): ServerDrag | undefined => event.dataTransfer && Array.from(event.dataTransfer.types).includes(explorerTargetDragType) ? service.drag : undefined
   const resolve = (event: DragEvent): (DropHover & { element: HTMLElement }) | undefined => {
     const at = placeOf(root, event.target)
     if (!at) return undefined
-    const verdict: DropVerdict = at.place === 'strip' ? service.stripVerdict() : service.verdict(at.tabId)
-    return { place: at.place, tabId: at.tabId, verdict, insert: at.place === 'editor' && bindings.insertHeld(event), rect: rectOf(at.element), element: at.element }
+    const verdict: DropVerdict = at.place === 'strip' ? service.stripVerdict() : service.verdict(at.tabId, undefined, at.dialect)
+    return { place: at.place, tabId: at.tabId, ...at.dialect ? { dialect: at.dialect } : {}, verdict, insert: at.place === 'editor' && bindings.insertHeld(event), rect: rectOf(at.element), element: at.element }
   }
   const over = (event: DragEvent) => {
     if (!carried(event)) return
@@ -57,7 +66,7 @@ export function bindServerDrop(root: HTMLElement, service: ServerDropService, bi
     service.hover(hover)
     if (at.insert) return
     event.stopPropagation()
-    if (at.verdict.accept) { event.preventDefault(); event.dataTransfer!.dropEffect = 'move' }
+    if (at.verdict.accept) { event.preventDefault(); event.dataTransfer!.dropEffect = at.verdict.action === 'addTarget' ? 'copy' : 'move' }
   }
   // Chromium's dragleave rarely names where the pointer went, so only a pointer outside the area clears what is shown.
   const leave = (event: DragEvent) => {
@@ -75,7 +84,7 @@ export function bindServerDrop(root: HTMLElement, service: ServerDropService, bi
     if (!at.verdict.accept) { service.end(); return }
     if (at.place === 'strip') { bindings.activateGroupOf(at.element); service.openQuery(drag); return }
     const plate = at.place === 'editor' ? document.querySelector('.server-drop-plate') : null
-    service.moveQuery(at.tabId!, plate ? rectOf(plate) : pointRect(event), drag).catch(bindings.reportError)
+    service.moveQuery(at.tabId!, plate ? rectOf(plate) : pointRect(event), drag, at.dialect).catch(bindings.reportError)
   }
   root.addEventListener('dragover', over, true)
   root.addEventListener('dragleave', leave, true)
@@ -99,28 +108,67 @@ function useTabMarks(root: HTMLElement | null, dragging: boolean, hover: DropHov
   }, [root, tabId, accept])
 }
 
-const refusal: Record<Exclude<DropVerdict, { accept: true }>['reason'], (name: string, server: string) => string> = {
-  notQuery: () => 'Only a query can move to another server; this document keeps the server it was opened for.',
-  running: name => `${name} is executing. Stop the query to move it to another server.`,
-  same: (_name, server) => `This query is already on ${server}; its session is kept.`,
-  disconnected: (_name, server) => `${server} is not connected.`,
-  busy: () => 'Wait for the current operation to finish.'
-}
-
-/** The card under a tab, the plate on an editor and the line under a strip: what the drop will do. */
+/** The card under a tab, the plate on an editor/pane and the line under a strip: what the drop will do. */
 function DropCard({ hover, drag, mode }: { hover: DropHover; drag: ServerDrag; mode: 'card' | 'plate' }) {
   const { documents, connections, gestures } = useWorkbench()
   const all = useServiceSnapshot(connections)
   const document = hover.tabId ? documents.get(hover.tabId) : undefined
   const from = all.find(connection => connection.id === document?.connectionId), to = all.find(connection => connection.id === drag.connectionId)
   const toName = drag.server, fromName = from ? from.displayName ?? from.server : 'Disconnected'
+  const dragProvider: ProviderId = to && isBigQueryConnection(to) ? 'bigquery' : 'sqlserver'
   const environment = to?.options.environment
+  const docName = document?.name ?? 'this query'
+  const isMulti = !!document?.multiMode
   let title: string, body: React.ReactNode = null
-  if (hover.place === 'strip') title = `Open a new query on ${toName}${drag.database ? ` · ${drag.database}` : ''}`
-  else if (!hover.verdict.accept) title = refusal[hover.verdict.reason](document?.name ?? 'This query', toName)
-  else if (hover.verdict.action === 'database') title = `Change ${document?.name ?? 'this query'}'s database to ${drag.database}`
-  else {
-    title = `Move ${document?.name ?? 'this query'} to ${toName}`
+  if (hover.place === 'strip') {
+    title = `Open a new query on ${toName}${drag.database ? ` · ${drag.database}` : ''}`
+  } else if (!hover.verdict.accept) {
+    switch (hover.verdict.reason) {
+      case 'notQuery':
+        title = 'Only a query can move to another server; this document keeps the server it was opened for.'
+        break
+      case 'running':
+        title = `${document?.name ?? 'This query'} is executing. Stop the query to change its servers.`
+        break
+      case 'same':
+        title = isMulti
+          ? `${toName} is already targeted by ${docName}.`
+          : `This query is already on ${toName}; its session is kept.`
+        break
+      case 'disconnected':
+        title = `${toName} is not connected.`
+        break
+      case 'busy':
+        title = 'Wait for the current operation to finish.'
+        break
+      case 'wrongEngine':
+        title = `${toName} uses a different engine than ${docName}. Use New Cross-Engine SELECT… to combine SQL Server and BigQuery.`
+        break
+      case 'wrongDialectPane':
+        title = `Drop ${dragProvider === 'bigquery' ? 'BigQuery' : 'SQL Server'} connections onto the ${dragProvider === 'bigquery' ? 'GoogleSQL' : 'Transact-SQL'} pane.`
+        break
+      case 'targetLimit':
+        title = 'A multi-server query can target at most 32 servers.'
+        break
+    }
+  } else if (hover.verdict.action === 'database') {
+    title = `Change ${docName}'s database to ${drag.database}`
+  } else if (hover.verdict.action === 'updateTargetDatabase') {
+    title = `Change ${toName}'s ${dragProvider === 'bigquery' ? 'dataset' : 'database'} to ${drag.database} in ${docName}`
+  } else if (hover.verdict.action === 'addTarget') {
+    title = `Add ${toName} to ${docName}`
+    const dbText = drag.database
+      ? `${dragProvider === 'bigquery' ? 'Default dataset' : 'Database'}: ${drag.database}.`
+      : `${dragProvider === 'bigquery' ? 'Default dataset' : 'Database'}: ${to?.database || (dragProvider === 'bigquery' ? 'none' : 'master')}.`
+    const paneNote = document?.multiMode === 'cross'
+      ? ` Targets the ${dragProvider === 'bigquery' ? 'GoogleSQL' : 'Transact-SQL'} pane.`
+      : ''
+    body = <>
+      <div className="server-drop-move"><Icon name="add" /><span className="server-drop-to">{toName}</span>{environment && <EnvironmentTag environment={environment} place="list" />}</div>
+      <div className="server-drop-note">{`${dbText}${paneNote}`}</div>
+    </>
+  } else {
+    title = `Move ${docName} to ${toName}`
     body = <>
       <div className="server-drop-move"><span className="server-drop-from">{fromName}</span><Icon name="arrow-right" /><span className="server-drop-to">{toName}</span>{environment && <EnvironmentTag environment={environment} place="list" />}</div>
       <div className="server-drop-note">{drag.database ? `Database: ${drag.database}.` : `Database: ${to?.database ?? 'the server\'s default'} (its default).`}{from ? ` The query's session on ${fromName} ends.` : ''}</div>
@@ -129,7 +177,7 @@ function DropCard({ hover, drag, mode }: { hover: DropHover; drag: ServerDrag; m
   const insert = gestures.modifiers('explorer.dropServerName') ? gestures.phrase('explorer.dropServerName') : undefined
   const hint = mode === 'plate' && insert ? `${insert[0].toUpperCase()}${insert.slice(1)} to insert the name instead.` : undefined
   return <div className={mode === 'plate' ? 'server-drop-plate' : 'server-drop-card'} role="status" aria-label="Server drop" data-refused={!hover.verdict.accept || undefined}>
-    {mode === 'plate' && <span className="server-drop-plug" aria-hidden="true"><Icon name={!hover.verdict.accept ? 'circle-slash' : drag.database ? 'database' : 'server'} /></span>}
+    {mode === 'plate' && <span className="server-drop-plug" aria-hidden="true"><Icon name={!hover.verdict.accept ? 'circle-slash' : drag.database ? 'database' : dragProvider === 'bigquery' ? 'bigquery' : 'server'} /></span>}
     <div className="server-drop-title">{title}</div>
     {body}
     {hint && <div className="server-drop-hint">{hint}</div>}
@@ -177,7 +225,7 @@ export default function ServerDropLayer({ root }: { root: HTMLElement | null }) 
   const show = drag && hover && !hover.insert ? hover : undefined
   return createPortal(<>
     {show && show.place !== 'editor' && <div className="server-drop-anchor" style={{ left: Math.max(4, show.rect.left), top: show.rect.top + show.rect.height + 6 }}><DropCard hover={show} drag={drag!} mode="card" /></div>}
-    {show && show.place === 'editor' && <div className="server-drop-overlay" data-refused={!show.verdict.accept || undefined} style={{ left: show.rect.left, top: show.rect.top, width: show.rect.width, height: show.rect.height }}>
+    {show && show.place === 'editor' && <div className="server-drop-overlay" data-refused={!show.verdict.accept || undefined} data-cross-dialect={show.dialect || undefined} style={{ left: show.rect.left, top: show.rect.top, width: show.rect.width, height: show.rect.height }}>
       <DropCard hover={show} drag={drag!} mode="plate" />
     </div>}
     {drag && hover?.insert && <div className="server-drop-anchor server-drop-insert" style={{ left: hover.rect.left + hover.rect.width / 2, top: hover.rect.top + hover.rect.height - 48 }}>

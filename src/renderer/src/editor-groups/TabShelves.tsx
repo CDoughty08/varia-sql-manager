@@ -336,12 +336,20 @@ function ShelfControls({ group, shelf, layout }: { readonly group: DockviewGroup
     {shelf.hidden.length > 0 && <button type="button" className="query-shelf-more" aria-label={label} title={`${label}\n${gestures.phrase('documentTabs.rows')} to change stack height`} popoverTarget={id}
       style={{ left: shelf.overflowLeft, top: shelf.overflowTop, width: shelf.cellWidth }} onPointerDown={event => event.stopPropagation()}>… {shelf.hidden.length} more</button>}
     <div className="query-shelf-overflow" id={id} popover="auto" ref={overflow} role="group" aria-label={`More ${name} tabs`}>
-      {shelf.hidden.map(tab => <button type="button" key={tab.id} title={tab.file?.path ?? tab.name} onClick={() => {
-        overflow.current?.hidePopover()
-        group.panels.find(panel => panel.id === tab.id)?.api.setActive()
-        layout.refresh()
-        group.model.tabsListElement.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tab.id)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus({ preventScroll: true })
-      }}>{tab.name}</button>)}
+      {shelf.hidden.map(tab => {
+        const multiHint = tab.multiMode === 'cross'
+          ? 'Cross-Engine SELECT'
+          : tab.multiMode === 'same'
+            ? `${(tab.multiTargets ?? []).filter(target => target.enabled).length} targets`
+            : undefined
+        const overflowTitle = [tab.file?.path ?? tab.name, multiHint].filter(Boolean).join(' · ')
+        return <button type="button" key={tab.id} data-multi-server={tab.multiMode || undefined} title={overflowTitle} onClick={() => {
+          overflow.current?.hidePopover()
+          group.panels.find(panel => panel.id === tab.id)?.api.setActive()
+          layout.refresh()
+          group.model.tabsListElement.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tab.id)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus({ preventScroll: true })
+        }}>{tab.name}</button>
+      })}
     </div>
   </div>
 }
