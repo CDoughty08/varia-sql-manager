@@ -80,6 +80,7 @@ describe('result page access', () => {
       // table (pinned below).
       'Results/ResultJobs.cs: var set = store.Find(resultId);',
       // The saved search index's store (IndexStore.Find), which holds no result.
+      'Search/ObjectSearchService.BigQueryReload.cs: case IndexFileProblem.Io when Store.Find(scope, IndexUnitKind.Dataset, project, dataset) is null:',
       'Search/ObjectSearchService.BigQueryReload.cs: unit ??= Store.Find(scope, IndexUnitKind.Dataset, project, dataset) is { } found && BigQuerySync.From(found.Sync) == sync ? found : null;',
       // Load into memory, a sort, filter or value list in BigQuery and their estimates want the windowed result itself.
       'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',

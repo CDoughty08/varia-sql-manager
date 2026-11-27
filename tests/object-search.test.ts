@@ -1507,6 +1507,9 @@ describe('ObjectSearchService', () => {
     expect(indexIncomplete({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, unchecked)).toBe(true)
     expect(indexGap({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, now)).toBe('saved 1 min ago, not checked')
     expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4 }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
+    // A refresh's progress carries no age (it checks none of them): the line keeps the last status's "not checked".
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 1, objects: 40, phase: 'names' }, unchecked, now))
+      .toBe('Indexing 0 of 1 dataset (40 objects so far)… Index saved 1 min ago, not checked.')
     // A malformed age (never sent: main's schema refuses it) says nothing rather than "NaN".
     expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4, savedAt: 'soon' }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Discovering BigQuery projects…')

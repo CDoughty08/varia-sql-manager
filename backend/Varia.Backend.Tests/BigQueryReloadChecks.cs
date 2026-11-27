@@ -29,6 +29,7 @@ internal static class BigQueryReloadChecks
         await Superseded(check);
         await Unchecked(check);
         await Rewritten(check);
+        await Vanished(check);
         await Damaged(check);
         await Budget(check);
     }
@@ -449,6 +450,34 @@ internal static class BigQueryReloadChecks
         await search.Store.Idle();
         check(search.SavedLoads is { Loaded: 3, Stale: 1 } && source.TablesOf.GetValueOrDefault(Billing + ".sales") == 3 && source.TableCalls == 3,
             "a file written again between the listing and its load is not held with the listed one's sync bytes: the dataset is read whole");
+    }
+
+    // ---- A file deleted between the listing and its load ----
+
+    private static async Task Vanished(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        source.Reset();
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        // As DDL from another connection or a prune would: the file goes after the listing, before its load.
+        search.SavedLoading = (_, dataset) =>
+        {
+            if (dataset != "ops" || Unit(search, Billing, "ops") is not { } unit) return;
+            search.Store.Delete(unit);
+            search.Store.Idle().GetAwaiter().GetResult();
+        };
+        await Build(search, source, id);
+        search.SavedLoading = null;
+        await search.Store.Idle();
+        check(search.SavedLoads is { Loaded: 3, Stale: 1, Refused: 0 } && source.TablesOf.GetValueOrDefault(Billing + ".ops") == 2 && Hits(search, id, "events") == 1,
+            "a file deleted after it was listed counts as gone, not unreadable, and its dataset is read again");
     }
 
     // ---- Corrupt files and another key's file ----

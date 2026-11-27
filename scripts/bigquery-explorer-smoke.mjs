@@ -7,7 +7,7 @@
 // saved index before the dataset's listing answers and reads no object's details again (docs/object-search.md, Reloading a
 // BigQuery index). No assertion depends on absolute pixel sizes.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { startBigQueryRest } from './fixtures/bigquery-rest.mjs'
 import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow } from './fixtures/explorer-tree.mjs'
@@ -111,8 +111,22 @@ try {
   // The connection's index saved its dataset; a second backend start on the same profile loads it before any call. With the
   // dataset's tables.list held, a search already finds the dataset's objects, and both index lines say how old the
   // saved index is while the build checks it. The listing then finds the dataset unchanged: no object's details are read.
-  const savedFiles = async () => (await readdir(resolve(profile, 'SearchIndex'), { recursive: true }).catch(() => [])).filter(name => String(name).endsWith('.vidx'))
-  await expect.poll(async () => (await savedFiles()).length, { timeout: 30000 }).toBeGreaterThan(0)
+  const searchObjects = async () => {
+    await page.keyboard.press('F1')
+    await page.keyboard.type('search objects')
+    await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
+    await expect(objectSearchBox(page)).toBeFocused()
+  }
+  // The first build ends (the tab's index line stops saying Indexing), then its last save lands: the saved files stop changing.
+  await searchObjects()
+  await expect(objectSearchIndexLines(page).first()).not.toContainText('Indexing', { timeout: 30000 })
+  const savedFolder = resolve(profile, 'SearchIndex')
+  const savedFiles = async () => {
+    const names = (await readdir(savedFolder).catch(() => [])).filter(name => name.endsWith('.vidx')).sort()
+    return (await Promise.all(names.map(async name => `${name}:${(await stat(resolve(savedFolder, name)).catch(() => undefined))?.mtimeMs}`))).join('|')
+  }
+  let lastFiles
+  await expect.poll(async () => { const now = await savedFiles(); const settled = now !== '' && now === lastFiles; lastFiles = now; return settled }, { timeout: 30000, intervals: [500] }).toBe(true)
   fake.gets.length = 0
   const release = fake.hold()
   // Restart, past the prompt that the connection would close (connectProject answers Don't Save again).
@@ -128,11 +142,8 @@ try {
     await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe(mode)
     await page.screenshot({ path: resolve('artifacts', 'review-screenshots', 'pr-4', `saved-index-band-${mode}.png`) })
   }
-  await page.keyboard.press('F1')
-  await page.keyboard.type('search objects')
-  await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
-  await expect(objectSearchBox(page)).toBeFocused()
-  await page.keyboard.type('orders')
+  await searchObjects()
+  await objectSearchBox(page).fill('orders')
   await expect(objectSearchHits(page).filter({ hasText: 'orders' })).not.toHaveCount(0)
   await expect(objectSearchIndexLines(page).first()).toHaveText(checking)
   for (const mode of ['light', 'dark']) {
@@ -142,7 +153,8 @@ try {
   }
   expect(fake.gets).toEqual([])
   release()
-  await expect(objectSearchIndexLines(page).first()).not.toContainText('saved', { timeout: 30000 })
+  // Once the build has ended (its details pass included), nothing read any object's details.
+  await expect(objectSearchIndexLines(page).first()).not.toContainText(/Indexing|saved/, { timeout: 30000 })
   await expect(objectSearchHits(page).filter({ hasText: 'orders' })).not.toHaveCount(0)
   expect(fake.gets).toEqual([])
   expect(failures).toEqual([])

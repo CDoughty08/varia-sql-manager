@@ -145,11 +145,12 @@ export function indexMemoryNote(statuses: readonly (ObjectIndexStatus | undefine
 /** How old the part of a BigQuery index loaded from the saved index is, while no listing has checked it: "saved 2 h ago,
  *  checking" while the build that checks it runs, "saved 2 h ago, not checked" once it ended without (a listing that failed). */
 export function savedIndexText(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined, now: number = Date.now()): string {
-  const building = !!entry?.requestId
-  const savedAt = building ? entry?.savedAt : status?.savedAt
+  // Only a full build's progress says what it checks; a refresh or a stale-only build leaves the last status's word.
+  const checking = !!entry?.requestId && entry.savedAt !== undefined
+  const savedAt = checking ? entry?.savedAt : status?.savedAt
   const at = savedAt === undefined ? Number.NaN : Date.parse(savedAt)
   if (!Number.isFinite(at)) return ''
-  return `saved ${formatAge(now - at)}, ${building ? 'checking' : 'not checked'}`
+  return `saved ${formatAge(now - at)}, ${checking ? 'checking' : 'not checked'}`
 }
 
 /** What the index holds, for the summary line. */

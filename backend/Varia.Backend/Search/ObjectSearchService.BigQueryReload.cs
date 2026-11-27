@@ -118,6 +118,10 @@ internal sealed partial class ObjectSearchService
                         // As wave 2 stops reading new discovered datasets once one does not fit: the others would not either.
                         if (discovered) discoveredFull = true;
                         break;
+                    // Deleted since it was listed (DDL from another connection, a prune): gone, not unreadable.
+                    case IndexFileProblem.Io when Store.Find(scope, IndexUnitKind.Dataset, project, dataset) is null:
+                        Interlocked.Increment(ref savedStale);
+                        break;
                     default: Interlocked.Increment(ref savedRefused); break;
                 }
                 continue;
@@ -141,6 +145,7 @@ internal sealed partial class ObjectSearchService
                 {
                     state.Index.Put(read);
                     state.Saved[key] = (read, unit);
+                    state.SavedOrder.Add((Utc(read.ReadAt).Ticks, key));
                     SavedAtLocked(state);
                     held = true;
                 }
@@ -176,7 +181,11 @@ internal sealed partial class ObjectSearchService
         lock (state.Gate)
         {
             if (!ReferenceEquals(state.Build, owner) || !ReferenceEquals(state.Index.Get(key), earlier)) return false;
-            if (state.Saved.Remove(key)) SavedAtLocked(state);
+            if (state.Saved.Remove(key, out var checkedRead))
+            {
+                state.SavedOrder.Remove((Utc(checkedRead.Read.ReadAt).Ticks, key));
+                SavedAtLocked(state);
+            }
         }
         Interlocked.Increment(ref savedUnchanged);
         return true;
@@ -196,21 +205,30 @@ internal sealed partial class ObjectSearchService
         saved.Remove(project);
     }
 
-    /// <summary>Under state.Gate: forgets the loaded reads no longer held (replaced by a new read, or dropped) and answers when
-    /// the oldest one still held was read, which the status and the build's progress say while it has not been checked.</summary>
+    /// <summary>Under state.Gate: answers when the oldest loaded read still held was read, which the status and the build's progress
+    /// say while it has not been checked. Only the oldest entries are looked at: those no longer held (replaced by a new read, or
+    /// dropped) are forgotten as they come up, so a build with thousands of loaded datasets pays little per hold.</summary>
     private static DateTime? SavedAtLocked(State state)
     {
         DateTime? oldest = null;
-        foreach (var (key, (read, _)) in state.Saved.ToList())
+        while (state.SavedOrder.Count > 0)
         {
-            if (!ReferenceEquals(state.Index.Get(key), read)) { state.Saved.Remove(key); continue; }
-            var at = read.ReadAt.Kind == DateTimeKind.Local ? read.ReadAt.ToUniversalTime() : DateTime.SpecifyKind(read.ReadAt, DateTimeKind.Utc);
-            if (oldest is null || at < oldest) oldest = at;
+            var (ticks, key) = state.SavedOrder.Min;
+            var entry = state.Saved.TryGetValue(key, out var saved) && Utc(saved.Read.ReadAt).Ticks == ticks;
+            if (entry && ReferenceEquals(state.Index.Get(key), saved.Read))
+            {
+                oldest = new DateTime(ticks, DateTimeKind.Utc);
+                break;
+            }
+            state.SavedOrder.Remove((ticks, key));
+            if (entry) state.Saved.Remove(key);
         }
         state.SavedAt = oldest;
         state.SavedAtText = SavedAtText(oldest);
         return oldest;
     }
+
+    private static DateTime Utc(DateTime at) => at.Kind == DateTimeKind.Local ? at.ToUniversalTime() : DateTime.SpecifyKind(at, DateTimeKind.Utc);
 
     /// <summary>The status's and the progress's savedAt: UTC to the second, the same text whatever the culture.</summary>
     internal static string? SavedAtText(DateTime? at) => at?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
