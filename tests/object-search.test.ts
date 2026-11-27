@@ -709,6 +709,47 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 0, total: 0, objects: 40, status: status() })
   })
 
+  it('does not settle refreshBigQueryScopes waiters when a superseded build request rejects', async () => {
+    const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], cancel: [] as string[][] }
+    const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
+    const rejectable: ((error: Error) => void)[] = []
+    const bqApi: ObjectSearchOptions['api'] = {
+      explorerIndex: vi.fn(params => {
+        calls.index.push(params)
+        return new Promise<ApiResult<ObjectIndexResult>>((resolve, reject) => {
+          pendingIndex.push(resolve)
+          rejectable.push(reject)
+        })
+      }),
+      explorerSearch: vi.fn(async () => ({ ok: true as const, value: { hits: [], total: 0, partial: false, elapsedMs: 1, index: status({ provider: 'bigquery' }) } })),
+      explorerCancel: vi.fn(async ids => { calls.cancel.push([...ids]); return { ok: true as const, value: { cancelled: ids.length } } }),
+      onExplorerIndexProgress: () => () => {}
+    }
+    const bqConnections = new Connections([bigQueryConnection('bq')])
+    let nextId = 0
+    const search = new ObjectSearchService({
+      api: bqApi,
+      documents: { openCustom: vi.fn(), registerProvider: vi.fn(() => ({ dispose: () => {} })), get: vi.fn(), activate: vi.fn(), getSnapshot: vi.fn() } as unknown as ObjectSearchOptions['documents'],
+      connections: bqConnections,
+      settings: { get: ((key: string) => key === 'objectExplorer.search.indexOnConnect' ? false : key === 'objectExplorer.search.definitions' ? true : undefined) as ObjectSearchOptions['settings']['get'] },
+      events: { subscribe: () => ({ dispose: () => {} }) },
+      newId: () => `bq-req-${++nextId}`
+    })
+    let settled: boolean | undefined
+    const waiter = search.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'sales' }]).then(ok => { settled = ok; return ok })
+    // Supersede the first request with a new build.
+    search.build('bq')
+    expect(search.getSnapshot().indexes.bq?.requestId).toBe('bq-req-2')
+    // Rejecting the superseded req-1 must NOT settle the waiter while req-2 is still active.
+    rejectable[0](new Error('superseded failure'))
+    await settle()
+    expect(settled).toBeUndefined()
+    // Completing the active req-2 settles the waiter with true.
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    expect(await waiter).toBe(true)
+    search.dispose()
+  })
+
   it('reads the index status after a stopped first build, so what it read shows as a stopped index with Build index', async () => {
     const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
     const { service, api, pendingIndex, connections } = harness()

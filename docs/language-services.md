@@ -11,13 +11,16 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
 
 ## Using IntelliSense
 
-- **Completion.** **Ctrl+Space**, or a provider trigger character such as `.`. Suggestions use the query tab's
-  connection and database; switching tabs does not change another editor's pending request.
-- **Exact matches first.** A name that matches the typed word exactly, ignoring case and brackets, is listed and selected
-  first, above names that merely start with it, fuzzy matches and system objects. Monaco's own scoring would otherwise
-  prefer a prefix in the typed case (`orders` would rank `orders_archive` or a lower-case system view above `Orders`).
-  Each list is re-ranked as the word grows: a complete answer is reused for identifier characters typed at the caret,
-  and a truncated one is requested again.
+- **Completion.** **Ctrl+Space**, or a provider trigger character such as `.` (and `` ` `` in GoogleSQL). Suggestions use the query tab's
+  connection and database; switching tabs does not change another editor's pending request. Suggestions show the identifier
+  name with right-aligned kind/type metadata, with document-word suggestions (`wordBasedSuggestions`) disabled so comments and
+  unrelated words never pollute SQL lists. Accept suggestions with **Tab** or click; **Enter** inserts a newline so short
+  table aliases (such as `t`) are never hijacked by clause keywords.
+- **Exact matches first.** A name that matches the typed word exactly, ignoring case and quoting (brackets or backticks),
+  is listed and selected first, above names that merely start with it, fuzzy matches and system objects. Monaco's own
+  scoring would otherwise prefer a prefix in the typed case (`orders` would rank `orders_archive` or a lower-case
+  system view above `Orders`). Each list is re-ranked as the word grows: a complete answer is reused for identifier
+  characters typed at the caret, and a truncated one is requested again.
 - **Brackets.** Every column suggestion shows and inserts its name in brackets (`[bob].[columnName]`, `[Order Date]`);
   the bare name still filters, and so does a name after a typed `[` or `"`. A table or other name that is inserted in
   brackets because it needs quoting also shows its brackets. Accepting a suggestion inside an auto-closed `[...]`
@@ -123,10 +126,12 @@ checking**.
 ### Refresh Local Cache
 
 **Ctrl+Shift+R** (**Command+Shift+R** on macOS), **Edit › IntelliSense › Refresh Local Cache** or the palette rebuilds
-the query's metadata cache after schema changes, for its provider, connection and database. It preserves unsaved SQL,
-execution sessions, transactions and temporary tables, and waits for the provider's readiness notification before
-reporting completion. The status bar shows progress and failures; changing the query's target or closing it discards an
-obsolete result.
+the query's metadata cache after schema changes, for its provider, connection and database (or BigQuery datasets). It
+preserves unsaved SQL, execution sessions, transactions and temporary tables. On SQL Server it calls `language.refresh`
+and waits for the provider's readiness notification; on BigQuery it clears the connection's `LookupCache` immediately
+and runs a scoped `explorer.index` refresh for the datasets referenced by the tab (or its default dataset and billing
+project). The status bar shows `SQL: Refreshing` (`IntelliSense refreshing`) and, on SQL Server, failures; changing the
+query's target, disconnecting or closing it discards an obsolete result.
 
 ### Authentication
 
@@ -141,31 +146,43 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
 ([ipc.md](ipc.md)). Nothing is sent to Google and nothing is billed. SQL Server tabs keep SQL Tools.
 
 - **Pipeline.** `src/shared/completion/` knows no engine: a grammar reads the caret's statement into a site (an object
-  name, a member after a dot, an expression or a keyword) and its scope; `resolve.ts` asks the index for the objects the
-  scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, how a written name becomes an
-  index path, keywords and functions. GoogleSQL's are `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
+  name, a member after a dot, an expression, or a clause site such as `afterFromTable`, `statementStart`, `castType`,
+  `datePart`, `systemVar`, `infoSchema`, `joinCondition`, or `unnestArg`) and its scope; `resolve.ts` asks the index for
+  the objects the scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, clause-specific
+  keywords, how a written name becomes an index path, keywords and functions. GoogleSQL's are
+  `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
 - **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
   `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects (billing, starred
   and discovered accessible projects). `x.` lists a project's
   datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
   item with its range, and a wildcard (`events_*`) or one of its shards within the range reads the newest shard's columns
   (`events_*` reads the `events_YYYYMMDD` group even beside `events_summary`; `ev*` over two groups, or a group and a
-  table, reads none).
+  table, reads none). Hyphenated project and table identifiers (`my-proj-2`) use a hyphen-safe `wordPattern` so typing
+  or filtering across `-` keeps suggestions anchored without breaking subtraction expressions.
+- **Clause keywords and alias safety.** After a `FROM` or `JOIN` table, subquery, `UNNEST`, or alias (`afterFromTable`),
+  only valid `FROM`-clause continuations are suggested (`AS` when unaliased, `ON`/`USING` inside `JOIN`, `WHERE`, joins,
+  `GROUP BY`, `ORDER BY`, `TABLESAMPLE`, etc. — never `TABLE`, `ABORT`, or data types). At `statementStart` only statement
+  starters are suggested, and inside `CAST(… AS` / `SAFE_CAST(… AS` (`castType`) only GoogleSQL types and composite types.
 - **Expressions.** The columns of every source in scope, the scope's aliases, functions and keywords. `alias.` lists that
   source's columns, `alias.record.` a STRUCT's fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any
-  function. After `CAST(… AS`, types and keywords.
+  function.
 - **Scope.** `FROM` and `JOIN` items with or without `AS` (after `FOR SYSTEM_TIME AS OF` and `TABLESAMPLE` too), dashed
   projects written without backticks, comma joins, `UNNEST(…) AS x` and an earlier item's array (`FROM orders o, o.items`), subqueries (by their select
   list's names and stars), `WITH` queries (each sees only the ones before it, so one may read the table it shadows), set operations and outer queries' sources.
   An unqualified table is in the tab's default dataset of the connection's billing project.
-- **Names** are inserted as GoogleSQL takes them: bare when plain and not reserved, else in backticks.
+- **Names** are inserted as GoogleSQL takes them: bare when plain and not reserved, else in backticks. Accepting a leaf
+  identifier (`table`, `view`, `routine`, `model`, `column`, `field`, `cte`, `alias`) inside auto-closed `` `…` ``
+  consumes the trailing closing backtick so the caret exits cleanly; accepting a container (`project`, `dataset`) keeps
+  the caret inside so `.` chaining continues.
 - **Hover.** A table or view: its kind and path, rows, size, partitioning, clustering, shards and top-level columns with
   types (the first 40); a routine's signature; a column or field: type, REQUIRED and description; an alias or `WITH`
   name: what it reads; a function: its signatures.
-- **Index state.** While the index builds, every list is incomplete, so names read later appear as the word grows; the
-  first request on a connection that was never indexed starts a build when Options allows builds on connect. A project
+- **Index state.** While the index builds, every index-reading list is incomplete, so names read later appear as the word
+  grows; the first request on a connection that was never indexed starts a build when Options allows builds on connect.
+  `IndexCompletionService` subscribes to `ObjectSearchService` so index builds, manual refreshes, and DDL-stale updates
+  invalidate that connection's `LookupCache` immediately (with a generation guard blocking stale in-flight writes). A project
   read by name only has datasets and tables but no columns. The status bar's IntelliSense item says when the index is
-  building, unbuilt, unreachable or the tab is disconnected (keywords and functions only).
+  building, refreshing, unbuilt, unreachable or the tab is disconnected (keywords and functions only).
 - **Limits.** `language.lookup` takes 16 paths a request and answers 500 items a path by default (2,000 at most, 4,000
   in all); the renderer keeps answers per connection for 15 seconds (256 at most) and sends at most 4 lookups at once.
   Documents over 250,000 characters get none, and subqueries nested (or `WITH` queries chained through `*`) more than 64

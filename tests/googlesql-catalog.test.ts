@@ -76,6 +76,12 @@ describe('GoogleSQL catalogue', () => {
     expect(language.namespaces.sort()).toEqual(['AEAD', 'HLL_COUNT', 'KEYS', 'NET'])
     expect(googleSqlConfiguration.comments).toEqual({ lineComment: '--', blockComment: ['/*', '*/'] })
     expect(googleSqlConfiguration.autoClosingPairs?.map(pair => pair.open)).toEqual(['(', '[', '\'', '"', '`'])
+    expect(googleSqlConfiguration.wordPattern).toBeInstanceOf(RegExp)
+    const words = (text: string) => text.match(googleSqlConfiguration.wordPattern!) ?? []
+    expect(words('SELECT * FROM project-name.dataset.raw-events')).toEqual(['SELECT', 'FROM', 'project-name', 'dataset', 'raw-events'])
+    expect(words('SELECT * FROM my-proj-2.ds')).toEqual(['SELECT', 'FROM', 'my-proj-2', 'ds'])
+    expect(words('SELECT 1-2')).toEqual(['SELECT', '1', '2'])
+    expect(words('SELECT a - b -- comment')).toEqual(['SELECT', 'a', 'b', 'comment'])
   })
 
   it('keeps docs/googlesql.md in sync', async () => {

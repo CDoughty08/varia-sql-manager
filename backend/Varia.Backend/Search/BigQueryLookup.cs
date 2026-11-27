@@ -17,6 +17,8 @@ internal sealed class BigQueryLookup
     private readonly IndexBudget budget;
     /// <summary>What a lookup array leaves free of the budget: BigQuery's names floor, as its reads do.</summary>
     private readonly long keepFree;
+    private readonly string billing;
+    private readonly HashSet<string> starred;
     private readonly Action? arraysBuilt;
     private readonly Dictionary<string, Dictionary<string, DatabaseIndex>> reads = new(StringComparer.Ordinal);
     private readonly HashSet<string> namesOnly;
@@ -29,8 +31,10 @@ internal sealed class BigQueryLookup
     internal BigQueryLookup(string billing, IReadOnlyList<string> extras, IEnumerable<DatabaseIndex> held, IEnumerable<string>? namesOnly, IEnumerable<ObjectIndexSkip> skips,
         bool building, bool built, IndexBudget budget, Action? arraysBuilt = null, IEnumerable<string>? partialProjects = null,
         IReadOnlyDictionary<string, ObjectIndexSkip>? projectListingSkips = null, IReadOnlyDictionary<(string Project, string Dataset), ObjectIndexSkip>? datasetSkips = null,
-        long keepFree = 0)
+        long keepFree = 0, IEnumerable<string>? starredProjects = null)
     {
+        this.billing = billing;
+        this.starred = new HashSet<string>(starredProjects ?? [], StringComparer.Ordinal);
         this.keepFree = keepFree;
         Projects = [billing, .. extras.Where(extra => extra != billing).Distinct(StringComparer.Ordinal)];
         foreach (var read in held)
@@ -55,6 +59,12 @@ internal sealed class BigQueryLookup
 
     /// <summary>Whether a project's datasets were read by name only (no columns, view text or signatures).</summary>
     public bool NamesOnly(string project) => namesOnly.Contains(project);
+
+    /// <summary>The project's discovery tier: billing, starred, or discovered.</summary>
+    public string ProjectTier(string project) =>
+        string.Equals(project, billing, StringComparison.Ordinal) ? "billing"
+        : starred.Contains(project) ? "starred"
+        : "discovered";
 
     /// <summary>The project as the connection names it: exact, else the one that differs only in case; null when the connection has none such.</summary>
     public string? Project(string name) => Resolve(Projects, name);

@@ -58,24 +58,32 @@ internal static partial class BigQueryIndexChecks
         var top = await Lookup(PathRequest(), PathRequest("varia-alpha"), PathRequest("varia-alpha", "sales"), PathRequest("varia-beta", "census"), PathRequest("bigquery-public-data", "samples"), PathRequest("nope"));
         var objects = top.Answers[2];
         check(top.Index == "ready" && Items(top.Answers[0]) == "varia-alpha,varia-beta,bigquery-public-data,example.com:varia-beta"
-            && top.Answers[0].Items.All(item => item is { Kind: "bqProject", Detail: null }),
-            "projects come back in billing, starred, then discovered order with full details: " + Items(top.Answers[0]));
+            && top.Answers[0].Items.All(item => item is { Kind: "bqProject", Detail: null, NamesOnly: null, Partial: null })
+            && top.Answers[0].Items.Select(item => (item.Name, item.Tier)).SequenceEqual([("varia-alpha", "billing"), ("varia-beta", "starred"), ("bigquery-public-data", "discovered"), ("example.com:varia-beta", "discovered")]),
+            "projects come back in billing, starred, then discovered order with tiers and full details: " + Items(top.Answers[0]));
         check(top.Answers[1] is { State: "ready", Path: ["varia-alpha"] } && top.Answers[1].Items.Select(item => item.Name).ToList() is var datasets && datasets.Contains("sales") && datasets.Contains("staging")
-            && datasets.SequenceEqual(datasets.Order(StringComparer.Ordinal)) && top.Answers[1].Items.All(item => item.Kind == "bqDataset"),
+            && datasets.SequenceEqual(datasets.Order(StringComparer.Ordinal)) && top.Answers[1].Items.All(item => item is { Kind: "bqDataset", Partial: null }),
             "a project's datasets come back by name: " + Items(top.Answers[1]));
-        check(objects is { State: "ready", Truncated: false } && objects.Items.Any(item => item is { Name: "orders", Kind: "bqTable" }) && objects.Items.Any(item => item is { Name: "daily", Kind: "bqView" })
-            && objects.Items.Any(item => item is { Name: "to_cents", Kind: "bqRoutine", Subtype: "scalar", Detail: "(dollars NUMERIC) RETURNS INT64" })
+        var ordersItem = objects.Items.Single(item => item.Name == "orders");
+        check(objects is { State: "ready", Truncated: false } && ordersItem is { Kind: "bqTable", Rows: 1234567, Bytes: 5368709120, Partitioning: "DAY on placed", Clustering: "customer, region", Description: null, Partial: null }
+            && objects.Items.Any(item => item is { Name: "daily", Kind: "bqView", Partial: null })
+            && objects.Items.Any(item => item is { Name: "orders_copy", Kind: "bqTable", Subtype: "clone", Partial: null })
+            && objects.Items.Any(item => item is { Name: "to_cents", Kind: "bqRoutine", Subtype: "scalar", Detail: "(dollars NUMERIC) RETURNS INT64", Partial: null })
             && objects.Items.Single(item => item.Name.StartsWith("events_2", StringComparison.Ordinal)) is { Name: "events_20260103", Shards: { Count: 3, Prefix: "events_" } }
             && objects.Items.Any(item => item.Kind == "bqModel") && objects.Items.All(item => item.Kind != "bqDataset" && item.Kind != "bqColumn"),
-            "a dataset's objects come back with kinds, subtypes, a routine's signature and a sharded group as its newest shard, without the dataset entry or columns: " + Items(objects));
+            "a dataset's objects come back with kinds, subtypes, summary metadata, a routine's signature and a sharded group as its newest shard, without descriptions unless asked: " + Items(objects));
         check(top.Answers[3] is { State: "ready" } && Items(top.Answers[3]) == "population"
             && top.Answers[4] is { State: "ready" } && Items(top.Answers[4]) == "shakespeare"
             && top.Answers[5] is { State: "absent", Path: ["nope"], Items.Count: 0 },
             $"starred and discovered datasets are ready with their objects, and an unknown project is absent: {top.Answers[3].State} {top.Answers[4].State} {top.Answers[5].State}");
 
+        var detailedItems = (await Lookup(new JsonObject { ["path"] = new JsonArray("varia-alpha", "sales"), ["details"] = true })).Answers[0];
+        check(detailedItems.Items.Single(item => item.Name == "orders").Description == "Orders placed online.",
+            "object list items carry table descriptions only when details are requested");
+
         var orders = (await Lookup(PathRequest("varia-alpha", "sales", "orders"))).Answers[0];
-        check(orders.Object is { Name: "orders", Kind: "bqTable", Detailed: true, Rows: 1234567, Bytes: 5368709120, Partitioning: "DAY on placed", Clustering: "customer, region" },
-            "a table's answer carries its facts: rows, size, partitioning and clustering");
+        check(orders.Object is { Name: "orders", Kind: "bqTable", Detailed: true, Rows: 1234567, Bytes: 5368709120, Partitioning: "DAY on placed", Clustering: "customer, region", Description: "Orders placed online." },
+            "a table's answer carries its facts: rows, size, partitioning, clustering and description");
         check(Items(orders) == "id,customer,tags,placed,address,address.city,address.geo,address.geo.lat"
             && orders.Items[0] is { Kind: "bqColumn", Type: "INT64", Nullable: false } && orders.Items[2].Type == "ARRAY<STRING>" && orders.Items[4] is { Subtype: "struct", Type: "STRUCT" }
             && orders.Items[7] is { Type: "FLOAT64", Nullable: true } && orders.Items.All(item => item.Description is null),
@@ -130,10 +138,11 @@ internal static partial class BigQueryIndexChecks
             "a shard outside the group's range, or the prefix in another case, names no group");
         var salesRead = held.Single(read => read.Database == "varia-alpha" && read.Dataset == "sales");
         salesRead.ChildrenLeftOut = true;
-        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"), PathRequest("varia-alpha", "sales", "to_cents"))).Answers;
+        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"), PathRequest("varia-alpha", "sales", "to_cents"), PathRequest("varia-alpha", "sales"))).Answers;
         salesRead.ChildrenLeftOut = false;
-        check(cut[0].Object is { Detailed: false } && cut[0].State == "partial" && cut[1].Object is { Detailed: true },
-            "a table whose dataset's columns were left out is not detailed, and its dataset is partial; a routine's signature keeps it detailed");
+        check(cut[0].Object is { Detailed: false, Description: "Orders placed online." } && cut[0].State == "partial" && cut[1].Object is { Detailed: true }
+            && cut[2].Items.Single(item => item.Name == "orders").Partial == true && cut[2].Items.Single(item => item.Name == "to_cents").Partial is null,
+            "a table whose dataset's columns were left out is not detailed and its item is marked partial; a routine's signature keeps it detailed");
         var census = (await Lookup(PathRequest("varia-beta", "census", "population"))).Answers[0];
         var discoveredTable = (await Lookup(PathRequest("bigquery-public-data", "samples", "shakespeare"))).Answers[0];
         check(census is { State: "ready", Object: { Detailed: true }, Items.Count: > 0 }
@@ -143,6 +152,85 @@ internal static partial class BigQueryIndexChecks
         var namesOnlyLookup = With();
         check(namesOnlyLookup.NamesOnly("varia-beta") && namesOnlyLookup.Dataset("varia-beta", "census").State == LookupState.Partial,
             "a project in NamesOnly reports partial state for its datasets");
+        var tierAndPartialLookup = new BigQueryLookup("varia-alpha", ["varia-beta", "bigquery-public-data"], held, ["varia-beta"], [],
+            building: false, built: true, new IndexBudget(1 << 20), partialProjects: ["bigquery-public-data"], starredProjects: ["varia-beta"]);
+        var tierAnswer = EditorLookup.Answer(tierAndPartialLookup, new LanguageLookupArgs(id, [new([]), new(["varia-beta"]), new(["bigquery-public-data"])]));
+        check(tierAnswer.Answers[0].Items[0] is { Name: "varia-alpha", Tier: "billing", Detail: null, NamesOnly: null, Partial: null }
+            && tierAnswer.Answers[0].Items[1] is { Name: "varia-beta", Tier: "starred", Detail: "names", NamesOnly: true, Partial: null }
+            && tierAnswer.Answers[0].Items[2] is { Name: "bigquery-public-data", Tier: "discovered", Detail: null, NamesOnly: null, Partial: true }
+            && tierAnswer.Answers[1].Items.All(item => item.Partial == true),
+            "EditorLookup distinguishes project tiers, namesOnly projects (whose datasets are partial), and partial projects");
+
+        // Table/view descriptions: empty/null normalization, FactChars clipping, Weight accounting, and IndexBudget charging above detailsFloor.
+        var blankDesc = BigQueryEntries.FromTable(new Google.Apis.Bigquery.v2.Data.Table { Type = "TABLE", Description = "" });
+        var longDescText = new string('d', BigQueryIndexLimits.FactChars + 400);
+        var longDesc = BigQueryEntries.FromTable(new Google.Apis.Bigquery.v2.Data.Table { Type = "VIEW", Description = longDescText, View = new() { Query = "SELECT 1" } });
+        var emptyDesc = new BigQueryDetail(null, null, null, []);
+        check(blankDesc.Description is null && longDesc.Description == longDescText && BigQueryReader.Weight(longDesc) > BigQueryReader.Weight(emptyDesc),
+            "FromTable normalizes empty descriptions to null and Weight accounts for table descriptions");
+        var descEntry = new BigQueryEntry("bqView", "bqViews", null, "v", 1, null, Detail: longDesc);
+        var plainEntry = descEntry with { Detail = longDesc with { Description = null } };
+        var baseLimits = new ObjectIndexLimits { MemoryBytes = 64_000, NamesReserveBytes = 0 };
+        var basePool = new StringPool(new IndexBudget(baseLimits.MemoryBytes));
+        var plainRead = new BigQueryReader(baseLimits, basePool, null).Read("p", "d", [plainEntry], true, true)!;
+        var descPool = new StringPool(new IndexBudget(baseLimits.MemoryBytes));
+        var descRead = new BigQueryReader(baseLimits, descPool, null).Read("p", "d", [descEntry], true, true)!;
+        var clipped = descRead.Facts!.Of(1)?.Description;
+        var expectedCharge = IndexMemory.StringBytes(BigQueryIndexLimits.FactChars);
+        check(clipped is { Length: BigQueryIndexLimits.FactChars } && clipped.EndsWith('…')
+            && descRead.Bytes - plainRead.Bytes == expectedCharge
+            && BigQueryEntries.Known(descRead, true)[("bqView", "v")].Detail.Description == clipped,
+            "BigQueryReader clips table descriptions to FactChars, charges them to the budget, and preserves them in Known");
+        var tightPool = new StringPool(new IndexBudget(baseLimits.MemoryBytes));
+        var floor = baseLimits.MemoryBytes - (plainRead.Bytes + plainPoolCost(plainRead)) - (expectedCharge / 2);
+        var refusedDesc = new BigQueryReader(baseLimits, tightPool, null, namesFloor: 0, detailsFloor: floor).Read("p", "d", [descEntry], true, true);
+        check(refusedDesc is null && tightPool.Budget.Used == 0,
+            "a table description is charged above detailsFloor and returns all bytes to the budget when refused");
+        static long plainPoolCost(DatabaseIndex index) => index.Pooled.Sum(StringPool.Cost);
+
+        // Surrogate-safe clipping in BigQueryReader.Clip when a surrogate pair straddles FactChars - 2..FactChars - 1.
+        var surrogateDetail = BigQueryEntries.FromTable(new Google.Apis.Bigquery.v2.Data.Table { Type = "TABLE", Description = new string('a', 1022) + "🚀" + "bbb" });
+        var surrogatePool = new StringPool(new IndexBudget(baseLimits.MemoryBytes));
+        var surrogateRead = new BigQueryReader(baseLimits, surrogatePool, null).Read("p", "d", [new BigQueryEntry("bqTable", "bqTables", null, "surrogate_tbl", 1, null, Detail: surrogateDetail)], true, true)!;
+        var surrogateClipped = surrogateRead.Facts!.Of(1)?.Description;
+        var surrogateJson = System.Text.Json.JsonSerializer.Serialize(surrogateClipped);
+        check(surrogateClipped == new string('a', 1022) + "…" && !char.IsHighSurrogate(surrogateClipped[^2])
+            && !surrogateJson.Contains('\uFFFD') && !surrogateJson.Contains("\\uFFFD", StringComparison.OrdinalIgnoreCase),
+            "BigQueryReader.Clip backs off before a straddling surrogate pair and produces valid UTF-16 JSON");
+
+        // EditorLookup SafeCount bounds: Rows and Bytes are preserved up to MaxSafeInteger and omitted as null above it or when negative.
+        var safeMax = Varia.Backend.BigQuery.BigQueryLimits.MaxSafeInteger;
+        var countsPool = new StringPool(new IndexBudget(baseLimits.MemoryBytes));
+        var countsRead = new BigQueryReader(baseLimits, countsPool, null).Read("p", "d",
+        [
+            new("bqTable", "bqTables", null, "t_safe", 1, null, Detail: new BigQueryDetail(null, null, null, [], safeMax, safeMax)),
+            new("bqTable", "bqTables", null, "t_over", 1, null, Detail: new BigQueryDetail(null, null, null, [], safeMax + 1, safeMax + 1)),
+            new("bqTable", "bqTables", null, "t_max", 1, null, Detail: BigQueryEntries.FromTable(new Google.Apis.Bigquery.v2.Data.Table { Type = "TABLE", NumRows = (ulong)long.MaxValue, NumBytes = long.MaxValue })),
+            new("bqTable", "bqTables", null, "t_neg", 1, null, Detail: new BigQueryDetail(null, null, null, [], -1L, -1L))
+        ], true, true)!;
+        var countsLookup = new BigQueryLookup("p", [], [countsRead], [], [], building: false, built: true, new IndexBudget(1 << 20));
+        var countsRes = EditorLookup.Answer(countsLookup, new LanguageLookupArgs(id,
+        [
+            new(["p", "d"]),
+            new(["p", "d", "t_safe"]),
+            new(["p", "d", "t_over"]),
+            new(["p", "d", "t_max"]),
+            new(["p", "d", "t_neg"])
+        ]));
+        var case2Items = countsRes.Answers[0].Items.ToDictionary(item => item.Name);
+        check(countsRead.Facts!.Of(3)?.Rows == long.MaxValue && countsRead.Facts!.Of(3)?.Bytes == long.MaxValue,
+            "BigQueryEntries.FromTable and BigQueryObjectFacts continue storing counts up to long.MaxValue");
+        check(case2Items["t_safe"] is { Rows: 9_007_199_254_740_991L, Bytes: 9_007_199_254_740_991L }
+            && case2Items["t_over"] is { Rows: null, Bytes: null }
+            && case2Items["t_max"] is { Rows: null, Bytes: null }
+            && case2Items["t_neg"] is { Rows: null, Bytes: null },
+            "EditorLookup case 2 preserves Rows/Bytes up to MaxSafeInteger and omits counts above MaxSafeInteger or below 0");
+        check(countsRes.Answers[1].Object is { Rows: 9_007_199_254_740_991L, Bytes: 9_007_199_254_740_991L }
+            && countsRes.Answers[2].Object is { Rows: null, Bytes: null }
+            && countsRes.Answers[3].Object is { Rows: null, Bytes: null }
+            && countsRes.Answers[4].Object is { Rows: null, Bytes: null },
+            "EditorLookup case 3 preserves Rows/Bytes up to MaxSafeInteger and omits counts above MaxSafeInteger or below 0");
+
         var missing = (await Lookup(PathRequest("varia-alpha", "sales", "nothing"), PathRequest("varia-alpha", "nothing", "t"))).Answers;
         check(missing[0] is { State: "ready", Object: null, Path: ["varia-alpha", "sales"] } && missing[1] is { State: "absent", Object: null },
             "an object the dataset does not hold has no answer object, and a dataset the index does not hold is absent");

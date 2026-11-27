@@ -451,7 +451,17 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           if (result.code === 'CANCELLED') this.readStatus(connectionId)
         }
         this.nextRefresh(connectionId)
-      }, onUnexpectedError)
+        if (!this.getSnapshot().indexes[connectionId]?.requestId) this.settleBuildWaiters(connectionId, result.ok)
+      }, error => {
+        onUnexpectedError(error)
+        const entry = this.getSnapshot().indexes[connectionId]
+        if (!this.disposed && entry?.requestId === requestId) {
+          this.inFlightScope.delete(connectionId)
+          this.refreshes.delete(connectionId)
+          this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
+          this.settleBuildWaiters(connectionId, false)
+        }
+      })
     }
     if (!bulk) { send(undefined); return }
     void this.bulkPath(connectionId, requestId, definitions, starredProjects).then(answer => {
@@ -462,11 +472,20 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
         this.refreshes.delete(connectionId)
         this.stopping.delete(requestId)
+        this.settleBuildWaiters(connectionId, false)
         return
       }
       this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
       send(answer)
-    }, onUnexpectedError)
+    }, error => {
+      onUnexpectedError(error)
+      const entry = this.getSnapshot().indexes[connectionId]
+      if (!this.disposed && entry?.requestId === requestId) {
+        this.refreshes.delete(connectionId)
+        this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
+        this.settleBuildWaiters(connectionId, false)
+      }
+    })
   }
 
   /**
@@ -499,6 +518,40 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly indexedScopes = new Map<string, Set<string>>()
   /** Currently running scoped refresh key per connection, kept separate from completed `indexedScopes`. */
   private readonly inFlightScope = new Map<string, string>()
+  /** Waiters awaiting completion of a connection's active build and queued refreshes. */
+  private readonly buildWaiters = new Map<string, Set<(ok: boolean) => void>>()
+
+  private settleBuildWaiters(connectionId: string, ok: boolean): void {
+    const waiters = this.buildWaiters.get(connectionId)
+    if (!waiters) return
+    this.buildWaiters.delete(connectionId)
+    for (const resolve of waiters) resolve(ok)
+  }
+
+  /**
+   * Re-reads the named BigQuery scopes (or starts a full build if the connection has no ready index yet) and settles
+   * once the build and any queued refreshes complete, cancel, stop, or disconnect.
+   */
+  async refreshBigQueryScopes(connectionId: string, scopes: readonly BigQueryIndexScope[]): Promise<boolean> {
+    const connection = this.o.connections.get(connectionId)
+    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
+    const billing = connection.options.provider === 'bigquery' ? connection.options.project : undefined
+    const entry = this.getSnapshot().indexes[connectionId]
+    if (!entry?.requestId && (entry?.error || !entry?.status || entry.status.state === 'none')) {
+      this.build(connectionId)
+      for (const scope of scopes) {
+        if (scope.project !== billing) this.refreshBigQuery(connectionId, { scope })
+      }
+    } else {
+      for (const scope of scopes) this.refreshBigQuery(connectionId, { scope })
+    }
+    if (!this.getSnapshot().indexes[connectionId]?.requestId) return false
+    return new Promise<boolean>(resolve => {
+      let set = this.buildWaiters.get(connectionId)
+      if (!set) { set = new Set(); this.buildWaiters.set(connectionId, set) }
+      set.add(resolve)
+    })
+  }
 
   /**
    * Re-reads part of a BigQuery connection's index: a project or dataset whole (Object Explorer's Refresh on it), or the datasets
@@ -860,6 +913,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.typing.clear()
     for (const fanout of this.fanouts.values()) fanout.settle()
     this.fanouts.clear()
+    for (const id of [...this.buildWaiters.keys()]) this.settleBuildWaiters(id, false)
     for (const registration of this.registrations.splice(0)) registration.dispose()
     this.clearListeners()
   }
@@ -1100,6 +1154,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       for (const id of gone) { const requestId = indexes[id]?.requestId; if (requestId) this.estimating.get(requestId)?.abort() }
       for (const id of gone) delete kept[id]
       this.publish({ ...this.getSnapshot(), indexes: kept })
+      for (const id of gone) this.settleBuildWaiters(id, false)
     }
     // A retained single-server tab keeps its filter and completed hits, but no old-handle reply may repopulate it.
     for (const document of Object.values(this.getSnapshot().documents)) {

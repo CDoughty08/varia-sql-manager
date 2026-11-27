@@ -28,20 +28,26 @@ export type LanguageLookupRequest = z.infer<typeof languageLookupRequestSchema>
  *  building: a build has not reached it yet; skipped: its last read failed; absent: the index holds no such container. */
 export const languageLookupStates = ['ready', 'partial', 'building', 'skipped', 'absent'] as const
 export type LanguageLookupState = typeof languageLookupStates[number]
+export const languageLookupProjectTiers = ['billing', 'starred', 'discovered'] as const
+export type LanguageLookupProjectTier = typeof languageLookupProjectTiers[number]
 const shardsSchema = z.object({ prefix: z.string().max(1024), count: z.number().int().min(0), first: z.string().max(8), last: z.string().max(8) }).strict()
 // A column by its field path: 15 names of up to 300 characters, joined by dots.
 const name = z.string().min(1).max(languageLookupLimits.prefixChars)
 export const languageLookupItemSchema = z.object({
   name, kind: z.string().min(1).max(64), subtype: z.string().max(64).optional(),
   type: z.string().max(4096).optional(), nullable: z.boolean().optional(),
-  detail: z.string().max(4096).optional(), description: z.string().max(4096).optional(), shards: shardsSchema.optional()
+  detail: z.string().max(4096).optional(), description: z.string().max(4096).optional(), shards: shardsSchema.optional(),
+  tier: z.enum(languageLookupProjectTiers).optional(), namesOnly: z.boolean().optional(), partial: z.boolean().optional(),
+  rows: z.number().int().min(0).optional(), bytes: z.number().int().min(0).optional(),
+  partitioning: z.string().max(4096).optional(), clustering: z.string().max(4096).optional()
 }).strict()
 export type LanguageLookupItem = z.infer<typeof languageLookupItemSchema>
 export const languageLookupObjectSchema = z.object({
   name, kind: z.string().min(1).max(64), subtype: z.string().max(64).optional(), detailed: z.boolean(),
   rows: z.number().int().min(0).optional(), bytes: z.number().int().min(0).optional(),
   partitioning: z.string().max(4096).optional(), clustering: z.string().max(4096).optional(), signature: z.string().max(4096).optional(),
-  shards: shardsSchema.optional(), columnsCut: z.boolean().optional(), modified: z.string().max(64).optional()
+  shards: shardsSchema.optional(), columnsCut: z.boolean().optional(), modified: z.string().max(64).optional(),
+  description: z.string().max(4096).optional()
 }).strict()
 export type LanguageLookupObject = z.infer<typeof languageLookupObjectSchema>
 export const languageLookupAnswerSchema = z.object({

@@ -1,3 +1,5 @@
+using Varia.Backend.BigQuery;
+
 namespace Varia.Backend.Search;
 
 /// <summary>language.lookup's bounds (languageLookupLimits in src/shared/language-lookup.ts).</summary>
@@ -9,6 +11,7 @@ internal static class EditorLookupLimits
 internal static class EditorLookup
 {
     private static RequestException Invalid(string what) => new("INVALID_PARAMS", "Invalid language lookup: " + what);
+    private static long? SafeCount(long? value) => value is >= 0 and <= BigQueryLimits.MaxSafeInteger ? value : null;
 
     public static void Validate(LanguageLookupArgs args)
     {
@@ -69,7 +72,9 @@ internal static class EditorLookup
             case 0:
             {
                 var names = exact ? Resolved(lookup.Projects, prefix) : lookup.Projects.Where(Keeps);
-                var (items, truncated) = Take(names.Select(name => new LanguageLookupItem(name, "bqProject", Detail: lookup.NamesOnly(name) ? "names" : null)), ref left);
+                var (items, truncated) = Take(names.Select(name => new LanguageLookupItem(name, "bqProject", Detail: lookup.NamesOnly(name) ? "names" : null,
+                    Tier: lookup.ProjectTier(name), NamesOnly: lookup.NamesOnly(name) ? true : null,
+                    Partial: lookup.ProjectState(name) == LookupState.Partial ? true : null)), ref left);
                 return new("ready", [], items, truncated);
             }
             case 1:
@@ -78,7 +83,8 @@ internal static class EditorLookup
                 if (project is null) return new("absent", [.. path], [], false);
                 var datasets = lookup.Datasets(project);
                 var names = exact ? Resolved(datasets, prefix) : datasets.Where(Keeps);
-                var (items, truncated) = Take(names.Select(name => new LanguageLookupItem(name, "bqDataset")), ref left);
+                var (items, truncated) = Take(names.Select(name => new LanguageLookupItem(name, "bqDataset",
+                    Partial: lookup.Dataset(project, name).State == LookupState.Partial ? true : null)), ref left);
                 return new(State(lookup.ProjectState(project)), [project], items, truncated);
             }
             case 2:
@@ -88,8 +94,16 @@ internal static class EditorLookup
                 IEnumerable<LookupObject> objects;
                 if (exact) objects = lookup.Object(dataset, prefix) is { } one ? [one] : [];
                 else objects = lookup.Objects(dataset).Where(entry => Keeps(entry.Name)).OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase).ThenBy(entry => entry.Name, StringComparer.Ordinal);
-                var (items, truncated) = Take(objects.Select(entry => new LanguageLookupItem(entry.Name, entry.Kind, entry.Subtype, Detail: BigQueryLookup.Facts(entry)?.Signature,
-                    Shards: BigQueryLookup.Shards(entry))), ref left);
+                var details = request.Details == true;
+                var (items, truncated) = Take(objects.Select(entry =>
+                {
+                    var facts = BigQueryLookup.Facts(entry);
+                    return new LanguageLookupItem(entry.Name, entry.Kind, entry.Subtype, Detail: facts?.Signature,
+                        Description: details ? facts?.Description : null, Shards: BigQueryLookup.Shards(entry),
+                        Partial: !IsDetailed(lookup, dataset, entry, facts) || facts?.ColumnsCut == true ? true : null,
+                        Rows: SafeCount(facts?.Rows), Bytes: SafeCount(facts?.Bytes),
+                        Partitioning: facts?.Partitioning, Clustering: facts?.Clustering);
+                }), ref left);
                 return new(State(dataset.State), resolved, items, truncated, Skip: dataset.Skip?.Code);
             }
             default:
@@ -99,12 +113,9 @@ internal static class EditorLookup
                 if (owner is not { } entry)
                     return new(State(dataset.State), lookup.Project(path[0]) is null ? [.. path] : [dataset.Project, dataset.Dataset], [], false, Skip: dataset.Skip?.Code);
                 var facts = BigQueryLookup.Facts(entry);
-                // Columns the budget left out make the object's details incomplete, whatever its facts say.
-                // A model has no columns for the second pass to read: outside a project read by name only, it is as detailed as it gets.
-                // Columns left out take a table's detail; a routine's signature is not a child and stays.
-                var detailed = (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && (entry.Kind == "bqRoutine" || dataset.Held?.ChildrenLeftOut != true);
-                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, detailed, facts?.Rows, facts?.Bytes, facts?.Partitioning, facts?.Clustering,
-                    facts?.Signature, BigQueryLookup.Shards(entry), facts?.ColumnsCut == true ? true : null, entry.Table.Modified(entry.At));
+                var detailed = IsDetailed(lookup, dataset, entry, facts);
+                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, detailed, SafeCount(facts?.Rows), SafeCount(facts?.Bytes), facts?.Partitioning, facts?.Clustering,
+                    facts?.Signature, BigQueryLookup.Shards(entry), facts?.ColumnsCut == true ? true : null, entry.Table.Modified(entry.At), facts?.Description);
                 var details = request.Details == true;
                 var columns = lookup.Columns(entry).Where(column => Keeps(column.Name));
                 var (items, truncated) = Take(columns.Select(column => new LanguageLookupItem(column.Name, "bqColumn", column.Entry.Subtype, column.Type?.TypeName,
@@ -113,4 +124,10 @@ internal static class EditorLookup
             }
         }
     }
+
+    // Columns the budget left out make the object's details incomplete, whatever its facts say.
+    // A model has no columns for the second pass to read: outside a project read by name only, it is as detailed as it gets.
+    // Columns left out take a table's detail; a routine's signature is not a child and stays.
+    private static bool IsDetailed(BigQueryLookup lookup, BigQueryLookupDataset dataset, LookupObject entry, BigQueryObjectFacts? facts) =>
+        (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && (entry.Kind == "bqRoutine" || dataset.Held?.ChildrenLeftOut != true);
 }
