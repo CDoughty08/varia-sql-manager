@@ -54,9 +54,15 @@ describe('IndexCompletionService.definition', () => {
       getOffsetAt: (position: { column: number }) => position.column - 1
     }
     const document = { id: 'q1', kind: 'sql', connectionId: options.live === false ? undefined : connectionId, database: 'sales' }
-    const documents = { getSnapshot: () => ({ documents: [document] }), getModel: () => model, get: () => document, subscribe: () => () => {} }
+    const documents = {
+      getSnapshot: () => ({ documents: [document] }),
+      getModel: () => model,
+      get: () => document,
+      languageContext: (m: unknown) => m === model ? { documentId: document.id, connectionId: document.connectionId, database: document.database, provider: 'bigquery' as const, suspended: false } : undefined,
+      subscribe: () => () => {}
+    }
     const connection = { id: connectionId, generation: 1, server: 'varia-alpha', providerId: 'bigquery' }
-    const connections = { get: () => connection, getSnapshot: () => [connection], subscribe: () => () => {} }
+    const connections = { get: () => connection, isLive: () => true, getSnapshot: () => [connection], subscribe: () => () => {} }
     const requests: LanguageLookupPath[][] = []
     const api = {
       languageLookup: vi.fn(async ({ requests: asked }: { requests: LanguageLookupPath[] }): Promise<ApiResult<LanguageLookupResult>> => {

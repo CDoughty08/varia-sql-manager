@@ -13,6 +13,6 @@ export function messagesContribution({ commands, documents, queries, results }: 
   }
   return commands.register('output.revealError', {
     when: args => !!location(args),
-    run: args => { const at = location(args); if (at) documents.revealLine(at.tabId, at.line, at.revision, at.dialect) }
+    run: args => { const at = location(args); if (at) { if (at.dialect) documents.revealLine(at.tabId, at.line, at.revision, at.dialect); else documents.revealLine(at.tabId, at.line, at.revision) } }
   })
 }
