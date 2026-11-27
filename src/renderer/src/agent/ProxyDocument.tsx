@@ -163,7 +163,7 @@ function ReferencesSection({ model }: Pick<SectionProps, 'model'>) {
   const references = model.references ?? []
   if (references.length === 0) return <p className="field-note">{agentProxyText.referencesNone}</p>
   return <div className="agent-proxy-references">
-    <table className="properties-table" aria-label="Job steps that run as this proxy">
+    <table className="agent-table" aria-label="Job steps that run as this proxy">
       <thead><tr><th scope="col">Job</th><th scope="col">Step</th><th scope="col">Subsystem</th></tr></thead>
       <tbody>{references.map(reference => <tr key={`${reference.job}:${reference.stepId}`}><td>{reference.job}</td><td>{`${reference.stepId} ${reference.step}`}</td><td>{subsystemLabel(reference.subsystem)}</td></tr>)}</tbody>
     </table>

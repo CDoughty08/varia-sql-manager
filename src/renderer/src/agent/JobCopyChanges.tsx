@@ -200,7 +200,7 @@ export default function JobCopyChanges(props: Props) {
 export function CopyCompare({ state, service }: Pick<Props, 'state' | 'service'>) {
   const rows = service.compareRows(state.id)
   return <div role="group" className="agent-copy-compare" aria-label={createFromText.compare}>
-    {rows.length === 0 ? <p className="field-note">{createFromText.compareNone}</p> : <table className="properties-table" aria-label={createFromText.compare}>
+    {rows.length === 0 ? <p className="field-note">{createFromText.compareNone}</p> : <table className="agent-table" aria-label={createFromText.compare}>
       <thead><tr><th scope="col">Where</th><th scope="col">Field</th><th scope="col">Source ({state.source!.base.name})</th><th scope="col">This job</th></tr></thead>
       <tbody>{rows.map((row, index) => <tr key={`${row.group}:${row.field}:${index}`}><td>{row.group}</td><th scope="row">{row.field}</th><td>{row.source}</td><td>{row.copy}</td></tr>)}</tbody>
     </table>}
