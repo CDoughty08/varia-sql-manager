@@ -338,6 +338,8 @@ internal sealed partial class ObjectSearchService
         void Report(int done, int total, string phase, bool last)
         {
             if (progress is null) return;
+            // What of the saved index is still unchecked changes as listings check it: a pass's closing report says it again.
+            if (last) lock (state.Gate) SavedAtLocked(state);
             lock (progressGate)
             {
                 if (ProgressReplaces(last, phase, lastPhase, done, lastDone)) lastDone = done;
@@ -354,7 +356,8 @@ internal sealed partial class ObjectSearchService
             if (throttled != sentThrottled) throttleRepeats = ThrottleRepeats;
             sentThrottled = throttled;
             var growing = lastPhase == "names" && Volatile.Read(ref listingProjects) != 0;
-            progress!(new BigQueryIndexProgress(lastDone, Math.Max(lastDone, lastTotal), state.Index.Objects, lastPhase!, growing ? true : null, throttled ? true : null));
+            progress!(new BigQueryIndexProgress(lastDone, Math.Max(lastDone, lastTotal), state.Index.Objects, lastPhase!, growing ? true : null, throttled ? true : null,
+                scope is null && !staleOnly ? state.SavedAtText : null, scope is null && !staleOnly ? true : null));
         }
         // BigQuery's rate limit can stall every call at once, so no read finishes to report it: a change in throttling is sent by itself.
         // Progress EVENTs are droppable, so the watcher sends a change again on its next few ticks, in case main missed it.
@@ -379,6 +382,8 @@ internal sealed partial class ObjectSearchService
             catch (Exception) { }
         }
         var watcher = progress is null ? Task.CompletedTask : WatchThrottlingAsync(watchStop.Token);
+        // The saved units a full build listed before its first call, by project: a listing deletes those it no longer names.
+        Dictionary<string, List<SavedUnit>>? savedUnits = null;
         try
         {
             // A project marked whole: each dataset its listing names takes the project's mark (so a failed read keeps it marked and
@@ -466,7 +471,8 @@ internal sealed partial class ObjectSearchService
                 }, loop)).ToArray();
                 await Task.WhenAll(workers);
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, new(value.Cut, 0, Volatile.Read(ref failures), seen.GetValueOrDefault(target), storeSeen.GetValueOrDefault(target, long.MaxValue)), details: value.Read);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, new(value.Cut, 0, Volatile.Read(ref failures), seen.GetValueOrDefault(target),
+                    storeSeen.GetValueOrDefault(target, long.MaxValue), BigQueryEntries.ListingDigest(value.Listed, value.Cut)), details: value.Read);
                 if (held is not null)
                 {
                     Skip(held);
@@ -551,8 +557,10 @@ internal sealed partial class ObjectSearchService
                     throw new OperationCanceledException(loop);
                 }
                 var key = project + "\u0001" + dataset;
-                var force = (scope is not null && !missingOnly) || marked || stale.Contains(target);
                 var earlier = state.Index.Get(key);
+                // DDL from another connection of the principal marks only the store: a held read it postdates is read whole.
+                var force = (scope is not null && !missingOnly) || marked || stale.Contains(target)
+                    || earlier is not null && state.Index.Sink?.Scope is { } sinkScope && Store.MarkedSince(sinkScope, earlier);
                 var carried = BigQueryEntries.Known(earlier, definitions, carry: true);
                 var listed = BigQueryEntries.FromListing(listing);
                 // What pass 2 reads: every object with details that this build may not reuse: one the earlier read did not read
@@ -561,6 +569,30 @@ internal sealed partial class ObjectSearchService
                     had.Created == item.Created && (item.Modified is null || item.Modified == had.Modified);
                 bool Reused(BigQueryEntry item) => !force && carried.TryGetValue(BigQueryEntries.Key(item), out var had) && !had.Detail.Carried && Same(had, item);
                 var again = listed.Select(item => BigQueryEntries.HasDetails(item) && !Reused(item)).ToArray();
+                var digest = BigQueryEntries.ListingDigest(listed, listing.Cut);
+                // The listing is the one the held read (loaded from its file, or read before) was made from, and it has nothing
+                // left to read: it stays as it is, and its file is only marked used rather than written again.
+                if (!force && !again.Any(read => read) && Unchanged(state, source2, project, dataset, earlier, digest, definitions))
+                {
+                    carried.Clear();
+                    loop.ThrowIfCancellationRequested();
+                    NamesHeld?.Invoke(project, dataset);
+                    lock (state.Gate) if (Current()) state.Indexed++;
+                    ObjectIndexSkip? cutSkip = null;
+                    if (listing.Cut)
+                    {
+                        cutSkip = new ObjectIndexSkip(dataset, "TOO_LARGE", "The dataset has more objects than the index lists; it keeps the first ones.", Project: project);
+                        Skip(cutSkip);
+                        onIncomplete?.Invoke(project);
+                    }
+                    SetDatasetSkip(project, dataset, cutSkip);
+                    if (!listing.Cut) Clear(target);
+                    onDone?.Invoke(target);
+                    onAttempted?.Invoke(target);
+                    var unchangedDone = tickDone();
+                    Report(unchangedDone, Math.Max(unchangedDone, total()), "names", false);
+                    return;
+                }
                 // Pass 1 still holds what the earlier read had of those objects, by name, until pass 2 has read them again: a
                 // dataset whose columns fitted keeps their memory between the passes, rather than give it back and ask for it
                 // again above BigQuery's floor, where it would be refused once anything else has taken memory since. They are
@@ -573,7 +605,8 @@ internal sealed partial class ObjectSearchService
                 carried.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, new(listing.Cut, again.Count(read => read), 0, seen.GetValueOrDefault(target), storeSeen.GetValueOrDefault(target, long.MaxValue)));
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, new(listing.Cut, again.Count(read => read), 0, seen.GetValueOrDefault(target),
+                    storeSeen.GetValueOrDefault(target, long.MaxValue), digest));
                 NamesHeld?.Invoke(project, dataset);
                 if (held is { Code: not ChildrenLeftOut })
                 {
@@ -621,9 +654,16 @@ internal sealed partial class ObjectSearchService
             void KeepProjectDatasets(string project, HashSet<string> names, bool cut, long beforeListing, string? onlyDataset = null)
             {
                 stop.ThrowIfCancellationRequested();
+                var heldGone = new HashSet<string>(StringComparer.Ordinal);
                 lock (state.Gate)
                 {
                     if (!Current()) throw new OperationCanceledException(stop);
+                    // Saved datasets held as the listing lands: dropping the read deletes the file, so the prune below leaves them.
+                    if (!cut && onlyDataset is null && savedUnits is not null)
+                        lock (savedUnits)
+                            if (savedUnits.TryGetValue(project, out var units))
+                                foreach (var unit in units)
+                                    if (!names.Contains(unit.Dataset!) && state.Index.Get(project + "\u0001" + unit.Dataset) is not null) heldGone.Add(unit.Dataset!);
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || cut
                         || onlyDataset is { } kept && kept != dataset, gone: true);
                     if (!cut)
@@ -634,6 +674,8 @@ internal sealed partial class ObjectSearchService
                     }
                     if (names.Count == 0) PruneEmptyProjectLocked(project, beforeListing);
                 }
+                if (!cut && onlyDataset is null && savedUnits is not null)
+                    lock (savedUnits) PruneSaved(state, savedUnits, project, names, heldGone);
                 if (!cut)
                 {
                     if (onlyDataset is null) PruneProjectStale(project, names, beforeListing);
@@ -811,6 +853,10 @@ internal sealed partial class ObjectSearchService
                     }
                     lock (state.Gate) if (ReferenceEquals(state.Build, source2)) state.Bulk = new(bulkRead, bulkFailed, bulkError?.Code, bulkError?.Message);
                 }
+
+                // What the principal saved is searchable before any call; the waves below check it.
+                savedUnits = await Task.Run(() => LoadSaved(state, source2, billing, starredSet, allProjects, stop), stop);
+                if (state.SavedAtText is not null) Report(0, 0, "names", true);
 
                 // Wave 1 — Billing project (Names + Details): ready for Search Objects and IntelliSense right away.
                 var wave1Targets = new List<(string Project, string Dataset)>();
@@ -1521,8 +1567,14 @@ internal sealed partial class ObjectSearchService
                         built.SaveWhenHeld = !(state.Stale.TryGetValue((project, dataset), out var mark) && mark != saved.Seen) && !state.StaleProjects.ContainsKey(project);
                         built.StaleSeen = saved.StoreSeen;
                         // A read that fit only without columns has no details left to read: they would not fit either.
-                        built.Sync = new BigQuerySync(saved.Cut, childrenLeftOut ? 0 : saved.Pending, saved.Failed, detailsLeftOut).ToBytes();
+                        built.Sync = new BigQuerySync(saved.Cut, childrenLeftOut ? 0 : saved.Pending, saved.Failed, detailsLeftOut, saved.Listing).ToBytes();
                         state.Index.Put(built);
+                        // A loaded read it replaces has been checked.
+                        if (state.Saved.Remove(built.Database + "\u0001" + built.Dataset, out var replaced))
+                        {
+                            state.SavedOrder.Remove((replaced.Ticks, built.Database + "\u0001" + built.Dataset));
+                            SavedAtLocked(state);
+                        }
                     }
                     else superseded = true;
                 }
@@ -1543,8 +1595,8 @@ internal sealed partial class ObjectSearchService
     }
 
     /// <summary>What <see cref="Hold"/> is told for the dataset's file: whether the listing was cut, how many objects pass 2 has
-    /// yet to read, how many it could not, and the dataset's stale mark as this read of it began.</summary>
-    private readonly record struct BigQuerySaved(bool Cut, int Pending, int Failed, long Seen, long StoreSeen = long.MaxValue);
+    /// yet to read, how many it could not, the dataset's stale mark as this read of it began, and the listing's digest.</summary>
+    private readonly record struct BigQuerySaved(bool Cut, int Pending, int Failed, long Seen, long StoreSeen = long.MaxValue, string? Listing = null);
 
     /// <summary>How many times pass 2 sends the object a dataset's read ran out of room at back to what was held and reads again,
     /// before every object goes back: each is a read of the whole dataset.</summary>

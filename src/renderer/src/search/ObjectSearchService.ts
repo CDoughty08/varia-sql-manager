@@ -30,6 +30,10 @@ export interface IndexEntry {
   readonly growing?: true
   /** BigQuery: its rate limit is refusing calls, which retry. */
   readonly throttled?: true
+  /** BigQuery, while building: when the oldest dataset loaded from the saved index that the build has not checked yet was read. */
+  readonly savedAt?: string
+  /** BigQuery, while building: the build is a full one, which checks what was loaded (so no savedAt means all is checked). */
+  readonly full?: true
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -1146,8 +1150,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private progress(progress: ObjectIndexProgress): void {
     const entry = Object.values(this.getSnapshot().indexes).find(value => value.requestId === progress.requestId)
     if (!entry) return
-    const { growing: _growing, throttled: _throttled, ...rest } = entry
-    this.putIndex({ ...rest, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}, ...progress.growing ? { growing: true } : {}, ...progress.throttled ? { throttled: true } : {} })
+    const { growing: _growing, throttled: _throttled, savedAt: _savedAt, full: _full, ...rest } = entry
+    this.putIndex({ ...rest, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}, ...progress.growing ? { growing: true } : {}, ...progress.throttled ? { throttled: true } : {},
+      ...progress.savedAt ? { savedAt: progress.savedAt } : {}, ...progress.full ? { full: true } : {} })
   }
 
   private putIndex(entry: IndexEntry): void {

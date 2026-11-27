@@ -79,6 +79,9 @@ describe('result page access', () => {
       // Copy and Save find their set through ResultJobs.Lease and route a windowed one to its block cache or its remote
       // table (pinned below).
       'Results/ResultJobs.cs: var set = store.Find(resultId);',
+      // The saved search index's store (IndexStore.Find), which holds no result.
+      'Search/ObjectSearchService.BigQueryReload.cs: case IndexFileProblem.Io when Store.Find(scope, IndexUnitKind.Dataset, project, dataset) is null:',
+      'Search/ObjectSearchService.BigQueryReload.cs: unit ??= Store.Find(scope, IndexUnitKind.Dataset, project, dataset) is { } found && BigQuerySync.From(found.Sync) == sync ? found : null;',
       // Load into memory, a sort, filter or value list in BigQuery and their estimates want the windowed result itself.
       'SqlService.BigQueryResidence.cs: var set = store.Find(args.ResultId) ?? throw Unavailable(args.ResultId);',
       'SqlService.BigQueryViews.cs: var set = store.Find(resultId) ?? throw Unavailable(resultId);',
@@ -130,7 +133,8 @@ describe('result page access', () => {
         if (!/^\s*\/\//.test(line)) for (const match of line.matchAll(/([\w)\]]+)[?!]?\.Find\b/g)) receivers.add(match[1])
       }
     }
-    expect([...receivers].sort()).toEqual(['DefinitionNames', 'IdentityMatches', 'Probes', 'Samples', 'accounts', 'all', 'bigQuery', 'cache', 'matcher', 'service', 'store'])
+    // Store is the search service's saved-index store (IndexStore), which holds no result.
+    expect([...receivers].sort()).toEqual(['DefinitionNames', 'IdentityMatches', 'Probes', 'Samples', 'Store', 'accounts', 'all', 'bigQuery', 'cache', 'matcher', 'service', 'store'])
     // SqlService's Stored is the only one that takes a set.
     const storedDeclaration = /\bStored\s*(?:<[^>]*>)?\s*\(\s*(?:this\s+|in\s+|ref\s+)?[\w.<>?\[\]]+\s+\w+\s*(?:=[^)]*)?\)/g
     expect(' private static ResultSetBuffer? Stored( ResultSetBuffer? set) => set;'.match(storedDeclaration)).toHaveLength(1)
