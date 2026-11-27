@@ -40,6 +40,10 @@ export const objectSearchLimits = {
    *  the billing and starred projects' details, and discovered projects' details, which give way first
    *  (ObjectIndexLimits.BigQuery*FloorBytes). */
   bigQueryFloors: { names: 6, details: 7, discovered: 8 },
+  /** The saved index on disk (IndexStoreLimits): its limit in MiB as Options sets it (objectExplorer.search.diskLimitMiB) and
+   *  explorer.indexStore.configure carries it, the days an unused file is kept, the store folder's name and its path's
+   *  longest length, and the key's length as main sends it (32 bytes in base64). */
+  store: { diskMiB: { default: 2048, min: 64, max: 262_144 }, unusedDays: 30, folder: 'SearchIndex', folderChars: 2048, keyChars: 44 },
   /** Index progress pushed to the window, at most, per second. */
   progressPerSecond: 4,
   /** How long the Search Objects box waits after a key before it searches, in ms. */

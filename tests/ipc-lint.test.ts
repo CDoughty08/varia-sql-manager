@@ -105,8 +105,9 @@ await import(${JSON.stringify(core)})`
     // Smoke runs follow their emulated reduced motion without the setting; packaged builds never honour the variable.
     expect(main).toContain("const followSystemMotion = testSeams && process.env.VARIA_TEST_FOLLOW_SYSTEM_MOTION === '1'")
     expect(main.match(/VARIA_TEST_FOLLOW_SYSTEM_MOTION|--varia-follow-system-motion/g)).toHaveLength(2)
-    // Remember password's reversible test cipher, for smoke runs on machines without a keyring.
-    expect(main).toContain("const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)")
+    // Remember password's reversible test cipher, for smoke runs on machines without a keyring, and a system with no key store.
+    expect(main).toContain('const testStorage = testSeams ? process.env.VARIA_TEST_SAFE_STORAGE : undefined')
+    expect(main).toContain("const secretCipher = smokeProfile ? lockedCipher() : testStorage === 'test' ? testCipher() : testStorage === 'none' ? lockedCipher('no-keyring') : safeStorageCipher(safeStorage, process.platform)")
     // Updates follow a loopback test feed (plain http) only in unpackaged smoke runs; every other build reads GitHub over https.
     expect(main).toContain("const testUpdateFeed = testSeams && /^http:\\/\\/127\\.0\\.0\\.1:\\d{1,5}\\/$/.test(process.env.VARIA_TEST_UPDATE_FEED ?? '') ? process.env.VARIA_TEST_UPDATE_FEED : undefined")
     expect(main.match(/VARIA_TEST_UPDATE_FEED/g)).toHaveLength(2)

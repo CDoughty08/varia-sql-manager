@@ -2,7 +2,7 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, IndexMemoryDetail, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, IndexMemoryDetail, IndexStoreStatus, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
 import { backendDescriptorSchema, truncationSchema } from './descriptors'
@@ -130,8 +130,8 @@ export type PortRequest = z.infer<typeof portRequestSchema>
 
 export type MemoryFeature = 'results' | 'index'
 /** A budget's figures; a results.memory event also carries `detail`, which a query summary's budget does not, and an
- *  explorer.index.memory event what the index holds (`index`, its `detail` on the wire). */
-export type MemoryReport = { readonly usedBytes: number; readonly globalBytes: number; readonly detail?: ResultMemoryDetail; readonly index?: IndexMemoryDetail } & MemoryOrder
+ *  explorer.index.memory event what the index holds (`index`, its `detail` on the wire) and the saved index on disk (`store`). */
+export type MemoryReport = { readonly usedBytes: number; readonly globalBytes: number; readonly detail?: ResultMemoryDetail; readonly index?: IndexMemoryDetail; readonly store?: IndexStoreStatus } & MemoryOrder
 
 /** Main → worker. Page bodies are exact-size ArrayBuffers, never decoded by main. A live event carries the EVENT body's
  *  length, which the worker grants back once the page has applied it. */
@@ -288,15 +288,18 @@ export const indexMemoryDetailSchema = z.object({
   packedBytes: count, packedTextBytes: count, cut: count, childrenLeftOut: count, recordBytes: count, nameBytes: count, definitionBytes: count, readingBytes: count,
   lastBuildMs: count.optional(), lastSearchMs: count.optional()
 }).strict() satisfies z.ZodType<IndexMemoryDetail>
+export const indexStoreStatusSchema = z.object({
+  mode: z.enum(['encrypted', 'clearText', 'disabled', 'noKeyStore', 'unavailable']), files: count, bytes: count, limitBytes: count
+}).strict() satisfies z.ZodType<IndexStoreStatus>
 /** Global memory EVENTs (id 0). Each feature has its own sequence. Results shares its sequence with query summaries. Both
  *  carry what they hold (`detail`, the Memory panel's Nerd metrics). */
 export const memoryEventSchema = z.union([
   z.object({ type: z.literal('results.memory'), usedBytes: count, globalBytes: count.min(1), seq: count.min(1), detail: resultMemoryDetailSchema.optional() }).strict(),
-  z.object({ type: z.literal('explorer.index.memory'), usedBytes: count, globalBytes: count.min(1), seq: count.min(1), detail: indexMemoryDetailSchema.optional() }).strict()
+  z.object({ type: z.literal('explorer.index.memory'), usedBytes: count, globalBytes: count.min(1), seq: count.min(1), detail: indexMemoryDetailSchema.optional(), store: indexStoreStatusSchema.optional() }).strict()
 ])
 /** A validated memory event as the report main forwards: an index event's `detail` travels as `index`. */
 export function memoryReport(event: z.infer<typeof memoryEventSchema>, generation: number): { feature: MemoryFeature; report: MemoryReport } {
   const { usedBytes, globalBytes, seq } = event
   if (event.type === 'results.memory') return { feature: 'results', report: { usedBytes, globalBytes, seq, generation, ...event.detail ? { detail: event.detail } : {} } }
-  return { feature: 'index', report: { usedBytes, globalBytes, seq, generation, ...event.detail ? { index: event.detail } : {} } }
+  return { feature: 'index', report: { usedBytes, globalBytes, seq, generation, ...event.detail ? { index: event.detail } : {}, ...event.store ? { store: event.store } : {} } }
 }

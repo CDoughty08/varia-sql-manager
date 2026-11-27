@@ -89,11 +89,12 @@ export function testCipher(): SecretCipher {
 
 /**
  * For a packaged smoke run that keeps its debugging port (sandbox-guard.ts's smokeDebuggingProfile): another program may
- * drive the page, so nothing is encrypted or decrypted, and Remember password is unavailable.
+ * drive the page, so nothing is encrypted or decrypted, and Remember password is unavailable. An unpackaged smoke run
+ * asks for the same with `no-keyring` (VARIA_TEST_SAFE_STORAGE=none): a system with no key store at all.
  */
-export function lockedCipher(): SecretCipher {
+export function lockedCipher(reason: NonNullable<SecretStorageState['reason']> = 'unavailable'): SecretCipher {
   return {
-    state: async () => ({ available: false, reason: 'unavailable' }),
+    state: async () => ({ available: false, reason }),
     encrypt: async () => { throw new Error(unavailable) },
     decrypt: async () => { throw new Error(unreadable) }
   }

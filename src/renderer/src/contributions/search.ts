@@ -1,13 +1,21 @@
-import type { ApiResult, VariaApi } from '../../../shared/contracts'
+import type { ApiResult, IndexStoreCleared, VariaApi } from '../../../shared/contracts'
 import { searchHitNames, type SearchHitNames } from '../../../shared/explorer/search.ts'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, searchHitOf } from '../menus/targets'
 import { explorerSearchId, type FocusedHit } from '../search/ObjectSearchService'
 import { revealHit } from '../search/hit-actions'
+import { formatBytes } from '../results/status'
 import { serverItems } from './query'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
+
+/** What Clear Saved Search Indexes reports: how much went, and what could not be deleted (a file another program holds). */
+export function savedIndexesCleared({ files, bytes, kept }: IndexStoreCleared): string {
+  const count = (value: number) => `${value.toLocaleString('en-US')} ${value === 1 ? 'file' : 'files'}`
+  const removed = files === 0 ? 'There were no saved search indexes to clear.' : `Saved search indexes cleared: ${count(files)}, ${formatBytes(bytes)}.`
+  return kept > 0 ? `${removed} ${count(kept)} could not be deleted.` : removed
+}
 
 /**
  * Search Objects' commands. Search Objects opens a tab on the server whose Object Explorer menu runs it, narrowed to the
@@ -16,7 +24,7 @@ const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error
  * All servers tab), else the active document's or the selected node's, else the one picked; Stop Indexing stops every running build. A result's Reveal and Copy commands act on the result its menu was opened for, else the
  * selected result of the list that has focus, on a live server.
  */
-export function searchContribution(workbench: Pick<Workbench, 'commands' | 'objectSearch' | 'documents' | 'connections' | 'explorer' | 'quickInput'>, api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
+export function searchContribution(workbench: Pick<Workbench, 'commands' | 'objectSearch' | 'documents' | 'connections' | 'explorer' | 'quickInput' | 'notifications'>, api: Pick<VariaApi, 'writeClipboardText' | 'clearSavedSearchIndexes'>): Disposable {
   const { commands, objectSearch, documents, connections, explorer, quickInput } = workbench
   const live = (id: string | undefined) => id !== undefined && connections.isLive(id) ? id : undefined
   const target = (args?: CommandArgs): string | undefined => {
@@ -87,6 +95,14 @@ export function searchContribution(workbench: Pick<Workbench, 'commands' | 'obje
     commands.register('explorer.stopIndexing', {
       when: () => Object.values(objectSearch.getSnapshot().indexes).some(entry => entry.requestId),
       run: () => objectSearch.stopAll()
+    }),
+    commands.register('explorer.clearSavedIndexes', {
+      run: async () => {
+        const cleared = unwrap(await api.clearSavedSearchIndexes())
+        // Done is news, not a warning; a file left behind is.
+        if (cleared.kept > 0) commands.reportWarning(savedIndexesCleared(cleared))
+        else workbench.notifications.notify({ severity: 'info', message: savedIndexesCleared(cleared) })
+      }
     })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

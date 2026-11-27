@@ -13,7 +13,7 @@ import { enlargeOutput, pinStackedResults, sizeResultStack } from './fixtures/re
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, captionFits, comparisonTools, nameCut, namedResultGrid, resultFacts, backendReady, columnProfile, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, explorerTree, gridCell, gridCellSelector, gridPart, jobNotice,
-  jobProgress, kindIcon, localGrid, localGridFrame, moreResultsTools, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  jobProgress, kindIcon, localGrid, localGridFrame, moreResultsTools, operationAnnouncer, operationCancel, operationNotice, operationProgress, lostServerRows, matching, memoryBreakdown, memoryIndicator, memorySaved, memoryUsage, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
   outputPaneIds, outputPanel, outputToolbar, outputView, pane, paneTab, part, planViewer, planCanvas, queryBar, queryBarButton, queryFacts, queryPlanButton, clickQueryPlanOption, queryStatus, quickInput, quickInputActive, quickInputRows, resultClose, resultGrid, resultSplitters, resultsToolbar, resultsToolbarFit, resultsToolsMenu, resultToggle, statusBar,
   pivotFacts, pivotPanel, pivotSource, profileCard, resultEntryKey, profileFigures, resultsSearchAnnouncer, resultsSearchCount, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, transposedCell, transposedGridSelector, transposedName, unsavedMark, connectDialogWindow, dialogClosed, dialogWindow, pressToClose, submitConnect
 } from './fixtures/ui.mjs'
@@ -22,7 +22,9 @@ await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'results-control-'))
 await mkdir(join(control, 'hold'))
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+// Off Windows a headless run has no keyring: the saved index's key is protected by the reversible test cipher, so the Memory
+// panel's Saved on disk line reads Encrypted on every platform.
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } }
 delete env.ELECTRON_RUN_AS_NODE
 const linux = process.platform === 'linux', eol = process.platform === 'win32' ? '\r\n' : '\n'
 // Renderer tasks in the measured segments, from a trace of the renderer's main thread: none with 50 ms of CPU time on
@@ -1759,6 +1761,8 @@ try {
   // menubar, as before (menus-smoke).
   await expect(memoryDetails.getByRole('button', { name: 'Nerd metrics', exact: true })).toHaveAttribute('tabindex', '-1')
   await expect(memoryUsage(page, 'index')).toHaveText(/^[1-9]\d* MB \/ 512 MB$/)
+  // The saved index, as main configured it under the key store's key: what is on disk against the default limit.
+  await expect(memorySaved(page)).toHaveText(/^Saved on disk[1-9]\d* files · [1-9]\d* MB \/ 2,048 MBEncrypted$/)
   await expect(resultsMemory).toHaveText('236 MB / 256 MB')
   await memoryDetails.hover()
   await expect(memoryDetails).toBeVisible()

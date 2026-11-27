@@ -116,9 +116,18 @@ internal sealed partial class SqlService
     /// a mark on an unindexed project no build would read.</summary>
     private void Record(string connectionId, BigQueryConnection connection, string project, BigQueryIndexMarks marks)
     {
+        var principal = connection.Principal.PrincipalId;
         foreach (var (markProject, markDataset) in marks.Datasets)
+        {
             search.MarkStaleIfTracked(connectionId, connection.Options.Project, markProject, markDataset);
-        if (marks.WholeProject) search.MarkProjectStale(connectionId, project);
+            // The saved files are the principal's, shared with its other connections.
+            search.MarkSavedStale(principal, markProject, markDataset);
+        }
+        if (marks.WholeProject)
+        {
+            search.MarkProjectStale(connectionId, project);
+            search.MarkSavedStale(principal, project, null);
+        }
     }
 
     /// <summary>Reads, in the background, the jobs of a script's DDL statements whose listing named no target (at most

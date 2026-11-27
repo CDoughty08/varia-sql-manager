@@ -18,12 +18,16 @@ internal interface IObjectSearchHost
     /// SQL Database, which cannot EXEC across databases.</summary>
     SqlConnection Connection(string connectionId, string? database);
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>The database the connection signed in to, which names a contained database user's account beside its SID; null
+    /// when unknown (nothing of such a user's index is then saved).</summary>
+    string? HomeDatabase(string connectionId) => null;
 }
 
 /// <summary>
 /// explorer.index and explorer.search: an in-memory index per connection of the objects Object Explorer lists by schema and
 /// name (and their module definitions), read two databases at a time (<see cref="ObjectIndexLimits.Total"/>) from constant catalog SQL (<see cref="ObjectSearchSql"/>),
-/// and searched in memory. Nothing reaches disk; a disconnect drops the connection's index. A database that cannot be read is
+/// and searched in memory. A disconnect drops the connection's index; each read it held whole is saved by the
+/// <see cref="IndexStore"/> (when main has configured one), which no build reads back yet. A database that cannot be read is
 /// skipped as a value, and the index keeps every other one.
 /// </summary>
 internal sealed partial class ObjectSearchService : IDisposable
@@ -123,6 +127,29 @@ internal sealed partial class ObjectSearchService : IDisposable
         resources = new ResourceCatalog(pool, () => Limits.NamesReserveBytes);
         total = new SemaphoreSlim(Limits.Total);
         running = new RequestRegistry(64, "object index");
+        Store.Opened = SaveHeld;
+    }
+
+    /// <summary>Queues a save of what every connection's index holds: the store has just started saving (main configures it a
+    /// moment after a backend starts, and a connection restored at startup may have built by then), or saves under another
+    /// key. A BigQuery dataset DDL has marked stale since its read is left for the build that reads it again.</summary>
+    private void SaveHeld()
+    {
+        foreach (var state in states.Values)
+            lock (state.Gate)
+                state.Index.Announce(read => read.Dataset is not { } dataset || !state.Stale.ContainsKey((read.Database, dataset)) && !state.StaleProjects.ContainsKey(read.Database));
+    }
+
+    /// <summary>The saved index: every connection's reads are queued here as they are held (<see cref="ConnectionIndex.Sink"/>).</summary>
+    internal IndexStore Store { get; } = new();
+
+    /// <summary>Whose saved index a SQL Server connection's units are: the server as it names itself and the account that signed
+    /// in. Where the server's own objects are read in the connection's database rather than master (a contained database user,
+    /// Azure SQL Database), what a connection sees depends on that database, so it is part of whose index it is.</summary>
+    internal IndexStoreScope? ScopeOf(string connectionId, ServerProfile profile)
+    {
+        var own = !profile.ServerScopeInMaster;
+        return IndexStoreScope.SqlServer(profile.ServerName, profile.PrincipalId, own, own ? host.HomeDatabase(connectionId) : null);
     }
 
     public ObjectIndexLimits Limits { get; }
@@ -257,6 +284,7 @@ internal sealed partial class ObjectSearchService : IDisposable
         var render = IndexRender(profile);
         SetMemoryLimit(args.MemoryLimitMiB);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
+        state.Index.Sink ??= Store.Sink(ScopeOf(args.ConnectionId, profile));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
@@ -395,6 +423,7 @@ internal sealed partial class ObjectSearchService : IDisposable
         running.ForgetAll();
         foreach (var state in states.Values) state.Index.Dispose();
         states.Clear();
+        Store.Dispose();
     }
 
     internal static SearchQuery Validate(ObjectSearchArgs args)

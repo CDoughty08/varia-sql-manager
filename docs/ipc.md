@@ -330,8 +330,26 @@ Notes:
    read (`SettingsStore.onDidLoad`). A failed request is not re-sent: a value set while it was in flight, the generation's
    recovery from unresponsive, the next change or the next launch sends a new one.
 
+4. `explorer.indexStore.configure { mode, folder, limitMiB, key? }`: how the saved Search Objects index stands
+   (docs/object-search.md, Saved index). `mode` is `encrypted`, `clearText`, `disabled` or `noKeyStore`; `folder` is a
+   full path of at most 2,048 characters whose last part is `SearchIndex`; `limitMiB` is 64 to 262,144; `key` is 32
+   bytes in base64 (44 characters), present exactly when the mode is `encrypted` (the files' key) or `clearText` (a
+   value that only names files). Anything else is `INVALID_PARAMS`, checked in zod (`indexStoreConfigureSchema`) and in
+   C# (`IndexStore.Configure`). It answers the store's status `{ mode, files, bytes, limitBytes }`, where `mode` may
+   also be `unavailable` (the folder cannot be used). The request is sensitive (its frame is zeroed once written). Main
+   sends it, one in flight, as each generation becomes ready, when one of the three `objectExplorer.search` saving
+   settings changes, and after each successful settings read (`IndexStoreConfig`). It sends nothing (the backend then
+   saves and deletes nothing) before the settings are read, while one of the three was reset by an unreadable
+   `settings.json`, and while the key store does not answer or is not reachable yet; it asks the key store again after
+   30 s, doubling to at most 10 minutes. Only a lasting answer (no keyring, no backend) gives `noKeyStore` or `clearText`. A failed request is not re-sent: the next change, the generation's
+   recovery from unresponsive or the next launch sends a new one.
+5. `explorer.indexStore.clear {}` (60 s): deletes every file of the saved index and answers `{ files, bytes, kept }`
+   (deleted, their bytes, and files that could not be deleted). Main sends it for Clear Saved Search Indexes
+   (`varia:index-store-clear`) and hands the page only those three counts.
+
 `mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `results.setMemoryLimit`,
-`debug.results.synthesize`) are sent only by main: they are in no renderer schema (`requestSchemas`) and no port schema
+`debug.results.synthesize`, `bigquery.endIdleSessions`, `bigquery.cancelJobs`, `explorer.indexStore.configure`,
+`explorer.indexStore.clear`) are sent only by main: they are in no renderer schema (`requestSchemas`) and no port schema
 (`portRequestSchema`).
 
 **Microsoft Entra ID.** The six Entra types (`entraMfa`, `entraPassword`, `entraIntegrated`, `entraServicePrincipal`,
@@ -969,7 +987,7 @@ authoritative; a query's events after it are ignored.
 | type | Emitted |
 | --- | --- |
 | `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends, and main keeps the last event's `detail` until then |
-| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use (a fall below the last walk's figure waits for the next walk, at the first check 5 s after the last) or in its limit (`globalBytes`, which a build's `memoryLimitMiB` sets), a build's end, a disconnect and a finished search (whose time `detail` carries). Own sequence |
+| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use (a fall below the last walk's figure waits for the next walk, at the first check 5 s after the last) or in its limit (`globalBytes`, which a build's `memoryLimitMiB` sets), a build's end, a disconnect and a finished search (whose time `detail` carries), and a change in the saved index's figures. Once main has configured the saved index it also carries `store` (`indexStoreStatusSchema`): `{ mode, files, bytes, limitBytes }`, never a path, a key or a name. Own sequence |
 
 Both are droppable; a refused sample consumes no sequence number and stays eligible. Main pairs each sequence with the
 generation, keeps the latest per feature, and replays both when a results port opens.
@@ -2582,7 +2600,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)), `NOT_READY` (`explorer.indexStore.clear` before the store is configured) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -2623,6 +2641,7 @@ terminal for live probes. Display login text is never identity proof.
 | Banner: crash loop | "The SQL backend stopped repeatedly and was not restarted again." **Restart SQL Backend** **Copy details** |
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 11 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
+| `NOT_READY` | `explorer.indexStore.clear` before main has configured the store: "The saved search indexes cannot be cleared yet: Varia is still waiting for the system key store or its settings. Nothing was deleted." |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
 | `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
@@ -2739,7 +2758,8 @@ and reports that block skipped.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
   absolute `VARIA_TEST_NODE`), `VARIA_BACKEND_TEST_HOOKS`, `VARIA_RESULT_BUDGET_BYTES`, `VARIA_BACKEND_LIVENESS_MS`,
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`),
-  `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`), and
+  `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`) or `=none`
+  (a system with no key store), and
   `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (`--varia-follow-system-motion`: the renderer reduces motion whenever the emulated
   media asks, without the setting).
   `VARIA_IPC_TRACE=1` (unpackaged only) logs each frame's kind, id and length to stderr, never a body.

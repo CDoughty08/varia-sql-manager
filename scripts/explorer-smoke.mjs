@@ -1,6 +1,6 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
@@ -10,7 +10,7 @@ import {
   dependenciesDialog, dependenciesTree, dependencyNode, inspectorTab, localGrid, menuItemNames, messages, movePane, objectSearchBox, objectSearchGroup, objectSearchHits, objectSearchIndexLines, explorerSearchIndexLine, documentVerb, objectSearchSelected, objectSearchServer, objectSearchServerOptions, objectSearchSummary, outputView, paneMenuButton, part, peekDefinitionText, peekEditorWidgetHosts, dockPopoutBack, queryEditorText, primaryAction, quickInput, selectOpenDocument, serverRows, staleBadge, statusChips, submitConnect, toolbarButton as mainToolbarButton, expectEditorShown, dialogClosed
 } from './fixtures/ui.mjs'
 import { pinStackedResults } from './fixtures/results-pane.mjs'
-import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard } from './fixtures/ui.mjs'
+import { activeDocument, emptyQueryStripPoint, queryDatabase, queryServer, serverDropCard, toasts } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -18,7 +18,9 @@ if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'explorer-profile-'))
 // The backend's test hooks let the stub answer Peek's Top rows with synthetic rows the real results grid reads.
-const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_BACKEND_TEST_HOOKS: '1' }
+// Off Windows a headless run has no keyring, so the saved index's key is protected by the reversible test cipher (the live slice
+// below checks what a real build saves); Windows uses DPAPI itself.
+const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_BACKEND_TEST_HOOKS: '1', ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } }
 delete env.ELECTRON_RUN_AS_NODE
 // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it, as Chromium will not start sandboxed there.
 const launchOptions = { args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 }
@@ -2625,6 +2627,65 @@ try {
       await expect(databaseRow).toHaveAttribute('aria-label', name)
       expect(await (await explorerRow(page, server, 'Databases', name, wait)).getAttribute('id')).toBe(databaseRowId)
       console.log('Object Explorer checks: on a real server, F5 on Databases adds a new scratch database\'s row and keeps the others, F5 on the server shows a column added by a query below what stays expanded, and a database a query sets read-only shows its live chip, without a refresh, until it is set back.')
+
+      // The saved index (docs/object-search.md, Saved index): a real build writes its units to the profile's own folder,
+      // encrypted, under names and with content that hold no object's name; Clear Saved Search Indexes empties it.
+      const probe = randomBytes(6).toString('hex'), probeTable = `VariaStoreTable_${probe}`, probeProcedure = `VariaStoreProc_${probe}`, probeText = `VariaStoreText_${probe}`
+      await run(`USE [${name}];\nCREATE TABLE dbo.[${probeTable}] (ProbeColumn_${probe} int);\nEXEC(N'CREATE PROCEDURE dbo.[${probeProcedure}] AS SELECT N''${probeText}'' AS marker');\nUSE master;`, 'probed')
+      // The profile this launch runs on (step 13d moved to a fresh one).
+      const home = env.VARIA_TEST_USER_DATA, storeFolder = join(home, 'SearchIndex')
+      const storeFiles = async () => (await readdir(storeFolder).catch(() => [])).filter(file => !file.startsWith('.'))
+      const palette = async title => {
+        await page.keyboard.press('F1')
+        await page.keyboard.type(title)
+        await quickInput(page).getByRole('option', { name: new RegExp('^Object Explorer: ' + title) }).click()
+      }
+      const queryTab = await activeDocumentName(page)
+      await select(server)
+      await palette('Rebuild Search Index')
+      // The build has read the scratch database once Search Objects finds its new table, by name and by its procedure's text.
+      await palette('Search Objects…')
+      await expect(objectSearchBox(page)).toBeFocused()
+      await page.keyboard.type(probeTable)
+      await expect(objectSearchHits(page).filter({ hasText: probeTable })).not.toHaveCount(0, { timeout: 120000 })
+      await objectSearchBox(page).fill(probeText)
+      await expect(objectSearchHits(page).filter({ hasText: probeProcedure })).not.toHaveCount(0, { timeout: 120000 })
+      // Saves trail the reads by a moment: wait until the folder has files and two looks a second apart agree.
+      let seen = -1
+      await expect.poll(async () => { const count = (await storeFiles()).length, settled = count > 0 && count === seen; seen = count; return settled }, { timeout: 120000, intervals: [1000] }).toBe(true)
+      const savedFiles = await storeFiles()
+      expect(savedFiles.every(file => /^[0-9a-f]{32}-[0-9a-f]{32}\.vidx$/.test(file)), savedFiles.join(' ')).toBe(true)
+      const distinctive = [name, probeTable, probeProcedure, probeText, `ProbeColumn_${probe}`, 'Orders', 'sp_who', 'spt_values']
+      let savedBytes = 0
+      for (const file of savedFiles) {
+        const content = await readFile(join(storeFolder, file))
+        savedBytes += content.length
+        expect(content.subarray(0, 8).toString('latin1')).toBe('VARIAIDX')
+        // Mode 1: AES-256-GCM, never clear text.
+        expect(content[10]).toBe(1)
+        for (const text of distinctive) {
+          expect(file.toLowerCase().includes(text.toLowerCase()), `${text} in a file name`).toBe(false)
+          expect(content.includes(Buffer.from(text, 'utf8')), `${text} as UTF-8 in ${file}`).toBe(false)
+          expect(content.includes(Buffer.from(text, 'utf16le')), `${text} as UTF-16 in ${file}`).toBe(false)
+        }
+      }
+      // More than the server's own handful of bytes: databases with thousands of system objects were saved.
+      expect(savedBytes).toBeGreaterThan(64 * 1024)
+      // The key is on disk only as the key store's ciphertext, in main's own file, and nowhere in the store's folder.
+      const keyFile = JSON.parse(await readFile(join(home, 'search-index-key.json'), 'utf8'))
+      expect(Object.keys(keyFile).sort()).toEqual(['key', 'version'])
+      await palette('Clear Saved Search Indexes')
+      // The toast itself: the polite live region repeats its sentence for screen readers.
+      await expect(toasts(page).filter({ hasText: /Saved search indexes cleared: [\d,]+ files?, / })).toBeVisible(wait)
+      expect(await storeFiles()).toEqual([])
+      // Back to the query, which the cleanup below runs in.
+      await documentTabs(page).getByRole('tab', { name: queryTab }).click()
+      console.log(`Object Explorer checks: a real index build saved ${savedFiles.length} encrypted files (${savedBytes} bytes) under hashed names with no object name in them, and Clear Saved Search Indexes emptied the folder.`)
+    } catch (error) {
+      // The cleanup below needs the query's editor, which a failed step may have left behind another tab: say why first.
+      console.log('The live slice failed: ' + (error instanceof Error ? error.message : String(error)))
+      await documentTabs(page).getByRole('tab').first().click().catch(() => {})
+      throw error
     } finally {
       // Object Explorer's pool holds no database open, so nothing it did blocks the drop.
       if (created) await run(`USE master;\nIF DB_ID(N'${name}') IS NOT NULL\nBEGIN\n  ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n  DROP DATABASE [${name}];\nEND`, 'dropped')
@@ -2642,4 +2703,5 @@ try {
   clearTimeout(watchdog)
   await application?.close().catch(() => application?.process()?.kill())
   await rm(profile, { recursive: true, force: true })
+  if (env.VARIA_TEST_USER_DATA !== profile) await rm(env.VARIA_TEST_USER_DATA, { recursive: true, force: true })
 }

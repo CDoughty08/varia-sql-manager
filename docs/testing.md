@@ -230,7 +230,7 @@ npm run test:smoke:wsl -- --all
     `motion: true`: the renderer reduces motion whenever the emulated `prefers-reduced-motion` asks, without the
     Reduce motion when the system asks setting), `VARIA_TEST_WINDOW_STATE=1` (the main window keeps its place between
     launches, and main sets `globalThis.__variaWindowPlacement`; docs/popout-windows.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
-    cipher);
+    cipher) or `=none` (a system with no key store: Remember password and the saved search index are unavailable);
   - `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
     holdNextRenderer and releaseHolders);
   - the renderer's test mode: `window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()` (saves

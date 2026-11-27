@@ -19,6 +19,8 @@ import {
   settingGridRow, settingRow, themePatchFrom, themePreferenceChanged, treeRows, unsavedSettings, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
+import { indexStorageNote } from './index-storage-note'
+import type { SecretStorageState } from '../../../shared/connections'
 import { highlightParts, normalizeQuery, searchAllOptions } from './search'
 import { focusToReturn, isElement, returnFocusBeside } from '../core/focus'
 import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
@@ -236,6 +238,14 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     setThemeDraft(current => themePreferenceChanged(current, previous) ? current : next)
   }, [storedTheme])
 
+  // Whether the system can protect the saved Search Objects index: asked when the dialog opens, so its page can say when it cannot.
+  const [indexStorage, setIndexStorage] = useState<SecretStorageState>()
+  useEffect(() => {
+    let live = true
+    void window.varia?.searchIndexStorage?.().then(result => { if (live && result.ok) setIndexStorage(result.value) }, () => {})
+    return () => { live = false }
+  }, [])
+
   const shortcuts = useShortcuts()
   const shortcutsState = useShortcutsSnapshot()
   const [shortcutEdit, setShortcutEdit] = useState<ShortcutEdit>(() => startShortcutEdit(shortcuts.getSnapshot()))
@@ -312,6 +322,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const rows = treeRows(expanded, shownTree)
   const focusId = rows.some(row => row.page.id === treeFocus) ? treeFocus : rows.find(row => row.page.id === page)?.page.id ?? rows[0]?.page.id
   const form = pageForm(page, draft, platform)
+  const indexStorageText = indexStorageNote(indexStorage, draft['objectExplorer.search.saveIndex'] === true, draft['objectExplorer.search.saveUnencrypted'] === true)
   const shownRows = form.groups.flatMap(group => group.rows)
   const showingUnified = browseScope === 'all' && (!!searchResult || modifiedOnly)
 
@@ -687,6 +698,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
           </div>}
           <h3 className="options-heading">{ancestors && <span className="options-crumb">{ancestors}<span className="visually-hidden"> › </span></span>}<span className="options-title">{form.page.title}</span></h3>
           {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
+          {form.page.id === 'objectExplorer.commands' && indexStorageText && <p className="options-note" data-tone="warning" role="note"><Icon name="warning" /><span>{indexStorageText}</span></p>}
           {form.page.layout === 'shortcuts'
             ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture} linked={linked}
               salvaged={shortcutsState.salvaged ? shortcutsState.notice ?? '' : undefined} onChange={next => { setShortcutDraft(next); setError(''); setAppliedNotice(false); setConfirmClose(false) }} />

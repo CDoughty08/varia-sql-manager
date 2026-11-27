@@ -28,6 +28,19 @@ internal sealed record ConnectionInfo(string Id, string Server, string Database,
 internal sealed record IntegratedIdentity(string? Principal);
 /// <summary>connections.identity takes no parameters; reading them into this record refuses unknown members.</summary>
 internal sealed record IdentityArgs;
+/// <summary>explorer.indexStore.configure (main only): how the saved Search Objects index stands for this backend. Mode is
+/// encrypted, clearText, disabled or noKeyStore. Folder is the store's own folder under the user-data directory (a full path
+/// of at most 2,048 characters whose last part is SearchIndex). Key is 32 bytes in base64 (44 characters), given exactly when
+/// the mode is encrypted (the files' key) or clearText (a value that only names files). LimitMiB is the disk limit, 64 to
+/// 262,144. The request is sensitive: its frame is zeroed once written.</summary>
+internal sealed record IndexStoreConfigureArgs(string Mode, string Folder, int? LimitMiB, string? Key = null);
+/// <summary>The saved index as the Memory panel shows it: Mode is encrypted, clearText, disabled, noKeyStore or unavailable
+/// (the folder cannot be used); Files and Bytes are what the store's folder holds of its own; LimitBytes is the disk limit.</summary>
+internal sealed record IndexStoreStatus(string Mode, int Files, long Bytes, long LimitBytes);
+/// <summary>explorer.indexStore.clear takes no parameters; reading them into this record refuses unknown members.</summary>
+internal sealed record IndexStoreClearArgs;
+/// <summary>explorer.indexStore.clear: the files deleted, their bytes, and the files that could not be deleted.</summary>
+internal sealed record IndexStoreClearResult(int Files, long Bytes, int Kept);
 /// <summary>entra.cache.clear (main only) takes no parameters; reading them into this record refuses unknown members.</summary>
 internal sealed record EntraCacheArgs;
 /// <summary>entra.cache.clear: every Microsoft Entra token and credential in this process is gone.</summary>
@@ -124,8 +137,10 @@ internal sealed record ResultCodecCounters(string? Name, int? Level, long PagesP
     public static readonly ResultCodecCounters Off = new(null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 /// <summary>The global explorer.index.memory EVENT: the shared index budget's figures and, for the Memory panel's Nerd metrics,
-/// what the index holds (docs/ipc.md, Global memory events); the detail is read when the event goes out.</summary>
-internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, IndexMemoryDetail Detail)
+/// what the index holds (docs/ipc.md, Global memory events); the detail is read when the event goes out. Store is the saved
+/// index on disk, left out until main has configured it.</summary>
+internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, IndexMemoryDetail Detail,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IndexStoreStatus? Store = null)
 {
     [JsonPropertyOrder(-1)] public string Type => "explorer.index.memory";
 }

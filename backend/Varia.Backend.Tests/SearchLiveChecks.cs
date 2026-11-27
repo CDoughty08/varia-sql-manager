@@ -10,7 +10,8 @@ namespace Varia.Backend.Tests;
 /// dropped object go, and a disconnect gives the definitions' budget back.</summary>
 internal static class SearchLiveChecks
 {
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database,
+        Func<string, string> ownLogin)
     {
         // A name that breaks out of brackets, strings and comments, and a marker only this run's definitions hold.
         var marker = "varia_marker_" + Guid.NewGuid().ToString("N")[..8];
@@ -53,8 +54,81 @@ internal static class SearchLiveChecks
             (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
                 new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, caseSensitive, wholeWord, regex, scope, Database: inDatabase), json), json);
 
+        // A login with a long name the server's unit is sure to hold: the connecting login may be too short to look for in the
+        // saved files (CI's is sa). The scratch database drops it when it goes.
+        var longLogin = ownLogin("search");
+        created = await sql("CREATE LOGIN [" + longLogin.Replace("]", "]]") + "] WITH PASSWORD = '" + ScratchDatabase.Throwaway().Replace("'", "''") + "', CHECK_POLICY = OFF;", "master");
+        check(created.Error is null, "the search checks create a login with a long name: " + created.Error);
+
+        // The saved index (IndexStore), on a temporary folder under a key of the checks' own: the first build saves what it reads.
+        var storeRoot = Directory.CreateTempSubdirectory("varia-index-store-live-").FullName;
+        var storeFolder = Path.Combine(storeRoot, IndexStoreLimits.FolderName);
+        var storeKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        service.Search.Store.Configure(new("encrypted", storeFolder, IndexStoreLimits.DefaultDiskMiB, Convert.ToBase64String(storeKey)));
+        await service.Search.Store.Idle();
+
         var events = new List<JsonElement>();
         var built = await service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, value => events.Add(JsonSerializer.SerializeToElement(value, json)));
+        try
+        {
+            // A real build's units, each saved under the scope the connection itself established, and each loading back equal.
+            await service.Search.Store.Idle();
+            var profile = ((IObjectSearchHost)service).Profile(connectionId);
+            var scope = service.Search.ScopeOf(connectionId, profile);
+            var index = service.Search.IndexOf(connectionId)!;
+            var savedReads = index.Held.Where(read => !read.FailedPart).ToList();
+            var listed = scope is null ? [] : service.Search.Store.List(scope);
+            var files = Directory.GetFiles(storeFolder);
+            check(scope is not null && profile.ServerName is { Length: > 0 } && profile.PrincipalId is { Length: > 0 },
+                "the connect probe established the server's own name and the account, which is whose saved index this is");
+            check(listed.Count == savedReads.Count && savedReads.Count >= 2 && files.Length == savedReads.Count + (index.Resource is null ? 0 : 1) && service.Search.Store.Counts.Failed == 0
+                && files.All(file => IndexStoreNames.IsUnit(Path.GetFileName(file))) && service.Search.Store.Status is { Mode: "encrypted" } storeStatus && storeStatus.Files == files.Length,
+                "a real build saves every unit it holds, and the shared system objects once (" + files.Length + " files, " + files.Sum(file => new FileInfo(file).Length) + " bytes for " + savedReads.Count + " reads)");
+            var again = new IndexFileChecks.World(new ObjectIndexLimits { MemoryBytes = 4L << 30, NamesReserveBytes = 1L << 30 });
+            var equal = true;
+            foreach (var read in savedReads)
+            {
+                var kind = ReferenceEquals(read, index.Server) ? IndexUnitKind.Server : ReferenceEquals(read, index.Agent) ? IndexUnitKind.Agent : IndexUnitKind.Database;
+                var unit = listed.SingleOrDefault(item => item.Kind == kind && item.Database == read.Database);
+                if (unit is null) { equal = false; continue; }
+                var loaded = service.Search.Store.Load(unit, again.Connection, again.Limits, again.Pool);
+                equal &= loaded.Value is { } value && IndexFileChecks.Dump(value) == IndexFileChecks.Dump(read) && unit.Header.Children == !read.ChildrenLeftOut;
+                if (loaded.Value is { } put) again.Connection.Abandon(put);
+            }
+            var resourceEqual = index.Resource is not { } set || service.Search.Store.LoadResource(set.Key, long.MaxValue).Value is { } savedSet && IndexFileChecks.Dump(savedSet.Read.Table) == IndexFileChecks.Dump(set.Table);
+            check(equal && resourceEqual, "every unit the real build saved loads back equal to what the index holds");
+            // Only needles of 8 bytes or more: ciphertext is random, so a shorter one turns up by chance (CI's login "sa" is 2 bytes
+            // in UTF-8, one chance in 65,536 at every position of hundreds of KB). At 8 bytes a chance match is one in 2^64 a position.
+            // Every category keeps at least one long needle, or the check fails rather than pass with nothing to look for; the long
+            // login is checked to be in the index, so its absence from the files means something.
+            (string Category, string Text)[] texts =
+            [
+                ("object", hostile), ("object", "usp_Find"), ("object", "srch"), ("object", "spt_fallback_db"), ("object", "sp_who"),
+                ("database", database), ("server", profile.ServerName ?? ""), ("login", profile.Login ?? ""), ("login", longLogin),
+                ("definition", marker), ("definition", constant),
+            ];
+            var distinctive = texts
+                .SelectMany(text => new[] { (text.Category, Label: text.Category + " UTF-8", Bytes: System.Text.Encoding.UTF8.GetBytes(text.Text)), (text.Category, Label: text.Category + " UTF-16", Bytes: System.Text.Encoding.Unicode.GetBytes(text.Text)) })
+                .Where(needle => needle.Bytes.Length >= 8).ToList();
+            string[] categories = ["object", "database", "server", "login", "definition"];
+            var uncovered = categories.Where(category => !distinctive.Any(needle => needle.Category == category)).ToList();
+            var loginHeld = (await FindIn(null, longLogin, "names", wholeWord: true)).Hits.Count > 0;
+            check(uncovered.Count == 0 && loginHeld, "every category of name the saved files are searched for has a needle of 8 bytes or more (none: "
+                + (uncovered.Count == 0 ? "none" : string.Join(", ", uncovered)) + "), and the long login is in the index");
+            var inFiles = files.SelectMany(file => File.ReadAllBytes(file) is var content ? distinctive.Where(needle => content.AsSpan().IndexOf(needle.Bytes) >= 0).Select(needle => needle.Label) : []).Distinct().ToList();
+            check(inFiles.Count == 0,
+                "no saved file holds an object's, the database's, the server's or the login's name, or a definition's text, in UTF-8 or UTF-16 ("
+                + distinctive.Count + " needles; found: " + (inFiles.Count == 0 ? "none" : string.Join(", ", inFiles)) + ")");
+            check((await service.Search.Store.ClearAsync()) is { Kept: 0 } cleared && cleared.Files == files.Length && Directory.GetFiles(storeFolder).Length == 0, "a clear deletes every file the build saved");
+        }
+        finally
+        {
+            // The rest of the suite builds without a store: nothing more is written.
+            service.Search.Store.Configure(new("disabled", storeFolder, IndexStoreLimits.DefaultDiskMiB));
+            await service.Search.Store.Idle();
+            try { Directory.Delete(storeRoot, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
         check(built.Status is { State: "ready", Definitions: true } && built.Status.Indexed >= 1 && built.Status.Objects >= 4,
             "a build reads every database it can (" + built.Status.Indexed + " of " + built.Status.Databases + ", " + built.Status.Objects + " objects, " + built.ElapsedMs + " ms)");
         check(events.Count >= 2 && events[0].GetProperty("type").GetString() == "explorer.index.progress" && events[^1].GetProperty("done").GetInt32() == built.Status.Databases,

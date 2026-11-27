@@ -388,6 +388,15 @@ export interface IndexMemoryDetail {
   packedBytes: number; packedTextBytes: number; cut: number; childrenLeftOut: number; recordBytes: number; nameBytes: number; definitionBytes: number; readingBytes: number
   lastBuildMs?: number; lastSearchMs?: number
 }
+/** How the saved Search Objects index stands (docs/object-search.md, Saved index): encrypted under the key main holds,
+ *  unencrypted by the user's choice where the system has no key store, turned off in Options, off because there is no key
+ *  store, or unavailable because its folder cannot be used. */
+export type IndexStoreMode = 'encrypted' | 'clearText' | 'disabled' | 'noKeyStore' | 'unavailable'
+/** The saved index as the Memory panel shows it: the files its folder holds, their bytes, and the disk limit. Never a
+ *  path, a key or a name. */
+export interface IndexStoreStatus { mode: IndexStoreMode; files: number; bytes: number; limitBytes: number }
+/** explorer.indexStore.clear: the files deleted, their bytes, and the files that could not be deleted. */
+export interface IndexStoreCleared { files: number; bytes: number; kept: number }
 /** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
@@ -821,6 +830,15 @@ export interface AuthMethods {
 export interface ResultMemoryMethods {
   'results.setMemoryLimit': { params: { limitGiB: number }; result: { applied: boolean; globalBytes: number; queryBytes: number } }
 }
+/** The saved Search Objects index's methods, which only main sends: no renderer schema accepts them.
+ *  `explorer.indexStore.configure` tells each backend where the store is (a folder main names under the user-data
+ *  directory), how it is protected (`key`: 32 bytes in base64, the files' key when encrypted, a value that only names files
+ *  in clear text) and its disk limit; the request is sensitive. `explorer.indexStore.clear` deletes every saved file
+ *  (Clear Saved Search Indexes). */
+export interface IndexStoreMethods {
+  'explorer.indexStore.configure': { params: { mode: Exclude<IndexStoreMode, 'unavailable'>; folder: string; limitMiB: number; key?: string }; result: IndexStoreStatus }
+  'explorer.indexStore.clear': { params: Record<string, never>; result: IndexStoreCleared }
+}
 /** BigQuery's pre-connect methods as main sends them: the renderer's parameters with the credential material main read. */
 export interface BigQueryMainMethods {
   'bigquery.account': { params: BigQueryCredentialParams & { credential: BigQueryCredentialMaterial }; result: BigQueryAccount }
@@ -840,7 +858,7 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, BigQueryMainMethods, DebugMethods {
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, IndexStoreMethods, BigQueryMainMethods, DebugMethods {
   'connections.connect': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: ConnectionInfo }
   'connections.databases': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: DatabaseInfo[] }
 }
@@ -964,6 +982,10 @@ export interface VariaApi {
   onConnectionBindingsChanged(callback: (event: ConnectionBindingsChanged) => void): () => void
   /** Help › Clear Entra ID Token Cache: main asks first; resolves to false when the user cancels. */
   clearEntraTokenCache(): Promise<ApiResult<boolean>>
+  /** Clear Saved Search Indexes: main has the backend delete every file of the saved index. */
+  clearSavedSearchIndexes(): Promise<ApiResult<IndexStoreCleared>>
+  /** Whether the system has a key store to encrypt the saved Search Objects index with (Options says so when it has none). */
+  searchIndexStorage(): Promise<ApiResult<SecretStorageState>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
   /** Both engines' saved connections: SQL Server's `library`, and BigQuery's (key files by name only). */

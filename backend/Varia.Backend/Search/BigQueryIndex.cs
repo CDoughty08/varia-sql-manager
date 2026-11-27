@@ -9,6 +9,9 @@ internal interface IBigQueryIndexSource
 {
     /// <summary>The connection's billing project; throws NOT_CONNECTED.</summary>
     string BillingProject(string connectionId);
+    /// <summary>The connection's verified principal (its identity pin), which names whose saved index a dataset's file is; null
+    /// when there is none, and nothing is then saved.</summary>
+    string? Principal(string connectionId) => null;
     /// <summary>Whether BigQuery is refusing the connection's principal for its rate right now (the build's progress says so).</summary>
     bool Throttled(string connectionId) => false;
     /// <summary>Every accessible project via projects.list, sorted ordinally and capped at <paramref name="maxProjects"/>.</summary>

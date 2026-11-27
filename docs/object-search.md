@@ -43,8 +43,9 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
 
 ## The index
 
-- **Lifetime.** Backend memory only, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
-  Rebuild Search Index, dropped on disconnect or backend exit. With the setting off nothing else builds one: the search
+- **Lifetime.** Held in backend memory, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
+  Rebuild Search Index, dropped on disconnect or backend exit. What a build reads is also saved to disk
+  ([Saved index](#saved-index)), though a new session does not read it back yet. With the setting off nothing else builds one: the search
   says "This server has no index yet." with **Build index** (**Build indexes** on All servers).
 - **Progress.** The status bar shows "Indexing objects N / M" and Stop (a BigQuery build names its pass instead; see
   BigQuery below). A newer build of the same connection stops the older one.
@@ -253,6 +254,98 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 | Characters per Fuzzy Match word (a longer word: exactly only) | 64 |
 | Matches counted per definition | 999 |
 | Preview length | 160 characters |
+
+## Saved index
+
+Every part of an index is saved to disk as soon as it has been read, so that an index need not be read from its server
+again after a restart. **A saved index is not read back yet**: this version saves, bounds and sweeps the files, and a
+connection still builds its index from the server each time. Reading a saved index back (at once for BigQuery, after a
+check against the server for SQL Server) comes with later changes.
+
+- **What a file is.** One unit of an index: a SQL Server database's read, a server's own objects, SQL Server Agent's
+  objects, a BigQuery dataset's read, or a shared set of system objects. Each is a file of its own
+  (`<32 hex>-<32 hex>.vidx`) in the `SearchIndex` folder of the Varia profile (the user-data directory), written to a
+  temporary file and renamed into place, so a crash or a stop leaves the earlier file or none. The whole index is
+  saved, definitions included, compressed.
+- **Encryption.** Files are AES-256-GCM under a 32-byte key that Varia makes on first use and keeps only in the operating
+  system's key store form: the key's ciphertext (DPAPI on Windows, the Keychain on macOS, the Secret Service or KWallet
+  on Linux) in `search-index-key.json` beside the saved passwords. Only the main process reads it and hands it to the
+  backend in memory; the window never sees the key or the folder. If the key store is reset so the ciphertext no longer
+  opens, that file is set aside, a new key is made, and the files written under the old key are deleted by the sweep.
+- **No key store.** Where the system has none (Linux without GNOME Keyring or KWallet), nothing is saved, and Options
+  says so beside the settings. A keyring that is there but not reachable yet (locked, or a prompt nobody has answered)
+  is not taken for none: nothing is saved or deleted meanwhile, and Varia asks it again a little later. Nor does
+  anything happen to the saved index before Varia has read its settings, or while one of the three was reset because
+  `settings.json` could not be read. **Save index unencrypted when there is no key
+  store** opts in to saving in clear text there: the names of your servers' objects and the text of their procedures,
+  functions and views are then readable by any program or person that can read your files. Passwords, connection
+  strings and tokens are never part of an index. Turning the option off again, or a key store coming back, deletes the
+  unencrypted files.
+- **Whose file it is.** A file's name and the identity inside it are keyed hashes, never a server's, database's,
+  project's, dataset's, login's or principal's name, so the folder's listing says nothing about your servers.
+  - SQL Server: the server as it names itself (`SERVERPROPERTY('ServerName')`) and the account that signed in (its
+    SID, or an Entra account's tenant and object ids). Two connection profiles that reach one server as one login share
+    its files; another login, whose view of the catalog is its own, never does. A contained database user, and any
+    connection to Azure SQL Database (where a connection sees the catalog from one database), also counts the database
+    it opened. A connection whose server name or account the connect probe could not establish saves nothing.
+  - BigQuery: the verified principal alone. A dataset's file is shared by every connection of that principal,
+    whatever its billing project.
+  - The shared system objects: their own fingerprint (version, edition, and what the login sees of them).
+  - Two servers that report the same name and are signed in to with the same SID (`sa` on two containers with one host
+    name, say) count as one: each one's build overwrites the other's files.
+- **What is saved, and what is not.**
+
+  | Read | Saved |
+  |---|---|
+  | A database, the server's objects or Agent's objects, read whole | Yes, replacing the unit's earlier file |
+  | A database kept without its children (`CHILDREN_LEFT_OUT`), or read with definitions off | Yes; the file's header says what it lacks, so it is never taken for a whole read |
+  | A read with definitions left out for memory | Yes, with the count of what was left out |
+  | A read that failed part way (kept because nothing was held before) | No; an earlier file of the unit stays as it is |
+  | A database skipped (`TOO_LARGE`, `TIMEOUT`, an error) | Nothing new; an earlier file stays |
+  | A database the server no longer lists, while its index holds it | Its file is deleted (one not held this session goes by the sweep's age and limit rules) |
+  | A BigQuery dataset after its names are listed (pass 1) | Yes; the file says how many objects' details are still to read |
+  | The same dataset once its details are read (pass 2) | Yes, in its place; it counts details that failed or were left out for memory, and whether the listing was cut. Each object's own facts say whether its details are whole |
+  | A dataset DDL marked stale | Its file is deleted at once, and saved again by the build that reads it afterwards. A read begun before the DDL is not saved by any connection of the principal, whichever of them ran it and whether or not it indexes the project; DDL that may have touched any dataset of a project does the same for all of them |
+  | A dataset its project no longer lists, while its index holds it | Its file is deleted |
+  | A project that left what this connection indexes (no longer starred, or filtered) | Its files stay for the principal's other connections |
+
+- **Saving never waits on anything else.** One background thread writes one file at a time at low priority. A unit read
+  again while its save is queued is written once, as the newest read, and a newer read stops an older write of the same
+  unit. A disconnect frees the index's memory at once: the write in progress finishes, and what was still queued is not
+  written, since the queue never keeps alive what the index memory limit no longer counts (the next build saves it). A
+  read the index replaces or drops is withdrawn from the queue the same way. A deletion (a database the server stopped
+  listing, DDL) goes ahead of any queued save. A backend stop cancels the write in progress and writes nothing more, but
+  still does the deletions queued. What an index already holds when saving starts
+  (a connection restored at startup may build before the app has told the backend where the saved index lives; saving
+  turned on again; a new key) is saved then, without a rebuild.
+- **Bounds.** **Saved index disk limit** (`objectExplorer.search.diskLimitMiB`, 2,048 MiB by default, 64 to 262,144)
+  is the most the folder's index files take; past it the least recently used files are deleted first, and lowering the
+  limit deletes down to it at once. A file not used for 30 days (saved, or later loaded) is deleted whatever the space.
+- **The sweep** only deletes, when the store opens and again while it saves: temporary files a crash left (older than
+  an hour, so another Varia's save in progress is left alone), files unused for 30 days, files that do not open under
+  the current key or format version or whose content is not the unit their name says, then the least recently used
+  until the folder is under its limit. It touches only regular files directly in the `SearchIndex` folder that have
+  the store's own names: any other file there, a directory, a link, or an index file shorter than a file header is
+  neither opened nor deleted, and a file that cannot be deleted (another program holds it) is skipped. Two Varias sharing a
+  profile only ever replace whole files and delete, so neither damages the other's.
+- **Turning it off.** **Save index between sessions** (`objectExplorer.search.saveIndex`, on by default) off stops
+  saving and deletes every saved index. All three settings apply at once, without a restart.
+- **Clear Saved Search Indexes** (the command palette) deletes every saved file and reports how many. The indexes in
+  memory stay, and their next builds save again. Before the backend has been told where the saved index lives (Varia is
+  waiting for its settings or for the key store), it says so and deletes nothing.
+- **Deletions while nothing is saved.** A database the server stops listing, or BigQuery DDL, while the store does not
+  save (just after start, while the key store has not answered, without a key store) is remembered, and its file
+  deleted once the store saves again in that session.
+- **Where it shows.** The Memory panel's Search Indexer row has a **Saved on disk** line: the files and their size
+  against the limit, and Encrypted, Not encrypted (your choice in Options), Off in Options, Off: this system has no key
+  store, or Unavailable when the folder cannot be used ([status-bar-memory.md](status-bar-memory.md)).
+
+| Limit | Value |
+|---|---|
+| Disk space (past it, least recently used files go first) | 2,048 MiB by default, 64 to 262,144 MiB (`objectExplorer.search.diskLimitMiB`) |
+| Days an unused file is kept | 30 |
+| Age at which a leftover temporary file is deleted | 1 hour |
+| One file | 4 GiB |
 
 ## Searching
 
@@ -550,4 +643,5 @@ takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a pro
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).
 On either engine `explorer.index` takes `memoryLimitMiB` (64 to 16,384, checked in zod and in C#), the limit every
 connection's index shares from that build on; a status carries `leftOut` and `leftOutIn` when definitions were left out
-for memory.
+for memory. The saved index has two methods of its own that only main sends, `explorer.indexStore.configure` and
+`explorer.indexStore.clear` ([ipc.md](ipc.md#methods)); its figures reach the window on `explorer.index.memory`.

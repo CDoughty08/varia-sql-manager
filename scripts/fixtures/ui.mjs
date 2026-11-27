@@ -506,6 +506,8 @@ export const readOnlyStatus = page => editorStatus(page).getByText('Read-only', 
 export const memoryIndicator = page => statusBar(page).locator(part.memory)
 export const memoryBreakdown = page => page.getByRole('region', { name: 'Memory usage', includeHidden: true })
 export const memoryUsage = (page, feature) => page.locator(`.memory-details .memory-row[data-feature="${feature}"] .memory-usage`)
+/** The Search Indexer row's Saved on disk line: the saved index's files against its limit, and how it stands. */
+export const memorySaved = page => page.locator('.memory-details .memory-row[data-feature="index"] .memory-store')
 /** The active document's status: its state sentence and connection facts, or a value document's kind. */
 export const queryStatus = page => page.getByRole('status', { name: 'Query status', exact: true })
 /** One query status fact by key: server, login, database, time or rows. */

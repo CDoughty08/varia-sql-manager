@@ -743,8 +743,8 @@ describe('Search', () => {
     expect(api.explorerSearch).not.toHaveBeenCalled()
     expect(explorer.getSnapshot().rows.nodes.some(node => node?.label === 'dbo.Orders')).toBe(false)
     quickInput.filter('orders')
-    // Commands match too (o-r-d-e-r-s from the start of Operations, and spread through Restore Files and Filegroups), between the queries and the objects.
-    const local = [['open queries', 'Orders report.sql'], ['commands', 'Integration Services: Copy Operations with Headers'], [undefined, 'Object Explorer: Restore Files and Filegroups…']]
+    // Commands match too (o-r-d-e-r-s from the start of Operations, and spread through Clear Saved Search Indexes and Restore Files and Filegroups), between the queries and the objects.
+    const local = [['open queries', 'Orders report.sql'], ['commands', 'Integration Services: Copy Operations with Headers'], [undefined, 'Object Explorer: Clear Saved Search Indexes'], [undefined, 'Object Explorer: Restore Files and Filegroups…']]
     // The queries and commands are there at once, with the way to Search Objects; the progress bar runs until the servers answer.
     expect(view().rows.map(row => [row.group, row.item.label])).toEqual([...local, ['objects', seeAllObjects]])
     expect(view().busy).toBe(true)
@@ -753,8 +753,8 @@ describe('Search', () => {
     expect(api.explorerSearch.mock.calls.at(-1)![0]).toMatchObject({ text: 'orders', in: 'names', match: 'fuzzy', limit: quickSearchHits })
     expect(view().busy).toBe(false)
     // The row shows what the search matched, not what the widget's own matcher would.
-    expect(view().rows[3]).toMatchObject({ item: { icon: 'table', description: 'server-a.example › AppData' }, ranges: [[4, 10]] })
-    expect(view().rows[4].item.description).toBe('Showing 1 of 75 objects')
+    expect(view().rows[4]).toMatchObject({ item: { icon: 'table', description: 'server-a.example › AppData' }, ranges: [[4, 10]] })
+    expect(view().rows[5].item.description).toBe('Showing 1 of 75 objects')
     // A BigQuery object's row names it as Search Objects does, without its dataset, which follows its project in the description.
     const bigQuery: ObjectSearchHit = { object: { kind: 'bqTable', project: 'varia-alpha', dataset: 'sales', name: 'orders' }, folder: 'bqTables', label: 'sales.orders', range: [6, 6] }
     expect(objectRow(bigQuery, 'BigQuery')).toEqual({ label: 'orders', description: 'BigQuery › varia-alpha › sales', ranges: [[0, 6]] })
@@ -765,8 +765,9 @@ describe('Search', () => {
     expect(view().busy).toBe(true)
     await landed(() => expect(view().rows.filter(row => row.item.group === 'objects').map(row => row.item.label)).toEqual([seeAllObjects]))
     quickInput.filter('orders')
-    await landed(() => expect(view().rows[3]?.item.label).toBe('dbo.Orders'))
+    await landed(() => expect(view().rows[4]?.item.label).toBe('dbo.Orders'))
     // Past the commands, to the object.
+    quickInput.move('next')
     quickInput.move('next')
     quickInput.move('next')
     quickInput.move('next')
@@ -780,7 +781,7 @@ describe('Search', () => {
     // The last row takes the text to a Search Objects tab.
     await key('workbench.search')
     quickInput.filter('orders')
-    await landed(() => expect(view().rows[3]?.item.label).toBe('dbo.Orders'))
+    await landed(() => expect(view().rows[4]?.item.label).toBe('dbo.Orders'))
     quickInput.move('previous')
     expect(view().rows[view().activeIndex].item.label).toBe(seeAllObjects)
     quickInput.accept()

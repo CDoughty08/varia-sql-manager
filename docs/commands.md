@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (466)
+## Commands (467)
 
 ### File
 
@@ -351,6 +351,7 @@ keys it uses are listed below.
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
 | Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
+| Clear Saved Search Indexes | `explorer.clearSavedIndexes` | — | — | — | Always | — |
 | Reveal in Object Explorer (not in the palette) | `search.revealHit` | — | — | — | `hasConnection` | Search Objects result context menu › Reveal in Object Explorer |
 | Copy Name (not in the palette) | `search.copyName` | Ctrl+C * (`searchHitsFocus`) | Ctrl+C * (`searchHitsFocus`) | ⌘C * (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Name |
 | Copy Schema-Qualified Name (not in the palette) | `search.copySchemaName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Schema-Qualified Name |

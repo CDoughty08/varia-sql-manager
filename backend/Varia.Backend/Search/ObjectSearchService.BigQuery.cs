@@ -26,7 +26,21 @@ internal sealed partial class ObjectSearchService
     {
         if (!BqNames.IsProject(project) || !BqNames.IsDataset(dataset) || !states.TryGetValue(connectionId, out var state)) return;
         lock (state.Gate)
-            if (state.BigQuery) state.Stale[(project, dataset)] = ++state.StaleMarks;
+        {
+            if (!state.BigQuery) return;
+            state.Stale[(project, dataset)] = ++state.StaleMarks;
+            // What was saved of the dataset is stale from here: its file goes until a build has read it again.
+            state.Index.Sink?.Stale(project, dataset);
+        }
+    }
+
+    /// <summary>Records DDL on a dataset (or, with none, on any dataset of a project) against what is saved for the principal
+    /// that ran it: the file goes, and no connection of the principal saves a read of it begun before now, whether or not the
+    /// connection that ran the DDL indexes the project (its marks, above, cover only what it indexes).</summary>
+    public void MarkSavedStale(string? principal, string project, string? dataset)
+    {
+        if (!BqNames.IsProject(project) || dataset is not null && !BqNames.IsDataset(dataset) || IndexStoreScope.BigQuery(principal) is not { } scope) return;
+        Store.MarkStale(scope, project, dataset);
     }
 
     /// <summary>Records that DDL may have changed any dataset of a project, which ones unknown (a script whose statements could not
@@ -35,7 +49,13 @@ internal sealed partial class ObjectSearchService
     {
         if (!BqNames.IsProject(project) || !states.TryGetValue(connectionId, out var state)) return;
         lock (state.Gate)
-            if (state.BigQuery) state.StaleProjects[project] = ++state.StaleMarks;
+        {
+            if (!state.BigQuery) return;
+            state.StaleProjects[project] = ++state.StaleMarks;
+            if (state.Index.Sink is { } sink)
+                foreach (var read in state.Index.Databases)
+                    if (read.Database == project && read.Dataset is { } dataset) sink.Stale(project, dataset);
+        }
     }
 
     /// <summary>Test seam: a connection's index counts as a BigQuery one, so DDL marks land on it without a build.</summary>
@@ -66,6 +86,7 @@ internal sealed partial class ObjectSearchService
                 || state.Index.Databases.Any(read => read.Dataset is not null && read.Database == project))
             {
                 state.Stale[(project, dataset)] = ++state.StaleMarks;
+                state.Index.Sink?.Stale(project, dataset);
             }
         }
     }
@@ -152,6 +173,8 @@ internal sealed partial class ObjectSearchService
         var definitions = args.Definitions ?? true;
         SetMemoryLimit(args.MemoryLimitMiB);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
+        // A dataset's file is its verified principal's, whatever project the connection bills.
+        state.Index.Sink ??= Store.Sink(IndexStoreScope.BigQuery(source.Principal(args.ConnectionId)));
         // Discovered projects' details keep the most free, so they give way before the billing and starred projects' do. A
         // refresh the user asked of one project or dataset reads it as a starred one, whatever the project.
         bool Discovered(string project) => scope is null && project != billing && !starredSet.Contains(project);
@@ -178,6 +201,8 @@ internal sealed partial class ObjectSearchService
             : !staleOnly || skip.Project is { } skipProject && (stale.Contains((skipProject, skip.Database)) || wholeProjects.ContainsKey(skipProject));
         // The mark each dataset had when this build began reading it: only that mark is cleared, so DDL that lands mid-read stays marked.
         var seen = new ConcurrentDictionary<(string, string), long>();
+        // The store's stale count as each dataset's read began: DDL from another connection of the principal counts too.
+        var storeSeen = new ConcurrentDictionary<(string, string), long>();
         bool Current() => ReferenceEquals(state.Build, source2);
         var skipOrder = 0;
         const int CarriedSkipOffset = 1_000_000;
@@ -235,7 +260,11 @@ internal sealed partial class ObjectSearchService
         // Records the dataset's mark as its read begins: a marked dataset is read whole, even when marked after this build began.
         bool Seen((string, string) target)
         {
-            lock (state.Gate) return (seen[target] = state.Stale.GetValueOrDefault(target)) != 0;
+            lock (state.Gate)
+            {
+                storeSeen[target] = state.Index.Sink?.StaleSeq ?? long.MaxValue;
+                return (seen[target] = state.Stale.GetValueOrDefault(target)) != 0;
+            }
         }
         void Clear((string, string) target)
         {
@@ -261,7 +290,7 @@ internal sealed partial class ObjectSearchService
             lock (state.Gate)
             {
                 if (!Current()) throw new OperationCanceledException(stop);
-                state.Index.KeepWhere(read => allowed.Contains(read.Database));
+                state.Index.KeepWhere(read => allowed.Contains(read.Database), gone: false);
                 foreach (var gone in state.Stale.Keys.Where(key => !allowed.Contains(key.Project)).ToList())
                 {
                     state.Stale.Remove(gone);
@@ -437,7 +466,7 @@ internal sealed partial class ObjectSearchService
                 }, loop)).ToArray();
                 await Task.WhenAll(workers);
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, details: value.Read);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, new(value.Cut, 0, Volatile.Read(ref failures), seen.GetValueOrDefault(target), storeSeen.GetValueOrDefault(target, long.MaxValue)), details: value.Read);
                 if (held is not null)
                 {
                     Skip(held);
@@ -496,7 +525,7 @@ internal sealed partial class ObjectSearchService
                         {
                             if (Current())
                             {
-                                state.Index.KeepWhere(read => !(read.Database == project && read.Dataset == dataset));
+                                state.Index.KeepWhere(read => !(read.Database == project && read.Dataset == dataset), gone: true);
                                 state.DatasetSkips.Remove((project, dataset));
                                 if (state.Stale.TryGetValue((project, dataset), out var mark) && mark <= beforeObjects)
                                     state.Stale.Remove((project, dataset));
@@ -544,7 +573,7 @@ internal sealed partial class ObjectSearchService
                 carried.Clear();
                 // A superseded build writes nothing more: the newer one has reset the counters and skips.
                 loop.ThrowIfCancellationRequested();
-                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop);
+                var held = Hold(state, source2, project, dataset, entries, definitions, Discovered(project), loop, new(listing.Cut, again.Count(read => read), 0, seen.GetValueOrDefault(target), storeSeen.GetValueOrDefault(target, long.MaxValue)));
                 NamesHeld?.Invoke(project, dataset);
                 if (held is { Code: not ChildrenLeftOut })
                 {
@@ -596,7 +625,7 @@ internal sealed partial class ObjectSearchService
                 {
                     if (!Current()) throw new OperationCanceledException(stop);
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || cut
-                        || onlyDataset is { } kept && kept != dataset);
+                        || onlyDataset is { } kept && kept != dataset, gone: true);
                     if (!cut)
                     {
                         foreach (var gone in state.DatasetSkips.Keys.Where(key => key.Project == project && !names.Contains(key.Dataset)
@@ -922,7 +951,7 @@ internal sealed partial class ObjectSearchService
                     lock (state.Gate)
                     {
                         if (!Current()) throw new OperationCanceledException(stop);
-                        state.Index.KeepWhere(read => read.Database != project);
+                        state.Index.KeepWhere(read => read.Database != project, gone: false);
                         foreach (var gone in state.Stale.Keys.Where(key => key.Project == project).ToList())
                         {
                             state.Stale.Remove(gone);
@@ -1404,8 +1433,10 @@ internal sealed partial class ObjectSearchService
     /// read ran out of room at (a text the pool did not hold), a few times; then all. What was left out is reported as
     /// details missing (TOO_LARGE with Details). A dataset that holds no details is tried without columns
     /// (CHILDREN_LEFT_OUT), then skipped as TOO_LARGE.</summary>
+    /// <param name="saved">What the dataset's file is to say beside the read (<see cref="BigQuerySync"/>), and the stale mark the
+    /// dataset had when this read of it began: a mark made since means DDL the read may predate, so no file stands for it.</param>
     private ObjectIndexSkip? Hold(State state, CancellationTokenSource owner, string project, string dataset, IReadOnlyList<BigQueryEntry> entries, bool definitions, bool discovered,
-        CancellationToken token, IReadOnlyList<int>? details = null)
+        CancellationToken token, BigQuerySaved saved, IReadOnlyList<int>? details = null)
     {
         var old = state.Index.Get(project + "\u0001" + dataset);
         var (namesFloor, detailsFloor) = (Limits.BigQueryNamesFloorBytes, Limits.BigQueryDetailsFloor(discovered, old is { Detailed: true }));
@@ -1485,7 +1516,14 @@ internal sealed partial class ObjectSearchService
             {
                 lock (state.Gate)
                 {
-                    if (ReferenceEquals(state.Build, owner)) state.Index.Put(built);
+                    if (ReferenceEquals(state.Build, owner))
+                    {
+                        built.SaveWhenHeld = !(state.Stale.TryGetValue((project, dataset), out var mark) && mark != saved.Seen) && !state.StaleProjects.ContainsKey(project);
+                        built.StaleSeen = saved.StoreSeen;
+                        // A read that fit only without columns has no details left to read: they would not fit either.
+                        built.Sync = new BigQuerySync(saved.Cut, childrenLeftOut ? 0 : saved.Pending, saved.Failed, detailsLeftOut).ToBytes();
+                        state.Index.Put(built);
+                    }
                     else superseded = true;
                 }
             }
@@ -1503,6 +1541,10 @@ internal sealed partial class ObjectSearchService
             ? "The dataset's changes did not fit, so its earlier names were kept: " + BigQueryPart + ", and the rest is in use."
             : "The dataset was not indexed: " + BigQueryPart + ", and the rest is in use.", Project: project);
     }
+
+    /// <summary>What <see cref="Hold"/> is told for the dataset's file: whether the listing was cut, how many objects pass 2 has
+    /// yet to read, how many it could not, and the dataset's stale mark as this read of it began.</summary>
+    private readonly record struct BigQuerySaved(bool Cut, int Pending, int Failed, long Seen, long StoreSeen = long.MaxValue);
 
     /// <summary>How many times pass 2 sends the object a dataset's read ran out of room at back to what was held and reads again,
     /// before every object goes back: each is a read of the whole dataset.</summary>

@@ -173,7 +173,7 @@ internal static partial class IndexFileChecks
         return new SearchCostChecks.Batch([.. sets]);
     }
 
-    private static async Task<DatabaseIndex> Database(World world, bool children = true, bool definitions = true, DatabaseIndex? credit = null, int extraTables = 0, string name = "Sales")
+    internal static async Task<DatabaseIndex> Database(World world, bool children = true, bool definitions = true, DatabaseIndex? credit = null, int extraTables = 0, string name = "Sales")
     {
         var read = await new DatabaseReader(name, world.Limits, world.Pool, credit).ReadAsync(DatabaseBatch(children, definitions, extraTables), definitions, CancellationToken.None, children)
             ?? throw new InvalidOperationException("The checks' database did not fit.");
@@ -182,7 +182,7 @@ internal static partial class IndexFileChecks
     }
 
     /// <summary>The server's own objects: databases (one from before 1970), logins, roles, a linked server, a server trigger with its text.</summary>
-    private static async Task<DatabaseIndex> Server(World world)
+    internal static async Task<DatabaseIndex> Server(World world)
     {
         var reader = new SearchCostChecks.Batch([
             Rows([("name", typeof(string)), ("created", typeof(DateTime)), ("system", typeof(bool)), ("snapshot", typeof(bool))],
@@ -197,7 +197,7 @@ internal static partial class IndexFileChecks
             ?? throw new InvalidOperationException("The checks' server objects did not fit.");
     }
 
-    private static async Task<DatabaseIndex> Agent(World world)
+    internal static async Task<DatabaseIndex> Agent(World world)
     {
         var reader = new DataTableReader([
             Rows([("code", typeof(string)), ("name", typeof(string)), ("modified", typeof(DateTime))], ["AJ", "Nightly", At], ["AJ", "Undated", null]),
@@ -208,7 +208,7 @@ internal static partial class IndexFileChecks
 
     /// <summary>The resource database's objects as its reader leaves them: views, a function and a procedure with typed columns
     /// and parameters, and their definitions (one long).</summary>
-    private static Task<ObjectTable> ResourceObjects(World world, bool definitions = true)
+    internal static Task<ObjectTable> ResourceObjects(World world, bool definitions = true)
     {
         var sets = new List<DataTable>
         {
@@ -304,7 +304,7 @@ internal static partial class IndexFileChecks
         return [.. listed.Select(entry => entry with { Detail = BigQueryBulk.Detail(rows, entry, true) })];
     }
 
-    private static DatabaseIndex Dataset(World world, List<BigQueryEntry> entries, bool children = true, bool definitions = true, DatabaseIndex? credit = null, bool discovered = false) =>
+    internal static DatabaseIndex Dataset(World world, List<BigQueryEntry> entries, bool children = true, bool definitions = true, DatabaseIndex? credit = null, bool discovered = false) =>
         new BigQueryReader(world.Limits, world.Pool, credit, world.Limits.BigQueryNamesFloorBytes, world.Limits.BigQueryDetailsFloor(discovered, credit is { Detailed: true }))
             .Read("varia-alpha", "sales", entries, children, definitions) ?? throw new InvalidOperationException("The checks' dataset did not fit.");
 
