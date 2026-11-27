@@ -3,6 +3,7 @@ import ServerDropLayer, { bindServerDrop } from './ServerDropLayer'
 import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type IWatermarkPanelProps, type SerializedDockview } from 'dockview-react'
 import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout, type EditorTabRows } from '../../../shared/editor-groups'
 import { environmentPreset, environmentTag } from '../../../shared/environments'
+import { connectionPresets } from '../../../shared/theme/connection-colors'
 import { queryConnectionPresentation } from '../query-connection'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { ThemeType } from '../../../shared/theme/types'
@@ -72,6 +73,9 @@ export interface Area {
 }
 export const AreaContext = createContext<Area | null>(null)
 const RestoredContext = createContext(false)
+
+const redPresetColor = connectionPresets.find(preset => preset.name === 'red')!.stored
+const purplePresetColor = connectionPresets.find(preset => preset.name === 'purple')!.stored
 
 const panelOptions = (id: string, title: string) => ({ id, contentComponent: 'document', tabComponent: 'document', title, renderer: 'onlyWhenVisible' as const })
 const addOptions = (id: string, title: string) => ({ id, component: 'document', tabComponent: 'document', title, renderer: 'onlyWhenVisible' as const })
@@ -278,7 +282,7 @@ export function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   if (!tab) return null
   const kind = documentInfo(tab), pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
   const prodTarget = isMulti ? multiResolved.find(item => environmentPreset(item.environment) === 'Production') : undefined
-  const multiAccentColor = isMulti ? (prodTarget ? (prodTarget.color ?? 'red') : isCross ? 'purple' : multiResolved.find(item => item.color)?.color) : undefined
+  const multiAccentColor = isMulti ? (prodTarget ? (prodTarget.color ?? redPresetColor) : isCross ? purplePresetColor : multiResolved.find(item => item.color)?.color) : undefined
   const tabAccent = workbench.theme.accent(isMulti ? multiAccentColor : presentation.color)
   const tabSwatches = isMulti && multiSummary
     ? multiSummary.colors.map(color => workbench.theme.accent(color)).filter((color): color is string => !!color).slice(0, 4)

@@ -337,10 +337,11 @@ function ShelfControls({ group, shelf, layout }: { readonly group: DockviewGroup
       style={{ left: shelf.overflowLeft, top: shelf.overflowTop, width: shelf.cellWidth }} onPointerDown={event => event.stopPropagation()}>… {shelf.hidden.length} more</button>}
     <div className="query-shelf-overflow" id={id} popover="auto" ref={overflow} role="group" aria-label={`More ${name} tabs`}>
       {shelf.hidden.map(tab => {
+        const enabledTargets = tab.multiMode === 'same' ? (tab.multiTargets ?? []).filter(target => target.enabled).length : 0
         const multiHint = tab.multiMode === 'cross'
           ? 'Cross-Engine SELECT'
           : tab.multiMode === 'same'
-            ? `${(tab.multiTargets ?? []).filter(target => target.enabled).length} targets`
+            ? `${enabledTargets} ${enabledTargets === 1 ? 'target' : 'targets'}`
             : undefined
         const overflowTitle = [tab.file?.path ?? tab.name, multiHint].filter(Boolean).join(' · ')
         return <button type="button" key={tab.id} data-multi-server={tab.multiMode || undefined} title={overflowTitle} onClick={() => {

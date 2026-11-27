@@ -282,6 +282,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
   }
 
   const openInSingleEngine = (dialect: ProviderId) => {
+    if (docSnapshot.busy) return
     const scripts = documents.getCrossEngineScripts(tabId)
     const sql = scripts.ok
       ? (dialect === 'bigquery' ? scripts.bigquery : scripts.sqlserver)
@@ -293,23 +294,26 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
     const matching = (tab.multiTargets ?? []).filter(target => target.enabled && target.provider === dialect)
     const baseName = tab.name.replace(/\.sql$/i, '')
     const name = `${baseName}_${dialect === 'bigquery' ? 'BigQuery' : 'SqlServer'}.sql`
+    const eol = documents.getModel(tabId)?.getEOL() === '\r\n' ? 'crlf' : 'lf'
     if (matching.length >= 2) {
-      documents.openMultiQuery({ mode: 'same', targets: matching, name, sql, provider: dialect, unsaved: sql.length > 0 })
+      documents.openMultiQuery({ mode: 'same', targets: matching, name, sql, provider: dialect, unsaved: sql.length > 0, eol })
       return
     }
     const first = matching[0]
     if (first?.connectionId && connectionService.isLive(first.connectionId)) {
-      documents.create(name, sql, first.database || (dialect === 'bigquery' ? '' : 'master'), first.connectionId, sql.length > 0)
+      documents.create(name, sql, first.database || (dialect === 'bigquery' ? '' : 'master'), first.connectionId, sql.length > 0, undefined, eol)
       return
     }
     documents.reopen({
       name,
       kind: 'sql',
       text: sql,
-      eol: 'lf',
+      eol,
       dirty: sql.length > 0,
-      database: dialect === 'bigquery' ? '' : 'master',
-      provider: dialect
+      database: first?.database || (dialect === 'bigquery' ? '' : 'master'),
+      provider: dialect,
+      ...first?.lastServer ? { server: first.lastServer } : {},
+      ...first?.targetId ? { targetId: first.targetId, ...first.attachWanted !== undefined ? { attachWanted: first.attachWanted } : {} } : {}
     })
   }
 
@@ -351,7 +355,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
       <span className="cross-engine-guard-text">{formatGuardSummary(violations)}</span>
       <div className="cross-engine-guard-actions">
         <button type="button" className="ui-button cross-engine-guard-next" onClick={() => jumpToNextBlocked(scope, violations)}>Next blocked</button>
-        <button type="button" className="ui-button cross-engine-guard-open" onClick={() => openInSingleEngine(openDialect)}>{openLabel}</button>
+        <button type="button" className="ui-button cross-engine-guard-open" disabled={docSnapshot.busy} onClick={() => openInSingleEngine(openDialect)}>{openLabel}</button>
       </div>
     </div>
   }

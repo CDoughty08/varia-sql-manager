@@ -8,6 +8,7 @@ import { useTicker } from './core/useTicker'
 import { modalOpen } from './core/modal'
 import { watchModals, windows } from './core/windows'
 import { environmentPreset, environmentTag } from '../../shared/environments'
+import { connectionPresets } from '../../shared/theme/connection-colors'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import MultiTargetPopover, { multiTargetTriggerSummary, resolveMultiTargets } from './MultiTargetPopover'
@@ -15,6 +16,9 @@ import ClientStatisticsToggle from './statistics/ClientStatisticsToggle'
 import BigQueryCostChip from './BigQueryCostChip'
 import { formatElapsed, lostHint, planButtonState, queryContextModel, toolbarMove, toolbarReturn, toolbarStop, withKey, type QueryContextModel } from './query-context'
 import { documentUri } from './services/documents'
+
+const redPresetColor = connectionPresets.find(preset => preset.name === 'red')!.stored
+const purplePresetColor = connectionPresets.find(preset => preset.name === 'purple')!.stored
 
 /** Selection metadata only: the execution service remains the source of the SQL that actually runs. */
 export function useExecutionScope(tabId?: string): { readonly selected: boolean; readonly title: string; readonly label: string; readonly detail: string; readonly pill: string; readonly tooltip?: string } {
@@ -59,7 +63,7 @@ export function useQueryContext(tabId?: string): { readonly tab: QueryTab | unde
   const summary = multiTargetTriggerSummary(tab, connections, rememberedTargets)
   const resolved = resolveMultiTargets(tab, connections, rememberedTargets).filter(item => item.target.enabled)
   const prod = resolved.find(item => environmentPreset(item.environment) === 'Production')
-  const color = prod ? (prod.color ?? 'red') : tab.multiMode === 'cross' ? 'purple' : resolved.find(item => item.color)?.color
+  const color = prod ? (prod.color ?? redPresetColor) : tab.multiMode === 'cross' ? purplePresetColor : resolved.find(item => item.color)?.color
   const environment = summary.prodCount > 0 ? 'Production' : undefined
   const model: QueryContextModel = {
     ...baseModel,

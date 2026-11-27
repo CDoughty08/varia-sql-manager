@@ -2,6 +2,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings } from '../src/shared/settings/catalog'
+import { connectionAccent } from '../src/shared/theme/connection-colors'
+import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { multiTargetSummaryText, queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
@@ -277,6 +279,46 @@ describe('the query status facts\' environment tag', () => {
     expect(settledHtml).toContain('Query executed successfully.')
     expect(settledHtml).toContain('query-status-server')
     expect(settledHtml).toContain('2 SQL Servers · Ready')
+  })
+
+  it('R4 Finding 1: paints QueryStatusBar edge using real connectionAccent for Production (red) and Cross-Engine (purple) fallback presets', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const activeTheme = resolveBuiltin('dark')
+    const theme = { subscribe: () => () => {}, getSnapshot: () => ({ active: activeTheme }), accent: (color?: string) => connectionAccent(color, activeTheme) }
+    fixture.connections.add(
+      { id: 'c-prod', server: 'sql-prod', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql-prod', database: 'master', authentication: 'windows', trustServerCertificate: false, environment: 'Production' }
+    )
+    fixture.connections.add(
+      { id: 'c-dev', server: 'sql-dev', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql-dev', database: 'master', authentication: 'windows', trustServerCertificate: false, environment: 'Development' }
+    )
+    fixture.connections.add(
+      { id: 'bq-dev', providerId: 'bigquery', server: 'bq-dev', database: 'ds', serverVersion: '', generation: 1 },
+      { provider: 'bigquery', projectId: 'bq-dev', defaultDataset: 'ds', environment: 'Development' } as never
+    )
+
+    const workbench = { ...fixture, theme } as unknown as Workbench
+    const prodTab = fixture.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'c-prod', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'c-dev', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    const prodHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab: prodTab, variant: 'bar' }) }))
+    expect(prodHtml).toContain('border-top:3px solid var(--varia-connection-red)')
+
+    const crossTab = fixture.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { connectionId: 'c-dev', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'bq-dev', provider: 'bigquery', database: 'ds', enabled: true }
+      ]
+    })
+    const crossHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab: crossTab, variant: 'bar' }) }))
+    expect(crossHtml).toContain('border-top:3px solid var(--varia-connection-purple)')
   })
 })
 
