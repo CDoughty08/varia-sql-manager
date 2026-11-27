@@ -367,16 +367,17 @@ makes any call, and its listings then check it:
   on disk and is read as if nothing were saved. Once a discovered project's dataset does not fit, no other discovered one
   is loaded, as the names pass stops reading new discovered datasets.
 - **Stale marks win.** A dataset DDL from any of the principal's connections marked stale is never loaded: its file is
-  being deleted, and the build reads it whole. Nor is one whose newer save or deletion is still queued. A loaded dataset
-  DDL marks stale afterwards is read whole again, as any held one is.
+  being deleted, and the build reads it whole. Nor is one whose newer save or deletion is still queued. A held dataset
+  (loaded or read) that DDL from any of the principal's connections marks stale afterwards is read whole by its next
+  listing.
 - **Failures are values.** A file that does not open (damaged, another key, another version's format), or does not load
   (memory), is counted and its dataset read from BigQuery as if nothing were saved; the build never fails for a file.
 - **In-place changes.** A change that keeps an object's creation time, such as `ALTER TABLE ... ADD COLUMN` run outside
   Varia or a view's text patched in place, is not seen until the dataset is refreshed (Object Explorer's Refresh),
   as within a session. DDL run from Varia's query tabs marks the dataset stale and is seen.
 - **When.** Once per connection, at its first full build while the saved index can be read. A build that starts before
-  the app has told the backend where the saved index lives (just after start) loads nothing; the connection's next full
-  build does.
+  the app has told the backend where the saved index lives (just after start) loads nothing, and a build stopped while
+  it loads leaves the rest; the connection's next full build loads them.
 
 | Limit | Value |
 |---|---|

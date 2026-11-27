@@ -113,8 +113,6 @@ internal sealed partial class ObjectSearchService : IDisposable
         /// with no target and no default dataset), by project (under Gate): the next stale-only build lists the project again and
         /// reads every dataset in it whole.</summary>
         public readonly Dictionary<string, long> StaleProjects = new(StringComparer.Ordinal);
-        /// <summary>The newest stale mark not yet spent, or null: index status carries it so the renderer asks a stale-only
-        /// build once per new mark (never again for a mark a failed read left).</summary>
         /// <summary>BigQuery reads loaded from the saved index that no listing has checked yet, by key, with the file each came
         /// from (under Gate): the status says how old they are while the build that checks them runs.</summary>
         public readonly Dictionary<string, (DatabaseIndex Read, SavedUnit Unit)> Saved = new(StringComparer.Ordinal);
@@ -123,6 +121,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         /// <summary>When the oldest of <see cref="Saved"/> was read, and as the status's text (read by the progress without Gate).</summary>
         public DateTime? SavedAt;
         public volatile string? SavedAtText;
+        /// <summary>The newest stale mark not yet spent, or null: index status carries it so the renderer asks a stale-only
+        /// build once per new mark (never again for a mark a failed read left).</summary>
         public long? StaleMark => Stale.Count + StaleProjects.Count == 0 ? null : Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max());
     }
 

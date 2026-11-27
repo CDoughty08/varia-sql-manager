@@ -24,6 +24,8 @@ internal static class BigQueryReloadChecks
     {
         await Sessions(check);
         await StaleMarked(check);
+        await MarkedElsewhere(check);
+        await StoppedWhileLoading(check);
         await Damaged(check);
         await Budget(check);
     }
@@ -295,6 +297,62 @@ internal static class BigQueryReloadChecks
         check(search.SavedLoads is { Stale: 1, Loaded: 3 } && source.TablesOf.GetValueOrDefault(Billing + ".sales") == 3 && source.RoutineCalls == 1 && source.TableCalls == 3,
             "a dataset DDL marked stale is not loaded from its file: it is read again whole, and only it");
         check(Hits(search, id, "orders") >= 1 && Unit(search, Billing, "sales") is not null, "and the read after the mark is saved");
+    }
+
+    // ---- DDL from another connection of the principal, after a dataset loaded ----
+
+    private static async Task MarkedElsewhere(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        source.Reset();
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        var listing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.OnDatasets = async (_, token) => { listing.TrySetResult(); await release.Task.WaitAsync(token); };
+        var build = Build(search, source, id);
+        await listing.Task;
+        // Another connection's DDL marks only the store (MarkSavedStale), never this connection's own marks.
+        search.MarkSavedStale(Principal, Billing, "ops");
+        release.SetResult();
+        await build;
+        source.OnDatasets = null;
+        await search.Store.Idle();
+        check(search.SavedLoads is { Loaded: 4, Unchanged: 3 } && source.TablesOf.GetValueOrDefault(Billing + ".ops") == 2 && source.TableCalls == 2,
+            "a loaded dataset that another connection's DDL marks stale is read whole by its listing, and only it");
+        check(Unit(search, Billing, "ops") is { } saved && BigQuerySync.From(saved.Sync) is { Whole: true }, "and the read after the mark is saved");
+    }
+
+    // ---- A build stopped while it loads leaves the rest to the next ----
+
+    private static async Task StoppedWhileLoading(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        source.Reset();
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        using var stop = new CancellationTokenSource();
+        var loads = 0;
+        search.SavedLoading = (_, _) => { if (++loads == 2) stop.Cancel(); };
+        try { await Build(search, source, id, stop.Token); } catch (Exception error) when (error is OperationCanceledException or RequestException) { }
+        search.SavedLoading = null;
+        source.Reset();
+        await Build(search, source, id);
+        await search.Store.Idle();
+        check(source.TableCalls == 0 && source.RoutineCalls == 0 && Hits(search, id, "t3") == 1,
+            "a build stopped while it loaded the saved index leaves the rest to the next full build, which loads it");
     }
 
     // ---- Corrupt files and another key's file ----

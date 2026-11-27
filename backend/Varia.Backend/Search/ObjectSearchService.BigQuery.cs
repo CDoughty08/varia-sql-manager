@@ -556,8 +556,10 @@ internal sealed partial class ObjectSearchService
                     throw new OperationCanceledException(loop);
                 }
                 var key = project + "\u0001" + dataset;
-                var force = (scope is not null && !missingOnly) || marked || stale.Contains(target);
                 var earlier = state.Index.Get(key);
+                // DDL from another connection of the principal marks only the store: a held read it postdates is read whole.
+                var force = (scope is not null && !missingOnly) || marked || stale.Contains(target)
+                    || earlier is not null && state.Index.Sink?.Scope is { } sinkScope && Store.MarkedSince(sinkScope, earlier);
                 var carried = BigQueryEntries.Known(earlier, definitions, carry: true);
                 var listed = BigQueryEntries.FromListing(listing);
                 // What pass 2 reads: every object with details that this build may not reuse: one the earlier read did not read

@@ -17,6 +17,9 @@ internal sealed partial class ObjectSearchService
 {
     private long savedLoaded, savedRefused, savedBudget, savedStale, savedUnchanged, savedPruned;
 
+    /// <summary>Checks: called with a saved dataset's project and name just before it is loaded.</summary>
+    internal Action<string, string>? SavedLoading { get; set; }
+
     internal SavedLoadCounts SavedLoads => new(Interlocked.Read(ref savedLoaded), Interlocked.Read(ref savedRefused), Interlocked.Read(ref savedBudget),
         Interlocked.Read(ref savedStale), Interlocked.Read(ref savedUnchanged), Interlocked.Read(ref savedPruned));
 
@@ -44,6 +47,22 @@ internal sealed partial class ObjectSearchService
             if (!Store.Configured || Store.Mode is not (IndexStoreMode.Encrypted or IndexStoreMode.ClearText)) return byProject;
             state.SavedLooked = true;
         }
+        try
+        {
+            return LoadSaved(state, owner, scope, billing, starred, allProjects, token);
+        }
+        catch (OperationCanceledException)
+        {
+            // A build stopped or replaced while it loaded leaves the rest to the next full build (what landed stays held).
+            lock (state.Gate) state.SavedLooked = false;
+            throw;
+        }
+    }
+
+    private Dictionary<string, List<SavedUnit>> LoadSaved(State state, CancellationTokenSource owner, IndexStoreScope scope, string billing, IReadOnlySet<string> starred,
+        bool allProjects, CancellationToken token)
+    {
+        var byProject = new Dictionary<string, List<SavedUnit>>(StringComparer.Ordinal);
         // Marks made after this are DDL the listed files may predate.
         var since = Store.StaleSeq;
         var units = Store.List(scope, out var unreadable, token);
@@ -78,6 +97,7 @@ internal sealed partial class ObjectSearchService
                 if (!ReferenceEquals(state.Build, owner)) throw new OperationCanceledException(token);
                 if (!Standing()) { Interlocked.Increment(ref savedStale); continue; }
             }
+            SavedLoading?.Invoke(project, dataset);
             var loaded = Store.Load(unit, state.Index, Limits, pool, discovered: discovered, childrenFallback: true, token: token);
             if (loaded.Value is not { } read)
             {
@@ -95,6 +115,8 @@ internal sealed partial class ObjectSearchService
             }
             // The read compares a later listing with what its file says (it is the file's: a load is never saved again).
             read.Sync = unit.Sync;
+            // As a read begun now: DDL any connection of the principal marks after this has its listing read the dataset whole.
+            read.StaleSeen = since;
             var held = false;
             lock (state.Gate)
             {

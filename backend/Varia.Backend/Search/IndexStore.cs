@@ -361,6 +361,13 @@ internal sealed class IndexStore : IDisposable
         if (dataset is not null) Drop(scope, IndexUnitKind.Dataset, project, dataset);
     }
 
+    /// <summary>Whether DDL from any connection of the principal marked <paramref name="read"/>'s dataset or project stale after
+    /// the read began (its <see cref="DatabaseIndex.StaleSeen"/>): a held read so marked is read whole again.</summary>
+    public bool MarkedSince(IndexStoreScope scope, DatabaseIndex read)
+    {
+        lock (gate) return Stale(scope, read);
+    }
+
     /// <summary>Whether DDL marked <paramref name="read"/>'s dataset or project stale after the read began (under the gate).</summary>
     private bool Stale(IndexStoreScope scope, DatabaseIndex read)
     {
