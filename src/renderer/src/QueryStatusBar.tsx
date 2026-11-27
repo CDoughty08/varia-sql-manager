@@ -90,7 +90,9 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
     const statusTargets: MultiQueryStatusTarget[] = multiResolved.map(item => {
       const liveState = item.target.connectionId
         ? query?.multiTargets?.find(state => state.connectionId === item.target.connectionId)
-        : query?.multiTargets?.find(state => state.label === item.name)
+        : item.target.targetId
+          ? query?.multiTargets?.find(state => state.targetKey === item.target.targetId)
+          : undefined
       return {
         provider: item.target.provider,
         connected: item.live,
