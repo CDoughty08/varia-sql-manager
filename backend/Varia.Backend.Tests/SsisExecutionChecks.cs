@@ -32,7 +32,7 @@ internal static class SsisExecutionChecks
         var statements = SsisSql.Execution(catalog);
         var runs = SsisSql.PackageRuns(catalog);
         var problems = statements.Concat(runs).SelectMany((statement, index) => SsisSql.Lint(statement.Text, statement.List).Select(problem => "#" + index + ": " + problem)).ToList();
-        check(statements.Length == 9 && statements.Select(statement => statement.List).SequenceEqual([false, false, true, true, true, true, true, false, true]) && problems.Count == 0
+        check(statements.Length == 10 && statements.Select(statement => statement.List).SequenceEqual([false, false, true, true, true, true, true, false, true, false]) && problems.Count == 0
             && statements[0].Text.Contains("SELECT @folder = e.folder_name, @project = e.project_name, @package = e.package_name FROM [catalog].[executions] AS e WHERE e.execution_id = @execution_id;", StringComparison.Ordinal)
             && statements[1].Text.Contains("FROM [catalog].[executions] AS e WHERE e.execution_id = @execution_id;", StringComparison.Ordinal)
             && statements[2].Text.Contains("COUNT_BIG(*) FROM [catalog].[event_messages] AS m WHERE m.operation_id = @execution_id GROUP BY m.message_type", StringComparison.Ordinal)
@@ -44,9 +44,12 @@ internal static class SsisExecutionChecks
             && statements[6].Text.Contains("(SELECT TOP (@runs) e.execution_id", StringComparison.Ordinal) && statements[6].Text.Contains("e.execution_id <= @execution_id", StringComparison.Ordinal)
             && statements[7].Text.Contains("e.execution_id > @execution_id ORDER BY e.execution_id;", StringComparison.Ordinal)
             && statements[8].Text.Contains("e.status = @succeeded AND e.execution_id < @execution_id", StringComparison.Ordinal) && statements[8].Text.Contains("s.execution_result = 0", StringComparison.Ordinal)
+            && statements[8].Text.Contains("SUM(CAST(s.execution_duration AS bigint))", StringComparison.Ordinal) && statements[8].Text.Contains("GROUP BY s.execution_id, x.executable_id", StringComparison.Ordinal)
+            && statements[9].Text.Contains("TOP (1)", StringComparison.Ordinal) && statements[9].Text.Contains("m.message_type IN (120)", StringComparison.Ordinal)
+            && statements[9].Text.EndsWith("ORDER BY m.message_time ASC, m.event_message_id ASC;", StringComparison.Ordinal)
             && runs.Length == 1 && runs[0].List && runs[0].Text.Contains("m.message_type IN (120)", StringComparison.Ordinal) && runs[0].Text.Contains("m.message_type IN (110)", StringComparison.Ordinal)
             && runs[0].Text.EndsWith("e.package_name = @package ORDER BY e.execution_id DESC;", StringComparison.Ordinal)
-            && SsisSql.All(catalog.Views).Count(item => item.Id.StartsWith("execution #", StringComparison.Ordinal)) == 9
+            && SsisSql.All(catalog.Views).Count(item => item.Id.StartsWith("execution #", StringComparison.Ordinal)) == 10
             && SsisSql.All(catalog.Views).Count(item => item.Id.StartsWith("packageRuns #", StringComparison.Ordinal)) == 1,
             "the run page's batch looks up the package, reads the execution, counts its messages by type, lists the newest messages of the types whose bit is on and of @source's task, "
             + "the executables with their statistics summed, the parameters (a sensitive value never read), the package's runs up to this one and the next, and the usual durations' history; "

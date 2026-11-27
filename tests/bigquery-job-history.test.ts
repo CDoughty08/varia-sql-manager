@@ -299,7 +299,7 @@ describe('Job History documents', () => {
     expect(restore).toHaveBeenCalledTimes(1)
   })
   it('open the job\'s whole SQL in a new tab, and Re-run executes it there unless the SQL was cut', async () => {
-    const { service, grid, api, queries, documents } = history()
+    const { service, grid, api, queries, documents, results } = history()
     const id = service.open('bq1')
     service.attachGrid(id, grid as unknown as LiveGrid)
     grid.select(cells({ mine: '0', user: 'ben@example.com' }))
@@ -320,6 +320,17 @@ describe('Job History documents', () => {
     api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ dataset: 'other-project.sales' }) })
     await service.openSql(id, false)
     expect(documents.active).toMatchObject({ database: '' })
+    // Re-run of a job whose default dataset was in another project opens without executing, so unqualified names never hit the connection's default dataset.
+    documents.activate(id)
+    api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ sql: 'SELECT amount FROM invoices', dataset: 'external-prod.finance_archive' }) })
+    await service.openSql(id, true)
+    service.answerConfirm(id, true)
+    await settled()
+    expect(documents.active).toMatchObject({ database: '' })
+    expect(documents.getModel(documents.active!.id)?.getValue()).toBe('SELECT amount FROM invoices')
+    expect(execute).not.toHaveBeenCalled()
+    expect(service.get(id)?.notice).toEqual({ tone: 'info', text: jobHistoryText.externalDataset('external-prod.finance_archive') })
+    expect(results.getSnapshot()[documents.active!.id]?.messages.map(message => message.text)).toContain(jobHistoryText.externalDataset('external-prod.finance_archive'))
     // Re-run of another user's job asks first, naming the job and its user; the tab opens and runs only on Re-run.
     documents.activate(id)
     const tabs = documents.getSnapshot().documents.length

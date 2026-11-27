@@ -105,7 +105,8 @@ describe('environment in the connection options', () => {
     const production = { id: crypto.randomUUID(), options: { ...base, environment: 'Production' }, favorite: true, registered: false }
     const staging = { id: crypto.randomUUID(), options: { ...base, database: 'master', environment: 'Staging' }, favorite: true, registered: false }
     const profiles = [staging, production], keys = new Map(profiles.map(profile => [profile.id, entryKey(profile.options)]))
-    expect(savedEntry(profiles, keys, { ...base, server: ' SQL-PROD-01 ', database: 'SALES' })).toBe(production)
+    expect(savedEntry(profiles, keys, { ...base, server: ' SQL-PROD-01 ', database: 'Sales' })).toBe(production)
+    expect(savedEntry(profiles, keys, { ...base, database: 'SALES' })).toBeUndefined()
     expect(savedEntry(profiles, keys, { ...base, database: 'master', displayName: 'Other name', environment: 'Test' })).toBe(staging)
     expect(savedEntry(profiles, keys, { ...base, database: 'Other' })).toBeUndefined()
     // An incomplete form names none.

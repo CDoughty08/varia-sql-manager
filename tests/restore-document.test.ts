@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
 import { restoreMessages, type BackupSetRow, type RestoreModel, type RestoreServerFacts } from '../src/shared/actions/restore'
-import type { RestoreRequest } from '../src/shared/actions/restore-schema'
+import { restoreOptionsProblems, type RestoreRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionScriptResult } from '../src/shared/actions/schema'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
-import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
+import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, restoreToText, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
 import { restorePreviewDelayMs, restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
 import { restoreTestHook } from '../src/renderer/src/restore/test-hook'
 import { coverage, followPoint, stepPoint, timeMs, timelineWindow, timeText } from '../src/renderer/src/restore/timeline'
@@ -301,6 +301,28 @@ describe('Restore Database as a document', () => {
     restore.updateDraft(id, { restoreAs: { Sales: 'L:\\LOG\\Sales_copy_log.ldf' } })
     expect(fileRows(state().draft!, state().facts).map(item => item.problem)).toEqual(['Another file is restored to this path.', 'Another file is restored to this path.'])
     expect(draftProblems(state().draft!, state().facts).files).toHaveLength(2)
+    // Forward-slash and backslash Windows spellings of the same file are detected as duplicates.
+    restore.updateDraft(id, { restoreAs: { Sales: 'C:\\Data\\sales.mdf', Sales_log: 'C:/Data/sales.mdf' } })
+    expect(fileRows(state().draft!, state().facts).map(item => item.problem)).toEqual(['Another file is restored to this path.', 'Another file is restored to this path.'])
+    // A valid logical file name matching an Object.prototype property (e.g. constructor) does not break Restore As lookup.
+    const protoFacts = { ...state().facts, files: [{ ...state().facts.files[0], logical: 'constructor' }] }
+    const protoRow = fileRows({ ...state().draft!, restoreAs: {} }, protoFacts)[0]
+    expect(protoRow.typed).toBe(false)
+    expect(protoRow.problem).toBeUndefined()
+    // When a later copy-only log is skipped, Restore to names the latest supported recovery point rather than calling the older set the last backup.
+    const copyOnlyLog = { ...history[0], id: uuid(99), name: 'copy_log', firstLsn: '68800001', lastLsn: '70000001', checkpointLsn: '70000001', finish: '2026-10-29T21:06:00', start: '2026-10-29T21:06:00', copyOnly: true }
+    const copyFacts = { ...state().facts, sets: [copyOnlyLog, ...state().facts.sets] }
+    const copyDraft = { ...state().draft!, stopAt: undefined }
+    expect(restoreToText(copyDraft, copyFacts, draftPlan(copyDraft, copyFacts))).toBe('Latest supported recovery point (2026-10-29 21:05:46; skips later copy-only log)')
+    // Under Manual Selection, unchecking a later normal log does not mislabel the older set as the latest supported recovery point.
+    const manualDraft = { ...copyDraft, manual: [history[2].id] }
+    expect(restoreToText(manualDraft, copyFacts, draftPlan(manualDraft, copyFacts))).toBe('The last backup taken (2026-10-29 21:05:44)')
+    // Mixed-slash UNC MOVE paths normalize to the same Windows path and are rejected as duplicates.
+    expect(restoreOptionsProblems({
+      sets: [{ id: history[2].id, devices: history[2].devices, file: 1, type: 'full' }],
+      relocate: [{ logical: 'Sales', physical: '/\\files\\share\\same.mdf' }, { logical: 'Sales_log', physical: '\\\\files\\share\\same.mdf' }],
+      replace: false, recovery: 'recovery', keepReplication: false, restrictedUser: false, closeConnections: false
+    }).some(problem => problem.path === 'relocate')).toBe(true)
   })
   it('says when the server goes while it reads, and the test hook opens it only on a live connection', async () => {
     const { restore, state, connections } = opened()

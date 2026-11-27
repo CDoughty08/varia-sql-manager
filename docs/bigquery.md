@@ -177,10 +177,13 @@ BigQuery's rule refuses are dropped, and a location that is not a location id is
 ## Execution
 
 `query.execute` on a BigQuery handle runs the editor's text as one query job (`SqlService.BigQueryExecution.cs`). It
-takes an optional `dataset` (the query's default dataset; the connection's when absent) and ignores `database`. SQL
-Server's options (stop on error, actual and live plans, client statistics) are refused with `UNSUPPORTED_PROVIDER`, in
-main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
-and leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens Connect and, once the
+takes an optional `dataset` (the query's default dataset; the connection's when absent) or `noDefaultDataset: true`
+(explicitly clears the connection's default dataset; mutually exclusive with `dataset` and refused on SQL Server) and
+ignores `database`. SQL Server's options (stop on error, actual and live plans, client statistics) are refused with
+`UNSUPPORTED_PROVIDER`, in main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A
+BigQuery query tab sends its dataset (or `noDefaultDataset: true` when the user cleared the connection's default) and
+leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens
+Connect and, once the
 connection is ready, runs the query as a SQL Server tab does, through the same estimate and cost prompt. A restored tab whose job has
 not re-attached yet only attaches, so that job's session and results come back first; Execute then runs as usual.
 
@@ -848,8 +851,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
     cost prompts. **Re-attach** on a running one does the same and adopts its session, so Stop cancels it. A tab that
     already holds the job is focused instead. Both need the job's creator, who alone can read its result table.
   - **Open SQL in New Tab** and **Re-run** open the job's whole SQL in a new query tab on the connection, with the job's
-    default dataset when it is in the billing project; Re-run then executes it with the usual cost prompts, unless the SQL
-    was longer than Varia reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
+    default dataset when it is in the billing project. When the job's default dataset lived in another project, the tab
+    opens with no default dataset and a notice instead of executing, so unqualified table names never fall back to the
+    connection's dataset; otherwise Re-run executes it with the usual cost prompts, unless the SQL was longer than Varia
+    reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
     or CREATE OR REPLACE TABLE, a script, or a statement BigQuery did not name) and when another user ran it (it runs as you); the cost prompts name the job too
     ("Re-run this job?"). Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
     Cancel Executing Query.

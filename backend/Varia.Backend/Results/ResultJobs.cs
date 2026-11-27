@@ -743,7 +743,7 @@ internal sealed class ResultJobs(ResultStore store)
         {
             token.ThrowIfCancellationRequested();
             var (from, to) = Within(page, first, last);
-            var view = PageView.Parse(room.Body(page), set.Columns.Count, scratch);
+            var view = PageView.Parse(room.Body(page), set.Columns.Count, scratch).With(page.Lengths);
             for (var row = from; row <= to; row++)
             {
                 if (index is null) { writer.Row(view, row, columns); continue; }

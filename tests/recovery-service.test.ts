@@ -222,6 +222,31 @@ describe('AutoRecover in the workbench', () => {
     } finally { fixture.dispose() }
   })
 
+  it('rewrites an AutoRecover copy when the tab name or database changes without a text edit', async () => {
+    const fixture = workbenchFixture()
+    try {
+      const { api, documents, recovery, targets } = fixture
+      fixture.connect(connectionInfo('c1'))
+      const tab = documents.create('before.sql', 'SELECT 1', 'Sales', 'c1')
+      fixture.model(tab.id).edit('SELECT 2')
+      await recovery.flush()
+      expect(api.writeRecovery).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'before.sql', server: 'c1.example', database: 'Sales', text: 'SELECT 2' }))
+      documents.rename(tab.id, 'after.sql')
+      targets.changeDatabase(tab.id, 'Payroll')
+      await recovery.flush()
+      expect(api.writeRecovery).toHaveBeenCalledTimes(2)
+      expect(api.writeRecovery).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'after.sql', server: 'c1.example', database: 'Payroll', text: 'SELECT 2' }))
+      // A second flush with unchanged metadata is a no-op.
+      await recovery.flush()
+      expect(api.writeRecovery).toHaveBeenCalledTimes(2)
+      // Resuming a copy after a reload (without verified metadata) refreshes the same copy on the next flush.
+      const reloaded = documents.create('renamed.sql', 'SELECT 2', 'Payroll', 'c1', true)
+      recovery.resume(reloaded.id, 'r-reloaded')
+      await recovery.flush()
+      expect(api.writeRecovery).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r-reloaded', name: 'renamed.sql', server: 'c1.example', database: 'Payroll', text: 'SELECT 2' }))
+    } finally { fixture.dispose() }
+  })
+
   it('opens what it can take, and reports the rest in the file banner', async () => {
     const fixture = workbenchFixture({ recovery: [entry('r1', 'a.sql'), entry('r2', 'b.sql')] })
     try {
