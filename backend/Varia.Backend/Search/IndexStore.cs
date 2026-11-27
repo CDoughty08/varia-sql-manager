@@ -154,6 +154,8 @@ internal sealed class IndexStore : IDisposable
     }
 
     internal IndexStoreMode? Mode { get { lock (gate) return open?.Mode; } }
+    /// <summary>Whether the store saves and reads now (encrypted, or clear text by choice).</summary>
+    public bool Saves => Active() is not null;
     /// <summary>Whether main has configured the store (it then knows its folder, and Clear can delete).</summary>
     public bool Configured { get { lock (gate) return open is not null && !disposed; } }
     /// <summary>Whether the store was stopped (the checks wait on it).</summary>

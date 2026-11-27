@@ -73,6 +73,13 @@ internal static class ExplorerLiveChecks
         }
         var options = service.Explorer.Options;
         var major = int.Parse(info.ServerVersion.Split('.')[0]);
+        if (Environment.GetEnvironmentVariable("VARIA_TEST_SEARCH_RELOAD_ONLY") == "1" && Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") == "1")
+        {
+            // Only the saved-index reload checks, on their own scratch database (docs/testing.md, Scratch).
+            await SearchReloadLiveChecks.RunAsync(check, service, info.Id, (text, database) => Sql(text, database),
+                "VariaScratch_" + DateTime.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture) + "_" + Guid.NewGuid().ToString("N")[..8]);
+            return;
+        }
 
         check(info.ProductVersion is { Length: > 0 } && info.Login is { Length: > 0 } && info.EngineEdition is > 0, "connect probes the server profile: product version, login and engine edition");
         bool linux;
@@ -366,6 +373,7 @@ internal static class ExplorerLiveChecks
         await using var scratch = await ScratchDatabase.CreateAsync(sql, Path.Combine(AppContext.BaseDirectory, "Fixtures"));
         Console.WriteLine("Created the Object Explorer scratch database in " + watch.ElapsedMilliseconds + " ms.");
         await SearchLiveChecks.RunAsync(check, service, client.ConnectionId, json, sql, scratch.Name, scratch.OwnLogin);
+        await SearchReloadLiveChecks.RunAsync(check, service, client.ConnectionId, sql, scratch.Name);
         await PeekLiveChecks.ScratchAsync(check, service, client.ConnectionId, scratch.Name, scratch.Major, sql, json, scratch.CreateMemoryOptimizedAsync, scratch.DropMemoryOptimizedAsync,
             scratch.OwnLogin);
         var major = scratch.Major;

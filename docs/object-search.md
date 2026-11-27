@@ -46,7 +46,8 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
 - **Lifetime.** Held in backend memory, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
   Rebuild Search Index, dropped on disconnect or backend exit. What a build reads is also saved to disk
   ([Saved index](#saved-index)); a BigQuery connection's first build reads its saved datasets back before anything else, and
-  a SQL Server connection does not read its saved index back yet. With the setting off nothing else builds one: the search
+  a SQL Server connection's first build reads back each database whose fingerprint still matches
+  ([Reloading a SQL Server index](#reloading-a-sql-server-index)). With the setting off nothing else builds one: the search
   says "This server has no index yet." with **Build index** (**Build indexes** on All servers).
 - **Progress.** The status bar shows "Indexing objects N / M" and Stop (a BigQuery build names its pass instead; see
   BigQuery below). A newer build of the same connection stops the older one.
@@ -75,7 +76,7 @@ Each hit carries Object Explorer's ref and folder, so it can be revealed and scr
 | Server | Every database (under Databases, System Databases or Database Snapshots, any state); on box editions and Managed Instance also logins, server roles, credentials, cryptographic providers, audits, server audit specifications, backup devices, linked servers and server triggers. |
 | Database | Users, database and application roles, schemas, assemblies, asymmetric and symmetric keys, certificates, column master and encryption keys, database audit specifications, database triggers, external data sources and file formats, full-text catalogs and stoplists, partition schemes and functions, search property lists, plan guides. |
 | Schema | Tables (in Tables, FileTables, External Tables, Graph Tables or Dropped Ledger Tables), views, synonyms, procedures (T-SQL, CLR, extended, replication-filter), scalar, table-valued and aggregate functions, sequences, user-defined data and CLR types, table types, XML schema collections, rules, defaults, security policies. |
-| Children | Columns, keys, constraints, DML triggers, indexes, statistics and parameters under their table, view, table type, procedure or function, only where Object Explorer lists such a folder. Label `schema.parent.name`; the hit names the parent's folder. Columns are those the Columns folder shows (no graph hidden or dropped ledger columns), and system functions' columns and parameters are left out. |
+| Children | Columns, keys, constraints, DML triggers, indexes, statistics (not the ones SQL Server creates by itself, `_WA_Sys_...`) and parameters under their table, view, table type, procedure or function, only where Object Explorer lists such a folder. Label `schema.parent.name`; the hit names the parent's folder. Columns are those the Columns folder shows (no graph hidden or dropped ledger columns), and system functions' columns and parameters are left out. |
 | SQL Server Agent | On SQL Server connections: the jobs the login may read in `msdb.dbo.sysjobs_view` (none, and no error, for a login in no Agent role), and where msdb lets it read them (SQLAgentOperatorRole or sysadmin) operators and, where the Alerts folder is served (Windows), alerts. They name no database and reveal below the server's SQL Server Agent node. |
 | History tables | A temporal or ledger history table and its columns, indexes and statistics name the table whose history row shows it, and Reveal walks there. A dropped ledger table's history is left out. |
 
@@ -262,8 +263,9 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 
 Every part of an index is saved to disk as soon as it has been read, so that an index need not be read from its server
 again after a restart. A BigQuery connection reads its saved index back at once ([Reloading a BigQuery
-index](#reloading-a-bigquery-index)); a SQL Server connection still builds its index from the server each time, and
-reading it back after a check against the server comes with a later change.
+index](#reloading-a-bigquery-index)); a SQL Server connection reads a saved database back only after a check against the
+server says it is unchanged, or reads again only what changed ([Reloading a SQL Server
+index](#reloading-a-sql-server-index)).
 
 - **What a file is.** One unit of an index: a SQL Server database's read, a server's own objects, SQL Server Agent's
   objects, a BigQuery dataset's read, or a shared set of system objects. Each is a file of its own
@@ -380,6 +382,43 @@ makes any call, and its listings then check it:
 - **When.** Once per connection, at its first full build while the saved index can be read. A build that starts before
   the app has told the backend where the saved index lives (just after start) loads nothing, and a build stopped while
   it loads leaves the rest; the connection's next full build loads them.
+
+### Reloading a SQL Server index
+
+A saved SQL Server database is never searchable before the server has confirmed it. A connection's first build checks each
+database it would read, before reading it, in up to three steps of constant catalog SQL that a login able to read the
+database's catalog can run:
+
+- **Fingerprint.** One row: the database's identity (its id, creation time, Service Broker GUID and collation) and the
+  count, latest change and checksum of its objects, users, roles, schemas, keys and the rest of what the index names,
+  user types (a type created again under its name counts as changed), DDL triggers, plan guides and the statistics the index keeps. Another database under the same name (dropped
+  and created again, or restored over it) is read whole, as is a file saved with another **Index module definitions**
+  or children setting, or one with no fingerprint this version reads. The fingerprint reads committed catalog rows (it waits
+  on DDL still open), and a read is saved with its fingerprint only when one taken after the read is the same; otherwise
+  it is saved with none, and the next build reads it whole.
+- **Unchanged.** A database whose fingerprint matches is held from its file as it was saved. Nothing else is read from
+  it, and its file is not written again, only marked used. One saved with definitions left out for memory is read whole
+  instead once there is room for them.
+- **Changed.** Otherwise the build lists the database's objects (each id, parent, last change and a checksum of its name,
+  schema, type and statistics) and compares them with the list saved beside the file. Only new and changed objects, a
+  changed child's parent, and their children and definitions are read again; dropped ones are dropped, and the rest keep
+  what the file held. The file is then saved in place. A database is read whole instead when the objects to read again
+  (the changed ones with their children) number more than 20,000, or more than 256 and more than a quarter of its objects; when its file left definitions out for memory; or when its
+  compatibility level is below 130 (the selective read needs `OPENJSON`). Table types are always read again whole.
+- **Failures are values.** A fingerprint, listing or selective read that fails, is denied or takes too long (15 seconds
+  for the fingerprint, a third of the database's read budget for the listing and selective read) reads the database whole as if nothing were saved; a file that does not open or does not load is
+  read whole too. Each is counted, and the build never fails for one.
+- **When.** At a connection's first build of a database, while the index holds nothing for it. A database already held
+  (read or loaded this session) is not checked again until it is read again: Object Explorer's Refresh, or Rebuild
+  Search Index. The server's own objects and SQL Server Agent's jobs are each one cheap read, so they are always read
+  from the server.
+- **What the fingerprint misses.** A grant or revoke of VIEW DEFINITION or of column permissions that shows or hides a
+  definition or column without changing which objects the login sees; a change to the `microsoft_database_tools_support`
+  extended property (which hides an object); a foreign key's referenced table, or a history table's current table, that
+  becomes visible to the login while the key's own table (or the history table) stays as it was; DDL that another session runs in a transaction while the
+  database is being read and rolls back before the read ends (the catalog is read uncommitted); and a change whose hashes collide (the fingerprint sums the first four bytes of each
+  row's SHA-256; a listing row's checksum is BINARY_CHECKSUM, a weak hash). Each is seen when the database is refreshed. Checked live on SQL Server 2025 only; the SQL is written for 2016
+  and later.
 
 | Limit | Value |
 |---|---|
