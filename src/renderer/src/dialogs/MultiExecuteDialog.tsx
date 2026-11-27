@@ -6,6 +6,7 @@ import { environmentPreset } from '../../../shared/environments'
 import { classifyStatements, type StatementClassification } from '../../../shared/multi-query'
 import type { ProviderId } from '../../../shared/providers'
 import { focusToReturn, isElement, returnFocusTo } from '../core/focus'
+import { useOptionalWorkbench } from '../core/WorkbenchContext'
 import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
 import DialogFooter from '../kit/DialogFooter'
@@ -68,9 +69,11 @@ export function transactionDisableReason(
   hasEmulator: boolean,
   startLine?: number
 ): string | undefined {
+  const lineOffset = Math.max(0, (startLine ?? 1) - 1)
+  const formatLocation = (statement: StatementClassification['firstBlockingStatement']) =>
+    statement ? `Line ${statement.line + lineOffset}: ${statement.keyword}` : undefined
   const blocker = classification.firstBlockingStatement
-  const line = blocker ? blocker.line + Math.max(0, (startLine ?? 1) - 1) : undefined
-  const location = blocker && line !== undefined ? `Line ${line}: ${blocker.keyword}` : undefined
+  const location = formatLocation(blocker)
   if (provider === 'sqlserver') {
     if (!classification.hasNonTransactionalTSql) return undefined
     return location
@@ -81,8 +84,9 @@ export function transactionDisableReason(
     return 'BigQuery emulator connections do not support multi-statement session transactions.'
   }
   if (classification.hasBigQueryPermanentDdl) {
-    return location
-      ? `Script contains permanent BigQuery DDL (${location}). BigQuery prohibits permanent DDL inside multi-statement transactions. Pre-flight Dry Run (free) and Sequential rollout are pre-selected below.`
+    const ddlLocation = formatLocation(classification.statements.find(s => s.permanentDdl) ?? blocker)
+    return ddlLocation
+      ? `Script contains permanent BigQuery DDL (${ddlLocation}). BigQuery prohibits permanent DDL inside multi-statement transactions. Pre-flight Dry Run (free) and Sequential rollout are pre-selected below.`
       : 'Script contains permanent BigQuery DDL. BigQuery prohibits permanent DDL inside multi-statement transactions. Pre-flight Dry Run (free) and Sequential rollout are pre-selected below.'
   }
   if (classification.blocksBigQueryTransaction) {
@@ -316,6 +320,11 @@ export function MultiExecuteDialogModal({
   const effectiveMode = txDisabled ? 'fireAndForget' : mode
   const submitLabel = multiExecuteSubmitLabel(effectiveMode, request.provider, request.targets.length, prodCount)
 
+  const batchTag = !isBigQuery && classification.batchCount > 1 ? `${classification.batchCount} batches` : undefined
+  const detectedTags = batchTag && !classification.tags.includes(batchTag)
+    ? [batchTag, ...classification.tags]
+    : classification.tags
+
   const txDescription = isBigQuery
     ? 'Opens an ephemeral BigQuery session with BEGIN TRANSACTION on each project. Waits at the commit barrier and commits all only if every project succeeds — otherwise rolls back and aborts sessions.'
     : 'Opens a local transaction (SET XACT_ABORT ON; BEGIN TRANSACTION) on each SQL Server in parallel (no MSDTC). Waits at the commit barrier and commits all only if every server succeeds — otherwise rolls back all peers.'
@@ -382,13 +391,10 @@ export function MultiExecuteDialogModal({
             )}
           </div>
 
-          {(classification.tags.length > 0 || (!isBigQuery && classification.batchCount > 1)) && (
+          {detectedTags.length > 0 && (
             <div className="multi-exec-detected" aria-label="Detected statements">
               <span className="multi-exec-detected-label">Detected:</span>
-              {!isBigQuery && classification.batchCount > 1 && (
-                <span className="multi-exec-stmt-tag">{classification.batchCount} batches</span>
-              )}
-              {classification.tags.map(tag => (
+              {detectedTags.map(tag => (
                 <span key={tag} className="multi-exec-stmt-tag">{tag}</span>
               ))}
             </div>
@@ -547,11 +553,17 @@ export function MultiExecuteDialogModal({
   return createPortal(dialog, ownerDocument.body)
 }
 
+const noopSubscribe = () => () => {}
+const noopSnapshot = () => undefined
+
 function TargetChip({ target }: { readonly target: MultiExecuteTargetItem }) {
+  const theme = useOptionalWorkbench()?.theme
+  useSyncExternalStore(theme?.subscribe ?? noopSubscribe, theme?.getSnapshot ?? noopSnapshot, theme?.getSnapshot ?? noopSnapshot)
+  const color = theme?.accent(target.color) ?? target.color
   const scope = target.provider === 'bigquery' ? target.dataset : target.database
   return (
     <span className="multi-exec-target-chip">
-      {target.color && <span className="multi-exec-target-dot" style={{ backgroundColor: target.color }} aria-hidden="true" />}
+      {color && <span className="multi-exec-target-dot" style={{ backgroundColor: color }} aria-hidden="true" />}
       <strong className="multi-exec-target-label">{target.label}</strong>
       {scope && <span className="multi-exec-target-scope">({scope})</span>}
       {target.environment && <EnvironmentTag environment={target.environment} place="list" about={target.label} />}

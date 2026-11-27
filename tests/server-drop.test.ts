@@ -1,7 +1,21 @@
 // @vitest-environment happy-dom
-import { describe, expect, it, vi } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SnapshotStore } from '../src/renderer/src/core/store'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { Workbench } from '../src/renderer/src/core/workbench'
 import { dropVerdict, ServerDropService, verdicts, type ServerDrag } from '../src/renderer/src/editor-groups/server-drop'
-import { placeOf } from '../src/renderer/src/editor-groups/ServerDropLayer'
+import ServerDropLayer, { placeOf } from '../src/renderer/src/editor-groups/ServerDropLayer'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const cleanups: (() => void)[] = []
+afterEach(() => {
+  cleanups.splice(0).reverse().forEach(fn => fn())
+  document.body.innerHTML = ''
+  vi.restoreAllMocks()
+})
 
 const drag: ServerDrag = { connectionId: 'reporting', label: 'REPORTING-SQL', server: 'REPORTING-SQL' }
 const databaseDrag: ServerDrag = { ...drag, database: 'AppData', label: 'AppData' }
@@ -188,5 +202,71 @@ describe('placeOf', () => {
     expect(at('line')).toMatchObject({ place: 'editor', tabId: 'q1' })
     expect(at('other')).toBeUndefined()
     expect(at('outside')).toBeUndefined()
+  })
+})
+
+describe('ServerDropLayer DropCard preview', () => {
+  it('R5 D2 #1: previews existing multi-target database/dataset on addTarget by connectionId or targetId, while letting drag.database override', async () => {
+    const connectionsStore = new SnapshotStore([
+      { id: 'sql-1', targetId: 'target-sql-1', server: 'SQL-01', database: 'master', options: {} },
+      { id: 'sql-2', targetId: 'target-sql-2', server: 'SQL-02', database: 'SalesDefault', options: {} },
+      { id: 'bq-1', targetId: 'target-bq-1', providerId: 'bigquery', server: 'bq-proj', database: 'analytics_default', options: { provider: 'bigquery' } }
+    ])
+    const docs = new Map([
+      ['m1', {
+        id: 'm1',
+        name: 'Multi.sql',
+        database: '',
+        multiMode: 'cross' as const,
+        multiTargets: [
+          { connectionId: 'sql-1', targetId: 'target-sql-1', provider: 'sqlserver' as const, database: 'BillingDB', enabled: false },
+          { targetId: 'target-sql-2', provider: 'sqlserver' as const, database: 'ArchiveDB', enabled: true },
+          { targetId: 'target-bq-1', provider: 'bigquery' as const, database: '', enabled: false }
+        ]
+      }]
+    ])
+    class TestDropStore<T> extends SnapshotStore<T> {
+      set(next: T) { this.publish(next) }
+    }
+    const serverDrop = new TestDropStore<{
+      drag?: ServerDrag
+      hover?: { place: 'tab'; tabId: string; verdict: typeof verdicts.addTarget; insert: boolean; rect: typeof rect }
+    }>({})
+    const workbench = {
+      serverDrop,
+      documents: { get: (id: string) => docs.get(id) },
+      connections: connectionsStore,
+      gestures: { modifiers: () => '', phrase: () => '' }
+    } as unknown as Workbench
+
+    const areaRoot = document.body.appendChild(document.createElement('div'))
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); areaRoot.remove() })
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ServerDropLayer, { root: areaRoot }) }))
+    })
+
+    const hoverWith = async (nextDrag: ServerDrag) => {
+      await act(async () => {
+        serverDrop.set({
+          drag: nextDrag,
+          hover: { place: 'tab', tabId: 'm1', verdict: verdicts.addTarget, insert: false, rect }
+        })
+      })
+      return document.body.querySelector<HTMLElement>('.server-drop-card .server-drop-note')!.textContent
+    }
+
+    // 1. Existing disabled entry matched by connectionId -> previews preserved 'BillingDB' instead of connection's 'master'.
+    expect(await hoverWith({ connectionId: 'sql-1', label: 'SQL-01', server: 'SQL-01' })).toContain('Database: BillingDB.')
+
+    // 2. Existing detached entry matched by to.targetId -> previews preserved 'ArchiveDB' instead of connection's 'SalesDefault'.
+    expect(await hoverWith({ connectionId: 'sql-2', label: 'SQL-02', server: 'SQL-02' })).toContain('Database: ArchiveDB.')
+
+    // 3. Explicit drag.database overrides existing entry's database.
+    expect(await hoverWith({ connectionId: 'sql-1', database: 'AppData', label: 'AppData', server: 'SQL-01' })).toContain('Database: AppData.')
+
+    // 4. Existing BigQuery entry with empty dataset ('') preserves 'none' instead of connection's 'analytics_default'.
+    expect(await hoverWith({ connectionId: 'bq-1', label: 'bq-proj', server: 'bq-proj' })).toContain('Default dataset: none.')
   })
 })

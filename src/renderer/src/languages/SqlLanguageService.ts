@@ -336,6 +336,9 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, token: Monaco.CancellationToken = noCancellation): Promise<FoundDefinition | null | undefined> {
     if (!this.api.languageDefinition || token.isCancellationRequested) return
     if (model.getValueLength() > languageLimits.documentCharacters) throw new Error(definitionErrors.tooLarge)
+    if (this.documents.languageContext(model, id => this.connections.isLive(id))?.suspended) {
+      throw new Error('Switch to Split view for per-dialect IntelliSense and syntax checking.')
+    }
     const capture = this.capture(model, position)
     const connectionId = capture?.request.context.connectionId
     if (!capture || !connectionId) throw new Error(definitionErrors.connectFirst)
