@@ -154,12 +154,13 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
 
   // Compact <select> when targets > 6 or inside MessagesStrip (`firstError`) so pills never wrap and crowd the strip.
   const useSelect = targets.length > 6 || !!firstError
+  const coordErrs = errorCounts.get(coordinatorFilter) ?? 0
   return <div className="messages-container" data-compact={firstError || undefined}>
     <div className="messages-filter-bar" role="region" aria-label="Filter messages by server">
       {useSelect
         ? <select className="messages-filter-select" aria-label="Filter messages by server" value={validFilter} onChange={event => setFilter(event.target.value)}>
             <option value="all">All servers ({tab.messages.length})</option>
-            {hasCoordinatorLines && <option value={coordinatorFilter}>Coordinator</option>}
+            {hasCoordinatorLines && <option value={coordinatorFilter}>Coordinator{coordErrs > 0 ? ` (${coordErrs} ${coordErrs === 1 ? 'error' : 'errors'})` : ''}</option>}
             {targets.map(target => {
               const errs = errorCounts.get(target.targetKey) ?? 0
               return <option key={target.targetKey} value={target.targetKey}>{target.label}{errs > 0 ? ` (${errs} ${errs === 1 ? 'error' : 'errors'})` : ''}</option>
@@ -167,7 +168,12 @@ export default function MessagesView({ id, tabId, tab, firstError }: { id?: stri
           </select>
         : <div className="messages-filter-pills" role="group" aria-label="Filter messages by server">
             <button type="button" className="messages-filter-pill" aria-pressed={validFilter === 'all'} onClick={() => setFilter('all')}>All</button>
-            {hasCoordinatorLines && <button type="button" className="messages-filter-pill" aria-pressed={validFilter === coordinatorFilter} onClick={() => setFilter(coordinatorFilter)}>Coordinator</button>}
+            {hasCoordinatorLines && <button type="button" className="messages-filter-pill" aria-pressed={validFilter === coordinatorFilter} data-has-error={coordErrs > 0 || undefined}
+              aria-label={coordErrs > 0 ? `Coordinator, ${coordErrs} ${coordErrs === 1 ? 'error' : 'errors'}` : undefined}
+              onClick={() => setFilter(coordinatorFilter)}>
+              <span>Coordinator</span>
+              {coordErrs > 0 && <span className="messages-filter-err" aria-hidden="true">!</span>}
+            </button>}
             {targets.map(target => {
               const errs = errorCounts.get(target.targetKey) ?? 0
               return <button key={target.targetKey} type="button" className="messages-filter-pill" aria-pressed={validFilter === target.targetKey} data-has-error={errs > 0 || undefined}

@@ -47,7 +47,8 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
       const warnings = tab.combineWarnings?.has(entry.key) ? tab.combineWarnings.get(entry.key) : tab.multi!.combineWarnings
       if (warnings && warnings.length > 0) {
         notices.push({ kind: 'combineWarning', tone: 'info', text: warnings.join(' ') })
-      } else if (!stale) {
+      }
+      if (!stale && !warnings?.some(warning => warning.startsWith('Skipped '))) {
         const slot = entry.descriptor.statementSlot ?? 0
         const k = tab.combinedCounts?.get(entry.key) ?? combinedTargetCount(tab, slot), total = tab.multi!.targets.length
         if (k < total) {
@@ -102,6 +103,7 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
           if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) actionFocus.current = false
         }}>
         <button type="button" className="multi-grid-notice-btn" disabled={!rebuilding && !canRebuild} aria-disabled={rebuilding || undefined}
+          title={!rebuilding && !canRebuild ? (running ? 'Unavailable while the query runs.' : 'At least two complete in-memory server result sets are needed to rebuild Combined.') : undefined}
           onClick={() => { if (canRebuild) void results.rebuildCombined(tabId, entry.key) }}>
           <Icon name={rebuilding ? 'loading' : 'refresh'} spin={rebuilding} /><span>{rebuilding ? 'Rebuilding…' : 'Rebuild'}</span>
         </button>

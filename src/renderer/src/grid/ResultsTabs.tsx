@@ -449,13 +449,21 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     <div className="rt-results" data-tab-row="result" onKeyDown={resultKey}>
       <div className="rt-strip" ref={stripRef} role="tablist" aria-label="Results and comparisons" onScroll={() => measureStrip(false)} onWheel={wheel}>
         {shown.map((item, place) => {
-          const on = item === items[at], others = item.group?.pivot ? ' and its Pivot' : ''
+          const on = item === items[at]
+          const itemGroups = item.combined
+            ? tab.groups.filter(gItem => gItem.table.entry.descriptor.kind === 'combined')
+            : item.targetKey
+              ? tab.groups.filter(gItem => gItem.table.entry.descriptor.targetKey === item.targetKey)
+              : item.group ? [item.group] : []
+          const pivotCount = itemGroups.filter(gItem => !!gItem.pivot).length
+          const others = pivotCount > 1 ? ' and its Pivots' : pivotCount === 1 ? ' and its Pivot' : ''
+          const stableKey = item.summary ? summaryEntryKey : item.combined ? '__combined__' : item.targetKey ? `target:${item.targetKey}` : item.key
           const batch = item.group && !item.targetKey && !item.combined ? batchText(item.group.batchNumber, item.group.iteration, tab.totalBatches) : ''
           const tip = [item.number ? `${item.name} · ${item.number}` : item.short ? item.name : item.targetPhase ? `${item.name} · ${targetPhaseInfo(item.targetPhase).label}` : '', batch].filter(Boolean).join(' · ')
           const spoken = spokenTopItem(item)
           const phase = item.targetPhase ? targetPhaseInfo(item.targetPhase) : undefined
           const needsAriaLabel = !!(item.number || item.short || item.targetKey || (item.combined && (item.statementCount ?? 0) > 1))
-          return <div key={item.key} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}
+          return <div key={stableKey} className="rt-tab" data-tab-entry={item.key} data-selected={on || undefined} data-named={item.named || undefined}
             data-summary={item.summary || undefined} data-combined={item.combined || undefined} data-target-key={item.targetKey}>
             <button type="button" role="tab" id={tabIdOf(item.key, 'result')} aria-selected={on} tabIndex={on ? 0 : -1} title={tip || undefined} {...needsAriaLabel ? { 'aria-label': spoken } : {}}
               aria-setsize={items.length} aria-posinset={first + place + 1} {...on ? { 'aria-controls': id + 'panel' } : {}} onClick={() => selectTopItem(item)}>

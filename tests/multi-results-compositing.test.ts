@@ -13,7 +13,7 @@ import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { minGridHeight, setFloors, stackLayout } from '../src/renderer/src/grid/stack'
 import ResultsTabs, { tabsFold, tabsNeed } from '../src/renderer/src/grid/ResultsTabs'
-import ResultsStack, { entryNotices, entryNoticesHeight, entryTotalBatches, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
+import ResultsStack, { EntryNoticeBars, entryNotices, entryNoticesHeight, entryTotalBatches, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
 import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRequests, pickerRows, shortenDistinct, stackReveals, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
 import { CompareService, isCrossEnginePair } from '../src/renderer/src/results/CompareService'
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
@@ -22,7 +22,7 @@ import MultiRunSummary, { normalizeMultiEnvironment } from '../src/renderer/src/
 import OutputPane, { discardNotice, hasResultsView, outputViewOf, useLayoutFocus } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
-import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, slotNamed, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
+import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, slotNamed, summaryEntryKey, turnableKinds, type TabResults } from '../src/renderer/src/results/ResultsService'
 import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -419,8 +419,8 @@ describe('ResultsTabs, ResultsStack, and result-picker', () => {
     // Notice heights are factored into tabsFold, tabsNeed, stackNeed, and settledContent.
     const combinedEntry = tab.sets.find(entry => entry.descriptor.kind === 'combined')!
     const noticeHeight = entryNoticesHeight(tab, combinedEntry)
-    expect(noticeHeight).toBe(2 * multiNoticeHeight) // rolledBack + combineWarning
-    const shortHeight = g.headerHeight + 2 * g.rowHeight + scrollbarSize() + g.stackBorder + g.resultTabsHeight + g.viewTabsHeight + multiNoticeHeight
+    expect(noticeHeight).toBe(3 * multiNoticeHeight) // rolledBack + combineWarning + partialCombine
+    const shortHeight = g.headerHeight + 2 * g.rowHeight + scrollbarSize() + g.stackBorder + g.resultTabsHeight + noticeHeight
     expect(tabsFold(shortHeight, scrollbarSize(), true, 0)).toBeUndefined()
     expect(tabsFold(shortHeight, scrollbarSize(), true, noticeHeight)).toBe('one')
 
@@ -3337,5 +3337,141 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
       combinedCounts: new Map([[combKey, 2]])
     })
     expect(partial - base).toBe(multiNoticeHeight)
+  })
+
+  it('R9 D4 #1: MultiRunSummary rollback banner distinguishes mixed committed/commitInDoubt runs from full rollback', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r9-mixed-commit.sql', 'UPDATE t SET a = 1; SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, rolledBackPreview: true })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { status: 'committed', resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { status: 'rolledBack', resultSetIds: [2] })
+        ],
+        [s1, s2],
+        { mode: 'transaction', status: 'commitInDoubt' }
+      )
+    })
+
+    const mixedHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id], active: true })
+    }))
+    const mixedBanner = mixedHost.querySelector('.multi-notice-warn')?.textContent ?? ''
+    expect(mixedBanner).toContain('Rolled back — preview only (not committed).')
+    expect(mixedBanner).not.toContain('every server transaction was rolled back')
+    expect(mixedBanner).toContain('one or more server transactions were committed or are in doubt')
+
+    // Contrast with an all-rolled-back transaction run: keeps the full rollback reassurance.
+    f.results.begin(doc.id, 'q2', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const r1 = descriptor(3, { index: 0, targetKey: 'prod-east', statementSlot: 0, rolledBackPreview: true })
+    void f.results.finish(doc.id, 'q2', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { status: 'rolledBack', resultSetIds: [3] }),
+          multiOutcome(sqlTargets[1], { status: 'failed' })
+        ],
+        [r1],
+        { mode: 'transaction', status: 'rolledBack' }
+      )
+    })
+    const allHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id], active: true })
+    }))
+    expect(allHost.querySelector('.multi-notice-warn')?.textContent).toContain('every server transaction was rolled back')
+  })
+
+  it('R9 D4 #2 & #6: entryNotices shows partialCombine alongside schema-drift warnings and gives disabled Rebuild a tooltip', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r9-notices.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { status: 'failed' })
+        ],
+        [s1, s2, comb],
+        { combineWarnings: ['Column Amount widened from int to decimal.'] }
+      )
+    })
+
+    const tab = f.results.getSnapshot()[doc.id]
+    const combEntry = tab.sets.find(entry => entry.descriptor.kind === 'combined')!
+    const notices = entryNotices(tab, combEntry)
+    expect(notices.map(n => n.kind)).toEqual(['combineWarning', 'partialCombine'])
+    expect(entryNoticesHeight(tab, combEntry)).toBe(2 * multiNoticeHeight)
+
+    // When a warning already starts with "Skipped ", partialCombine is not duplicated.
+    const skippedTab: TabResults = { ...tab, combineWarnings: new Map([[combEntry.key, ['Skipped dev-01: incompatible schema.']]]) }
+    expect(entryNotices(skippedTab, combEntry).map(n => n.kind)).toEqual(['combineWarning'])
+
+    // Removing one of the two remaining servers makes Rebuild disabled with an explanatory title.
+    const s2Key = tab.sets.find(entry => entry.descriptor.targetKey === 'prod-west')!.key
+    expect(f.results.removeEntry(doc.id, s2Key)).toBe(true)
+    const staleTab = f.results.getSnapshot()[doc.id]
+    const staleComb = staleTab.sets.find(entry => entry.descriptor.kind === 'combined')!
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(EntryNoticeBars, { tabId: doc.id, tab: staleTab, entry: staleComb, running: false })
+    }))
+    const rebuildBtn = [...host.querySelectorAll<HTMLButtonElement>('.multi-grid-notice-btn')]
+      .find(btn => btn.textContent?.includes('Rebuild'))!
+    expect(rebuildBtn.disabled).toBe(true)
+    expect(rebuildBtn.title).toContain('At least two complete in-memory server result sets')
+  })
+
+  it('R9 D4 #3 & #4: ResultsTabs preserves stable tab DOM element across statement-0 removal and notes Pivots on any statement', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r9-tabs-stable.sql', 'SELECT 1; SELECT 2;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const e0 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, name: 'First' })
+    const e1 = descriptor(2, { index: 1, targetKey: 'prod-east', statementSlot: 1, name: 'Second' })
+    const w0 = descriptor(4, { index: 3, targetKey: 'prod-west', statementSlot: 0, name: 'First' })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1, 2] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [4] })
+        ],
+        [e0, e1, w0]
+      )
+    })
+    f.results.addSet(doc.id, descriptor(3, { index: 2, kind: 'pivot', targetKey: 'prod-east', statementSlot: 1, name: 'Second Pivot' }), 'Second Pivot', ['1:2'])
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const render = () => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    render()
+
+    const eastTabBefore = host.querySelector<HTMLElement>('.rt-tab[data-target-key="prod-east"]')!
+    expect(eastTabBefore).not.toBeNull()
+    // R9 D4 #4: Close tooltip mentions Pivot even though the Pivot lives on statement 1, not statement 0.
+    const closeBtn = eastTabBefore.querySelector<HTMLButtonElement>('.rt-close')!
+    expect(closeBtn.title).toContain('and its Pivot')
+
+    // R9 D4 #3: Removing statement 0 updates data-tab-entry to statement 1 without unmounting the .rt-tab node.
+    const e0Key = f.results.getSnapshot()[doc.id].sets.find(entry => entry.descriptor.resultId === 1)!.key
+    expect(f.results.removeEntry(doc.id, e0Key)).toBe(true)
+    render()
+    const eastTabAfter = host.querySelector<HTMLElement>('.rt-tab[data-target-key="prod-east"]')!
+    expect(eastTabAfter).toBe(eastTabBefore)
   })
 })

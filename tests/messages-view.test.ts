@@ -176,4 +176,69 @@ describe('multi-server Messages filter pill accessibility (R5-D4-6)', () => {
       expect(badge.hasAttribute('aria-label')).toBe(false)
     }
   })
+
+  it('R9 D4 #5: announces Coordinator error counts on both the pill and compact select option', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('coord-errors.sql', 'SELECT 1', 'SalesDB')
+    const targets = [
+      { targetKey: 'east', connectionId: 'c-east', provider: 'sqlserver' as const, label: 'prod-east' },
+      { targetKey: 'west', connectionId: 'c-west', provider: 'sqlserver' as const, label: 'prod-west' }
+    ]
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'transaction', targets } })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: {
+        mode: 'transaction',
+        status: 'rolledBack',
+        targets: targets.map(target => ({
+          targetKey: target.targetKey,
+          provider: target.provider,
+          label: target.label,
+          status: 'rolledBack',
+          batchesCompleted: 0,
+          batchesTotal: 1,
+          rowsAffected: 0,
+          resultSetIds: [],
+          elapsedMs: 10
+        })),
+        resultSets: [],
+        discardedResultSets: 0,
+        messages: [
+          { text: 'Coordinator aborted run due to timeout.', kind: 'error' },
+          { text: 'Second coordinator failure.', kind: 'error' },
+          { text: 'Rolled back.', kind: 'info', targetKey: 'east' }
+        ],
+        messagesTruncated: false,
+        elapsedMs: 12,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T18:30:00.0000000+00:00'
+      }
+    })
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root: Root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+
+    // Pill bar mode (<= 6 targets, !firstError)
+    act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(MessagesView, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    const coordPill = [...host.querySelectorAll<HTMLButtonElement>('.messages-filter-pill')].find(btn => btn.textContent?.includes('Coordinator'))!
+    expect(coordPill.getAttribute('data-has-error')).toBe('true')
+    expect(coordPill.getAttribute('aria-label')).toBe('Coordinator, 2 errors')
+    expect(coordPill.querySelector('.messages-filter-err')?.textContent).toBe('!')
+
+    // Compact select mode (`firstError: true`)
+    act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(MessagesView, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id], firstError: true })
+      }))
+    })
+    const coordOption = host.querySelector<HTMLOptionElement>('.messages-filter-select option[value="__coordinator__"]')!
+    expect(coordOption.textContent).toBe('Coordinator (2 errors)')
+  })
 })
