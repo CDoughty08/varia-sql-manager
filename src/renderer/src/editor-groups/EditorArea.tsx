@@ -62,13 +62,15 @@ import { multiTargetTriggerSummary, resolveMultiTargets } from '../MultiTargetPo
 
 /** One editor group's Monaco editor and the element it lives in, which moves into the text document the group shows. */
 interface GroupEditor { readonly element: HTMLDivElement; readonly editor: QueryEditorInstance; shows: string; dispose(): void }
-interface Area {
+export interface Area {
   /** Shows document `id` in group `group`'s editor, in `slot`. */
   mount(group: string, slot: HTMLElement, id: string): void
   /** `slot` no longer shows group `group`'s editor (its document is hidden, or moved). */
   unmount(group: string, slot: HTMLElement): void
+  /** Rebinds the status bar's caret tracker after a secondary editor binds, unbinds, or takes focus. */
+  syncStatus(): void
 }
-const AreaContext = createContext<Area | null>(null)
+export const AreaContext = createContext<Area | null>(null)
 const RestoredContext = createContext(false)
 
 const panelOptions = (id: string, title: string) => ({ id, contentComponent: 'document', tabComponent: 'document', title, renderer: 'onlyWhenVisible' as const })
@@ -620,6 +622,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.status?.binding.dispose()
     this.status = editor ? { editor, binding: this.workbench.editorStatus.bindEditor(editor) } : undefined
   }
+  syncStatus(): void { this.followStatus() }
 
   mount(group: string, slot: HTMLElement, id: string): void {
     if (this.disposed) return
@@ -634,7 +637,10 @@ class EditorAreaController implements Area, EditorGroupHost {
       // and came back before then raised no new focus, leaving the plan active under the caret. Every focusin counts too.
       const activate = () => {
         const shows = this.editors.get(group)?.shows
-        if (shows && this.workbench.documents.getSnapshot().activeId !== shows) this.api?.getPanel(shows)?.api.setActive()
+        if (!shows) return
+        this.workbench.documents.setActivePane(shows, 'primary')
+        if (this.workbench.documents.getSnapshot().activeId !== shows) this.api?.getPanel(shows)?.api.setActive()
+        this.followStatus()
       }
       const focus = created.instance.onDidFocusEditorWidget(activate)
       element.addEventListener('focusin', activate)

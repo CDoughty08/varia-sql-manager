@@ -3,6 +3,7 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { TextRange } from './text-ops'
 import { codiconClass } from '../../../shared/icons'
+import type { ProviderId } from '../../../shared/providers'
 
 export type BookmarkPane = 'primary' | 'secondary'
 
@@ -32,6 +33,8 @@ export interface BookmarkDocuments {
   activeModel?(id: string): BookmarkModel | undefined
   editorOf?(id: string, pane?: BookmarkPane): BookmarkEditor | undefined
   setActivePane?(id: string, pane: BookmarkPane): void
+  revision?(id: string): number
+  revealLine?(id: string, line: number, revision: number, dialect?: ProviderId): boolean
   activate(id: string): void
   readonly boundEditor: BookmarkEditor | undefined
 }
@@ -218,12 +221,18 @@ export class BookmarkService extends SnapshotStore<BookmarkSnapshot> implements 
     }
   }
   private show(tabId: string, pane: BookmarkPane, line: number): void {
-    if (this.documents.getSnapshot().activeId !== tabId) this.documents.activate(tabId)
     this.documents.setActivePane?.(tabId, pane)
+    if (this.documents.getSnapshot().activeId !== tabId) this.documents.activate(tabId)
     const model = this.modelOf(tabId, pane)
-    const editor = this.documents.editorOf?.(tabId, pane) ?? this.documents.boundEditor
-    if (!editor || !model || editor.getModel() !== model) return
+    if (!model) return
     const lineNumber = Math.min(line, model.getLineCount())
+    const editor = this.documents.editorOf?.(tabId, pane) ?? this.documents.boundEditor
+    if (!editor || editor.getModel() !== model) {
+      if (this.documents.revealLine && this.documents.revision) {
+        this.documents.revealLine(tabId, lineNumber, this.documents.revision(tabId), pane === 'secondary' ? 'bigquery' : 'sqlserver')
+      }
+      return
+    }
     editor.setPosition({ lineNumber, column: 1 })
     editor.revealLineInCenterIfOutsideViewport(lineNumber)
     editor.focus()

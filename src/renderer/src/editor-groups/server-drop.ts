@@ -81,6 +81,7 @@ export const verdicts = Object.freeze({
 
 export interface DropContext {
   readonly dragProvider?: ProviderId
+  readonly dragTargetId?: string
   readonly dropDialect?: ProviderId
 }
 
@@ -105,11 +106,17 @@ export function dropVerdict(
     }
     const targets = document.multiTargets ?? []
     const existing = targets.find(target => target.connectionId === drag.connectionId)
+      ?? (context.dragTargetId ? targets.find(target => target.targetId === context.dragTargetId) : undefined)
+    const enabledCount = targets.filter(target => target.enabled).length
     if (existing) {
-      if (!existing.enabled) return verdicts.addTarget
+      if (existing.connectionId !== drag.connectionId) {
+        if (!existing.enabled && enabledCount >= maxMultiTargets) return verdicts.targetLimit
+        return verdicts.addTarget
+      }
+      if (!existing.enabled) return enabledCount >= maxMultiTargets ? verdicts.targetLimit : verdicts.addTarget
       return drag.database && drag.database !== existing.database ? verdicts.updateTargetDatabase : verdicts.same
     }
-    if (targets.length >= maxMultiTargets) return verdicts.targetLimit
+    if (enabledCount >= maxMultiTargets) return verdicts.targetLimit
     return verdicts.addTarget
   }
   if (document.connectionId === drag.connectionId) return drag.database && drag.database !== document.database ? verdicts.database : verdicts.same
@@ -134,6 +141,10 @@ export class ServerDropService extends SnapshotStore<ServerDropSnapshot> {
     return connection && isBigQueryConnection(connection) ? 'bigquery' : 'sqlserver'
   }
 
+  private targetIdOf(connectionId: string): string | undefined {
+    return this.options.targets.targetForConnection?.(connectionId) ?? this.options.connections.get(connectionId)?.targetId
+  }
+
   verdict(tabId: string | undefined, drag = this.drag, dropDialect?: ProviderId): DropVerdict {
     if (!drag || tabId === undefined) return verdicts.notQuery
     const { documents, queries, connections } = this.options
@@ -142,7 +153,7 @@ export class ServerDropService extends SnapshotStore<ServerDropSnapshot> {
       documents.get(tabId),
       drag,
       { running: queries.isRunning(tabId), live: isLiveConnection(connection), busy: documents.getSnapshot().busy },
-      { dragProvider: this.providerOf(drag.connectionId), dropDialect }
+      { dragProvider: this.providerOf(drag.connectionId), dragTargetId: this.targetIdOf(drag.connectionId), dropDialect }
     )
   }
   /** Over a strip's empty space: a new query can open while the server is connected. */
@@ -180,8 +191,11 @@ export class ServerDropService extends SnapshotStore<ServerDropSnapshot> {
         }
         const provider = this.providerOf(drag.connectionId)
         const existingTargets = doc.multiTargets ?? []
-        const existingIndex = existingTargets.findIndex(item => item.connectionId === drag.connectionId || (!!connection.targetId && item.targetId === connection.targetId))
-        const targetId = targets.targetForConnection?.(drag.connectionId) ?? connection.targetId
+        const targetId = this.targetIdOf(drag.connectionId)
+        let existingIndex = existingTargets.findIndex(item => item.connectionId === drag.connectionId)
+        if (existingIndex < 0 && targetId) {
+          existingIndex = existingTargets.findIndex(item => item.targetId === targetId)
+        }
         const database = drag.database ?? (provider === 'bigquery' ? (connection.database || '') : (connection.database || 'master'))
         if (existingIndex >= 0) {
           documents.updateMultiTarget?.(tabId, existingIndex, item => ({
@@ -199,7 +213,13 @@ export class ServerDropService extends SnapshotStore<ServerDropSnapshot> {
             enabled: true,
             provider
           }
-          documents.setMultiTargets?.(tabId, [...existingTargets, added])
+          const next = [...existingTargets]
+          while (next.length >= maxMultiTargets) {
+            const disabledIndex = next.findIndex(item => !item.enabled)
+            if (disabledIndex < 0) break
+            next.splice(disabledIndex, 1)
+          }
+          if (next.length < maxMultiTargets) documents.setMultiTargets?.(tabId, [...next, added])
         }
         documents.activate(tabId)
         if (this.getSnapshot().landing?.seq === landing.seq) this.publish({ ...this.getSnapshot(), landing: { ...landing, arrived: true } })

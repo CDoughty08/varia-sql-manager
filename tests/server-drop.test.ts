@@ -42,6 +42,33 @@ describe('dropVerdict', () => {
     expect(dropVerdict({ connectionId: 'reporting', database: 'AppData' }, databaseDrag, idle)).toBe(verdicts.same)
     expect(dropVerdict({ connectionId: 'sales', database: 'Sales' }, databaseDrag, idle)).toBe(verdicts.move)
   })
+  it('enforces the 32-target cap against enabled targets and matches detached targets by dragTargetId', () => {
+    const thirtyOneEnabled = Array.from({ length: 31 }, (_, i) => ({
+      connectionId: `sql-${i}`, provider: 'sqlserver' as const, database: 'master', enabled: true
+    }))
+    const withOneDisabled = {
+      database: '',
+      multiMode: 'same' as const,
+      multiTargets: [
+        ...thirtyOneEnabled,
+        { connectionId: 'sql-disabled', provider: 'sqlserver' as const, database: 'master', enabled: false }
+      ]
+    }
+    // 31 enabled + 1 disabled = 32 stored entries: still accepts adding a 32nd enabled target.
+    expect(dropVerdict(withOneDisabled, drag, idle, { dragProvider: 'sqlserver' })).toBe(verdicts.addTarget)
+
+    // 32 enabled entries: refuses a brand-new target, but allows re-attaching an already-enabled detached target via dragTargetId.
+    const thirtyTwoEnabled = {
+      database: '',
+      multiMode: 'same' as const,
+      multiTargets: [
+        ...thirtyOneEnabled,
+        { targetId: 'target-rep', provider: 'sqlserver' as const, database: 'master', enabled: true }
+      ]
+    }
+    expect(dropVerdict(thirtyTwoEnabled, drag, idle, { dragProvider: 'sqlserver' })).toBe(verdicts.targetLimit)
+    expect(dropVerdict(thirtyTwoEnabled, drag, idle, { dragProvider: 'sqlserver', dragTargetId: 'target-rep' })).toBe(verdicts.addTarget)
+  })
 })
 
 describe('ServerDropService', () => {
@@ -104,6 +131,49 @@ describe('ServerDropService', () => {
     service.hover({ place: 'tab', tabId: 'q1', verdict: service.verdict('q1'), insert: false, rect: { ...rect } })
     service.hover({ place: 'editor', tabId: 'q1', verdict: service.verdict('q1'), insert: true, rect })
     expect(listener).toHaveBeenCalledTimes(3)
+  })
+  it('prunes a disabled multi-target slot when adding past 32 stored entries and re-attaches detached targets by targetId', async () => {
+    const thirtyOne = Array.from({ length: 31 }, (_, i) => ({
+      connectionId: `sql-${i}`, provider: 'sqlserver' as const, database: 'master', enabled: true
+    }))
+    let multiTargets: { connectionId?: string; targetId?: string; attachWanted?: boolean; provider: 'sqlserver' | 'bigquery'; database: string; enabled: boolean }[] = [
+      ...thirtyOne,
+      { connectionId: 'sql-old-disabled', provider: 'sqlserver', database: 'master', enabled: false }
+    ]
+    const connections = new Map([
+      ['reporting', { id: 'reporting', targetId: 'target-rep', server: 'REPORTING-SQL', database: 'Sales' }]
+    ])
+    const documents = {
+      get: (id: string) => id === 'm1' ? { id: 'm1', name: 'Multi.sql', database: '', multiMode: 'same' as const, multiTargets } : undefined,
+      activate: vi.fn(),
+      newQuery: vi.fn(),
+      getSnapshot: () => ({ busy: false }),
+      setMultiTargets: vi.fn((_id: string, next: typeof multiTargets) => { multiTargets = next }),
+      updateMultiTarget: vi.fn((_id: string, index: number, patch: (item: typeof multiTargets[number]) => typeof multiTargets[number]) => {
+        multiTargets = multiTargets.map((item, i) => i === index ? patch(item) : item)
+      })
+    }
+    const targets = {
+      changeConnection: vi.fn(),
+      changeDatabase: vi.fn(),
+      targetForConnection: (id: string) => connections.get(id)?.targetId
+    }
+    const service = new ServerDropService({ documents, queries: { isRunning: () => false }, targets, connections: { get: (id: string) => connections.get(id) } } as never)
+
+    service.start(drag)
+    expect(service.verdict('m1')).toBe(verdicts.addTarget)
+    expect(await service.moveQuery('m1', rect)).toBe(true)
+    expect(multiTargets).toHaveLength(32)
+    expect(multiTargets.some(t => t.connectionId === 'sql-old-disabled')).toBe(false)
+    expect(multiTargets.at(-1)).toMatchObject({ connectionId: 'reporting', targetId: 'target-rep', attachWanted: true, enabled: true, database: 'Sales' })
+
+    // Now detach 'reporting' (leaving 32 enabled targets) and drop again: verdict + moveQuery match by targetId identically.
+    multiTargets = multiTargets.map(t => t.targetId === 'target-rep' ? { targetId: 'target-rep', provider: 'sqlserver', database: 'Sales', enabled: true } : t)
+    service.start(databaseDrag)
+    expect(service.verdict('m1')).toBe(verdicts.addTarget)
+    expect(await service.moveQuery('m1', rect)).toBe(true)
+    expect(multiTargets).toHaveLength(32)
+    expect(multiTargets.find(t => t.targetId === 'target-rep')).toMatchObject({ connectionId: 'reporting', attachWanted: true, enabled: true, database: 'AppData' })
   })
 })
 
