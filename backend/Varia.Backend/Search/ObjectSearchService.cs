@@ -329,7 +329,7 @@ internal sealed partial class ObjectSearchService : IDisposable
             {
                 state.Databases = names.Count;
                 state.Ledger.List(names);
-                if (ReferenceEquals(state.Build, source)) state.Listed = listed;
+                if (ReferenceEquals(state.Build, source)) { state.Listed = listed; PruneLocked(state); }
                 foreach (var gone in state.SqlStale.Keys.Concat(state.Due.Keys).Where(key => key.Length > 0 && !listed.Contains(key)).ToList())
                 {
                     state.SqlStale.Remove(gone);
@@ -458,6 +458,7 @@ internal sealed partial class ObjectSearchService : IDisposable
     {
         running.Forget(connectionId);
         if (!states.TryRemove(connectionId, out var state)) return;
+        lock (state.Gate) state.Closed = true;
         StopSweep(state);
         state.Index.Dispose();
         // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
@@ -906,6 +907,11 @@ internal sealed class SkipList(int capacity)
     }
 
     public List<ObjectIndexSkip> ToList() => [.. items.Select(item => item.Skip)];
+
+    /// <summary>Removes the skips at a fixed place (<see cref="Server"/>, <see cref="Agent"/>) that <paramref name="match"/> picks: a
+    /// check that reads the server again replaces what an earlier read reported there, rather than adding to it.</summary>
+    public void RemoveFixed(int order, Func<ObjectIndexSkip, bool>? match = null) =>
+        items.RemoveAll(item => item.Order == order && order < 0 && (match is null || match(item.Skip)));
 
     /// <summary>Removes a database's skips (a check read it again); the server's, Agent's and the resource database's stay.</summary>
     public void Remove(string database)

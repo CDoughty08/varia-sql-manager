@@ -22,6 +22,7 @@ internal static class FreshnessChecks
     {
         Scripts(check);
         SqlMarks(check);
+        Skips(check);
         SqlDue(check);
         await Arguments(check);
         await BigQueryDue(check);
@@ -99,11 +100,25 @@ internal static class FreshnessChecks
         search.MarkSqlStale(id, "Sales");
         search.MarkSqlStale(id, null);
         var status = search.IndexStatus(new(id)).Status;
-        check(search.SqlStaleOf(id).Order(StringComparer.Ordinal).SequenceEqual([ObjectSearchService.ServerScope, "Sales"]) && status.StaleMark == before + 2 && status.Stale == 2,
-            "DDL in a held database, and on the server's own objects, each make a mark the status names and counts");
+        check(search.SqlStaleOf(id).Order(StringComparer.Ordinal).SequenceEqual([ObjectSearchService.ServerScope, "Sales"]) && status.StaleMark == before + 2 && status.Stale == 1,
+            "DDL in a held database, and on the server's own objects, each make a mark the status names; the line counts only the database");
         search.MarkSqlStale(id, "Sales");
-        check(search.SqlStaleOf(id).Count == 2 && search.IndexStatus(new(id)).Status is { Stale: 2 } again && again.StaleMark == before + 3,
+        check(search.SqlStaleOf(id).Count == 2 && search.IndexStatus(new(id)).Status is { Stale: 1 } again && again.StaleMark == before + 3,
             "DDL again in a marked database moves its mark on (a check that began before it does not spend it), counted once");
+    }
+
+    private static void Skips(Action<bool, string> check)
+    {
+        var skips = new SkipList(4);
+        skips.Add(SkipList.Server, new("", "PERMISSION_DENIED", "denied"));
+        skips.Add(SkipList.Server, new("", "CATALOG_ERROR", "list failed"));
+        skips.Add(SkipList.Agent, new("", "PERMISSION_DENIED", "agent", Agent: true));
+        skips.Add(0, new("Sales", "TIMEOUT", "slow"));
+        skips.RemoveFixed(SkipList.Server, skip => skip.Code != "CATALOG_ERROR");
+        skips.RemoveFixed(SkipList.Agent);
+        skips.RemoveFixed(0);
+        check(skips.ToList().Select(skip => skip.Code).SequenceEqual(["CATALOG_ERROR", "TIMEOUT"]),
+            "a check replaces the server and Agent skips (never adding to them, so the list stays bounded) and leaves the databases");
     }
 
     // ---- Check on use ----
@@ -134,6 +149,17 @@ internal static class FreshnessChecks
         var mark = due.Index.StaleMark;
         check(Find(search, id, "orders", database: "Sales").Index.StaleMark == mark, "a due database is not marked again by the next search (one check is asked per mark)");
         check(Find(search, id, "orders").Index is { Stale: 2 } all && all.StaleMark == mark + 1, "a search of every database marks the others due too");
+        // No check came (or it failed): once the threshold has passed again, the next search renumbers the marks, so one is asked again.
+        var waiting = Find(search, id, "orders").Index.StaleMark;
+        clock.Now += ObjectSearchService.SqlCheckAfter;
+        check(Find(search, id, "orders").Index is { Stale: 2 } again && again.StaleMark > waiting && Find(search, id, "orders").Index.StaleMark == again.StaleMark,
+            "a due database whose check never passed is asked again once its threshold passes again, once");
+        search.MarkSqlStale(id, "Ops");
+        var ddl = Find(search, id, "orders").Index.StaleMark;
+        clock.Now += ObjectSearchService.SqlCheckAfter - TimeSpan.FromMinutes(1);
+        var soon = Find(search, id, "orders").Index.StaleMark;
+        clock.Now += TimeSpan.FromMinutes(1);
+        check(soon == ddl && Find(search, id, "orders").Index.StaleMark > ddl, "a DDL mark whose check failed is asked again a threshold after it was made, not before");
     }
 
     private static async Task Arguments(Action<bool, string> check)
@@ -182,6 +208,21 @@ internal static class FreshnessChecks
         check(source.ObjectCalls == 4 && source.TableCalls == 0 && source.RoutineCalls == 0, "a check of due, unchanged datasets re-lists each and gets no object's details");
         check(search.DueOf(id).Count == 0 && checkedStatus is { Stale: null, Checking: null } && checkedStatus.CheckedAt == clock.Now.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
             "once checked, nothing is due and the status says when it was checked");
+
+        // A dataset dropped outside Varia: the check finds it gone, and its due mark goes with it.
+        source.Projects["proj-b"].TryRemove("ds2", out _);
+        clock.Now += ObjectSearchService.BigQueryCheckAfter;
+        Hits(search, id, "orders");
+        check(search.DueOf(id).Count == 4, "an hour on, every dataset is due again");
+        var afterGone = (await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Stale: true), source, CancellationToken.None)).Status;
+        check(search.DueOf(id).Count == 0 && afterGone.Stale is null && Hits(search, id, "t3") == 0, "a due dataset found gone leaves the index and its mark, so nothing stays may have changed");
+        async Task<string?> Refused(ObjectIndexArgs args)
+        {
+            try { await search.IndexBigQueryAsync(args, source, CancellationToken.None); return null; }
+            catch (RequestException error) { return error.Code; }
+        }
+        check(await Refused(new(id, Guid.NewGuid().ToString(), Stale: true, Database: "sales")) == "INVALID_PARAMS" && await Refused(new(id, Guid.NewGuid().ToString(), Stale: true, CheckAll: true)) == "INVALID_PARAMS",
+            "BigQuery refuses SQL Server's database and checkAll");
     }
 
     private static Table Shaped(params string[] columns) =>
@@ -198,7 +239,8 @@ internal static class FreshnessChecks
             await search.Store.Idle();
             var saved = search.Store.Counts.Saved;
             search.TableRead(id, Billing, "sales", "orders", Shaped("col_0", "col_1", "col_2"));
-            check(search.BigQueryRefreshes.Refreshed == 0, "details read anyway that say what the index holds change nothing");
+            search.RoutineRead(id, Billing, "sales", "fn_total", new Routine { RoutineType = "SCALAR_FUNCTION", LastModifiedTime = 1_700_000_100_000, DefinitionBody = "x + 1", Arguments = [] });
+            check(search.BigQueryRefreshes.Refreshed == 0, "details read anyway that say what the index holds (a table's, a routine's) change nothing");
             search.TableRead(id, Billing, "sales", "orders", Shaped("col_0", "col_1", "col_2", "added_in_place"));
             await search.Store.Idle();
             check(search.BigQueryRefreshes.Refreshed == 1 && Hits(search, id, "added_in_place") == 1 && Hits(search, id, "customers") == 1 && search.Store.Counts.Saved == saved + 1,
@@ -226,6 +268,8 @@ internal static class FreshnessChecks
         search.UtcNow = () => clock.Now;
         search.SweepIdle = TimeSpan.FromMilliseconds(20);
         search.SweepPace = TimeSpan.FromMilliseconds(1);
+        // Fewer objects a pass than the sales dataset holds: its passes go on from where the last one stopped.
+        search.SweepObjects = 2;
         var id = Guid.NewGuid().ToString();
         var early = 0;
         var due = DateTime.MaxValue;
@@ -290,5 +334,13 @@ internal static class FreshnessChecks
         check(Volatile.Read(ref whileBuilding) == 0 && search.BigQueryRefreshes.SweepGets >= gets, "a build pauses the background re-read: it makes no get while the build runs");
         search.Forget(id);
         check(await WaitUntilAsync(() => search.Sweeps == 0), "closing the connection ends its background re-read");
+
+        // A connection that closes as its build ends: no background re-read starts on what it left.
+        var late = Guid.NewGuid().ToString();
+        var starts = search.SweepStarts;
+        search.BeforeSweep = () => search.Forget(late);
+        try { await Build(search, source, late); } catch (RequestException) { }
+        finally { search.BeforeSweep = null; }
+        check(search.SweepStarts == starts && search.Sweeps == 0, "a connection closed as its build ends starts no background re-read");
     }
 }

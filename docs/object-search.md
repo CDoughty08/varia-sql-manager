@@ -454,8 +454,9 @@ and BigQuery's background re-read is scheduled by the backend.
   server node checks the server, Agent and every database. Rebuild Search Index reads everything whole. BigQuery's
   Refresh re-reads its project or dataset ([BigQuery](#bigquery)).
 - **Failures are values.** A fingerprint that fails, is denied or takes too long keeps the held read searchable and its
-  mark; that mark is not asked again, and the database is checked at its next mark, its next due search after another
-  15 minutes, or Refresh. A full build stops a running check; a check never stops a full build: one asked while it runs
+  mark. That mark is not asked again at once: the database is checked at its next mark, Refresh, or the first search
+  15 minutes after the mark (or the failed check), which renumbers it so the window asks again. A database or dataset
+  found gone takes its marks with it. A full build stops a running check; a check never stops a full build: one asked while it runs
   waits for it. DDL that lands while a check reads keeps its mark for the next check.
 - **Details read anyway (BigQuery).** An object's details read for Properties, Peek or the details pane replace what
   the index holds of it when they differ (its columns, text, partitioning, clustering or signature; never only its
@@ -463,7 +464,8 @@ and BigQuery's background re-read is scheduled by the backend.
 - **Background re-read (BigQuery).** After a connection's first full build, the backend gets each held object's details
   again, the dataset whose details are oldest first, once they are 4 hours old: one call at a time, 2 seconds apart (at
   most 1,800 an hour), each under the principal's rate limiter like any metadata call, at most 1,000 objects of a
-  dataset a pass, giving up a pass after 3 failed calls in a row. It pauses while any build or check of the connection
+  dataset a pass (a larger dataset's passes go on from where the last stopped, and its details count as re-read once
+  they reach its end), giving up a pass after 3 failed calls in a row. It pauses while any build or check of the connection
   runs, and stops when the connection closes. A dataset whose objects changed is held and saved again; an object gone
   marks its dataset due.
 - **What is missed until a check.** DDL run outside Varia (another tool, a job, a deployment) is seen at the next due
@@ -474,7 +476,7 @@ and BigQuery's background re-read is scheduled by the backend.
 - **Where it shows.** The index line, in the Search Objects tab and in Object Explorer's band, ends with how fresh the
   index is: "saved 2 h ago" or "read 5 min ago" (the oldest unit; saved when it came from the saved index), then
   "checked just now" (the unit checked longest ago), "checking", or "2 databases may have changed" (marked or due and not
-  yet checked), and "1 database not verified" (a SQL Server read with no fingerprint, while the saved index is on). The
+  yet checked; the server's own objects are checked with them but not counted), and "1 database not verified" (a SQL Server read with no fingerprint, while the saved index is on). The
   line's tooltip gives the times on your clock. Ages are worked out when the line is drawn. The band keeps the line in
   view while checking, while something may have changed and while something is not verified.
 
@@ -782,7 +784,7 @@ cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Fai
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
 takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a project, or a project's dataset) and `bulk` (SQL Server refuses them), `stale`
 (a check) on either engine, and on SQL Server with `stale` either `database` (a database to check whatever its age, at most
-128 UTF-16 units) or `checkAll` (every database and the server), and
+128 UTF-16 units) or `checkAll` (every database and the server; BigQuery refuses both), and
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).
 On either engine `explorer.index` takes `memoryLimitMiB` (64 to 16,384, checked in zod and in C#), the limit every
 connection's index shares from that build on; a status carries `leftOut` and `leftOutIn` when definitions were left out

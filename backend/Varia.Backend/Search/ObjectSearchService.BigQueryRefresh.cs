@@ -21,13 +21,18 @@ internal sealed partial class ObjectSearchService
     internal TimeSpan SweepPace { get; set; } = TimeSpan.FromSeconds(2);
     /// <summary>The longest the background re-read waits before it looks again, when nothing is due.</summary>
     internal TimeSpan SweepIdle { get; set; } = TimeSpan.FromMinutes(10);
-    /// <summary>The most objects one pass over a dataset gets; the rest wait for its next pass.</summary>
-    internal const int SweepObjects = 1000;
+    /// <summary>The most objects one pass over a dataset gets; the next pass goes on from there, and the dataset's details count
+    /// as re-read once a pass reaches its end.</summary>
+    internal int SweepObjects { get; set; } = 1000;
     /// <summary>A pass over a dataset gives up after this many failed gets in a row (and tries the dataset again later).</summary>
     internal const int SweepFailures = 3;
 
     private long objectsRefreshed, sweepGets, sweepRewrites;
-    private int sweeps;
+    private int sweeps, sweepStarts;
+    /// <summary>The background re-reads ever started (the checks read it).</summary>
+    internal int SweepStarts => Volatile.Read(ref sweepStarts);
+    /// <summary>A check's hook: called as a full build ends, just before it starts the background re-read.</summary>
+    internal Action? BeforeSweep { get; set; }
     /// <summary>The background re-reads running (the checks wait for a closed connection's to end).</summary>
     internal int Sweeps => Volatile.Read(ref sweeps);
     internal BigQueryRefreshCounts BigQueryRefreshes => new(Interlocked.Read(ref objectsRefreshed), Interlocked.Read(ref sweepGets), Interlocked.Read(ref sweepRewrites));
@@ -41,6 +46,11 @@ internal sealed partial class ObjectSearchService
         public CancellationTokenSource? Sweep;
         /// <summary>When each held dataset's details were last read whole (UTC ticks, under Gate): a re-list that reused them did not.</summary>
         public readonly Dictionary<string, long> DetailsAt = new(StringComparer.Ordinal);
+        /// <summary>Where the background re-read's next pass over each dataset starts (under Gate): a dataset with more objects than one
+        /// pass gets is covered over several passes.</summary>
+        public readonly Dictionary<string, int> SweepFrom = new(StringComparer.Ordinal);
+        /// <summary>The connection closed (Forget, under Gate): nothing starts on this state again.</summary>
+        public bool Closed;
     }
 
     /// <summary>A table-like object's details read by bigquery.properties: what the index holds of it is replaced when they differ.</summary>
@@ -78,9 +88,10 @@ internal sealed partial class ObjectSearchService
         return entries;
     }
 
-    /// <summary>Whether two details say the same of an object, leaving out its size and last change, which move with its data.</summary>
+    /// <summary>Whether two details say the same of an object, leaving out its size and last change, which move with its data. Of the
+    /// subtype only whether it is a clone counts: that is all a held read keeps of it (a routine's kind is its listing's).</summary>
     internal static bool SameDetails(BigQueryDetail had, BigQueryDetail now, bool definitions) =>
-        had.Subtype == now.Subtype && (!definitions || had.Definition == now.Definition) && had.Partitioning == now.Partitioning && had.Clustering == now.Clustering
+        (had.Subtype == "clone") == (now.Subtype == "clone") && (!definitions || had.Definition == now.Definition) && had.Partitioning == now.Partitioning && had.Clustering == now.Clustering
         && had.Signature == now.Signature && had.ColumnsCut == now.ColumnsCut && had.Columns.SequenceEqual(now.Columns);
 
     /// <summary>
@@ -136,9 +147,10 @@ internal sealed partial class ObjectSearchService
         CancellationTokenSource sweep;
         lock (state.Gate)
         {
-            if (state.Sweep is not null) return;
+            if (state.Sweep is not null || state.Closed) return;
             state.Sweep = sweep = new CancellationTokenSource();
         }
+        Interlocked.Increment(ref sweepStarts);
         _ = Task.Run(() => SweepAsync(connectionId, state, source, sweep.Token));
     }
 
@@ -205,9 +217,13 @@ internal sealed partial class ObjectSearchService
         var (project, dataset) = (key[..cut], key[(cut + 1)..]);
         DatabaseIndex? held;
         bool definitions;
-        lock (state.Gate) { held = state.Index.Get(key); definitions = state.Definitions; }
+        int from;
+        lock (state.Gate) { held = state.Index.Get(key); definitions = state.Definitions; from = state.SweepFrom.GetValueOrDefault(key); }
         if (held is null) return;
-        var objects = EntriesOf(held, definitions).Where(entry => BigQueryEntries.HasDetails(entry) && entry.Detail is not null).Take(SweepObjects).ToList();
+        var detailed = EntriesOf(held, definitions).Where(entry => BigQueryEntries.HasDetails(entry) && entry.Detail is not null).ToList();
+        if (from >= detailed.Count) from = 0;
+        var objects = detailed.Skip(from).Take(SweepObjects).ToList();
+        var end = from + objects.Count >= detailed.Count;
         var fresh = new Dictionary<(string, string), BigQueryDetail>();
         var failures = 0;
         var complete = true;
@@ -234,7 +250,13 @@ internal sealed partial class ObjectSearchService
             await Task.Delay(SweepPace, stop);
         }
         if (fresh.Count > 0 && Apply(state, project, dataset, fresh)) Interlocked.Increment(ref sweepRewrites);
-        // A pass cut short by a build is tried again after it; one that failed waits for its next turn, like a whole one.
-        if (complete) lock (state.Gate) state.DetailsAt[key] = UtcNow().Ticks;
+        // A pass cut short by a build is tried again after it; one that failed waits for its next turn, like a whole one. A pass
+        // that did not reach the dataset's end leaves its details' age as it was, so the next pass goes on soon.
+        if (complete)
+            lock (state.Gate)
+            {
+                if (end) { state.SweepFrom.Remove(key); state.DetailsAt[key] = UtcNow().Ticks; }
+                else state.SweepFrom[key] = from + objects.Count;
+            }
     }
 }

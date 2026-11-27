@@ -149,6 +149,8 @@ internal sealed partial class ObjectSearchService
         var watch = Stopwatch.StartNew();
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        // A check of one database, or of every one, is SQL Server's (a BigQuery check reads what its marks name).
+        if (args.Database is not null || args.CheckAll is not null) throw Invalid(args.Database is not null ? "database." : "checkAll.");
         if (args.StarredProjects is { } rawStarred && (rawStarred.Count > BigQueryIndexLimits.StarredProjects || rawStarred.Any(project => !BqNames.IsProject(project))))
             throw Invalid("starredProjects.");
         var billing = source.BillingProject(args.ConnectionId);
@@ -1447,9 +1449,14 @@ internal sealed partial class ObjectSearchService
                 if (scope is null && !staleOnly) state.Stopped = false;
                 state.BuiltAt = DateTime.UtcNow;
                 state.Phase = null;
+                PruneLocked(state);
             }
             // In-place changes no listing sees are caught by a slow background re-read, from the first full build on.
-            if (scope is null && !staleOnly) StartSweep(args.ConnectionId, state, source);
+            if (scope is null && !staleOnly)
+            {
+                BeforeSweep?.Invoke();
+                StartSweep(args.ConnectionId, state, source);
+            }
             Finish(build: true, watch.ElapsedMilliseconds);
             finishedBuild = true;
             return new(Status(state), watch.ElapsedMilliseconds);

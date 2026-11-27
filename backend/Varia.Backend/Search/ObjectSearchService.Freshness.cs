@@ -64,6 +64,8 @@ internal sealed partial class ObjectSearchService
             // A mark on a database the index neither holds nor listed would be read by no check, and would never be spent.
             if (key.Length > 0 && state.Index.Get(key) is null && !state.Listed.Contains(key)) return;
             state.SqlStale[key] = ++state.StaleMarks;
+            // Asked now: a check that fails is asked again once the threshold has passed since (DueOnUseLocked).
+            state.Tried[key] = UtcNow().Ticks;
         }
     }
 
@@ -79,6 +81,16 @@ internal sealed partial class ObjectSearchService
     {
         if (!states.TryGetValue(connectionId, out var state)) return [];
         lock (state.Gate) return [.. state.Due.Keys];
+    }
+
+    /// <summary>Under Gate, as a build or check ends: drops what is kept per unit (due, checked, tried, details' age) for units the
+    /// index no longer holds (a database or dataset found gone, a project that left the index), so a mark nothing could spend never
+    /// keeps the line saying something may have changed. DDL marks stay: their own build spends them.</summary>
+    private static void PruneLocked(State state)
+    {
+        bool Held(string key) => key.Length == 0 && !state.BigQuery || state.Index.Get(key) is not null;
+        foreach (var map in new[] { state.Due, state.Checked, state.Tried, state.DetailsAt })
+            foreach (var key in map.Keys.Where(key => !Held(key) && !(map == state.Tried && state.SqlStale.ContainsKey(key))).ToList()) map.Remove(key);
     }
 
     /// <summary>Under Gate: a unit was confirmed against its source now (and tried).</summary>
@@ -110,9 +122,14 @@ internal sealed partial class ObjectSearchService
             // A loaded read no listing has checked yet is the running (or a failed) full build's: the status already says so.
             if (state.BigQuery && state.Saved.ContainsKey(key)) continue;
             if (!state.Tried.TryGetValue(key, out var tried)) { state.Tried[key] = now; continue; }
-            if (now - tried < after || state.Due.ContainsKey(key) || (state.BigQuery ? state.Stale.ContainsKey((read.Database, read.Dataset!)) || state.StaleProjects.ContainsKey(read.Database)
-                : state.SqlStale.ContainsKey(key))) continue;
-            state.Due[key] = ++state.StaleMarks;
+            if (now - tried < after) continue;
+            // BigQuery's DDL marks wait for their read whole, which a failed one leaves to the next rebuild (docs/object-search.md).
+            if (state.BigQuery && (state.Stale.ContainsKey((read.Database, read.Dataset!)) || state.StaleProjects.ContainsKey(read.Database))) continue;
+            // Marked, or due, and its check has not passed within the threshold (it failed, or nothing asked it): a new number, so
+            // the renderer asks one check again; otherwise due now.
+            if (!state.BigQuery && state.SqlStale.ContainsKey(key)) state.SqlStale[key] = ++state.StaleMarks;
+            else state.Due[key] = ++state.StaleMarks;
+            state.Tried[key] = now;
         }
     }
 
@@ -134,7 +151,9 @@ internal sealed partial class ObjectSearchService
             if (state.BigQuery ? state.Saved.ContainsKey(read.Key) : fingerprints && read.Sync.IsEmpty) unverified++;
             else if (state.Checked.TryGetValue(read.Key, out var ticks) && (checkedAt is null || ticks < checkedAt)) checkedAt = ticks;
         }
-        var stale = state.BigQuery ? state.Stale.Count + state.StaleProjects.Count + state.Due.Count : state.SqlStale.Count + state.Due.Count;
+        // The server's own objects are marked too (ServerScope), but they are not a database: the line counts databases.
+        var stale = state.BigQuery ? state.Stale.Count + state.StaleProjects.Count + state.Due.Count
+            : state.SqlStale.Count(pair => pair.Key.Length > 0) + state.Due.Count(pair => pair.Key.Length > 0);
         return (SavedAtText(oldest is null ? null : Utc(oldest.ReadAt)), oldest is { Loaded: true } ? true : null, checkedAt is { } at ? SavedAtText(new DateTime(at, DateTimeKind.Utc)) : null,
             stale > 0 ? stale : null, unverified > 0 ? unverified : null);
     }
@@ -181,7 +200,7 @@ internal sealed partial class ObjectSearchService
         ObjectIndexResult Answer()
         {
             lock (state.Gate)
-                if (Current()) { state.Build = null; state.Building = false; state.Checking = false; }
+                if (Current()) { state.Build = null; state.Building = false; state.Checking = false; PruneLocked(state); }
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         // Spends a target's marks made before the check began: DDL that lands while it reads stays marked.
@@ -212,12 +231,20 @@ internal sealed partial class ObjectSearchService
                     state.Due.Remove(gone);
                 }
                 state.Listed = listed;
+                // The database list answered: a failure an earlier list reported is over.
+                state.Skipped.RemoveFixed(SkipList.Server, skip => skip.Code == "CATALOG_ERROR");
             }
             state.Index.Keep(listed);
             if (targets.Contains(ServerScope))
             {
                 var serverSkip = await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token);
-                if (serverSkip is not null) lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
+                // This read's outcome replaces the earlier reads' (never added to them, so the list stays bounded).
+                lock (state.Gate)
+                {
+                    state.Skipped.RemoveFixed(SkipList.Server, skip => skip.Code != "CATALOG_ERROR");
+                    state.Skipped.RemoveFixed(SkipList.Agent);
+                    if (serverSkip is not null) state.Skipped.Add(SkipList.Server, serverSkip);
+                }
                 // Agent's objects are the server's too (a job an object action changed).
                 if (explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
                     lock (state.Gate) state.Skipped.Add(SkipList.Agent, agentSkip);
@@ -247,7 +274,11 @@ internal sealed partial class ObjectSearchService
         catch (SqlException error)
         {
             // The database list itself failed: the index keeps what it had and its marks, and the check answers as a value.
-            lock (state.Gate) state.Skipped.Add(SkipList.Server, new("", "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "Databases", null).Message));
+            lock (state.Gate)
+            {
+                state.Skipped.RemoveFixed(SkipList.Server, skip => skip.Code == "CATALOG_ERROR");
+                state.Skipped.Add(SkipList.Server, new("", "CATALOG_ERROR", ExplorerErrors.From(error, ErrorPhase.Statement, "Databases", null).Message));
+            }
             return Answer();
         }
         finally
