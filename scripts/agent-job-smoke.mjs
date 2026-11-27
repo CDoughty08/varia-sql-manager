@@ -13,7 +13,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
 import {
-  closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, editorSurface, gridPart, inspectorPanel, inspectorTab, inspectorTabs,
+  chooseJamMoreAction, closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, editorSurface, gridPart, inspectorPanel, inspectorTab, inspectorTabs,
   liveGrid, part, quickInputRows, statusBar, stepCardFlowGeometry, submitConnect, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -368,7 +368,7 @@ try {
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
   await expect(documentTab(page, 'Job Activity Monitor - server-a')).toHaveAttribute('aria-selected', 'true')
   await jobCell('Backup').click()
-  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'Create Job Like This…')
   const like = documentFrame(page, 'Copy of Backup')
   await expect(inspectorTabs(like).getByRole('tab').first()).toContainText('Changes from source')
   await expect(like.getByRole('group', { name: 'Job', exact: true }).getByRole('switch', { name: 'Enable when saved', exact: true })).not.toBeChecked()
@@ -397,7 +397,7 @@ try {
   // editor opens a row as a job tab whose edits come back as Other changes; each row is created on its own, then Enable the created jobs.
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
   await jobCell('Backup').click()
-  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'Create Job Like This…')
   await documentFrame(page, 'Copy of Backup').getByRole('button', { name: 'Create several…', exact: true }).click()
   const several = documentFrame(page, 'Create several jobs')
   await expect(documentTab(page, 'Create several jobs')).toHaveAttribute('aria-selected', 'true')
