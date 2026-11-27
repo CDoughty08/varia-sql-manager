@@ -136,13 +136,15 @@ the reads held when it is made:
 
 A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQueryLookup`), which the editor reaches over
 `language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
-projects (billing first, then starred and discovered accessible projects, marked when read by name only), a project's datasets, a dataset's objects (a
-sharded group as its newest shard, a routine with its signature) and an object's facts and columns by field path in
-schema order. Projects, datasets and objects match exactly, else the one name that differs only in case; a wildcard
-(`events_*`, `events_2026*`) or a shard within a date-sharded group's range answers with the group's newest shard; the
-prefix matches with case, a group the wildcard covers whole wins over the tables and groups it only begins
-(`events_summary`, `events_intraday_`), and otherwise a wildcard that begins two groups, or a group and a plain table,
-answers nothing. A dataset's state is `Ready`,
+projects (billing first, then starred and discovered accessible projects, with `tier`, `namesOnly`, and `partial`
+markers), a project's datasets, a dataset's objects (a sharded group as its newest shard, a routine with its signature,
+and optional table summary facts `rows`, `bytes`, `partitioning`, `clustering`, and clipped `description` when detailed)
+and an object's facts and columns by field path in schema order. Index builds, scoped refreshes, and DDL-stale updates
+invalidate the editor's `LookupCache` immediately for the affected connection. Projects, datasets and objects match
+exactly, else the one name that differs only in case; a wildcard (`events_*`, `events_2026*`) or a shard within a
+date-sharded group's range answers with the group's newest shard; the prefix matches with case, a group the wildcard
+covers whole wins over the tables and groups it only begins (`events_summary`, `events_intraday_`), and otherwise a
+wildcard that begins two groups, or a group and a plain table, answers nothing. A dataset's state is `Ready`,
 `Partial` (children left out, its project read by name only, its details skipped, or a later read failed with an earlier
 one kept), `Building`, `Skipped` or `Absent`; a project is `Partial` when its dataset listing failed after earlier reads or
 a listed dataset's read failed.

@@ -32,7 +32,7 @@ export function renderGoogleSqlDocs(): string {
     '  namespaced function\'s (`NET.HOST(`, `SAFE.NET.HOST(`). The colours',
     '  are the SQL syntax colours of the theme.',
     '- **Brackets and quotes.** `(` and `[` pair and match; quotes and backticks close themselves outside strings and',
-    '  comments. Toggle Comment uses `--`.',
+    '  comments (accepting a leaf completion steps past the closing backtick; [language-services.md](language-services.md#completion-from-the-index)). Toggle Comment uses `--`.',
     '- **Signature help.** Typing `(` or `,` in a call to a function below shows its signatures and the parameter the caret',
     '  is in; **Ctrl+Shift+Space** (**⇧⌘Space** on macOS) shows it on demand, and **Up** and **Down** step through a',
     '  function\'s signatures. A `SAFE.` prefix shows the function it prefixes. Nothing shows inside a string or a comment, in',

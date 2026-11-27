@@ -512,6 +512,13 @@ internal static partial class IndexFileChecks
                     + Difference(before, after));
                 // The lookups above built each world's lookup arrays, which are part of neither file.
                 check(loadedInto.Budget.Used == original.Budget.Used && loadedInto.Memory == original.Memory, $"the lookup arrays {name} ({mode}) builds once loaded cost what the read's cost");
+                if (name == "a BigQuery dataset")
+                {
+                    var ordersAt = Enumerable.Range(0, loaded.Value.Table.Count).Single(at => loaded.Value.Table.Name(at) == "orders");
+                    check(loaded.Value.Facts?.Of(ordersAt)?.Description == "Orders placed online."
+                        && BigQueryEntries.Known(loaded.Value, true)[("bqTable", "orders")].Detail.Description == "Orders placed online.",
+                        $"a BigQuery dataset round-trips table descriptions through IndexFile and BigQueryEntries.Known ({mode})");
+                }
 
                 // Saved again from the loaded unit, the file holds the same content (the salt, and so the bytes, differ).
                 var again = new World();
@@ -992,7 +999,7 @@ internal static partial class IndexFileChecks
         // dataset with no signatures or layout, which are details too: one with them is refused, as its read is).
         foreach (var layout in new[] { false, true })
         {
-            var entries = layout ? DatasetEntries() : DatasetEntries().Select(entry => entry.Detail is null ? entry : entry with { Detail = entry.Detail with { Signature = null, Partitioning = null, Clustering = null } }).ToList();
+            var entries = layout ? DatasetEntries() : DatasetEntries().Select(entry => entry.Detail is null ? entry : entry with { Detail = entry.Detail with { Signature = null, Partitioning = null, Clustering = null, Description = null } }).ToList();
             var source = new World();
             var unit = Dataset(source, entries);
             var file = Save(unit, IndexUnitKind.Dataset, Sealed);

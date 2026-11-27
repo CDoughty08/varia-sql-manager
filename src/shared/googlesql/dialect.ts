@@ -14,6 +14,27 @@ export function quoteGoogleSqlName(name: string): string {
 }
 
 const keywords = [...new Set([...googleSqlReservedKeywords, ...googleSqlKeywords, ...googleSqlTypes])].sort()
+const statementStartKeywords: readonly string[] = [
+  'SELECT', 'WITH', 'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'CREATE', 'ALTER', 'DROP', 'TRUNCATE',
+  'CALL', 'DECLARE', 'SET', 'BEGIN', 'EXPLAIN', 'EXPORT', 'LOAD', 'ASSERT', 'EXECUTE'
+]
+const castTypes: readonly string[] = [...googleSqlTypes, 'ARRAY', 'STRUCT', 'RANGE']
+function afterFromKeywords(hasAlias = false, inJoin = false, mergeUsing = false): readonly string[] {
+  const list: string[] = []
+  if (!hasAlias) list.push('AS')
+  if (mergeUsing) {
+    list.push('ON')
+    return list
+  }
+  if (inJoin) list.push('ON', 'USING')
+  list.push(
+    'WHERE', 'JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN',
+    'GROUP BY', 'HAVING', 'QUALIFY', 'WINDOW', 'ORDER BY', 'LIMIT',
+    'UNION', 'UNION ALL', 'UNION DISTINCT', 'INTERSECT', 'EXCEPT',
+    'FOR SYSTEM_TIME AS OF', 'TABLESAMPLE', 'PIVOT', 'UNPIVOT'
+  )
+  return list
+}
 const functions: readonly DialectFunction[] = googleSqlFunctions.map(entry => ({
   name: entry.name, summary: entry.summary, signatures: entry.signatures.map(signature => signatureLabel(entry.name, signature).label)
 }))
@@ -63,6 +84,14 @@ export function googleSqlDialect(defaults: GoogleSqlDefaults): CompletionDialect
     objectLabel: (kind, subtype) => (subtype && subtypeLabels[subtype]) || labels[kind] || kind,
     pathText: path => '`' + path.join('.') + '`',
     keywords,
+    keywordsFor(site) {
+      switch (site.kind) {
+        case 'afterFromTable': return afterFromKeywords(site.hasAlias, site.inJoin, site.mergeUsing)
+        case 'statementStart': return statementStartKeywords
+        case 'castType': return castTypes
+        default: return keywords
+      }
+    },
     functions,
     functionNamed: name => { const entry = googleSqlFunction(name); return entry ? byName.get(entry.name) : undefined },
     functionNamespaces: namespaces,

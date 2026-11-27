@@ -1,7 +1,7 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { Workbench } from '../core/workbench'
 import type { Disposable } from '../core/types'
-import { isQueryDocument } from '../documents'
+import { documentProvider, isQueryDocument } from '../documents'
 import { triggerEditorAction } from '../editor/actions'
 import { definitionMessages } from '../languages/definition'
 import { googleSqlLanguageId } from '../languages/googlesql'
@@ -12,6 +12,7 @@ const definitionLanguages: ReadonlySet<string> = new Set(['sql', googleSqlLangua
 
 type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections'> & {
   readonly sqlLanguage: Pick<Workbench['sqlLanguage'], 'refreshCache'>
+  readonly indexCompletion?: Pick<Workbench['indexCompletion'], 'refreshCache'>
   readonly monaco?: { readonly editor: Pick<typeof Monaco.editor, 'getEditors'> & Partial<Pick<typeof Monaco.editor, 'registerCommand' | 'addKeybindingRules'>> }
   readonly editorPeek?: Pick<Workbench['editorPeek'], 'run' | 'closeCard'>
 }
@@ -21,12 +22,20 @@ type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections
  * Definition (Alt+F12) and Open Definition in Peek Tab for the SQL editor that has focus: a query tab's, or Peek's read-only
  * one (`EditorPeekService` has the rules). Escape in a query editor closes Peek's card, or drops its own Alt+F12 lookup.
  */
-export function languagesContribution({ commands, documents, connections, sqlLanguage, monaco, editorPeek }: LanguageWorkbench): Disposable {
+export function languagesContribution({ commands, documents, connections, sqlLanguage, indexCompletion, monaco, editorPeek }: LanguageWorkbench): Disposable {
   const target = (id?: string) => documents.get(id ?? documents.getSnapshot().activeId)
   const refresh = commands.register('edit.refreshIntelliSense', {
     when: args => { const document = target(args?.tabId); return isQueryDocument(document) && !!document?.connectionId && connections.isLive(document.connectionId) },
     unavailable: () => 'Connect this query before refreshing its IntelliSense cache.',
-    run: async args => { const document = target(args?.tabId); if (document) await sqlLanguage.refreshCache(document.id) }
+    run: async args => {
+      const document = target(args?.tabId)
+      if (!document) return
+      if (documentProvider(document) === 'bigquery') {
+        if (indexCompletion) await indexCompletion.refreshCache(document.id)
+        return
+      }
+      await sqlLanguage.refreshCache(document.id)
+    }
   })
   const next = commands.register('edit.nextSqlIssue', { run: () => triggerEditorAction(documents, 'editor.action.marker.next') })
   const previous = commands.register('edit.previousSqlIssue', { run: () => triggerEditorAction(documents, 'editor.action.marker.prev') })
