@@ -373,7 +373,8 @@ internal sealed partial class SqlService
                     events.Job(JobEvent(project, jobId, location, "done", BigQueryTransaction.None));
                     var columns = BigQueryColumnPlan.From(page.Schema) ?? throw new RequestException("BACKEND_ERROR", "BigQuery answered the query without columns.");
                     var total = page.TotalRows ?? 0;
-                    derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires, lengths: columns.Lengths, derived: true)
+                    derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires, lengths: columns.Lengths, derived: true,
+                        name: kind == "rerun" ? set.ResultName : null)
                         ?? throw TooLarge(distinct ? "There is not enough result memory for this column's values. Close other results and try again."
                             : sample ? SampleRoom : "There is not enough result memory for this view. Close other results and try again.");
                     BigQueryWindow? derivedWindow = null;
