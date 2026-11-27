@@ -13,8 +13,8 @@ import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { minGridHeight, setFloors, stackLayout } from '../src/renderer/src/grid/stack'
 import ResultsTabs, { tabsFold, tabsNeed } from '../src/renderer/src/grid/ResultsTabs'
-import ResultsStack, { entryNoticesHeight, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
-import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRows, shortenDistinct, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
+import ResultsStack, { entryNotices, entryNoticesHeight, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
+import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRequests, pickerRows, shortenDistinct, stackReveals, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
 import { CompareService } from '../src/renderer/src/results/CompareService'
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
 import MessagesView from '../src/renderer/src/results/MessagesView'
@@ -22,7 +22,7 @@ import MultiRunSummary from '../src/renderer/src/results/MultiRunSummary'
 import OutputPane, { hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
-import { isSummaryActive, pivotOutOfDate, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
+import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
 import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -1454,5 +1454,597 @@ describe('Round 2 adversarial regression checks (Domain 4: Results & CSS)', () =
     renderTabs()
     const westTopTab = host.querySelector<HTMLButtonElement>('[data-tab-row="result"] [data-target-key="prod-west"] [role="tab"]')!
     expect(document.activeElement).toBe(westTopTab)
+  })
+})
+
+describe('Round 3 adversarial regression fixes (R3-1 through R3-12)', () => {
+  it('R3-1: loaded() and rerunInPlace() mark Combined stale when a windowed BigQuery set enters memory', async () => {
+    const baseClient = fakeResultClient()
+    const combine = vi.fn<(...args: unknown[]) => Promise<ResultsCombineResult>>(async () => ({
+      descriptor: descriptor(999, { kind: 'combined', index: 0, statementSlot: 0, rowsRead: 6, rowsStored: 6, rowsAvailable: 6 })
+    }))
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const loadedBq = descriptor(3, { index: 2, targetKey: 'bq-1', statementSlot: 0, residence: 'memory', revision: 1, rowsRead: 2, rowsStored: 2, rowsAvailable: 2 })
+    const rerunBq = descriptor(30, { index: 2, targetKey: 'bq-1', statementSlot: 0, residence: 'memory', rowsRead: 2, rowsStored: 2, rowsAvailable: 2 })
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+      remoteQuery: vi.fn<NonNullable<VariaApi['remoteQuery']>>(async () => ({
+        ok: true,
+        value: {
+          status: 'completed',
+          recordsAffected: 0,
+          completedBatches: 1,
+          totalBatches: 1,
+          database: 'sales_dw',
+          resultSets: [loadedBq],
+          planSets: [],
+          discardedResultSets: 0,
+          messages: [],
+          messagesTruncated: false,
+          elapsedMs: 10,
+          budget: { usedBytes: 1024, globalBytes: 256 * 1048576, queryBytes: 128 * 1048576, generation: 1, seq: 1 },
+          completedAt: '2026-11-26T18:30:00.0000000+00:00'
+        }
+      }))
+    }
+    const remote = {
+      sample: vi.fn(),
+      rerun: vi.fn(async () => rerunBq)
+    } as unknown as RemoteViews
+    const results = new ResultsService({ client, api, events, remote, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    const targets: MultiTargetIdentity[] = [
+      { targetKey: 'sql-1', connectionId: 'c1', provider: 'sqlserver', label: 'sql-1' },
+      { targetKey: 'sql-2', connectionId: 'c2', provider: 'sqlserver', label: 'sql-2' },
+      { targetKey: 'bq-1', connectionId: 'c3', provider: 'bigquery', label: 'bq-1' }
+    ]
+    // Part A: loaded() marks Combined stale when BigQuery set loads into memory.
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'sql-2', statementSlot: 0 })
+    const bqRemote = descriptor(3, { index: 2, targetKey: 'bq-1', statementSlot: 0, residence: 'remote', rowsRead: 50000, rowsStored: 0, rowsAvailable: 50000 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(targets[0], { resultSetIds: [1] }), multiOutcome(targets[1], { resultSetIds: [2] }), multiOutcome(targets[2], { resultSetIds: [3] })],
+        [s1, s2, bqRemote, comb],
+        { mode: 'crossEngineReadOnly' }
+      )
+    })
+    const bqKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.targetKey === 'bq-1')!.key
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    expect(results.getSnapshot().t1.staleCombined?.has(combinedKey) ?? false).toBe(false)
+
+    await results.loadIntoMemory('t1', bqKey)
+    const afterLoad = results.getSnapshot().t1
+    expect(afterLoad.staleCombined?.has(combinedKey)).toBe(true)
+    const staleNotice = entryNotices(afterLoad, afterLoad.sets.find(entry => entry.key === combinedKey)!).find(notice => notice.kind === 'staleCombined')
+    expect(staleNotice?.text).toContain('Source server results changed')
+    expect(staleNotice?.text).not.toContain('was closed')
+    expect(results.canRebuildCombined('t1', combinedKey)).toBe(true)
+
+    // Part B: rerunInPlace() marks Combined stale when a windowed BigQuery set re-runs into memory.
+    results.begin('t2', 'q2', undefined, { multi: { mode: 'crossEngineReadOnly', targets } })
+    const s1b = descriptor(11, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const s2b = descriptor(12, { index: 1, targetKey: 'sql-2', statementSlot: 0 })
+    const bqRemote2 = descriptor(13, { index: 2, targetKey: 'bq-1', statementSlot: 0, residence: 'remote', rowsRead: 50000, rowsStored: 0, rowsAvailable: 50000 })
+    const comb2 = descriptor(20, { index: 3, kind: 'combined', statementSlot: 0 })
+    void results.finish('t2', 'q2', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(targets[0], { resultSetIds: [11] }), multiOutcome(targets[1], { resultSetIds: [12] }), multiOutcome(targets[2], { resultSetIds: [13] })],
+        [s1b, s2b, bqRemote2, comb2],
+        { mode: 'crossEngineReadOnly' }
+      )
+    })
+    const bqKey2 = results.getSnapshot().t2.sets.find(entry => entry.descriptor.targetKey === 'bq-1')!.key
+    const combinedKey2 = results.getSnapshot().t2.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    expect(results.getSnapshot().t2.staleCombined?.has(combinedKey2) ?? false).toBe(false)
+
+    await results.rerun('t2', bqKey2)
+    expect(results.getSnapshot().t2.staleCombined?.has(combinedKey2)).toBe(true)
+  })
+
+  it('R3-2: PivotService tracks sourceSet in tried, auto-follows rebuilt Combined with remapped columns, and refuses missing columns cleanly', async () => {
+    const colsBefore: ResultColumn[] = [
+      { name: 'Server', dataType: 'nvarchar', wire: 'text', nullable: false },
+      { name: 'Region', dataType: 'nvarchar', wire: 'text', nullable: false },
+      { name: 'Amount', dataType: 'int', wire: 'text', nullable: false }
+    ]
+    const colsShifted: ResultColumn[] = [
+      { name: 'Server', dataType: 'nvarchar', wire: 'text', nullable: false },
+      { name: 'ExtraCol', dataType: 'nvarchar', wire: 'text', nullable: true },
+      { name: 'Amount', dataType: 'int', wire: 'text', nullable: false },
+      { name: 'Region', dataType: 'nvarchar', wire: 'text', nullable: false }
+    ]
+    const colsMissing: ResultColumn[] = [
+      { name: 'Server', dataType: 'nvarchar', wire: 'text', nullable: false },
+      { name: 'ExtraCol', dataType: 'nvarchar', wire: 'text', nullable: true }
+    ]
+    const baseClient = fakeResultClient()
+    let rebuildSeq = 0
+    const combine = vi.fn<(...args: unknown[]) => Promise<ResultsCombineResult>>(async () => {
+      rebuildSeq++
+      return {
+        descriptor: descriptor(900 + rebuildSeq, {
+          kind: 'combined',
+          index: 3,
+          statementSlot: 0,
+          columns: rebuildSeq === 1 ? colsShifted : colsMissing,
+          rowsRead: 4,
+          rowsStored: 4,
+          rowsAvailable: 4
+        })
+      }
+    })
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
+    }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+    let followNow = 10
+    const pivot = new PivotService(results, {
+      follow: { layout: () => 'stacked', resultsShowing: () => true, onLayout: () => () => {} },
+      now: () => followNow++,
+      defer: callback => callback()
+    })
+    cleanups.add(() => pivot.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, columns: colsBefore })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, columns: colsBefore })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0, columns: colsBefore })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0, columns: colsBefore })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] }), multiOutcome(sqlTargets[2], { resultSetIds: [3] })],
+        [s1, s2, s3, comb]
+      )
+    })
+    const combinedKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+
+    // Build initial Pivot on Combined: rows=[1] (Region), values=[sum of 2 (Amount)].
+    pivot.open('t1', combinedKey)
+    pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'sum', column: 2 }] })
+    await pivot.run('t1')
+    const initialPivot = results.getSnapshot().t1.groups.find(group => group.table.key === combinedKey)!.pivot!
+    expect(initialPivot.pivot?.sourceColumns).toEqual(['Server', 'Region', 'Amount'])
+
+    // Rebuild Combined in place with shifted columns: auto-follow must fire (tried tracks sourceSet!) with remapped indices (Region -> 3, Amount -> 2).
+    results.removeTargetEntries('t1', 'dev-01')
+    await results.rebuildCombined('t1', combinedKey)
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    const rebuiltHandle = baseClient.handle(901)!
+    expect(rebuiltHandle.pivot).toHaveBeenCalledTimes(1)
+    expect(rebuiltHandle.pivot).toHaveBeenCalledWith(
+      { rows: [3], values: [{ aggregate: 'sum', column: 2 }] },
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    const followedGroup = results.getSnapshot().t1.groups.find(group => group.table.key === combinedKey)!
+    expect(pivotOutOfDate(results.getSnapshot().t1, followedGroup)).toBe(false)
+    expect(followedGroup.pivot?.pivot?.sourceColumns).toEqual(['Server', 'ExtraCol', 'Amount', 'Region'])
+
+    // Rebuild Combined again dropping Region and Amount: auto-follow and explicit update() refuse cleanly without calling backend pivot().
+    await results.rebuildCombined('t1', combinedKey)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const missingHandle = baseClient.handle(902)!
+    expect(missingHandle.pivot).not.toHaveBeenCalled()
+    expect(pivot.getSnapshot().tabs.t1.error).toContain('Region')
+    expect(pivot.getSnapshot().tabs.t1.error).toContain('Amount')
+
+    await pivot.update('t1', combinedKey)
+    expect(missingHandle.pivot).not.toHaveBeenCalled()
+    expect(results.getSnapshot().t1.jobNotice).toContain('no longer in')
+  })
+
+  it('R3-3: Stacked stepResult/jumpResult step over every statement grid in stacked order and ResultsStack resets statement filter on reveal', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r3-nav.sql', 'SELECT 1; SELECT 2', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const e1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const e2 = descriptor(2, { index: 1, targetKey: 'prod-east', statementSlot: 1 })
+    const w1 = descriptor(3, { index: 2, targetKey: 'prod-west', statementSlot: 0 })
+    const w2 = descriptor(4, { index: 3, targetKey: 'prod-west', statementSlot: 1 })
+    const c1 = descriptor(10, { index: 4, kind: 'combined', statementSlot: 0 })
+    const c2 = descriptor(11, { index: 5, kind: 'combined', statementSlot: 1 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 2] }), multiOutcome(sqlTargets[1], { resultSetIds: [3, 4] })],
+        [e1, e2, w1, w2, c1, c2]
+      )
+    })
+    const keyOf = (id: number) => f.results.getSnapshot()[doc.id].sets.find(entry => entry.descriptor.resultId === id)!.key
+    const [e1Key, e2Key, w1Key, w2Key, c1Key, c2Key] = [1, 2, 3, 4, 10, 11].map(keyOf)
+    const expectedOrder = [c1Key, c2Key, e1Key, e2Key, w1Key, w2Key]
+
+    // Part A: includeSummary=false visits every statement grid in stacked order.
+    f.results.focusEntry(doc.id, c1Key)
+    const visited = [c1Key]
+    for (let step = 1; step < expectedOrder.length; step++) {
+      const next = stepResult(f.results.getSnapshot()[doc.id], 1, false)!
+      visited.push(next)
+      f.results.focusEntry(doc.id, next)
+    }
+    expect(visited).toEqual(expectedOrder)
+    expect(jumpResult(f.results.getSnapshot()[doc.id], 4, false)).toBe(e2Key)
+    expect(jumpResult(f.results.getSnapshot()[doc.id], 'last', false)).toBe(w2Key)
+    // Tabs layout (includeSummary=true) keeps Summary as item 1 and collapsed server tabs.
+    expect(jumpResult(f.results.getSnapshot()[doc.id], 1, true)).toBe(summaryEntryKey)
+
+    // Part B: ResultsStack resets selectedStmt to 'all' on stackReveals and search reveal when target is in another slot.
+    const heightSpy = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(1600)
+    cleanups.add(() => heightSpy.mockRestore())
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    const stmt1Btn = [...host.querySelectorAll<HTMLButtonElement>('.rs-stmt-btn')].find(btn => btn.textContent?.includes('Statement 1'))!
+    act(() => { stmt1Btn.click() })
+    expect(stmt1Btn.getAttribute('aria-pressed')).toBe('true')
+    expect(host.querySelector(`[data-caption-entry="${e2Key}"]`)).toBeNull()
+
+    // Request reveal via stackReveals for a Statement 2 entry -> resets filter to All statements.
+    act(() => { stackReveals.request(doc.id, e2Key) })
+    const allBtn = [...host.querySelectorAll<HTMLButtonElement>('.rs-stmt-btn')].find(btn => btn.textContent === 'All statements')!
+    expect(allBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(host.querySelector(`[data-caption-entry="${e2Key}"]`)).not.toBeNull()
+
+    // Filter back to Statement 1, then trigger search reveal for Statement 2 entry -> resets filter to All statements.
+    act(() => { stmt1Btn.click() })
+    expect(host.querySelector(`[data-caption-entry="${w2Key}"]`)).toBeNull()
+    vi.spyOn(f.resultsSearch, 'pendingReveal').mockImplementation((_tabId, key) => key === w2Key)
+    const searchSnap = f.resultsSearch.getSnapshot()
+    vi.spyOn(f.resultsSearch, 'getSnapshot').mockReturnValue({
+      ...searchSnap,
+      [doc.id]: { text: 'foo', mode: 'values', status: 'done', total: 1, current: 0, columns: 0, partial: false, approximate: false, marks: new Map(), reveal: 99, revealEntry: w2Key, revealSelect: false, focus: 0, announcement: '' }
+    })
+    act(() => { (f.resultsSearch as unknown as { publish(v: unknown): void }).publish(f.resultsSearch.getSnapshot()) })
+    expect(allBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(host.querySelector(`[data-caption-entry="${w2Key}"]`)).not.toBeNull()
+  })
+
+  it('R3-4: addSample() clears run.activeSummary so loading a BigQuery sample while Summary is active shows the sample', async () => {
+    const baseClient = fakeResultClient()
+    const client = Object.assign(baseClient, { combine: vi.fn() })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
+      remoteQuery: vi.fn<NonNullable<VariaApi['remoteQuery']>>()
+    }
+    const sampleDesc = descriptor(90, { index: 0, targetKey: 'bq-1', statementSlot: 0, rowsRead: 100, rowsStored: 100, rowsAvailable: 100 })
+    const remote = { sample: vi.fn(async () => sampleDesc), rerun: vi.fn() } as unknown as RemoteViews
+    const results = new ResultsService({ client, api, events, remote, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets: crossTargets } })
+    const sql1 = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const bqRemote = descriptor(2, { index: 1, targetKey: 'bq-1', statementSlot: 0, residence: 'remote', rowsRead: 50000, rowsStored: 0, rowsAvailable: 50000 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(crossTargets[0], { resultSetIds: [1] }), multiOutcome(crossTargets[1], { resultSetIds: [2] })],
+        [sql1, bqRemote],
+        { mode: 'crossEngineReadOnly' }
+      )
+    })
+    const bqKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.targetKey === 'bq-1')!.key
+    // Summary is active before loading the sample.
+    expect(isSummaryActive(results.getSnapshot().t1)).toBe(true)
+
+    await results.loadSample('t1', bqKey, 100, 'first')
+    const after = results.getSnapshot().t1
+    const sampleEntry = after.sets.find(entry => entry.sample)!
+    expect(sampleEntry).toBeDefined()
+    expect(isSummaryActive(after)).toBe(false)
+    expect(after.activeSummary).toBeUndefined()
+    expect(after.focused).toBe(sampleEntry.key)
+  })
+
+  it('R3-5: plain Compare with Previous Result preserves an explicit exact:false choice on Cross-Engine pairs while Exact Text variant upgrades it', async () => {
+    const { results } = serviceFixture()
+    const compare = new CompareService(results)
+    cleanups.add(() => compare.dispose())
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets: crossTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0, columns: cols })
+    const bq1 = descriptor(2, { index: 1, targetKey: 'bq-1', statementSlot: 0, columns: cols })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(crossTargets[0], { resultSetIds: [1] }), multiOutcome(crossTargets[1], { resultSetIds: [2] })],
+        [s1, bq1],
+        { mode: 'crossEngineReadOnly' }
+      )
+    })
+    const [sqlKey, bqKey] = results.getSnapshot().t1.sets.map(entry => entry.key)
+
+    // User explicitly creates a non-exact comparison on the Cross-Engine pair.
+    const made = await compare.comparePair('t1', sqlKey, bqKey, { exact: false })
+    expect(made && 'key' in made).toBe(true)
+    const diffKey = (made as { readonly key: string }).key
+    const slotBefore = results.getSnapshot().t1.comparisons.find(slot => slot.key === diffKey)!
+    expect(compare.stateOf('t1', slotBefore.entry)?.exact).toBe(false)
+
+    // Plain Compare with Previous Result focuses it without overwriting exact: false.
+    results.focusEntry('t1', bqKey)
+    await compare.compare('t1', bqKey)
+    const slotAfterPlain = results.getSnapshot().t1.comparisons.find(slot => slot.key === diffKey)!
+    expect(results.getSnapshot().t1.focused).toBe(diffKey)
+    expect(compare.stateOf('t1', slotAfterPlain.entry)?.exact).toBe(false)
+
+    // Explicit Exact Text variant upgrades it to exact: true.
+    await compare.compare('t1', bqKey, { exact: true })
+    const slotAfterExact = results.getSnapshot().t1.comparisons.find(slot => slot.key === diffKey)!
+    expect(compare.stateOf('t1', slotAfterExact.entry)?.exact).toBe(true)
+
+    // First-time plain compare (when no comparison exists) still defaults Cross-Engine to exact: true.
+    results.removeEntry('t1', diffKey)
+    await compare.compare('t1', bqKey)
+    const freshSlot = results.getSnapshot().t1.comparisons[0]
+    expect(compare.stateOf('t1', freshSlot.entry)?.exact).toBe(true)
+  })
+
+  it('R3-6: combine warnings are tracked per Combined entry so rebuilding Statement 1 never wipes Statement 2 warnings', async () => {
+    const baseClient = fakeResultClient()
+    const nextWarnings: (readonly string[])[] = [[], ['Stmt 1 drift'], ['Stmt 2 drift'], []]
+    let seq = 0
+    const combine = vi.fn<(...args: unknown[]) => Promise<ResultsCombineResult>>(async () => {
+      const idx = seq++
+      const warnings = nextWarnings[idx] ?? []
+      return {
+        descriptor: descriptor(700 + idx, { kind: 'combined', index: 0, statementSlot: idx === 2 ? 1 : 0, rowsRead: 2, rowsStored: 2, rowsAvailable: 2 }),
+        warnings: [...warnings]
+      } as ResultsCombineResult
+    })
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
+    }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const sets = [
+      descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 }),
+      descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 }),
+      descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 }),
+      descriptor(4, { index: 3, targetKey: 'prod-east', statementSlot: 1 }),
+      descriptor(5, { index: 4, targetKey: 'prod-west', statementSlot: 1 }),
+      descriptor(6, { index: 5, targetKey: 'dev-01', statementSlot: 1 }),
+      descriptor(10, { index: 6, kind: 'combined', statementSlot: 0 }),
+      descriptor(11, { index: 7, kind: 'combined', statementSlot: 1 })
+    ]
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 4] }), multiOutcome(sqlTargets[1], { resultSetIds: [2, 5] }), multiOutcome(sqlTargets[2], { resultSetIds: [3, 6] })],
+        sets,
+        { combineWarnings: ['Initial warning'] }
+      )
+    })
+    const c1Key = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined' && entry.descriptor.statementSlot === 0)!.key
+    const c2Key = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined' && entry.descriptor.statementSlot === 1)!.key
+    results.removeTargetEntries('t1', 'dev-01')
+
+    // Rebuild Stmt 1 cleanly ([]): Stmt 1 clears its warning, Stmt 2 keeps Initial warning.
+    await results.rebuildCombined('t1', c1Key)
+    let tab = results.getSnapshot().t1
+    expect(tab.multi?.combineWarnings).toEqual(['Initial warning'])
+    expect(entryNotices(tab, tab.sets.find(e => e.key === c1Key)!).some(n => n.kind === 'combineWarning')).toBe(false)
+    expect(entryNotices(tab, tab.sets.find(e => e.key === c2Key)!).find(n => n.kind === 'combineWarning')?.text).toBe('Initial warning')
+
+    // Rebuild Stmt 1 with its own warning, then Stmt 2 with its own warning, then Stmt 1 cleanly again -> Stmt 2's warning survives!
+    await results.rebuildCombined('t1', c1Key)
+    await results.rebuildCombined('t1', c2Key)
+    await results.rebuildCombined('t1', c1Key)
+    tab = results.getSnapshot().t1
+    expect(tab.multi?.combineWarnings).toEqual(['Stmt 2 drift'])
+    expect(entryNotices(tab, tab.sets.find(e => e.key === c1Key)!).some(n => n.kind === 'combineWarning')).toBe(false)
+    expect(entryNotices(tab, tab.sets.find(e => e.key === c2Key)!).find(n => n.kind === 'combineWarning')?.text).toBe('Stmt 2 drift')
+  })
+
+  it('R3-7: picking Summary from ResultsPicker while fold===none removes data-fold on render and focuses the visible Summary tab', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r3-fold.sql', 'SELECT 1', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s1, s2]
+      )
+    })
+    const firstKey = f.results.getSnapshot()[doc.id].sets[0].key
+    f.results.focusEntry(doc.id, firstKey)
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    // Simulate a short pane where tabsFold returns 'none' for a grid.
+    const heightSpy = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(80)
+    cleanups.add(() => heightSpy.mockRestore())
+    const renderTabs = () => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    renderTabs()
+    const rtRoot = host.querySelector<HTMLElement>('.rt-root')!
+    expect(rtRoot.getAttribute('data-fold')).toBe('none')
+
+    // Open ResultsPicker and pick Summary while data-fold="none".
+    act(() => { pickerRequests.request(doc.id) })
+    const summaryOption = [...document.querySelectorAll<HTMLElement>('[data-results-picker] [role="option"]')].find(el => el.textContent?.includes('Summary'))!
+    expect(summaryOption).toBeDefined()
+    act(() => { summaryOption.click() })
+    renderTabs()
+
+    expect(rtRoot.getAttribute('data-fold')).toBeNull()
+    const summaryTab = host.querySelector<HTMLButtonElement>(`[data-tab-row="result"] [data-tab-entry="${summaryEntryKey}"] [role="tab"]`)!
+    expect(document.activeElement).toBe(summaryTab)
+  })
+
+  it('R3-8: StackSizing.keepFloor prevents single-set multi-server stack starvation in short panes', () => {
+    const minHeight = minGridHeight(scrollbarSize())
+    // Without keepFloor (single-server), a 1-set stack fills pane height directly.
+    expect(stackLayout(60, 1, undefined, minHeight).heights).toEqual([60])
+    // With keepFloor (multi-server stack sharing space with Summary band), 1-set stack enforces its floor.
+    const guarded = stackLayout(60, 1, undefined, minHeight, { keepFloor: true })
+    expect(guarded.heights[0]).toBe(minHeight)
+    expect(guarded.total).toBe(minHeight)
+
+    // Mounted ResultsStack passes keepFloor: multi so a 1-set multi-server stack in a 60px pane keeps minHeight.
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r3-floor.sql', 'SELECT 1', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, rowsRead: 50, rowsStored: 50, rowsAvailable: 50 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf([multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1])], [s1])
+    })
+    const heightSpy = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(60)
+    cleanups.add(() => heightSpy.mockRestore())
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    const item = host.querySelector<HTMLElement>('.rs-item')!
+    expect(parseInt(item.style.height, 10)).toBeGreaterThanOrEqual(minHeight)
+  })
+
+  it('R3-9: OutputPane hides PivotPanel when Summary is active in Tabs layout', async () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    await f.settings.choose('queryResults.grid.layout', 'tabs')
+    const doc = f.documents.create('r3-pivot-hide.sql', 'SELECT 1', 'SalesDB')
+    f.documents.activate(doc.id)
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s1, s2]
+      )
+    })
+    const firstKey = f.results.getSnapshot()[doc.id].sets[0].key
+    f.results.focusEntry(doc.id, firstKey)
+    f.pivot.open(doc.id, firstKey)
+
+    const emptyRetained = { entries: [] }
+    const emptyQueryPlans = {}
+    const paneWorkbench = {
+      ...f,
+      retainedPlans: { subscribe: () => () => {}, getSnapshot: () => emptyRetained },
+      queryPlans: { subscribe: () => () => {}, getSnapshot: () => emptyQueryPlans }
+    } as unknown as Workbench
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: paneWorkbench,
+      children: createElement(OutputPane, { pane: 'results', tabId: doc.id, query: true, connected: true })
+    }))
+    // Grid active in Tabs layout: PivotPanel renders.
+    expect(host.querySelector('.pivot-panel')).not.toBeNull()
+
+    // Switch to Summary in Tabs layout: PivotPanel hides.
+    act(() => { f.results.focusEntry(doc.id, summaryEntryKey) })
+    expect(host.querySelector('.pivot-panel')).toBeNull()
+
+    // Switch to Stacked layout (grids shown): PivotPanel renders again.
+    await act(async () => { await f.settings.choose('queryResults.grid.layout', 'stacked') })
+    expect(host.querySelector('.pivot-panel')).not.toBeNull()
+  })
+
+  it('R3-10: ResultsTabs statementLabel renders BigQuery sample label instead of duplicate Statement 1', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r3-sample-label.sql', 'SELECT 1', 'sales_dw')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'crossEngineReadOnly', targets: crossTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const bq1 = descriptor(2, { index: 1, targetKey: 'bq-1', statementSlot: 0, residence: 'remote', rowsRead: 50000, rowsStored: 0, rowsAvailable: 50000 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(crossTargets[0], { resultSetIds: [1] }), multiOutcome(crossTargets[1], { resultSetIds: [2] })],
+        [s1, bq1],
+        { mode: 'crossEngineReadOnly' }
+      )
+    })
+    const baseTab = f.results.getSnapshot()[doc.id]
+    const bqGroup = baseTab.groups.find(group => group.table.entry.descriptor.targetKey === 'bq-1')!
+    const sampleEntry = {
+      ...bqGroup.table.entry,
+      key: 'sample-1',
+      ordinal: -1,
+      number: 3,
+      sample: true as const,
+      label: 'Sample: 1,000 of 50,000 rows'
+    }
+    const sampleGroup = { ...bqGroup, ordinal: -1, table: { ...bqGroup.table, key: 'sample-1', group: -1, entry: sampleEntry } }
+    const tabWithSample = { ...baseTab, sets: [...baseTab.sets, sampleEntry], groups: [...baseTab.groups, sampleGroup], focused: bqGroup.table.key, activeSummary: undefined }
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsTabs, { tabId: doc.id, tab: tabWithSample })
+    }))
+    const stmtLabels = [...host.querySelectorAll<HTMLButtonElement>('[data-tab-row="stmt"] [role="tab"]')].map(btn => btn.textContent)
+    expect(stmtLabels).toEqual(['Statement 1', 'Sample: 1,000 of 50,000 rows'])
+  })
+
+  it('R3-11: entrySecondary returns Result N for unnamed multi-server target and combined results', () => {
+    const { results } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const e1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const e2 = descriptor(2, { index: 1, targetKey: 'prod-east', statementSlot: 1 })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 2] }), multiOutcome(sqlTargets[1])],
+        [e1, e2, comb]
+      )
+    })
+    const tab = results.getSnapshot().t1
+    const [entry1, entry2, entryComb] = tab.sets
+    expect(entrySecondary(entry1)).toBe('Result 1')
+    expect(entrySecondary(entry2)).toBe('Result 2')
+    expect(entrySecondary(entryComb)).toBe('Result 3')
+    expect(numberedName(entry1)).toBe('prod-sql-east-01 · Result 1')
+    expect(numberedName(entry2)).toBe('prod-sql-east-01 · Result 2')
+    expect(numberedName(entryComb)).toBe('Combined · Result 3')
+    // Single-server unnamed entry stays undefined.
+    expect(entrySecondary({ number: 1, descriptor: { name: undefined, kind: 'rows' } })).toBeUndefined()
+    // ResultsPicker rows carry distinct Result N secondary tags for unnamed multi-statement target results.
+    const rows = pickerRows(tab).filter(row => row.kind === 'table')
+    expect(rows.map(row => row.number)).toEqual(['Result 1', 'Result 2', 'Result 3'])
+  })
+
+  it('R3-12: .multi-env-pill and .multi-phase-pill declare transparent borders and CanvasText border-color under forced-colors', () => {
+    const rules = stylesheetRules()
+    const envPill = rules.find(rule => rule.at.length === 0 && rule.selector === '.multi-env-pill')
+    const phasePill = rules.find(rule => rule.at.length === 0 && rule.selector === '.multi-phase-pill')
+    expect(envPill?.declarations).toContainEqual({ property: 'border', value: '1px solid transparent' })
+    expect(phasePill?.declarations).toContainEqual({ property: 'border', value: '1px solid transparent' })
+    const forcedBorders = rules.filter(rule =>
+      rule.at.includes('@media (forced-colors: active)')
+      && rule.declarations.some(decl => decl.property === 'border-color' && decl.value === 'CanvasText')
+    )
+    expect(forcedBorders.some(rule => rule.selector.includes('.multi-env-pill'))).toBe(true)
+    expect(forcedBorders.some(rule => rule.selector.includes('.multi-phase-pill'))).toBe(true)
   })
 })

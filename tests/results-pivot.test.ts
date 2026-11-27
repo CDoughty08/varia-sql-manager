@@ -201,7 +201,7 @@ describe('PivotService', () => {
     expect(pivot.getSnapshot().info.get(setKey(sets[2].descriptor))).toEqual({ source: table, sourceLabel: 'Result 2', viewed: false, rows: 3, rowGroups: 2, columnGroups: 0, approximate: false, partial: false })
     expect(pivot.getSnapshot().tabs.t1).toMatchObject({ running: false, pivot: sets[2].key })
     // The slot records what the build read: its recipe, no filters (it read the stored rows), its rows, and a whole source.
-    expect(tab.groups[1].pivot!.pivot).toEqual({ recipe: { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, filters: [], inputRows: 3, truncated: false, incomplete: false, approximate: false, buildMs: expect.any(Number) })
+    expect(tab.groups[1].pivot!.pivot).toEqual({ recipe: { rows: [0], column: 1, values: [{ aggregate: 'sum', column: 2 }, { aggregate: 'count', column: 0 }] }, sourceColumns: ['Region', 'Year', 'Amount', 'Flag', 'Blob'], filters: [], inputRows: 3, truncated: false, incomplete: false, approximate: false, buildMs: expect.any(Number) })
     // Edit Pivot: opened on the Pivot, the builder starts from its recipe, whatever the draft became since.
     pivot.setDraft('t1', { rows: [1], values: [{ aggregate: 'count' }] })
     pivot.open('t1', sets[2].key)
@@ -738,7 +738,7 @@ describe('PivotService', () => {
     await settle()
     expect(filtered.close).toHaveBeenCalledOnce()
     // The Pivot records the filters it applied.
-    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toEqual({ recipe: emptyDraft, filters: [{ op: 'in', column: 0, rows: [2], nulls: false }], inputRows: 1, truncated: false, incomplete: false, approximate: false, buildMs: expect.any(Number) })
+    expect(results.getSnapshot().t1.groups[0].pivot!.pivot).toEqual({ recipe: emptyDraft, sourceColumns: ['Region', 'Year', 'Amount', 'Flag', 'Blob'], filters: [{ op: 'in', column: 0, rows: [2], nulls: false }], inputRows: 1, truncated: false, incomplete: false, approximate: false, buildMs: expect.any(Number) })
     // The backend evicted the grid's view, which stays evicted: the build runs once more over the same order and filters
     // built again for it alone, and closes that view after.
     const evicted = new ResultError('VIEW_NOT_FOUND', 'This sorted view was closed. Sort the results again.')

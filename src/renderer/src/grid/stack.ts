@@ -29,6 +29,8 @@ export interface StackSizing {
   readonly collapsed?: ReadonlySet<number>
   /** Extra fixed chrome height (e.g. multi-server notice strips) above each set's grid, added to its minimum floor. */
   readonly extraMin?: readonly number[]
+  /** Enforce the single-set minimum floor even without extra notice strips (e.g. multi-server stack with open Summary band). */
+  readonly keepFloor?: boolean
 }
 
 /**
@@ -44,7 +46,7 @@ export function stackLayout(paneHeight: number, count: number, weights: readonly
   if (count === 1) {
     if (collapsed?.has(0)) return { heights: [g.captionHeight], offsets: [0], total: pane }
     const extra = Math.max(0, sizing.extraMin?.[0] ?? 0)
-    const height = extra > 0 ? Math.max(pane, setFloors(1, minHeight, sizing)[0]) : pane
+    const height = extra > 0 || sizing.keepFloor ? Math.max(pane, setFloors(1, minHeight, sizing)[0]) : pane
     return { heights: [height], offsets: [0], total: Math.max(pane, height) }
   }
   const valid = weights?.length === count && weights.every(weight => Number.isFinite(weight) && weight > 0) ? weights : undefined
