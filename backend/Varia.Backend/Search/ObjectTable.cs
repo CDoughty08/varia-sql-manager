@@ -76,6 +76,16 @@ internal sealed class ObjectTable
     /// <summary>The editor metadata (types, index and key columns), or null where the read kept no children.</summary>
     public ObjectDetails? Details => details;
 
+    /// <summary>The entries as the table holds them, for <see cref="IndexFile"/>, which saves them as they are.</summary>
+    internal ReadOnlySpan<ObjectEntry> Entries => entries;
+    /// <summary>The dates the entries' 32 bits cannot hold, by entry, or null.</summary>
+    internal IReadOnlyDictionary<int, DateTime>? Dates => dates;
+
+    /// <summary>A table of parts <see cref="IndexFile"/> loaded and checked (<see cref="IndexFileUnit"/>): the arrays are the
+    /// table's from here on. Its shapes are its own, by the ids its entries carry, not the process's.</summary>
+    internal static ObjectTable FromParts(ObjectEntry[] entries, object?[] texts, ObjectShapes.Shape[] shapes, Dictionary<int, DateTime>? dates, ObjectDetails? details) =>
+        new(entries, texts, shapes, dates, details);
+
     /// <summary>The type of the column, parameter or scalar function at <paramref name="at"/>, or null.</summary>
     public TypedDetail? Typed(int at) => details?.Typed(at, texts);
 

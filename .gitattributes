@@ -3,3 +3,5 @@
 * text=auto eol=lf
 # Golden result pages (tests/fixtures/pages) are protocol bytes, compared byte for byte.
 *.page binary
+# Index files of each format version (backend/Varia.Backend.Tests/Fixtures/IndexFile) are loaded as the bytes they were written.
+*.vidx binary

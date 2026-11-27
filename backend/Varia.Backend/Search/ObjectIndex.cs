@@ -228,6 +228,45 @@ internal sealed class ObjectIndexLimits
     public int PreviewChars { get; init; } = 160;
 }
 
+/// <summary>Bounds on one saved unit of the index (<see cref="IndexFile"/>). A file is untrusted input: the loader checks every
+/// length and count against these, and the writer refuses a unit past them rather than write a file no reader takes. What a
+/// load keeps it charges to the index's budget first, as a read does; these bound the little it does not charge (the shapes,
+/// the caller's bytes, one text at a time, a bit or two for each entry a load without children reads past).</summary>
+internal static class IndexFileLimits
+{
+    /// <summary>One file, header and body.</summary>
+    public const long FileBytes = 4L << 30;
+    /// <summary>Entries in one unit's table, and in the shared resource set's (which is charged whatever the budget holds).</summary>
+    public const int Objects = 1 << 25;
+    public const int ResourceObjects = 1 << 21;
+    /// <summary>Distinct texts in one unit's table.</summary>
+    public const int Texts = 1 << 26;
+    /// <summary>One text in UTF-16 code units: the longest definition the index keeps by default (<see cref="ObjectIndexLimits.DefinitionChars"/>),
+    /// rounded up.</summary>
+    public const int TextChars = 1 << 20;
+    /// <summary>A text an entry or a type is named by. Search builds a label of an object's names for every candidate, so a
+    /// name is held to what the sources give: the longest is a BigQuery field path, 15 names of 300 characters.</summary>
+    public const int NameTextChars = 5000;
+    /// <summary>Dates outside what an entry's 32 bits hold (before 1970): kept beside the table, uncharged, so few.</summary>
+    public const int Dates = 1 << 16;
+    /// <summary>The kind, folder and subtype combinations one unit names (the process knows a few hundred), and each one's length.</summary>
+    public const int Shapes = 4096;
+    public const int ShapeChars = 64;
+    /// <summary>A unit's types (<see cref="ObjectDetails"/> numbers them in 16 bits) and the columns its indexes and keys list.</summary>
+    public const int Types = ushort.MaxValue + 1;
+    public const int KeyColumns = 1 << 27;
+    /// <summary>The columns of one index or key (SQL Server's most is 32 key columns and 1,023 included ones).</summary>
+    public const int KeyColumnsPerKey = 4096;
+    /// <summary>A database's, project's or dataset's name, or a server's version.</summary>
+    public const int NameChars = 1024;
+    /// <summary>A BigQuery fact's text (a signature, a description, a shard group's prefix), as a read clips it.</summary>
+    public const int FactChars = BigQueryIndexLimits.FactChars;
+    /// <summary>The caller's identity and sync state in the header, and the opaque bytes it may keep in the body.</summary>
+    public const int IdentityBytes = 1024;
+    public const int SyncBytes = 1 << 20;
+    public const int ExtraBytes = 32 << 20;
+}
+
 /// <summary>The memory held by every connection's index (<see cref="IndexMemory"/>), in bytes.</summary>
 internal sealed class IndexBudget(long limit)
 {

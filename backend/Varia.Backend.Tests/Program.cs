@@ -27,6 +27,12 @@ if (args is [SearchBench.Argument])
     return;
 }
 // tests/bench/search.bench.ts: measures only, no checks.
+if (args is [IndexFileBench.Argument])
+{
+    IndexFileBench.Run();
+    return;
+}
+// tests/bench/search.bench.ts: measures only, no checks.
 if (args is [FindBench.MessagesArgument, var messagesServer, ..])
 {
     FindBench.RunMessages(messagesServer, args.Length > 2 ? args[2] : null);
@@ -155,6 +161,18 @@ if (args is ["--seal-packing-checks"])
 {
     SealPackingChecks.Run(Check);
     Console.WriteLine("Passed " + passed + " seal packing checks.");
+    return;
+}
+if (args is ["--index-file-checks"])
+{
+    await IndexFileChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " index file checks.");
+    return;
+}
+// Writes the index file format's committed files (Fixtures/IndexFile) for the current format version: only when it changes.
+if (args is [IndexFileChecks.GoldensArgument, var goldenFolder])
+{
+    await IndexFileChecks.WriteGoldens(goldenFolder);
     return;
 }
 if (args is ["--result-name-checks"])
@@ -535,6 +553,7 @@ if (liveGroup is null)
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
         ("Peek", () => PeekChecks.RunAsync(Check)),
         ("Search", Sync(() => SearchChecks.Run(Check))),
+        ("IndexFile", () => IndexFileChecks.RunAsync(Check)),
         ("Scripting", () => ScriptingChecks.RunAsync(Check)),
         ("Action", () => ActionChecks.RunAsync(Check)),
         ("ServerFiles", () => ServerFilesChecks.RunAsync(Check)),

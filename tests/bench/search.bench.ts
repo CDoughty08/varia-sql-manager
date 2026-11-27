@@ -18,6 +18,26 @@ it('measures a one-letter object search over a million objects, and a scan of pa
   )
 })
 
+// The Search Objects index's on-disk format (backend/Varia.Backend/Search/IndexFile.cs), timed inside the .NET test program
+// (backend/Varia.Backend.Tests/IndexFileBench.cs): one database of about 300,000 objects saved to a file and loaded back,
+// encrypted, with its size on disk against the memory it holds.
+it('measures saving and loading a 300,000-object unit of the object index', () => {
+  const output = execFileSync('dotnet', ['run', '--project', 'backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj', '--configuration', 'Release', '--', '--index-file-bench'],
+    { encoding: 'utf8', timeout: 280_000, maxBuffer: 16 * 1024 * 1024 })
+  const measured = new Map(output.split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line) as Metric).map(metric => [metric.id, metric]))
+  const read = (id: string) => {
+    const metric = measured.get(id)
+    expect(metric, id).toBeTruthy()
+    return { value: metric!.value, unit: metric!.unit, detail: metric!.detail }
+  }
+  record(
+    { id: 'node.indexFile.saveMs', ...read('node.indexFile.saveMs') },
+    { id: 'node.indexFile.loadMs', ...read('node.indexFile.loadMs') },
+    { id: 'node.indexFile.diskPerMemory', ...read('node.indexFile.diskPerMemory') },
+    { id: 'node.indexFile.headerMs', ...read('node.indexFile.headerMs') }
+  )
+})
+
 // Find's pre-check before a culture compare (backend/Varia.Backend/Results/SearchFold.cs), timed inside the .NET test
 // program (backend/Varia.Backend.Tests/FindBench.cs) over fictional multilingual cells, with and without the pre-check, and
 // type-ahead narrowing (Results/SearchNarrowing.cs): a word typed a key at a time, narrowed and searching every row.
