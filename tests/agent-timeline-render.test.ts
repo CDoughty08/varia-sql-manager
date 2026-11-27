@@ -7,6 +7,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { freq, noEndDate, subday } from '../src/shared/agent/schedule'
 import type { AgentScheduleRecord, AgentSchedulesModel } from '../src/shared/actions/agent-schedule'
+import * as timelineModule from '../src/shared/agent/timeline'
 import type { TimelineSpan } from '../src/shared/agent/timeline'
 import SchedulesTimeline from '../src/renderer/src/agent/SchedulesTimeline'
 import { timelineFiltered } from '../src/renderer/src/agent/SchedulesService'
@@ -101,5 +102,76 @@ describe('the Schedules Timeline as rendered', () => {
     const below = read({ sysadmin: false, jobs: undefined, links: undefined })
     expect(timelineFiltered(below, 'twice').schedules.map(item => item.name)).toEqual(['Twice a day'])
     expect(timelineFiltered(below, 'reports').schedules).toEqual([])
+  })
+  it('shows a single overlap inline and collapses multiple overlaps into an expandable drawer', () => {
+    // 1 overlap: inline directly inside Overlaps region without collapsing
+    const single = read({
+      schedules: [record(1, 'Nightly 02:30', 23000)],
+      jobs: [job('A', 'Nightly'), job('B', 'Backup')],
+      links: [{ scheduleId: 1, jobId: 'A' }, { scheduleId: 1, jobId: 'B' }],
+      durations: [{ jobId: 'A', seconds: 1080 }, { jobId: 'B', seconds: 300 }]
+    })
+    const viewSingle = mount(single)
+    const regionSingle = container!.querySelector('[role="region"][aria-label="Overlaps"]')!
+    expect(regionSingle).not.toBeNull()
+    expect(regionSingle.querySelector('button[aria-expanded]')).toBeNull()
+    expect(regionSingle.textContent).toContain('Backup starts once during Nightly.')
+    expect(regionSingle.querySelector('button.agent-schedules-link')?.textContent).toContain('Open Nightly 02:30')
+
+    // 2..8 overlaps: drawer with toggle starts expanded and can collapse
+    const few = read({
+      schedules: [record(1, 'Nightly 02:30', 23000), record(2, 'Morning 06:00', 60000)],
+      jobs: [job('A', 'Nightly'), job('B', 'Backup'), job('C', 'Reports'), job('D', 'Extract')],
+      links: [{ scheduleId: 1, jobId: 'A' }, { scheduleId: 1, jobId: 'B' }, { scheduleId: 2, jobId: 'C' }, { scheduleId: 2, jobId: 'D' }],
+      durations: [{ jobId: 'A', seconds: 1080 }, { jobId: 'B', seconds: 300 }, { jobId: 'C', seconds: 900 }, { jobId: 'D', seconds: 300 }]
+    })
+    viewSingle.draw(few)
+    const regionFew = container!.querySelector('[role="region"][aria-label="Overlaps"]')!
+    const fewToggle = regionFew.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+    expect(fewToggle.getAttribute('aria-expanded')).toBe('true')
+    expect(fewToggle.textContent).toContain('2 overlaps detected')
+    expect(regionFew.querySelectorAll('.agent-timeline-note')).toHaveLength(2)
+    act(() => { fewToggle.click() })
+    expect(fewToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(regionFew.querySelectorAll('.agent-timeline-note')).toHaveLength(0)
+
+    // > 8 overlaps: collapsed by default with aria-expanded toggle, expands on click
+    const manySchedules = Array.from({ length: 10 }, (_, idx) => record(idx + 1, `Sched ${idx + 1}`, (idx + 1) * 10000))
+    const manyJobs = Array.from({ length: 10 }, (_, idx) => [job(`J${idx}A`, `Job ${idx}A`), job(`J${idx}B`, `Job ${idx}B`)]).flat()
+    const manyLinks = Array.from({ length: 10 }, (_, idx) => [{ scheduleId: idx + 1, jobId: `J${idx}A` }, { scheduleId: idx + 1, jobId: `J${idx}B` }]).flat()
+    const manyDurations = manyJobs.map(item => ({ jobId: item.id, seconds: 600 }))
+    const many = read({ schedules: manySchedules, jobs: manyJobs, links: manyLinks, durations: manyDurations })
+    viewSingle.draw(many)
+    const regionMulti = container!.querySelector('[role="region"][aria-label="Overlaps"]')!
+    const toggle = regionMulti.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+    expect(toggle).not.toBeNull()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toContain('10 overlaps detected')
+    expect(regionMulti.querySelectorAll('.agent-timeline-note')).toHaveLength(0)
+
+    act(() => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(regionMulti.querySelectorAll('.agent-timeline-note')).toHaveLength(10)
+  })
+
+  it('renders overlapsCut inline without "0 overlaps detected" when overlaps, selfOverlaps, and moreOverlaps are empty', () => {
+    const realTimelineModel = timelineModule.timelineModel
+    const spy = vi.spyOn(timelineModule, 'timelineModel').mockImplementation(input => ({
+      ...realTimelineModel(input),
+      overlaps: [],
+      selfOverlaps: [],
+      moreOverlaps: 0,
+      overlapsCut: true
+    }))
+    try {
+      mount(read())
+      const region = container!.querySelector('[role="region"][aria-label="Overlaps"]')!
+      expect(region).not.toBeNull()
+      expect(region.textContent).toContain(timelineModule.timelineText.overlapsCut)
+      expect(region.textContent).not.toContain('0 overlaps detected')
+      expect(region.querySelector('button[aria-expanded]')).toBeNull()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

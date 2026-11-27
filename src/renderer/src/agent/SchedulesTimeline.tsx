@@ -66,6 +66,7 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   // The active run by its row's key, its moment on the server's clock and its schedule (two schedules may start a job together), so a
   // Refresh (rows re-sorted, the window's start moved on) or the filter keeps it on the same run, or drops it when that run is gone.
   const [picked, setPicked] = useState<{ readonly key: string; readonly at?: number; readonly scheduleId?: number }>()
+  const [overlapOverride, setOverlapOverride] = useState<{ readonly key: string; readonly open: boolean }>()
   const axis = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const lanes = useRef<(HTMLDivElement | null)[]>([])
@@ -191,6 +192,19 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
   const announced = activeRow && activeRun ? timelineText.run(model, activeRow, activeRun) : ''
   const spanId = `agent-timeline-span-${documentId}`
   const zoomed = viewport.seconds < seconds
+  const totalNotes = model.overlaps.length + model.selfOverlaps.length
+  const hasOverflow = model.moreOverlaps > 0 || model.overlapsCut
+  const overlapKey = `${totalNotes}:${hasOverflow ? 1 : 0}`
+  const overlapsOpen = overlapOverride?.key === overlapKey ? overlapOverride.open : !(totalNotes > 8 || hasOverflow)
+  const renderOverlapNotes = () => <>
+    {model.overlaps.map(overlap => <p key={`${overlap.row}:${overlap.start}:${overlap.scheduleId}`} className="agent-timeline-note"><Icon name="warning" />
+      <span>{timelineText.overlap(model, overlap)}</span>
+      <button type="button" className="agent-schedules-link" onClick={() => onOpenSchedule(overlap.scheduleId)}>
+        Open {rows.find(row => row.key === overlap.row)?.schedules.find(item => item.id === overlap.scheduleId)?.name ?? 'schedule'}</button></p>)}
+    {model.moreOverlaps > 0 && <p className="field-note">{timelineText.moreOverlaps(model.moreOverlaps)}</p>}
+    {model.overlapsCut && <p className="field-note">{timelineText.overlapsCut}</p>}
+    {model.selfOverlaps.map(self => <p key={self.row} className="agent-timeline-note"><Icon name="warning" /><span>{timelineText.self(self)}</span></p>)}
+  </>
   return <div className="agent-timeline-wrap" data-agent-timeline={documentId}>
     <div className="agent-timeline-tools" role="toolbar" aria-label="Timeline">
       <span id={spanId} className="visually-hidden">Window</span>
@@ -221,14 +235,18 @@ export default function SchedulesTimeline({ documentId, model: read, span, onSpa
     </div>
     <p id={`${spanId}-run`} className="visually-hidden" aria-live="polite">{announced}</p>
     {!rows.length && <p className="field-note">{timelineText.none}</p>}
-    {(model.overlaps.length > 0 || model.selfOverlaps.length > 0) && <div className="agent-timeline-notes" role="region" aria-label="Overlaps">
-      {model.overlaps.map(overlap => <p key={`${overlap.row}:${overlap.start}:${overlap.scheduleId}`} className="agent-timeline-note"><Icon name="warning" />
-        <span>{timelineText.overlap(model, overlap)}</span>
-        <button type="button" className="agent-schedules-link" onClick={() => onOpenSchedule(overlap.scheduleId)}>
-          Open {rows.find(row => row.key === overlap.row)?.schedules.find(item => item.id === overlap.scheduleId)?.name ?? 'schedule'}</button></p>)}
-      {model.moreOverlaps > 0 && <p className="field-note">{timelineText.moreOverlaps(model.moreOverlaps)}</p>}
-      {model.overlapsCut && <p className="field-note">{timelineText.overlapsCut}</p>}
-      {model.selfOverlaps.map(self => <p key={self.row} className="agent-timeline-note"><Icon name="warning" /><span>{timelineText.self(self)}</span></p>)}
+    {(totalNotes > 0 || hasOverflow) && <div className="agent-timeline-notes tl-overlap-drawer" role="region" aria-label="Overlaps">
+      {(totalNotes === 1 && !hasOverflow) || (totalNotes === 0 && model.moreOverlaps === 0 && model.overlapsCut) ? renderOverlapNotes() : <>
+        <button type="button" className="agent-timeline-overlaps-head" aria-expanded={overlapsOpen} onClick={() => setOverlapOverride({ key: overlapKey, open: !overlapsOpen })}>
+          <Icon name={overlapsOpen ? 'chevron-down' : 'chevron-right'} />
+          <Icon name="warning" />
+          <span><strong>{`${totalNotes}${model.moreOverlaps > 0 ? '+' : ''} ${totalNotes === 1 && model.moreOverlaps === 0 ? 'overlap' : 'overlaps'} detected`}</strong></span>
+          <span className="agent-timeline-overlaps-toggle">{overlapsOpen ? 'Hide details' : 'Show details'}</span>
+        </button>
+        {overlapsOpen && <div className="agent-timeline-overlaps-list">
+          {renderOverlapNotes()}
+        </div>}
+      </>}
     </div>}
     {model.rowsLeftOut > 0 && <p className="field-note">{timelineText.rowsLeftOut(model.rowsLeftOut)}</p>}
     {model.runsCut && <p className="field-note">{timelineText.runsCut}</p>}
