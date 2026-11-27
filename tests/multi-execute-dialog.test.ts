@@ -509,6 +509,87 @@ describe('MultiExecuteDialog', () => {
     await expect(second).resolves.toBeUndefined()
     expect(service.getSnapshot().pending).toBeUndefined()
   })
+
+  it('R2 Finding 11: disables submit and blocks stray Enter while BigQuery dry runs are estimating or when cost warnings are present', async () => {
+    const p1 = deferred<ApiResult<BigQueryDryRunResult>>()
+    const p2 = deferred<ApiResult<BigQueryDryRunResult>>()
+    const estimator = vi.fn<BigQueryDryRunEstimator>(req => req.connectionId === bqTarget(1).connectionId ? p1.promise : p2.promise)
+
+    // SELECT query on non-PROD BigQuery projects (so hasProd && isMutation is false!).
+    const { form, radio, onConfirm } = await mountDialog({
+      tabId: 'tab-cost-guard',
+      provider: 'bigquery',
+      sql: 'SELECT * FROM core.events;',
+      targets: [
+        bqTarget(1, { costPrompt: true, costThresholdBytes: 5 * GiB }),
+        bqTarget(2, { costPrompt: true, costThresholdBytes: 5 * GiB })
+      ],
+      prices: true
+    }, { estimateBigQuery: estimator })
+
+    const submit = form().querySelector<HTMLButtonElement>('button[type="submit"]')!
+    // 1. While dry runs are estimating, submit is disabled and programmatic submit / Enter do nothing.
+    expect(submit.disabled).toBe(true)
+    const enterWhileEstimating = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    await act(async () => {
+      radio('fireAndForget').dispatchEvent(enterWhileEstimating)
+      form().dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })
+    expect(enterWhileEstimating.defaultPrevented).toBe(true)
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    // 2. Resolve dry runs with target 1 exceeding its cost threshold -> submit enables, but stray Enter on radio is STILL blocked by hasCostWarning!
+    await act(async () => {
+      p1.resolve({ ok: true, value: { bytesProcessed: 12 * GiB } })
+      p2.resolve({ ok: true, value: { bytesProcessed: 1 * GiB } })
+      await Promise.resolve()
+    })
+    await flush()
+    expect(submit.disabled).toBe(false)
+
+    const enterWithWarning = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    await act(async () => {
+      radio('fireAndForget').dispatchEvent(enterWithWarning)
+    })
+    expect(enterWithWarning.defaultPrevented).toBe(true)
+    expect(onConfirm).not.toHaveBeenCalled()
+
+    // Explicit click on submit still confirms.
+    await act(async () => { submit.click() })
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('R2 Finding 13: moves focus to Fire and Forget radio if Pre-flight Dry Run checkbox was focused when dynamic emulator detection disables it', async () => {
+    const dryRun = deferred<ApiResult<BigQueryDryRunResult>>()
+    const { radio, checkbox, onCancel } = await mountDialog({
+      tabId: 'tab-emu-focus',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: true
+    }, { estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(() => dryRun.promise) })
+
+    const preflight = checkbox('Pre-flight Dry Run (free)')!
+    expect(preflight.disabled).toBe(false)
+    preflight.focus()
+    expect(document.activeElement).toBe(preflight)
+
+    // Dynamic emulator detection disables preflight checkbox while it holds focus.
+    await act(async () => {
+      dryRun.resolve({ ok: true, value: { bytesProcessed: 0, faked: true } })
+      await Promise.resolve()
+    })
+    await flush()
+
+    expect(preflight.disabled).toBe(true)
+    expect(document.activeElement).toBe(radio('fireAndForget'))
+
+    // Escape from the recovered focus element closes the dialog cleanly.
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {

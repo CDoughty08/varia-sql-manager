@@ -503,15 +503,14 @@ describe('Wave 2a: QueryService multi-execution, read-only refusal, PreparedSess
       scripts: { sqlserver: 'SELECT 1', bigquery: 'SELECT\n  1\n  + 2\n  + 3' }
     }))
 
-    // Live targetState and resultSet.meta events flow cleanly.
+    // Live targetState updates QueryService snapshot without redundantly re-calling ResultsService; ResultsService.begin owns both state updates directly.
     const targetEvent: Extract<QueryEvent, { type: 'multiQuery.targetState' }> = {
       type: 'multiQuery.targetState', targetKey: uuid(1), phase: 'running', batchesCompleted: 0, batchesTotal: 1, rowsAffected: 0, resultSetCount: 0, elapsedMs: 12
     }
     beginOpts?.onTargetState?.(targetEvent)
     expect(queries.getSnapshot()[doc.id]?.multiTargets?.[0]?.phase).toBe('running')
-    expect(results.updateMultiTargetState).toHaveBeenCalled()
-    beginOpts?.onResultMeta?.({ type: 'resultSet.meta', resultId: 1, rolledBackPreview: true, generation: 1 })
-    expect(results.updateResultMeta).toHaveBeenCalled()
+    expect(results.updateMultiTargetState).not.toHaveBeenCalled()
+    expect(beginOpts?.onResultMeta).toBeUndefined()
 
     // PreparedSessions includes running multi-target tab in stopping, excludes it from plan, and validates target handle generations!
     const prepared = await queries.prepareSessions('disconnect', [doc.id])
@@ -1110,7 +1109,7 @@ describe('Wave 2 Domain 1 Round 1 adversarial regression checks', () => {
       results
     )
 
-    // 1. Label sanitization (control chars stripped, fallback to 'Server', capped at 128) & SQL Server database sanitization (trimmed, capped at 128, fallback to 'master').
+    // 1. Label sanitization (control chars stripped, fallback to 'Server', capped at 128) & SQL Server database sanitization (preserves leading/trailing spaces verbatim up to 128, whitespace-only falls back to 'master').
     const doc = f.documents.openMultiQuery({
       mode: 'same',
       targets: [
@@ -1123,7 +1122,7 @@ describe('Wave 2 Domain 1 Round 1 adversarial regression checks', () => {
     expect(executeMulti).toHaveBeenCalledTimes(1)
     const sentTargets = executeMulti.mock.calls[0]![0].targets
     expect(sentTargets[0]).toMatchObject({ label: 'Server', database: 'master' })
-    expect(sentTargets[1]).toMatchObject({ label: 'A'.repeat(128), database: 'D'.repeat(128) })
+    expect(sentTargets[1]).toMatchObject({ label: 'A'.repeat(128), database: `  ${'D'.repeat(126)}` })
 
     // 2. Reject > 32 targets locally with an explicit error and zero IPC.
     executeMulti.mockClear()
@@ -1322,5 +1321,191 @@ describe('Wave 2 Domain 1 Round 1 adversarial regression checks', () => {
     expect(confirmSessions).not.toHaveBeenCalled()
     expect(reportError).not.toHaveBeenCalled()
     expect(f.api.closeQuerySession).not.toHaveBeenCalled()
+  })
+})
+
+describe('Wave 2 Domain 1 Round 2 adversarial regression checks', () => {
+  it('R2 Finding 2 & 10: refuseReadOnly clears stale multiSummary/multiTargets and consumes an active pre-dispatch multi gate', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const doc = f.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'ds', enabled: true, provider: 'bigquery', attachWanted: true }
+      ],
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2'
+    })
+    const conns = new Map([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const }],
+      [uuid(11), { id: uuid(11), server: 'bq-1', database: 'ds', serverVersion: '', generation: 1, providerId: 'bigquery' as const }]
+    ])
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute: vi.fn(),
+        executeMulti: vi.fn(async () => ({
+          ok: true as const,
+          value: {
+            status: 'completed' as const, mode: 'crossEngineReadOnly' as const,
+            targets: [
+              { targetKey: uuid(1), provider: 'sqlserver' as const, label: 'sql-1', status: 'succeeded' as const, batchesCompleted: 1, batchesTotal: 1, rowsAffected: 1, elapsedMs: 5, resultSetIds: [] },
+              { targetKey: uuid(2), provider: 'bigquery' as const, label: 'bq-1', status: 'succeeded' as const, batchesCompleted: 1, batchesTotal: 1, rowsAffected: 1, elapsedMs: 5, resultSetIds: [] }
+            ],
+            resultSets: [], discardedResultSets: 0, messages: [], messagesTruncated: false, elapsedMs: 10,
+            budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+            completedAt: '2026-11-26T00:00:00.0000000Z'
+          }
+        })),
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => conns.get(id),
+      events,
+      { begin: vi.fn(), finish: vi.fn() }
+    )
+
+    await queries.executeMulti(doc.id, { mode: 'crossEngineReadOnly' })
+    expect(queries.getSnapshot()[doc.id]?.multiSummary?.status).toBe('completed')
+    expect(queries.getSnapshot()[doc.id]?.multiTargets).toHaveLength(2)
+
+    // Begin pre-dispatch gate (does NOT bump executionVersion), then refuseReadOnly consumes it and clears stale completed state.
+    const versionBefore = queries.executionVersion(doc.id)
+    const signal = queries.beginMultiGate(doc.id)
+    expect(signal).toBeDefined()
+    expect(queries.isRunning(doc.id)).toBe(true)
+    expect(queries.isGated(doc.id)).toBe(true)
+    expect(queries.executionVersion(doc.id)).toBe(versionBefore)
+
+    queries.refuseReadOnly(doc.id, [{ line: 1, message: 'DELETE blocked', dialect: 'sqlserver' }])
+    // Ending the gate in a finally block must NOT overwrite the refusal error with the pre-gate completed state.
+    queries.endMultiGate(doc.id, true, signal)
+
+    const after = queries.getSnapshot()[doc.id]
+    expect(after?.running).toBeUndefined()
+    expect(after?.multiSummary).toBeUndefined()
+    expect(after?.multiTargets).toBeUndefined()
+    expect(after?.error).toContain('READ_ONLY_VIOLATION')
+    queries.dispose()
+  })
+
+  it('R2 Finding 3: runMulti resolves each target timeout against global default and preserves 0 (no timeout)', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const executeMulti = vi.fn(async (_opts: MultiQueryOptions) => ({
+      ok: true as const,
+      value: {
+        status: 'completed' as const, mode: 'fireAndForget' as const, targets: [], resultSets: [], discardedResultSets: 0,
+        messages: [], messagesTruncated: false, elapsedMs: 1,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T00:00:00.0000000Z'
+      }
+    }))
+    const conns = new Map([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const, options: { advanced: { commandTimeout: 10 } } }],
+      [uuid(11), { id: uuid(11), server: 'sql-2', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const }],
+      [uuid(12), { id: uuid(12), server: 'sql-3', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const, options: { advanced: { commandTimeout: 0 } } }]
+    ])
+    const queries = new QueryService(
+      f.documents,
+      { execute: vi.fn(), executeMulti, cancel: vi.fn(), confirmSessions: vi.fn(), querySessionState: vi.fn() },
+      id => conns.get(id),
+      events,
+      { begin: vi.fn(), finish: vi.fn() },
+      () => 1000,
+      async () => {},
+      () => ({ ...defaultSettings, 'queryExecution.executionTimeout': 45 })
+    )
+
+    // Case 1: Target 1 has explicit 10s, Target 2 inherits global 45s -> effective max is 45s (not shrunk to 10s).
+    const doc1 = f.documents.openMultiQuery({
+      mode: 'same',
+      sql: 'SELECT 1',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+    await queries.executeMulti(doc1.id, { mode: 'fireAndForget' })
+    expect(executeMulti.mock.calls[0]![0].timeoutSeconds).toBe(45)
+
+    // Case 2: Target 3 has 0 (no timeout) alongside Target 2 (45s) -> combined timeoutSeconds is 0.
+    const doc2 = f.documents.openMultiQuery({
+      mode: 'same',
+      sql: 'SELECT 1',
+      targets: [
+        { targetId: uuid(2), connectionId: uuid(11), database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: uuid(3), connectionId: uuid(12), database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+    await queries.executeMulti(doc2.id, { mode: 'fireAndForget' })
+    expect(executeMulti.mock.calls[1]![0].timeoutSeconds).toBe(0)
+
+    // Case 3: Explicit request.targets path also respects 0 (no timeout).
+    await queries.executeMulti(doc2.id, {
+      mode: 'fireAndForget',
+      targets: [
+        { targetKey: uuid(3), connectionId: uuid(12), label: 'sql-3', database: 'Sales' },
+        { targetKey: uuid(1), connectionId: uuid(10), label: 'sql-1', database: 'Sales' }
+      ]
+    })
+    expect(executeMulti.mock.calls[2]![0].timeoutSeconds).toBe(0)
+    queries.dispose()
+  })
+
+  it('R2 Finding 4: setCrossView clears dirty on an emptied untitled Cross-Engine tab instead of keeping it falsely dirty', () => {
+    const f = documentFixture()
+    const doc = f.documents.openMultiQuery({
+      mode: 'cross',
+      crossView: 'file',
+      targets: [],
+      sql: serializeCrossEngineSql('SELECT 1', 'SELECT 2'),
+      unsaved: true
+    })
+    expect(f.documents.get(doc.id)?.dirty).toBe(true)
+
+    // Empty both sections in File view, then switch to Split view: both panes are empty in an untitled tab -> clean!
+    f.model(doc.id).edit(serializeCrossEngineSql('', ''))
+    expect(f.documents.setCrossView(doc.id, 'split')).toEqual({ ok: true })
+    expect(f.documents.getModel(doc.id)?.getValue()).toBe('')
+    expect(f.documents.getSecondaryModel(doc.id)?.getValue()).toBe('')
+    expect(f.documents.get(doc.id)?.dirty).toBe(false)
+  })
+
+  it('R2 Finding 7: cleanSqlServerDatabase preserves valid leading/trailing spaces on SQL Server database names', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const executeMulti = vi.fn(async (_opts: MultiQueryOptions) => ({
+      ok: true as const,
+      value: {
+        status: 'completed' as const, mode: 'fireAndForget' as const, targets: [], resultSets: [], discardedResultSets: 0,
+        messages: [], messagesTruncated: false, elapsedMs: 1,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T00:00:00.0000000Z'
+      }
+    }))
+    const queries = new QueryService(
+      f.documents,
+      { execute: vi.fn(), executeMulti, cancel: vi.fn(), confirmSessions: vi.fn(), querySessionState: vi.fn() },
+      id => id === uuid(10) ? { id: uuid(10), server: 'sql-1', database: ' LeadingDb ', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const } : undefined,
+      events,
+      { begin: vi.fn(), finish: vi.fn() }
+    )
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      sql: 'SELECT 1',
+      targets: [{ targetId: uuid(1), connectionId: uuid(10), database: ' LeadingDb ', enabled: true, provider: 'sqlserver' }]
+    })
+    await queries.executeMulti(doc.id, { mode: 'fireAndForget' })
+    expect(executeMulti.mock.calls[0]![0].targets[0]?.database).toBe(' LeadingDb ')
+
+    await queries.executeMulti(doc.id, {
+      mode: 'fireAndForget',
+      targets: [{ targetKey: uuid(1), connectionId: uuid(10), label: 'sql-1', database: ' Spaced ' }]
+    })
+    expect(executeMulti.mock.calls[1]![0].targets[0]?.database).toBe(' Spaced ')
+    queries.dispose()
   })
 })

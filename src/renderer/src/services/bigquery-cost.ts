@@ -175,7 +175,7 @@ interface Entry {
 
 export interface BigQueryCostDeps {
   readonly api: Pick<VariaApi, 'bigQueryDryRun'>
-  readonly documents: Pick<DocumentService, 'get' | 'getModel' | 'getSnapshot' | 'subscribe'>
+  readonly documents: Pick<DocumentService, 'get' | 'getModel' | 'getSnapshot' | 'subscribe'> & Partial<Pick<DocumentService, 'modelFor' | 'getCrossEngineScripts' | 'languageContext'>>
   readonly connections: Pick<ConnectionService, 'get' | 'isLive' | 'subscribe'>
   readonly settings: Settings
   readonly events: Pick<EventBus, 'subscribe'>
@@ -213,16 +213,30 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     this.reconcile()
   }
 
+  /** The tab's live BigQuery target (first enabled live BigQuery target for multi-server / Cross-Engine tabs). */
+  private bigQueryTarget(id: string): { readonly connection: LiveConnection; readonly database: string } | undefined {
+    const document = this.deps.documents.get(id)
+    if (!isQueryDocument(document) || !document) return undefined
+    if (document.multiMode) {
+      for (const target of document.multiTargets ?? []) {
+        if (!target.enabled || !target.connectionId || !this.deps.connections.isLive(target.connectionId)) continue
+        const connection = this.deps.connections.get(target.connectionId)
+        if (connection && isBigQueryConnection(connection)) return { connection, database: target.database }
+      }
+      return undefined
+    }
+    if (!document.connectionId || !this.deps.connections.isLive(document.connectionId)) return undefined
+    const connection = this.deps.connections.get(document.connectionId)
+    return connection && isBigQueryConnection(connection) ? { connection, database: document.database } : undefined
+  }
   /** The tab's live BigQuery connection, if it has one. */
   private connection(id: string): LiveConnection | undefined {
-    const document = this.deps.documents.get(id)
-    if (!isQueryDocument(document) || !document?.connectionId || !this.deps.connections.isLive(document.connectionId)) return undefined
-    const connection = this.deps.connections.get(document.connectionId)
-    return connection && isBigQueryConnection(connection) ? connection : undefined
+    return this.bigQueryTarget(id)?.connection
   }
   /** The tab's default dataset, as Execute sends it. */
   private dataset(id: string): string | undefined {
-    const database = this.deps.documents.get(id)?.database ?? ''
+    const document = this.deps.documents.get(id)
+    const database = document?.multiMode ? this.bigQueryTarget(id)?.database ?? '' : document?.database ?? ''
     return /^\w{1,1024}$/.test(database) ? database : undefined
   }
 
@@ -230,7 +244,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (this.disposed) return
     const open = new Set<string>()
     for (const document of this.deps.documents.getSnapshot().documents) {
-      const model = this.deps.documents.getModel(document.id)
+      const model = this.deps.documents.modelFor?.(document.id, 'bigquery') ?? this.deps.documents.getModel(document.id)
       const connection = this.connection(document.id)
       if (!connection || !model || model.isDisposed()) continue
       open.add(document.id)
@@ -241,7 +255,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
         entry = { id, model, key: '', revision: 0, content: model.onDidChangeContent(() => { const current = this.entries.get(id); if (current?.model === model) this.edited(current) }) }
         this.entries.set(id, entry)
       }
-      const key = JSON.stringify([connection.id, connection.generation, this.dataset(document.id)])
+      const key = JSON.stringify([connection.id, connection.generation, this.dataset(document.id), document.multiMode ?? '', document.crossView ?? ''])
       if (entry.key !== key) {
         // Another connection or dataset: the old figure and markers no longer apply, and nothing dry-runs until an edit.
         const first = entry.key === ''
@@ -285,6 +299,14 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   private diagnose(entry: Entry): void {
     if (this.disposed || this.entries.get(entry.id) !== entry || entry.model.isDisposed()) return
     if (entry.running) { entry.again = true; return }
+    const document = this.deps.documents.get(entry.id)
+    if (document?.multiMode === 'cross' && document.crossView === 'file') {
+      const parsed = this.deps.documents.getCrossEngineScripts?.(entry.id)
+      if (!parsed?.ok || !parsed.bigquery.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
+      if (parsed.bigquery.length > dryRunLimits.characters) { this.clearMarkers(entry); this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
+      this.hold(entry, this.dryRun(entry, parsed.bigquery, { line: parsed.bigQueryStartLine, column: 1 }))
+      return
+    }
     const sql = entry.model.getValue()
     if (!sql.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
     if (sql.length > dryRunLimits.characters) { this.clearMarkers(entry); this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
@@ -313,8 +335,9 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const checking: EstimateState = { phase: 'checking' }
     this.put(entry.id, checking)
     let response: ApiResult<BigQueryDryRunResult>
-    // The tab's id is its session's: text using the tab's temp tables or variables estimates in that session once it exists.
-    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {}, sessionId: entry.id }) }
+    // Single-server tabs use their tab id as sessionId so temp tables/variables estimate in-session; multi-target tabs use ephemeral sessions.
+    const isMulti = !!this.deps.documents.get(entry.id)?.multiMode
+    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {}, ...isMulti ? {} : { sessionId: entry.id } }) }
     catch (error) { response = { ok: false, error: error instanceof Error ? error.message : 'The dry run failed.' } as ApiResult<BigQueryDryRunResult> }
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
     if (!current) {

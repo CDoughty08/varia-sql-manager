@@ -110,9 +110,11 @@ export function multiTargetSummaryText(mode: 'same' | 'cross', targets: readonly
       ? 'No targets selected'
       : connectedCount === enabledCount && ready
         ? `${base} · Read-only`
-        : connectedCount === 0
-          ? `${base} · Disconnected`
-          : `${base} · ${connectedCount} of ${enabledCount} connected`
+        : connectedCount === enabledCount && !ready
+          ? `${base} · Select a ${sqlCount === 0 ? 'SQL Server' : 'BigQuery project'}`
+          : connectedCount === 0
+            ? `${base} · Disconnected`
+            : `${base} · ${connectedCount} of ${enabledCount} connected`
     return { label: state, prodCount, connectedCount, enabledCount, ready }
   }
   const provider: ProviderId = enabled[0]?.provider ?? targets[0]?.provider ?? 'sqlserver'

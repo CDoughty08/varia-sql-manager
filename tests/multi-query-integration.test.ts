@@ -706,4 +706,136 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
 
     wb.dispose()
   })
+
+  it('R2 Finding 10: query.execute on multi tabs activates reactive pre-dispatch gate (queryRunning=true without bumping executionVersion) and hands off cleanly to executeMulti or cancels cleanly', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    const bq1 = connectBq(wb, 'bq-proj-1', 'sales_dw')
+
+    let resolveDryRun!: (value: { ok: true; value: { bytesProcessed: number } }) => void
+    const dryRunPromise = new Promise<{ ok: true; value: { bytesProcessed: number } }>(resolve => { resolveDryRun = resolve })
+    const bigQueryDryRun = vi.fn(() => dryRunPromise)
+    const executeMulti = vi.fn(async () => ({
+      ok: true as const,
+      value: multiSummary('fireAndForget', [multiOutcome(bq1.targetId, 'bigquery', 'bq-proj-1')])
+    }))
+    const queryApi = {
+      execute: vi.fn(),
+      executeMulti,
+      cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+      confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+      querySessionState: vi.fn(async () => ({ ok: true as const, value: { checked: true, transactionCount: 0 } }))
+    }
+    const settings = new MutableSettings()
+    const resultsSink = { begin: vi.fn(), finish: vi.fn(async () => {}) }
+    const queries = new QueryService(wb.documents, queryApi, id => wb.connections.get(id), wb.events, resultsSink, () => 1000, async () => {}, () => settings.getSnapshot().values)
+    const multiExecutePrompts = new MultiExecutePromptService()
+    const costPrompts = new CostPromptService()
+    const optOut = costOptOut({
+      loadConnectionLibrary: vi.fn(async () => ({ ok: false as const, error: 'none' })),
+      setBigQueryCostPrompt: vi.fn(async () => ({ ok: true as const, value: true }))
+    })
+    const notifications = new NotificationService()
+    const commands = new CommandService({ state: () => ({ ...wb.context.getState(), queryRunning: !!wb.documents.active && queries.isRunning(wb.documents.active.id) }) })
+
+    const contrib = queryContribution(
+      {
+        commands, queries, documents: wb.documents, connections: wb.connections,
+        targets: wb.targets, quickInput: wb.quickInput, events: wb.events,
+        backend: wb.backend, settings: settings as never,
+        costOptOut: optOut, costPrompts, multiExecutePrompts, notifications
+      },
+      { ...wb.api, bigQueryDryRun }
+    )
+
+    const tab = wb.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [{ targetId: bq1.targetId, connectionId: bq1.info.id, database: 'sales_dw', enabled: true, provider: 'bigquery', attachWanted: true }]
+    })
+
+    // Start 1-target BigQuery execution: while dry-run is pending, reactive gate sets isRunning + isGated without bumping executionVersion!
+    const run1 = commands.execute('query.execute', { tabId: tab.id }, 'toolbar')
+    expect(queries.isRunning(tab.id)).toBe(true)
+    expect(queries.isGated(tab.id)).toBe(true)
+    expect(queries.getSnapshot()[tab.id]?.running?.gated).toBe(true)
+    expect(queries.executionVersion(tab.id)).toBe(0)
+
+    // Cancelling via query.cancel stops the gate locally (zero backend cancel IPC) and aborts pre-dispatch dry-run.
+    await commands.run('query.cancel', { tabId: tab.id })
+    expect(queries.isRunning(tab.id)).toBe(false)
+    expect(queries.isGated(tab.id)).toBe(false)
+    expect(queryApi.cancel).not.toHaveBeenCalled()
+    resolveDryRun({ ok: true, value: { bytesProcessed: 128 } })
+    await run1
+    expect(executeMulti).not.toHaveBeenCalled()
+
+    // Second run completes dry-run and hands off seamlessly from gate to real executeMulti!
+    bigQueryDryRun.mockImplementationOnce(async () => ({ ok: true, value: { bytesProcessed: 128 } }))
+    await commands.execute('query.execute', { tabId: tab.id }, 'toolbar')
+    expect(executeMulti).toHaveBeenCalledTimes(1)
+    expect(queries.executionVersion(tab.id)).toBe(1)
+    expect(queries.isRunning(tab.id)).toBe(false)
+
+    contrib.dispose()
+    multiExecutePrompts.dispose()
+    costPrompts.dispose()
+    queries.dispose()
+    wb.dispose()
+  })
+
+  it('R2 Finding 14: disconnectSelected prioritizes error over warning, and multi-select commands emit keyed engineLock / cap notices', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    wb.api.explorerChildren.mockImplementation(async () => ({ ok: true as const, value: { nodes: [], elapsedMs: 1, total: 0 } }))
+
+    for (let i = 1; i <= 33; i++) connectSql(wb, `sql-cap-${String(i).padStart(2, '0')}`, 'SalesDB')
+    const bq1 = connectBq(wb, 'bq-cap-01', 'sales_dw')
+    wb.explorer.settle()
+
+    const outcomes = new Map<string, { status: 'disconnected'; warning?: string } | { status: 'failed'; error: string }>([
+      ['t1', { status: 'disconnected', warning: 'A session note warning.' }],
+      ['t2', { status: 'failed', error: 'Disconnect failed fatally.' }]
+    ])
+    const disconnectCoordinator = { disconnectMany: vi.fn(async () => outcomes) } as unknown as DisconnectCoordinator
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const notifications = new NotificationService()
+    const reportError = vi.spyOn(commands, 'reportError')
+    const reportWarning = vi.spyOn(commands, 'reportWarning')
+
+    const contrib = explorerContribution(
+      { commands, documents: wb.documents, connections: wb.connections, explorer: wb.explorer, disconnectCoordinator, notifications },
+      wb.api
+    )
+
+    // 1. selectAllSqlServers with 33 servers surfaces the 32-server cap notice as a keyed toast!
+    await commands.execute('explorer.selectAllSqlServers', undefined, 'menu')
+    expect(wb.explorer.multiSelectedTargets()).toHaveLength(32)
+    expect(notifications.getSnapshot().visible).toEqual([
+      expect.objectContaining({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: expect.stringContaining('32') })
+    ])
+
+    // 2. toggleMultiSelect on incompatible BigQuery node replaces the keyed toast instead of stacking.
+    const bqRootId = wb.explorer.rootIds.find(id => wb.explorer.node(id)?.connectionId === bq1.info.id)!
+    const bqMenuNode = wb.explorer.menuNode(bqRootId)!
+    await commands.execute('explorer.toggleMultiSelect', { target: { kind: 'explorer', node: bqMenuNode } }, 'menu')
+    expect(notifications.getSnapshot().visible).toHaveLength(1)
+    expect(notifications.getSnapshot().visible[0]).toMatchObject({ key: 'explorer.multiSelect.engineLock' })
+
+    // 3. disconnectSelected scans all outcomes and reports error via reportError even when a warning appeared earlier.
+    await commands.execute('explorer.disconnectSelected', undefined, 'menu')
+    expect(reportError).toHaveBeenCalledWith('Disconnect failed fatally.')
+    expect(reportWarning).not.toHaveBeenCalled()
+
+    // 4. When only warnings exist, disconnectSelected falls back to reportWarning.
+    reportError.mockClear()
+    outcomes.delete('t2')
+    await commands.execute('explorer.disconnectSelected', undefined, 'menu')
+    expect(reportError).not.toHaveBeenCalled()
+    expect(reportWarning).toHaveBeenCalledWith('A session note warning.')
+
+    contrib.dispose()
+    wb.dispose()
+  })
 })

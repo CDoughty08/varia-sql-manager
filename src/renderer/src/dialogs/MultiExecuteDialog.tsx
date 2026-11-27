@@ -129,6 +129,7 @@ export function MultiExecuteDialogModal({
   const formRef = useRef<HTMLFormElement>(null)
   const txRadioRef = useRef<HTMLInputElement>(null)
   const fafRadioRef = useRef<HTMLInputElement>(null)
+  const preflightCheckboxRef = useRef<HTMLInputElement>(null)
   const returnFocus = useRef(focusToReturn())
 
   const isBigQuery = request.provider === 'bigquery'
@@ -183,14 +184,14 @@ export function MultiExecuteDialogModal({
     if (txDisabled && mode === 'transaction') setMode('fireAndForget')
   }, [txDisabled, mode, hasEmulator])
 
-  // When Coordinated Transaction becomes disabled while focused, move focus to Fire and Forget so Escape/Tab never break.
+  // When Coordinated Transaction or Pre-flight Dry Run becomes disabled while focused, move focus to Fire and Forget so Escape/Tab never break.
   useEffect(() => {
-    if (!txDisabled) return
+    if (!txDisabled && !hasEmulator) return
     const active = ownerDocument.activeElement
-    if (!active || active === ownerDocument.body || active === txRadioRef.current) {
+    if (!active || active === ownerDocument.body || (txDisabled && active === txRadioRef.current) || (hasEmulator && active === preflightCheckboxRef.current)) {
       fafRadioRef.current?.focus()
     }
-  }, [txDisabled, ownerDocument])
+  }, [txDisabled, hasEmulator, ownerDocument])
 
   // Initial focus lands on the active radio input (never on Execute); focus returns on unmount.
   useEffect(() => {
@@ -233,7 +234,31 @@ export function MultiExecuteDialogModal({
     return () => { abort.abort() }
   }, [isBigQuery, request.sql, request.targets, estimateBigQuery])
 
+  const costSummary = useMemo(() => {
+    if (!isBigQuery) return undefined
+    let estimating = 0
+    let doneCount = 0
+    let totalBytes = 0
+    let thresholdWarnings = 0
+    let capWarnings = 0
+    for (const target of request.targets) {
+      const state = estimates[target.targetKey]
+      if (!state || state.status === 'estimating') { estimating++; continue }
+      if (state.status !== 'done') continue
+      doneCount++
+      if (state.result.faked) continue
+      totalBytes += state.result.bytesProcessed
+      if (target.maximumBytesBilled !== undefined && state.result.bytesProcessed > target.maximumBytesBilled) capWarnings++
+      if (target.costPrompt !== false && target.costThresholdBytes !== undefined && state.result.bytesProcessed > target.costThresholdBytes) thresholdWarnings++
+    }
+    return { estimating, doneCount, totalBytes, thresholdWarnings, capWarnings }
+  }, [isBigQuery, request.targets, estimates])
+
+  const estimatingBigQuery = isBigQuery && (costSummary?.estimating ?? 0) > 0
+  const hasCostWarning = (costSummary?.thresholdWarnings ?? 0) > 0 || (costSummary?.capWarnings ?? 0) > 0
+
   const submitChoice = () => {
+    if (estimatingBigQuery) return
     const effectiveMode = txDisabled ? 'fireAndForget' : mode
     onConfirm({
       mode: effectiveMode,
@@ -252,8 +277,8 @@ export function MultiExecuteDialogModal({
       onCancel()
       return
     }
-    // Keyboard safety: when PROD + mutation is present, a stray Enter on a radio/checkbox must not submit immediately.
-    if (event.key === 'Enter' && hasProd && isMutation && isElement(event.target) && event.target.tagName === 'INPUT') {
+    // Keyboard safety: when PROD + mutation, cost warnings, or in-flight BigQuery dry runs are present, a stray Enter on a radio/checkbox must not submit immediately.
+    if (event.key === 'Enter' && ((hasProd && isMutation) || hasCostWarning || estimatingBigQuery) && isElement(event.target) && event.target.tagName === 'INPUT') {
       event.preventDefault()
     }
   }
@@ -274,26 +299,6 @@ export function MultiExecuteDialogModal({
   const txCaveat = isBigQuery
     ? 'BigQuery still bills bytes processed on rolled-back jobs. A drop during the final COMMIT step itself is reported as CommitInDoubt.'
     : 'Cross-platform coordinated local transactions (no MSDTC required). Holds locks until the slowest peer finishes; a drop during final COMMIT is reported as CommitInDoubt.'
-
-  const costSummary = useMemo(() => {
-    if (!isBigQuery) return undefined
-    let estimating = 0
-    let doneCount = 0
-    let totalBytes = 0
-    let thresholdWarnings = 0
-    let capWarnings = 0
-    for (const target of request.targets) {
-      const state = estimates[target.targetKey]
-      if (!state || state.status === 'estimating') { estimating++; continue }
-      if (state.status !== 'done') continue
-      doneCount++
-      if (state.result.faked) continue
-      totalBytes += state.result.bytesProcessed
-      if (target.maximumBytesBilled !== undefined && state.result.bytesProcessed > target.maximumBytesBilled) capWarnings++
-      if (target.costPrompt !== false && target.costThresholdBytes !== undefined && state.result.bytesProcessed > target.costThresholdBytes) thresholdWarnings++
-    }
-    return { estimating, doneCount, totalBytes, thresholdWarnings, capWarnings }
-  }, [isBigQuery, request.targets, estimates])
 
   const dialog = (
     <div className="modal-backdrop">
@@ -441,6 +446,7 @@ export function MultiExecuteDialogModal({
               {isBigQuery && (
                 <label className="checkbox-label">
                   <input
+                    ref={preflightCheckboxRef}
                     type="checkbox"
                     disabled={hasEmulator}
                     checked={!hasEmulator && preflightDryRun}
@@ -500,7 +506,7 @@ export function MultiExecuteDialogModal({
           status={<span className="sub-dialog-status">Prompted on every multi-target execute.</span>}
           trailing={
             <>
-              <button type="submit" className={hasProd && isMutation ? 'primary multi-exec-submit-prod' : 'primary'}>
+              <button type="submit" disabled={estimatingBigQuery} className={hasProd && isMutation ? 'primary multi-exec-submit-prod' : 'primary'}>
                 <Icon name="play" />
                 <span>{submitLabel}</span>
               </button>

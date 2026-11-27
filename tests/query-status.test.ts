@@ -2,7 +2,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings } from '../src/shared/settings/catalog'
-import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
+import { multiTargetSummaryText, queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
 import QueryStatusBar, { deriveMultiStatus } from '../src/renderer/src/QueryStatusBar'
@@ -203,6 +203,42 @@ describe('the query status facts\' environment tag', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
     // Only 1 target (c2) has a live phase, not 2!
     expect(html).toContain('Executing on 1 target (1/1 settled)')
+  })
+
+  it('R2 Finding 6: emits explicit engine-missing text on Cross-Engine tabs when all enabled targets are connected on only one engine', () => {
+    const missingBq = multiTargetSummaryText('cross', [
+      { provider: 'sqlserver', connected: true, enabled: true },
+      { provider: 'sqlserver', connected: true, enabled: true }
+    ])
+    expect(missingBq.ready).toBe(false)
+    expect(missingBq.label).toBe('2 SQL Servers + 0 BigQuery · Select a BigQuery project')
+
+    const missingSql = multiTargetSummaryText('cross', [
+      { provider: 'bigquery', connected: true, enabled: true }
+    ])
+    expect(missingSql.ready).toBe(false)
+    expect(missingSql.label).toBe('0 SQL Servers + 1 BigQuery · Select a SQL Server')
+
+    const model = queryStatusModel({
+      database: '',
+      running: false,
+      multiMode: 'cross',
+      multiTargets: [
+        { provider: 'sqlserver', connected: true, enabled: true },
+        { provider: 'sqlserver', connected: true, enabled: true }
+      ],
+      now: 1000,
+      settings: {
+        'textEditor.statusBar.executionTime': 'elapsed',
+        'textEditor.statusBar.showServer': true,
+        'textEditor.statusBar.showLogin': true,
+        'textEditor.statusBar.showDatabase': true,
+        'textEditor.statusBar.showRowCount': true
+      }
+    })
+    expect(model.tone).toBe('disconnected')
+    expect(model.text).toBe('2 SQL Servers + 0 BigQuery · Select a BigQuery project')
+    expect(model.text).not.toContain('2 of 2 connected')
   })
 })
 

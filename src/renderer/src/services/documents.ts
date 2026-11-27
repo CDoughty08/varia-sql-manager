@@ -306,7 +306,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       try { this.applyTextEdit(entry.model, combined, eol) }
       finally { entry.syncing = false }
       const savedVersionId = wasDirty ? null : entry.model.getAlternativeVersionId()
-      this.replace(id, { crossView: 'file', activePane: 'primary', savedVersionId, dirty: wasDirty })
+      const dirty = this.isEntryDirty({ ...document, savedVersionId }, entry)
+      this.replace(id, { crossView: 'file', activePane: 'primary', savedVersionId, dirty })
       this.notifyContentChanged(id)
       return { ok: true }
     }
@@ -320,7 +321,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     try { this.applyTextEdit(entry.model, parsed.sqlserver, eol) }
     finally { entry.syncing = false }
     const savedVersionId = wasDirty ? null : entry.model.getAlternativeVersionId()
-    this.replace(id, { crossView: 'split', activePane: 'primary', savedVersionId, dirty: wasDirty })
+    const dirty = this.isEntryDirty({ ...document, savedVersionId }, entry)
+    this.replace(id, { crossView: 'split', activePane: 'primary', savedVersionId, dirty })
     if (this.secondaryFollower && this.getSnapshot().activeId === id) this.showModel(this.secondaryFollower, id, 'secondary')
     this.notifyContentChanged(id)
     return { ok: true }
