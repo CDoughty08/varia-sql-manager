@@ -3290,7 +3290,7 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
   it('R8 D4 #6 & #8: styles.css sets GrayText on aria-disabled notice buttons in forced-colors mode, and tabsNeed accepts partial combinedCounts', () => {
     const rules = stylesheetRules()
     const disabledNoticeBtn = rules.find(rule =>
-      rule.at.includes('@media (forced-colors: active)') && rule.selector === '.multi-grid-notice-btn[aria-disabled="true"]'
+      rule.at.includes('@media (forced-colors: active)') && rule.selector.includes('.multi-grid-notice-btn[aria-disabled="true"]')
     )
     expect(disabledNoticeBtn?.declarations).toEqual(expect.arrayContaining([
       { property: 'color', value: 'GrayText' },
@@ -3855,5 +3855,96 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     expect(rules.find(r => r.selector === '.multi-target-card')?.declarations).toEqual(expect.arrayContaining([
       { property: 'min-width', value: '0' }
     ]))
+  })
+
+  it('R13 D4 #1–#4: fixes CSS active/hover specificity, excludes samples from defaultMultiPair, handles colons in Skipped target labels, and avoids premature allRolledBack while running', async () => {
+    // #1: CSS active toggle & chip rules outrank button.ui-button[aria-pressed="true"] and button:hover:not(:disabled).
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector.includes('button.ui-button.cross-engine-view-btn[aria-pressed="true"]'))?.declarations).toEqual(expect.arrayContaining([
+      { property: 'background', value: 'var(--varia-chip-activeBackground)' },
+      { property: 'color', value: 'var(--varia-chip-activeForeground)' }
+    ]))
+    expect(rules.find(r => r.selector === '.multi-exec-mode-card:hover:not(.is-disabled, .is-picked)')).toBeDefined()
+    expect(rules.find(r => r.selector.includes('button.multi-grid-notice-btn[aria-disabled="true"]:hover:not(:disabled)'))?.declarations).toEqual(expect.arrayContaining([
+      { property: 'background', value: 'transparent' }
+    ]))
+    expect(rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('button.ui-button.cross-engine-stack-btn[aria-pressed="true"]'))?.declarations).toEqual(expect.arrayContaining([
+      { property: 'forced-color-adjust', value: 'none' },
+      { property: 'background', value: 'Highlight' },
+      { property: 'color', value: 'HighlightText' }
+    ]))
+
+    // #2: CompareService.defaultMultiPair excludes BigQuery samples and never pairs two sets from the same targetKey.
+    const fx2 = serviceFixture()
+    const compare = new CompareService(fx2.results)
+    cleanups.add(() => compare.dispose())
+    const cols: ResultColumn[] = [{ name: 'Id', dataType: 'int', wire: 'text', nullable: false }]
+    fx2.results.begin('t2', 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const eastFull = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, columns: cols })
+    const westFull = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, columns: cols })
+    void fx2.results.finish('t2', 'q2', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [eastFull, westFull]
+      )
+    })
+    const sampleDesc = descriptor(3, { index: 2, targetKey: 'prod-east', statementSlot: 0, columns: cols })
+    fx2.results.addSet('t2', sampleDesc, 'Sample of East', ['1:1'])
+    const sampleEntry = fx2.results.getSnapshot().t2.sets.find(e => e.descriptor.resultId === 3)!
+    ;(sampleEntry as { sample?: boolean }).sample = true
+    const pair = compare.defaultMultiPair('t2', 0)
+    expect(pair?.old.descriptor.targetKey).toBe('prod-east')
+    expect(pair?.neu.descriptor.targetKey).toBe('prod-west')
+
+    // #3: Target label containing a colon ("BQ: Analytics Prod") attaches Skipped warning to the matching Combined entry and clears on rebuild.
+    const fx3 = serviceFixture()
+    const colonTargets: MultiTargetIdentity[] = [
+      { targetKey: 'sql-1', connectionId: 'c-sql-1', provider: 'sqlserver', label: 'SQL: East' },
+      { targetKey: 'sql-2', connectionId: 'c-sql-2', provider: 'sqlserver', label: 'SQL: West' },
+      { targetKey: 'bq-1', connectionId: 'c-bq-1', provider: 'bigquery', label: 'BQ: Analytics Prod' }
+    ]
+    fx3.results.begin('t3', 'q3', undefined, { multi: { mode: 'fireAndForget', targets: colonTargets } })
+    const m1 = descriptor(1, { index: 0, targetKey: 'sql-1', statementSlot: 0 })
+    const m2 = descriptor(2, { index: 1, targetKey: 'sql-2', statementSlot: 0 })
+    const m3 = descriptor(3, { index: 2, targetKey: 'bq-1', statementSlot: 0, residence: 'remote' })
+    const mc = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    const colonSkip = 'Skipped BQ: Analytics Prod: result is windowed in BigQuery. Load it into memory to include it in Combined.'
+    void fx3.results.finish('t3', 'q3', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(colonTargets[0], { resultSetIds: [1] }),
+          multiOutcome(colonTargets[1], { resultSetIds: [2] }),
+          multiOutcome(colonTargets[2], { resultSetIds: [3] })
+        ],
+        [m1, m2, m3, mc],
+        { combineWarnings: [colonSkip] }
+      )
+    })
+    const mcKey = fx3.results.getSnapshot().t3.sets.find(e => e.descriptor.kind === 'combined')!.key
+    expect(fx3.results.getSnapshot().t3.combineWarnings?.get(mcKey)).toEqual([colonSkip])
+    fx3.combine.mockResolvedValueOnce({ descriptor: descriptor(650, { kind: 'combined', index: 3, statementSlot: 0 }) })
+    expect(await fx3.results.rebuildCombined('t3', mcKey)).toBe(mcKey)
+    expect(fx3.results.getSnapshot().t3.multi?.combineWarnings).toBeUndefined()
+
+    // #4: While a transaction run is still running and one target rolled back, MultiRunSummary does NOT claim "every server transaction was rolled back".
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r13-running-rb.sql', 'UPDATE t SET a = 1; SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const rSet = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, rolledBackPreview: true })
+    ;(f.results as unknown as { runs: Map<string, { sets: unknown[]; multi?: { targets: { phase: string }[] } }> }).runs.get(doc.id)!.multi!.targets[0]!.phase = 'rolledBack'
+    f.results.begin(doc.id, 'q2', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const runningTab: TabResults = {
+      ...f.results.getSnapshot()[doc.id],
+      status: 'running',
+      sets: [{ key: 'e1', number: 1, descriptor: rSet, handle: fakeResultClient().open(rSet), label: 'prod-sql-east-01' }]
+    }
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: runningTab, active: true })
+    }))
+    const noticeText = host.querySelector('.multi-notice-warn')?.textContent ?? ''
+    expect(noticeText).toContain('while remaining servers finish settling')
+    expect(noticeText).not.toContain('every server transaction was rolled back')
   })
 })

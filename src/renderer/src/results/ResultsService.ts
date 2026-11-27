@@ -879,7 +879,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
             baseWarnings.push(warning)
             continue
           }
-          const skippedMatch = /^Skipped (.+?):/.exec(warning)
+          const skippedMatch = /^Skipped (.+): (?:result is windowed in BigQuery\.|source result was closed\.)/.exec(warning)
           if (skippedMatch) {
             const label = skippedMatch[1]!
             const target = run.multi?.targets.find(item => item.label === label || item.targetKey === label)

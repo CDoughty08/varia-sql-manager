@@ -418,7 +418,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const targetOrder = new Map(tab.multi!.targets.map((target, index) => [target.targetKey, index]))
     const candidates = tab.groups
       .map(group => group.table.entry)
-      .filter(entry => entry.descriptor.targetKey !== undefined && comparableTable(tab, entry))
+      .filter(entry => !entry.sample && entry.descriptor.targetKey !== undefined && comparableTable(tab, entry))
       .sort((a, b) => (targetOrder.get(a.descriptor.targetKey!) ?? Number.MAX_SAFE_INTEGER) - (targetOrder.get(b.descriptor.targetKey!) ?? Number.MAX_SAFE_INTEGER))
     if (candidates.length < 2) return undefined
     const slots = [...new Set(candidates.map(entry => entry.descriptor.statementSlot ?? 0))].sort((a, b) => a - b)
@@ -439,6 +439,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
       }
       for (let i = 0; i < inSlot.length; i++) {
         for (let j = i + 1; j < inSlot.length; j++) {
+          if (inSlot[i].descriptor.targetKey === inSlot[j].descriptor.targetKey) continue
           if (this.offers(tab, inSlot[j], inSlot[i])) return { old: inSlot[i], neu: inSlot[j] }
         }
       }

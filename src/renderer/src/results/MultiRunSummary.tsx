@@ -134,8 +134,10 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
   const totalRows = aggregateRows(multi.targets, tab.rowsRead)
   const succeededCount = multi.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length
   const rolledBackPreview = hasRolledBackPreviewRows(tab)
-  const allRolledBack = multi.status === 'rolledBack'
-    || multi.targets.every(target => target.phase !== 'committed' && target.phase !== 'commitInDoubt' && target.phase !== 'succeeded')
+  const allRolledBack = tab.status !== 'running' && (
+    multi.status === 'rolledBack'
+    || multi.targets.every(target => target.phase === 'rolledBack' || target.phase === 'cancelled' || target.phase === 'skipped')
+  )
   const warnings = multi.combineWarnings ?? []
   const runError = tab.error && (tab.status === 'lost' || !multi.targets.some(target => target.errorMessage)) ? tab.error : undefined
   const discarded = tab.discard ? (tab.summary?.discardedResultSets ?? tab.multiSummary?.discardedResultSets ?? 0) : 0
@@ -190,9 +192,11 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
 
     {rolledBackPreview && <div className="multi-notice multi-notice-warn" role="status">
       <Icon name="warning" />
-      <span><strong>Rolled back — preview only (not committed).</strong> {allRolledBack
-        ? 'Result rows remain inspectable below, but every server transaction was rolled back.'
-        : 'Preview rows from rolled-back servers remain inspectable below, but one or more server transactions were committed or are in doubt — check each server card before retrying.'}</span>
+      <span><strong>Rolled back — preview only (not committed).</strong> {tab.status === 'running'
+        ? 'Preview rows from rolled-back servers remain inspectable below while remaining servers finish settling.'
+        : allRolledBack
+          ? 'Result rows remain inspectable below, but every server transaction was rolled back.'
+          : 'Preview rows from rolled-back servers remain inspectable below, but one or more server transactions were committed or are in doubt — check each server card before retrying.'}</span>
     </div>}
 
     {discarded > 0 && <div className="multi-notice multi-notice-info" role="status" data-notice-kind="discarded">
