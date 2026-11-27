@@ -188,7 +188,7 @@ internal static class EditorLookup
                     return new(State(db.State), earlyPath, [], false, Skip: db.Skip?.Code);
                 }
                 var entry = summary.Object;
-                var resolvedSchema = entry.Schema ?? path[1];
+                var resolvedSchema = entry.Schema is { Length: > 0 } s ? s : path[1];
                 var resolvedPath = new List<string> { summary.Database.Database, resolvedSchema, entry.Name };
                 var detailed = !summary.Database.Gaps.HasFlag(LookupGaps.ChildrenLeftOut);
                 var signature = SqlSignature(summary);
@@ -225,18 +225,31 @@ internal static class EditorLookup
 
     private static IEnumerable<LanguageLookupItem> SqlSummaryItems(LookupObjectSummary summary)
     {
-        var pkColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var ukColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var fkColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var comparer = summary.Database.CaseSensitive == true ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+        var pkColumnIds = new HashSet<short>();
+        var ukColumnIds = new HashSet<short>();
+        var pkColumns = new HashSet<string>(comparer);
+        var ukColumns = new HashSet<string>(comparer);
+        var fkColumns = new HashSet<string>(comparer);
         foreach (var index in summary.Indexes)
         {
             if (index.Kind == "key" && index.Subtype == "primary")
             {
-                foreach (var keyCol in index.Columns) if (!keyCol.Included && keyCol.Name is { Length: > 0 }) pkColumns.Add(keyCol.Name);
+                foreach (var keyCol in index.Columns)
+                {
+                    if (keyCol.Included) continue;
+                    if (keyCol.ColumnId > 0) pkColumnIds.Add(keyCol.ColumnId);
+                    else if (keyCol.Name is { Length: > 0 }) pkColumns.Add(keyCol.Name);
+                }
             }
             else if (index.Kind == "key" && index.Subtype == "unique")
             {
-                foreach (var keyCol in index.Columns) if (!keyCol.Included && keyCol.Name is { Length: > 0 }) ukColumns.Add(keyCol.Name);
+                foreach (var keyCol in index.Columns)
+                {
+                    if (keyCol.Included) continue;
+                    if (keyCol.ColumnId > 0) ukColumnIds.Add(keyCol.ColumnId);
+                    else if (keyCol.Name is { Length: > 0 }) ukColumns.Add(keyCol.Name);
+                }
             }
         }
         foreach (var fk in summary.ForeignKeys)
@@ -245,8 +258,8 @@ internal static class EditorLookup
         foreach (var column in summary.Columns)
         {
             var markers = new List<string>();
-            if (pkColumns.Contains(column.Name)) markers.Add("PK");
-            if (ukColumns.Contains(column.Name)) markers.Add("UK");
+            if ((column.Ordinal > 0 && pkColumnIds.Contains(column.Ordinal)) || pkColumns.Contains(column.Name)) markers.Add("PK");
+            if ((column.Ordinal > 0 && ukColumnIds.Contains(column.Ordinal)) || ukColumns.Contains(column.Name)) markers.Add("UK");
             if (fkColumns.Contains(column.Name)) markers.Add("FK");
             var flags = column.Type?.Flags ?? TypedFlags.None;
             if ((flags & TypedFlags.Identity) != 0) markers.Add("IDENTITY");

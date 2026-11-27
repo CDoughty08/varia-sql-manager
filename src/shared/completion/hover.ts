@@ -28,7 +28,7 @@ export interface ObjectMarkdownOptions {
 
 /** Text as Markdown shows it literally: every character Markdown or a table cell could read as syntax is escaped. */
 export function escapeMarkdown(text: string): string {
-  return text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, '\\$&').replace(/\r?\n/g, ' ')
+  return text.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g, '\\$&').replace(/\r\n|[\r\n]/g, ' ')
 }
 
 const bytesText = (bytes: number) => {
@@ -328,7 +328,12 @@ export async function hoverFromIndex(read: HoverRead, dialect: CompletionDialect
       // Its `*` reads objects: ask for them first.
       await resolver.load()
       const columns = (await resolver.columns({ kind: 'cte', name: parts[0], cte: parts[0] })).columns
-      return { span, markdown: [`**${escapeMarkdown(parts[0])}** · WITH query`, '', ...childrenOf(columns, []).slice(0, hoverColumns).map(column => `- ${escapeMarkdown(column.path)}`)].join('\n') }
+      const allTop = childrenOf(columns, [])
+      const shown = allTop.slice(0, hoverColumns)
+      const more = allTop.length - shown.length
+      const lines = [`**${escapeMarkdown(parts[0])}** · WITH query`, '', ...shown.map(column => `- ${escapeMarkdown(column.path)}`)]
+      if (more > 0) lines.push('', `and ${more.toLocaleString('en-US')} more columns`)
+      return { span, markdown: lines.join('\n') }
     }
     const path = dialect.objectPath(parts)
     if (!path) return
@@ -355,10 +360,31 @@ export async function hoverFromIndex(read: HoverRead, dialect: CompletionDialect
   if (field) {
     const owner = field.source.kind === 'object' ? field.columns.path && dialect.pathText(field.columns.path) : field.source.name
     if (!field.path.length) {
-      // The alias itself: its table's summary, or a WITH query's or subquery's columns.
-      if (field.columns.object && field.columns.path) return { span, markdown: objectMarkdown(dialect, field.columns.path, field.columns.object, field.columns.columns, field.columns.truncated) }
-      const top = childrenOf(field.columns.columns, [])
-      return top.length ? { span, markdown: [`**${escapeMarkdown(parts[0])}**`, '', ...top.slice(0, hoverColumns).map(column => `- ${escapeMarkdown(column.path)}${column.type ? ` ${escapeMarkdown(column.type)}` : ''}`)].join('\n') } : undefined
+      // The alias itself: its table's summary (with project tier / namesOnly), or a WITH query's or subquery's columns.
+      if (field.columns.object && field.columns.path) {
+        const [projectInfo] = field.columns.path[0]
+          ? await resolver.load([{ path: [], prefix: field.columns.path[0], exact: true, limit: 1 }])
+          : [undefined]
+        const proj = projectInfo?.items[0]
+        return {
+          span,
+          markdown: objectMarkdown(
+            dialect,
+            field.columns.path,
+            field.columns.object,
+            field.columns.columns,
+            field.columns.truncated,
+            { tier: proj?.tier, namesOnly: proj?.namesOnly === true || proj?.detail === 'names' }
+          )
+        }
+      }
+      const allTop = childrenOf(field.columns.columns, [])
+      if (!allTop.length) return undefined
+      const shown = allTop.slice(0, hoverColumns)
+      const more = allTop.length - shown.length
+      const lines = [`**${escapeMarkdown(parts[0])}**`, '', ...shown.map(column => `- ${escapeMarkdown(column.path)}${column.type ? ` ${escapeMarkdown(column.type)}` : ''}`)]
+      if (more > 0) lines.push('', `and ${more.toLocaleString('en-US')} more columns`)
+      return { span, markdown: lines.join('\n') }
     }
     const column = columnAt(field.columns.columns, field.path)
     if (column) return { span, markdown: columnMarkdown(column, owner) }

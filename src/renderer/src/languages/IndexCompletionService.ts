@@ -6,7 +6,7 @@ import { definitionFromIndex, IndexUnavailableError } from '../../../shared/comp
 import { datasetMarkdown, escapeMarkdown, hoverColumns, hoverFromIndex, objectMarkdown, projectMarkdown } from '../../../shared/completion/hover'
 import { LookupCache } from '../../../shared/completion/lookup-cache'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionWord, IndexLookup, QueryScope } from '../../../shared/completion/model'
-import { childrenOf, sameName, ScopeResolver } from '../../../shared/completion/resolve'
+import { boundedLookup, childrenOf, sameName, ScopeResolver } from '../../../shared/completion/resolve'
 import type { BigQueryIndexScope, ObjectIndexStatus } from '../../../shared/explorer/search'
 import type { BigQueryScopeRefreshResult } from '../search/ObjectSearchService'
 import { googleSqlDialect } from '../../../shared/googlesql/dialect'
@@ -317,7 +317,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const { target } = meta
     if (!target.connectionId || !target.key || !this.isCurrentTarget(target.documentId, target.key)) return item
     try {
-      const lookup = this.lookup(target)
+      const lookup = boundedLookup(this.lookup(target, true))
       let markdown: string | undefined
       if (meta.kind === 'object') {
         const [project, dataset, name] = meta.path
@@ -367,8 +367,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         if (this.disposed || token.isCancellationRequested) return item
         const columns = (await resolver.columns({ kind: 'cte', name: meta.name, cte: meta.name })).columns
         if (this.disposed || token.isCancellationRequested) return item
-        const top = childrenOf(columns, []).slice(0, hoverColumns)
-        markdown = [`**${escapeMarkdown(meta.name)}** · WITH query`, '', ...(top.length ? top.map(col => `- ${escapeMarkdown(col.path)}${col.type ? ` ${escapeMarkdown(col.type)}` : ''}`) : ['Columns resolved from query.'])].join('\n')
+        const allTop = childrenOf(columns, [])
+        const top = allTop.slice(0, hoverColumns)
+        const more = allTop.length - top.length
+        const lines = [`**${escapeMarkdown(meta.name)}** · WITH query`, '', ...(top.length ? top.map(col => `- ${escapeMarkdown(col.path)}${col.type ? ` ${escapeMarkdown(col.type)}` : ''}`) : ['Columns resolved from query.'])]
+        if (more > 0) lines.push('', `and ${more.toLocaleString('en-US')} more columns`)
+        markdown = lines.join('\n')
       }
       if (!markdown || this.disposed || token.isCancellationRequested) return item
       return { ...item, documentation: { value: markdown, isTrusted: false, supportHtml: false } }
@@ -384,11 +388,11 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     if (!model) return undefined
     const target = this.target(model)
     if (!target?.connectionId || !target.key) return undefined
-    return this.lookup(target)(requests)
+    return boundedLookup(this.lookup(target, true))(requests)
   }
 
   /** language.lookup for a target, through its connection's cache; a tab without a live connection has no index to ask. */
-  private lookup(target: Target): IndexLookup {
+  private lookup(target: Target, passive = false): IndexLookup {
     const { connectionId, key, documentId } = target
     if (!connectionId || !key) return async () => undefined
     let cache = this.caches.get(key)
@@ -397,8 +401,9 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       this.caches.set(key, cache)
     }
     const kept = cache
+    const caller = passive ? undefined : documentId
     return async requests => {
-      const answers = await kept.lookup(requests, documentId)
+      const answers = await kept.lookup(requests, caller)
       // A connection reconcile() dropped while this lookup ran is not brought back.
       if (kept.index && this.caches.get(key) === kept && this.getSnapshot().indexes.get(key) !== kept.index) {
         const indexes = new Map(this.getSnapshot().indexes).set(key, kept.index)
@@ -607,6 +612,9 @@ function unquoteGoogleSqlName(value: string, quoted = false): string {
   return body.replace(/\\(.)/g, '$1')
 }
 
+const validLookupSegments = (segments: readonly string[]) =>
+  segments.every(segment => segment.length >= 1 && segment.length <= languageLookupLimits.segmentChars)
+
 function resolveMetaFor(
   item: CompletionItem,
   read: ReturnType<typeof readGoogleSqlCompletion>,
@@ -620,7 +628,7 @@ function resolveMetaFor(
     if (source.kind === 'cte') return { kind: 'cte', target, name: source.cte, scope: read.scope }
     if (source.kind === 'object') {
       const path = target.dialect.objectPath(source.parts)
-      if (path && path.length === 3) return { kind: 'object', target, path: [path[0], path[1], path[2]] }
+      if (path && path.length === 3 && validLookupSegments(path)) return { kind: 'object', target, path: [path[0], path[1], path[2]] }
     }
     return undefined
   }
@@ -628,14 +636,14 @@ function resolveMetaFor(
   const { qualifier } = read.site
   if (item.kind === 'table' || item.kind === 'view' || item.kind === 'routine' || item.kind === 'model') {
     const path = target.dialect.objectPath([...qualifier, item.label])
-    if (path && path.length === 3) return { kind: 'object', target, path: [path[0], path[1], path[2]] }
+    if (path && path.length === 3 && validLookupSegments(path)) return { kind: 'object', target, path: [path[0], path[1], path[2]] }
     return undefined
   }
   if (item.kind === 'container') {
     if (qualifier.length === 0) {
-      if (item.detail?.startsWith('Project')) return { kind: 'project', target, project: item.label }
-      if (target.project) return { kind: 'dataset', target, project: target.project, dataset: item.label }
-    } else if (qualifier.length === 1) {
+      if (item.detail?.startsWith('Project')) return validLookupSegments([item.label]) ? { kind: 'project', target, project: item.label } : undefined
+      if (target.project && validLookupSegments([target.project, item.label])) return { kind: 'dataset', target, project: target.project, dataset: item.label }
+    } else if (qualifier.length === 1 && validLookupSegments([qualifier[0], item.label])) {
       return { kind: 'dataset', target, project: qualifier[0], dataset: item.label }
     }
   }

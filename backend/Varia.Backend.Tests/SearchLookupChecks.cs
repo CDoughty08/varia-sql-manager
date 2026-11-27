@@ -360,7 +360,52 @@ internal static class SearchLookupChecks
         var emptyRes = EditorLookup.Answer((IndexLookup?)null, new LanguageLookupArgs(id, [new(["Sales", "dbo", "Orders"])]));
         check(emptyRes.Index == "none" && emptyRes.Answers[0] is { State: "absent", Object: null, Items.Count: 0 },
             "EditorLookup.Answer(null IndexLookup) returns index none and absent answers");
+
+        // Case-sensitive collation: PK/UK match by ColumnId (and FK by Ordinal) so `Id` and `id` are never mislabeled.
+        var csId = Guid.NewGuid().ToString();
+        var csHeld = service.Held(csId);
+        var csIndex = (await new DatabaseReader("CaseDb", service.Limits, service.Pool).ReadAsync(CaseSensitiveKeyFixture(), false, CancellationToken.None))!;
+        csHeld.Put(csIndex);
+        var csLookup = service.Lookup(csId)!;
+        var csRes = EditorLookup.Answer(csLookup, new LanguageLookupArgs(csId, [new(["CaseDb", "dbo", "Items"], Details: true)]));
+        var upperId = csRes.Answers[0].Items.FirstOrDefault(item => item.Kind == "column" && item.Name == "Id");
+        var lowerId = csRes.Answers[0].Items.FirstOrDefault(item => item.Kind == "column" && item.Name == "id");
+        var upperFk = csRes.Answers[0].Items.FirstOrDefault(item => item.Kind == "column" && item.Name == "ParentId");
+        var lowerFk = csRes.Answers[0].Items.FirstOrDefault(item => item.Kind == "column" && item.Name == "parentid");
+        check(upperId?.Detail == "PK" && lowerId?.Detail is null && upperFk?.Detail == "FK" && lowerFk?.Detail is null,
+            "EditorLookup.Answer(IndexLookup) respects ColumnId and case-sensitive collation for PK/UK/FK column markers");
+        service.Forget(csId);
+
         service.Forget(id);
         check(service.MemoryUsed == 0 && service.Lookup(id) is null, "a disconnect drops the index and its lookup arrays");
+    }
+
+    private static System.Data.DataTableReader CaseSensitiveKeyFixture()
+    {
+        var at = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        return SearchChecks.Batch(true,
+            [
+                [10, "dbo", "Items", "U", at, 0, false, (byte)0, null],
+                [20, "dbo", "Parents", "U", at, 0, false, (byte)0, null],
+                [30, "dbo", "PK_Items", "PK", at, 10, false, (byte)0, null],
+                [31, "dbo", "FK_Items_Parents", "F", at, 10, false, (byte)0, null]
+            ],
+            [],
+            [],
+            [
+                [10, "Id", 1, 56, (short)4, (byte)10, (byte)0, false, false, false, false],
+                [10, "id", 2, 56, (short)4, (byte)10, (byte)0, true, false, false, false],
+                [10, "ParentId", 3, 56, (short)4, (byte)10, (byte)0, false, false, false, false],
+                [10, "parentid", 4, 56, (short)4, (byte)10, (byte)0, true, false, false, false],
+                [20, "Id", 1, 56, (short)4, (byte)10, (byte)0, false, false, false, false]
+            ],
+            [[10, "PK_Items", (byte)1, 1]],
+            [],
+            [],
+            allTypes: SearchChecks.SystemTypes,
+            indexColumns: [[10, 1, 1, false, false]],
+            keys: [[30, 10, 1]],
+            foreignKeys: [[31, 3, 20, 1]],
+            caseSensitive: true);
     }
 }

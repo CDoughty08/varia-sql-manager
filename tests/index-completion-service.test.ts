@@ -775,4 +775,47 @@ describe('IndexCompletionService', () => {
     const answers = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])
     expect(answers?.[0]?.object?.name).toBe('orders')
   })
+
+  it('bounds over-length segments, keeps passive lookup failures from poisoning tab status, and appends CTE truncation footer', async () => {
+    let failNext = false
+    const f = createFixture({
+      lookup: async requests => {
+        if (failNext) return { ok: false, code: 'BACKEND_ERROR', error: 'Transient lookup failure.' }
+        return {
+          ok: true,
+          value: {
+            index: 'ready',
+            answers: requests.map(request => ({ state: 'absent', path: [...request.path], items: [], truncated: false }))
+          }
+        }
+      }
+    })
+    const tab = f.documents.create('q-bounds.sql', '', 'sales', bqConnId)
+
+    // Over-length backticked table alias (>1024 chars) never sends invalid path segments to language.lookup.
+    const longTable = 't'.repeat(1030)
+    const aliasList = await f.completeAt(tab.id, `SELECT | FROM \`varia-alpha.sales.${longTable}\` a`)
+    const aliasItem = aliasList.suggestions.find(s => labelText(s.label) === 'a')!
+    const callsBeforeAlias = f.languageLookup.mock.calls.length
+    expect(await f.completionProvider().resolveCompletionItem!(aliasItem, token())).toBe(aliasItem)
+    expect(f.languageLookup).toHaveBeenCalledTimes(callsBeforeAlias)
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    // lookupDocument filters out >1024-char segments via boundedLookup and passive errors never poison tab errors.
+    const bounded = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', longTable], limit: 1 }])
+    expect(bounded?.[0]?.state).toBe('absent')
+    expect(f.languageLookup).toHaveBeenCalledTimes(callsBeforeAlias)
+
+    failNext = true
+    expect(await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])).toBeUndefined()
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+    failNext = false
+
+    // CTE drawer with >40 columns appends the "and N more columns" footer.
+    const cols = Array.from({ length: 45 }, (_, i) => `${i + 1} AS c${i + 1}`).join(', ')
+    const cteList = await f.completeAt(tab.id, `WITH wide AS (SELECT ${cols}) SELECT * FROM |`)
+    const wideItem = cteList.suggestions.find(s => labelText(s.label) === 'wide')!
+    const resolvedCte = (await f.completionProvider().resolveCompletionItem!(wideItem, token()))!
+    expect((resolvedCte.documentation as Monaco.IMarkdownString).value).toContain('and 5 more columns')
+  })
 })

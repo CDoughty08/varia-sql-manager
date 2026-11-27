@@ -222,6 +222,7 @@ describe('grouped calm status bar and condensed SQL status chip', () => {
       'FROM sales.orders o',
       'JOIN `org-marketing.web.sessions` s ON o.sid = s.sid',
       'LEFT JOIN `bigquery-public-data.samples.shakespeare` w ON TRUE;',
+      `SELECT * FROM \`analytics-prod.sales.${'x'.repeat(1025)}\`;`,
       'SELECT * FROM `analytics-prod.region-us`.INFORMATION_SCHEMA.TABLES;'
     ].join('\n')
     const sources = extractBigQueryQuerySources(sql, 'analytics-prod', 'sales')
@@ -230,6 +231,20 @@ describe('grouped calm status bar and condensed SQL status chip', () => {
       'org-marketing.web.sessions',
       'bigquery-public-data.samples.shakespeare'
     ])
+
+    const unbuiltWaves = summarizeBigQueryWaves('analytics-prod', undefined, ['dw-shared'])
+    expect(unbuiltWaves.state).toBe('none')
+    expect(unbuiltWaves.billing).toEqual({ project: 'analytics-prod', state: 'none' })
+    expect(unbuiltWaves.starred).toEqual({ count: 1, full: 0, namesOnly: 0 })
+    expect(unbuiltWaves.discovered).toEqual({ count: 0, full: 0, namesOnly: 0 })
+
+    const buildingWaves = summarizeBigQueryWaves(
+      'analytics-prod',
+      { connectionId: 'bq-1', requestId: 'req-1', phase: 'names', done: 1, total: 3, objects: 10 },
+      ['dw-shared']
+    )
+    expect(buildingWaves.state).toBe('building')
+    expect(buildingWaves.starred).toEqual({ count: 1, full: 0, namesOnly: 0 })
 
     const waves = summarizeBigQueryWaves(
       'analytics-prod',
@@ -264,12 +279,15 @@ describe('grouped calm status bar and condensed SQL status chip', () => {
     expect(classifyQuerySourceHealth({ state: 'absent', path: ['p', 'd', 't'], items: [], truncated: false }, false)).toBe('notIndexed')
   })
 
-  it('replaces vertical pipe separators with calm dividers in the window status bar', () => {
+  it('replaces vertical pipe separators with calm dividers in the window status bar and clamps popover positioning', () => {
     const rules = stylesheetRules()
     expect(rules.some(rule => rule.selector === '.editor-status > * + *::before')).toBe(false)
     const querySeg = rules.find(rule => rule.selector === '.query-status .query-status-segment + .query-status-segment::before')
     expect(querySeg?.declarations.find(d => d.property === 'content')?.value).toBe("'·'")
     const groupDivider = rules.find(rule => rule.selector === '.editor-status-group + .editor-status-group::before')
     expect(groupDivider?.declarations.find(d => d.property === 'width')?.value).toBe('1px')
+    const popover = rules.find(rule => rule.selector === '.intellisense-popover')
+    expect(popover?.declarations.find(d => d.property === 'inset')?.value).toBe('auto clamp(8px, anchor(right), max(8px, calc(100vw - 432px))) anchor(top) auto')
+    expect(popover?.declarations.find(d => d.property === 'width')?.value).toBe('min(424px, calc(100vw - 16px))')
   })
 })

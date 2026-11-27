@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SnapshotStore } from '../src/renderer/src/core/store'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/shared/contracts'
 import { languageDefinitionSchema, languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageDefinition, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
@@ -1401,5 +1402,103 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     const afterRefresh = await f.completion.resolveCompletionItem!(orders, token())
     expect(f.api.languageLookup).toHaveBeenCalledTimes(2)
     expect(afterRefresh).toBe(orders)
+  })
+
+  it('preserves existing STS documentation, filters non-object/mismatched kinds, splits bracketed/dotted/db.. names, and invalidates on indexState updates', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    type IndexStateSnap = { readonly indexes: Readonly<Record<string, { readonly requestId?: string; readonly status?: { readonly state: 'none' | 'building' | 'ready'; readonly builtAt?: string; readonly databases: number; readonly indexed: number; readonly objects: number; readonly modules: number; readonly cut: number; readonly skipped: readonly { readonly database: string; readonly code: string; readonly message: string }[]; readonly definitions: boolean } }>> }
+    class MutableIndexStateStore extends SnapshotStore<IndexStateSnap> {
+      set(next: IndexStateSnap): void { this.publish(next) }
+    }
+    const indexState = new MutableIndexStateStore({ indexes: {} })
+    f.service.bindIndexState(indexState)
+
+    const tab = f.documents.create('q2.sql', 'SELECT * FROM OtherDB..Ord', 'SalesDB', 'sql-1')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: '[Orders]', kind: 7, detail: 'Table', documentation: 'Orders extended doc', insertText: '[Orders]' },
+          { label: 'dbo', kind: 9, detail: 'Schema', documentation: 'Schema doc' },
+          { label: 'PlainText', kind: 1, documentation: 'Text doc' },
+          { label: 'MyEvent', kind: 23, documentation: 'Event doc' },
+          { label: 'Orders', kind: 3, detail: 'Function', documentation: 'Built-in function doc' }
+        ]
+      }
+    })
+    f.api.languageLookup.mockResolvedValue({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: [{
+          state: 'ready',
+          path: ['OtherDB', 'dbo', 'Orders'],
+          truncated: false,
+          object: { name: 'Orders', kind: 'table', detailed: true },
+          items: [{ name: 'Id', kind: 'column', type: 'int', nullable: false, detail: 'PK' }]
+        }]
+      }
+    })
+
+    const list = await f.complete(tab.id, { lineNumber: 1, column: 27 } as Monaco.Position)
+    const byLabel = (name: string) => list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === name)!
+
+    // db..table qualifier resolves against OtherDB with schema '*', and preserves existing STS documentation.
+    const resolved = (await f.completion.resolveCompletionItem!(byLabel('[Orders]'), token()))!
+    expect(f.api.languageLookup).toHaveBeenCalledWith({
+      connectionId: 'sql-1',
+      requests: [{ path: ['OtherDB', '*', 'Orders'], limit: 2000, details: true }]
+    })
+    const md = (resolved.documentation as Monaco.IMarkdownString).value
+    expect(md).toContain('**dbo\\.Orders** · Table')
+    expect(md).toContain('---')
+    expect(md).toContain('Orders extended doc')
+
+    // Non-object kinds (1 Text, 9 Module, 23 Event) are skipped; kind 3 Function never clobbers when IndexLookup returns a table.
+    expect(await f.completion.resolveCompletionItem!(byLabel('dbo'), token())).toBe(byLabel('dbo'))
+    expect(await f.completion.resolveCompletionItem!(byLabel('PlainText'), token())).toBe(byLabel('PlainText'))
+    expect(await f.completion.resolveCompletionItem!(byLabel('MyEvent'), token())).toBe(byLabel('MyEvent'))
+    const fnItem = byLabel('Orders')
+    expect(await f.completion.resolveCompletionItem!(fnItem, token())).toBe(fnItem)
+    expect(fnItem.documentation).toBe('Built-in function doc')
+
+    // Bracketed multi-part labels (`[dbo].[Orders]`) and dotted table names (`[Sales.Orders]`) split before unquoting.
+    const tabMulti = f.documents.create('q3.sql', 'SELECT * FROM ', 'SalesDB', 'sql-1')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: '[dbo].[Orders]', kind: 7 },
+          { label: '[Sales.Orders]', kind: 7, filterText: 'Sales.Orders' }
+        ]
+      }
+    })
+    const multiList = await f.complete(tabMulti.id, { lineNumber: 1, column: 15 } as Monaco.Position)
+    const callsBefore = f.api.languageLookup.mock.calls.length
+    await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
+    await f.completion.resolveCompletionItem!(multiList.suggestions[1], token())
+    expect(f.api.languageLookup.mock.calls[callsBefore][0]).toEqual({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', 'dbo', 'Orders'], limit: 2000, details: true }]
+    })
+    expect(f.api.languageLookup.mock.calls[callsBefore + 1][0]).toEqual({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', '*', 'Sales.Orders'], limit: 2000, details: true }]
+    })
+
+    // Search Objects indexState update immediately clears lookupCaches for that connection.
+    const callsAfterCache = f.api.languageLookup.mock.calls.length
+    await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(callsAfterCache)
+    indexState.set({
+      indexes: {
+        'sql-1': { status: { state: 'ready', builtAt: '2026-11-27T12:00:00Z', databases: 1, indexed: 1, objects: 5, modules: 0, cut: 0, skipped: [], definitions: true } }
+      }
+    })
+    await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(callsAfterCache + 1)
   })
 })

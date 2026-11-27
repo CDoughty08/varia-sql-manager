@@ -597,6 +597,25 @@ describe('GoogleSQL scope reader', () => {
     const text = at("SELECT 'or|ders'")
     expect(readGoogleSqlHover(text.text, text.offset)).toBeUndefined()
   })
+
+  it('escapes standalone carriage returns in Markdown, appends CTE >40 col footer, and includes project tier/namesOnly on table alias hover', async () => {
+    expect(escapeMarkdown('line1\rline2\r\nline3\nline4')).toBe('line1 line2 line3 line4')
+
+    const cols = Array.from({ length: 45 }, (_, i) => `${i + 1} AS c${i + 1}`).join(', ')
+    const cteHoverPos = at(`WITH wide AS (SELECT ${cols}) SELECT * FROM wi|de`)
+    const cteHover = await hoverFromIndex(readGoogleSqlHover(cteHoverPos.text, cteHoverPos.offset)!, dialect, fakeLookup())
+    expect(cteHover?.markdown).toContain('and 5 more columns')
+
+    const aliasHoverPos = at('SELECT |o.id FROM sales.orders o')
+    const tierLookup = fakeLookup()
+    const aliasHover = await hoverFromIndex(readGoogleSqlHover(aliasHoverPos.text, aliasHoverPos.offset)!, dialect, async requests => {
+      const answers = await tierLookup(requests)
+      return answers?.map(ans => ans.path.length === 0
+        ? { ...ans, items: ans.items.map(item => ({ ...item, tier: 'billing' as const })) }
+        : ans)
+    })
+    expect(aliasHover?.markdown).toContain('**orders** · Table · Billing')
+  })
 })
 
 describe('completion from the index', () => {

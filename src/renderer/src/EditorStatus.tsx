@@ -71,12 +71,14 @@ export default function EditorStatus() {
   const { documents: list, activeId } = useServiceSnapshot(documents)
   const values = useServiceSnapshot(settings).values
   const [popoverOpen, setPopoverOpen] = useState(false)
+  const [popoverAutoFocus, setPopoverAutoFocus] = useState(false)
   const sqlTriggerRef = useRef<HTMLButtonElement>(null)
   const popoverId = useId()
   const active = list.find(document => document.id === activeId)
 
   const closePopover = useCallback((restoreFocus = false) => {
     setPopoverOpen(false)
+    setPopoverAutoFocus(false)
     if (restoreFocus) sqlTriggerRef.current?.focus({ preventScroll: true })
   }, [])
 
@@ -111,10 +113,19 @@ export default function EditorStatus() {
     {sqlChip && isQueryDocument(active) && <span className="editor-status-group editor-status-sql-group">
       <button ref={sqlTriggerRef} type="button" className="editor-status-sql editor-status-action" data-tone={sqlChip.tone}
         aria-label={sqlChip.ariaLabel} aria-expanded={popoverOpen} aria-haspopup="dialog" aria-controls={popoverId} title={sqlChip.detail}
-        onClick={() => { if (!modalOpen() && !menus?.ownsKeyboard()) setPopoverOpen(current => !current) }}>
+        onClick={event => {
+          if (!modalOpen() && !menus?.ownsKeyboard()) {
+            const keyboard = event.detail === 0
+            setPopoverOpen(current => {
+              const next = !current
+              setPopoverAutoFocus(next && keyboard)
+              return next
+            })
+          }
+        }}>
         <Icon name={sqlChip.icon} /><span>{sqlChip.label}</span>
       </button>
-      {popoverOpen && <IntelliSensePopover open={popoverOpen} popoverId={popoverId} triggerRef={sqlTriggerRef} active={active} isBigQuery={isBigQuery}
+      {popoverOpen && <IntelliSensePopover open={popoverOpen} autoFocus={popoverAutoFocus} popoverId={popoverId} triggerRef={sqlTriggerRef} active={active} isBigQuery={isBigQuery}
         language={language} issues={issues} sqlSetting={sqlSetting} onClose={closePopover} />}
       {language && <span className="visually-hidden" role="status" aria-live="polite" aria-label="SQL IntelliSense" title={language.detail}>{language.label}</span>}
       {issues && <span className="visually-hidden" role="status" aria-live="polite" aria-label="SQL query issues" title={issues.detail}>{issues.label}</span>}

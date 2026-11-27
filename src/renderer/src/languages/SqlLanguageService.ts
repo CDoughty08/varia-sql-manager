@@ -1,6 +1,6 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { sqlObjectMarkdown } from '../../../shared/completion/hover'
+import { escapeMarkdown, sqlObjectMarkdown } from '../../../shared/completion/hover'
 import { LookupCache } from '../../../shared/completion/lookup-cache'
 import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult, type LanguageDefinition, type LanguageCompletionItem } from '../../../shared/language-service'
 import { languageLookupLimits, type LanguageLookupPath } from '../../../shared/language-lookup'
@@ -12,6 +12,7 @@ import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import { isLiveConnection } from '../services/connection-availability'
 import type { BackendStateService } from '../services/backend'
+import type { IndexStateStore } from './IndexCompletionService'
 import { definitionErrors } from './definition'
 
 type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics' | 'languageDefinition' | 'languageLookup'>>
@@ -22,10 +23,12 @@ interface SqlResolveMeta {
   readonly database: string
   readonly schema: string
   readonly name: string
+  readonly kind?: number
 }
 const sqlLookupInFlightLimit = 4
-// LSP CompletionItemKind values that can represent catalog objects in IndexLookup (skip keywords, columns, variables, snippets, operators).
-const sqlResolvableKinds = new Set<number>([1, 2, 3, 7, 8, 9, 12, 18, 23])
+// LSP CompletionItemKind values (1-based) that map to catalog objects in IndexLookup:
+// 2 Method, 3 Function, 7 Class (table/view), 8 Interface (view), 12 Value (sequence), 18 Reference (synonym), 22 Struct (table type).
+const sqlResolvableKinds = new Set<number>([2, 3, 7, 8, 12, 18, 22])
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
@@ -104,11 +107,14 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private completionCache?: CompletionCache
   /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero STS/SQL round-trips). */
   private readonly lookupCaches = new Map<string, LookupCache>()
+  private readonly indexSignatures = new Map<string, string>()
+  private indexStateBinding?: Disposable
   private readonly resolveMeta = new WeakMap<Monaco.languages.CompletionItem, SqlResolveMeta>()
   private lookupInFlight = 0
   constructor(monaco: typeof Monaco, private readonly api: LanguageApi,
-    private readonly documents: DocumentService, private readonly connections: ConnectionService, backend?: BackendStateService) {
+    private readonly documents: DocumentService, private readonly connections: ConnectionService, backend?: BackendStateService, indexState?: IndexStateStore) {
     super({ checking: false, documentErrors: new Map(), activities: new Map() })
+    if (indexState) this.bindIndexState(indexState)
     this.bindings.push(monaco.languages.registerCompletionItemProvider('sql', {
       triggerCharacters: ['.'],
       provideCompletionItems: async (model, position, context, token) => {
@@ -639,12 +645,60 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     for (const cancel of this.waiters) cancel()
     this.refreshing.clear(); this.activities.clear(); this.foreground.clear()
     this.pending.clear()
+    this.indexStateBinding?.dispose()
+    this.indexStateBinding = undefined
+    this.indexSignatures.clear()
     this.bindings.forEach(binding => binding.dispose())
     for (const peek of this.peekModels.values()) peek.disposal.dispose()
     this.peekModels.clear()
     for (const id of this.used) this.close(id)
     this.used.clear(); this.contexts.clear(); this.epochs.clear(); this.lookupCaches.clear(); this.clearListeners()
     this.publish({ ...this.getSnapshot(), checking: false, activities: new Map() })
+  }
+
+  /** Subscribes to Search Objects' index state store so SQL Server `lookupCaches` clears immediately when builds/refreshes finish. */
+  bindIndexState(store: IndexStateStore): Disposable {
+    this.indexStateBinding?.dispose()
+    this.indexSignatures.clear()
+    if (this.disposed) return { dispose() {} }
+    this.syncIndexes(store)
+    const unsubscribe = store.subscribe(() => this.syncIndexes(store))
+    const binding: Disposable = {
+      dispose: () => {
+        unsubscribe()
+        if (this.indexStateBinding === binding) this.indexStateBinding = undefined
+      }
+    }
+    this.indexStateBinding = binding
+    return binding
+  }
+
+  private syncIndexes(store: IndexStateStore): void {
+    if (this.disposed) return
+    const entries = store.getSnapshot().indexes
+    const seen = new Set<string>()
+    for (const [connectionId, entry] of Object.entries(entries)) {
+      if (!entry) continue
+      seen.add(connectionId)
+      const signature = `${entry.requestId ?? ''}|${entry.status?.state ?? ''}|${entry.status?.builtAt ?? ''}|${entry.status?.objects ?? ''}|${entry.status?.indexed ?? ''}|${entry.error ?? ''}`
+      if (this.indexSignatures.get(connectionId) !== signature) {
+        this.indexSignatures.set(connectionId, signature)
+        this.clearLookupCacheForConnection(connectionId)
+      }
+    }
+    for (const connectionId of [...this.indexSignatures.keys()]) {
+      if (!seen.has(connectionId)) {
+        this.indexSignatures.delete(connectionId)
+        this.clearLookupCacheForConnection(connectionId)
+      }
+    }
+  }
+
+  private clearLookupCacheForConnection(connectionId: string): void {
+    const prefix = `${connectionId}:`
+    for (const [key, cache] of this.lookupCaches) {
+      if (key.startsWith(prefix)) cache.clear()
+    }
   }
 
   private sqlResolveContext(capture: Capture): { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string } | undefined {
@@ -671,9 +725,15 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
       const answers = await cache.lookup([{ path: [meta.database, meta.schema, meta.name], limit: languageLookupLimits.items, details: true }])
       if (this.disposed || token.isCancellationRequested || meta.backendEpoch !== this.backendEpoch) return item
       const answer = answers?.[0]
-      if (!answer?.object) return item
+      if (!answer?.object || !sqlKindMatches(meta.kind, answer.object.kind)) return item
       const markdown = sqlObjectMarkdown(answer.path, answer.object, answer.items, answer.truncated)
-      return { ...item, documentation: { value: markdown, isTrusted: false, supportHtml: false } }
+      const existing = typeof item.documentation === 'string'
+        ? item.documentation.trim()
+        : item.documentation?.value?.trim() ?? ''
+      const value = existing
+        ? `${markdown}\n\n---\n\n${typeof item.documentation === 'string' ? existing.split(/\r\n|[\r\n]/).map(line => escapeMarkdown(line)).join('\n') : existing}`
+        : markdown
+      return { ...item, documentation: { value, isTrusted: false, supportHtml: false } }
     } catch {
       return item
     }
@@ -748,7 +808,81 @@ function unquoteSqlName(value: string): string {
   if (value.startsWith('"')) return (value.length > 1 && value.endsWith('"') ? value.slice(1, -1) : value.slice(1)).replaceAll('""', '"')
   return value
 }
-/** Walks backward before `columnIndex` (0-based) on `line` to extract up to 2 SQL qualifier segments (`db.schema.` or `schema.`). */
+/** Verifies an IndexLookup object kind is compatible with an STS LSP CompletionItemKind before enriching docs. */
+function sqlKindMatches(lspKind: number | undefined, objectKind: string): boolean {
+  if (lspKind === undefined) return true
+  if (lspKind === 2 || lspKind === 3) return objectKind === 'procedure' || objectKind === 'function'
+  if (lspKind === 7) return objectKind === 'table' || objectKind === 'view' || objectKind === 'tableType' || objectKind === 'synonym'
+  if (lspKind === 8) return objectKind === 'view' || objectKind === 'table' || objectKind === 'tableType'
+  if (lspKind === 12) return objectKind === 'sequence' || objectKind === 'tableType' || objectKind === 'synonym'
+  if (lspKind === 18) return objectKind === 'synonym' || objectKind === 'table' || objectKind === 'view' || objectKind === 'procedure' || objectKind === 'function'
+  if (lspKind === 22) return objectKind === 'tableType' || objectKind === 'table' || objectKind === 'view'
+  return false
+}
+
+/** Splits a quoted/unquoted SQL multi-part name (`[dbo].[Orders]`, `[Sales.Orders]`, `db..Orders`) before unquoting each part. */
+function splitSqlSegments(text: string): string[] | undefined {
+  const source = text.trim()
+  if (!source) return undefined
+  const parts: string[] = []
+  let i = 0
+  while (i <= source.length) {
+    while (i < source.length && (source[i] === ' ' || source[i] === '\t')) i++
+    if (i >= source.length) {
+      if (parts.length > 0) return undefined
+      break
+    }
+    if (source[i] === '.') {
+      // Omitted schema in `db..table`
+      if (parts.length === 0) return undefined
+      parts.push('')
+      i++
+      continue
+    }
+    let seg: string
+    if (source[i] === '[') {
+      i++
+      let out = ''
+      let closed = false
+      while (i < source.length) {
+        if (source[i] === ']') {
+          if (source[i + 1] === ']') { out += ']'; i += 2; continue }
+          closed = true; i++; break
+        }
+        out += source[i++]
+      }
+      if (!closed || !out) return undefined
+      seg = out
+    } else if (source[i] === '"') {
+      i++
+      let out = ''
+      let closed = false
+      while (i < source.length) {
+        if (source[i] === '"') {
+          if (source[i + 1] === '"') { out += '"'; i += 2; continue }
+          closed = true; i++; break
+        }
+        out += source[i++]
+      }
+      if (!closed || !out) return undefined
+      seg = out
+    } else {
+      const start = i
+      while (i < source.length && source[i] !== '.' && source[i] !== ' ' && source[i] !== '\t' && source[i] !== '[' && source[i] !== ']' && source[i] !== '"') i++
+      seg = source.slice(start, i)
+      if (!seg) return undefined
+    }
+    parts.push(seg)
+    while (i < source.length && (source[i] === ' ' || source[i] === '\t')) i++
+    if (i >= source.length) break
+    if (source[i] !== '.') return undefined
+    i++
+    if (i >= source.length) return undefined
+  }
+  return parts.length ? parts : undefined
+}
+
+/** Walks backward before `columnIndex` (0-based) on `line` to extract up to 2 SQL qualifier segments (`db.schema.`, `db..`, or `schema.`). */
 function sqlQualifierBefore(line: string, columnIndex: number): string[] {
   let at = columnIndex - 1
   while (at >= 0 && (line[at] === ' ' || line[at] === '\t')) at--
@@ -757,6 +891,14 @@ function sqlQualifierBefore(line: string, columnIndex: number): string[] {
     at--
     while (at >= 0 && (line[at] === ' ' || line[at] === '\t')) at--
     if (at < 0) break
+    if (line[at] === '.') {
+      // `db..table`: empty schema segment before the second dot; keep `at` on the first dot so the next pass reads `db`.
+      if (parts.length === 0) {
+        parts.unshift('*')
+        continue
+      }
+      break
+    }
     if (line[at] === ']') {
       const end = at
       at--
@@ -797,7 +939,7 @@ function sqlQualifierBefore(line: string, columnIndex: number): string[] {
     }
     while (at >= 0 && (line[at] === ' ' || line[at] === '\t')) at--
   }
-  return parts
+  return parts.length === 1 && parts[0] === '*' ? [] : parts
 }
 
 function sqlMetaForItem(
@@ -806,26 +948,31 @@ function sqlMetaForItem(
   context: { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string }
 ): SqlResolveMeta | undefined {
   if (item.kind !== undefined && !sqlResolvableKinds.has(item.kind)) return undefined
-  const raw = unquoteSqlName(item.filterText ?? item.label).trim()
-  if (!raw || raw.startsWith('@') || raw.startsWith('#')) return undefined
+  const segments = splitSqlSegments(item.label) ?? (item.filterText ? splitSqlSegments(item.filterText) : undefined)
+  if (!segments || segments.length > 3) return undefined
+  const leaf = segments[segments.length - 1]
+  if (!leaf || leaf.startsWith('@') || leaf.startsWith('#')) return undefined
   let database = context.database
   let schema = '*'
-  let name = raw
+  let name = leaf
   if (qualifier.length >= 2) {
+    if (segments.length !== 1) return undefined
     database = qualifier[0]
     schema = qualifier[1]
   } else if (qualifier.length === 1) {
+    if (segments.length !== 1) return undefined
     schema = qualifier[0]
-  } else {
-    const dot = raw.indexOf('.')
-    if (dot > 0 && dot < raw.length - 1 && !raw.includes('.', dot + 1)) {
-      schema = unquoteSqlName(raw.slice(0, dot))
-      name = unquoteSqlName(raw.slice(dot + 1))
-    }
+  } else if (segments.length === 2) {
+    if (!segments[0]) return undefined
+    schema = segments[0]
+  } else if (segments.length === 3) {
+    if (!segments[0]) return undefined
+    database = segments[0]
+    schema = segments[1] || '*'
   }
   if (!database || !schema || !name) return undefined
   if (database.length > languageLookupLimits.segmentChars || schema.length > languageLookupLimits.segmentChars || name.length > languageLookupLimits.segmentChars) return undefined
-  return { ...context, database, schema, name }
+  return { ...context, database, schema, name, kind: item.kind }
 }
 
 /**
