@@ -210,7 +210,7 @@ export class TabShelfLayout {
     this.list.style.setProperty('--tab-stack-scroll-top', `${this.scrollTop}px`)
     this.resetScroll()
     this.shelves = shelves.map(shelf => ({ ...shelf, scrollTop: this.scrollTop }))
-    const signature = JSON.stringify([width, this.viewportHeight, this.scrollTop, shelves.map(shelf => [shelf.pinned, shelf.top, shelf.height, shelf.rows, shelf.limit, shelf.hidden.map(tab => [tab.id, tab.name])])])
+    const signature = JSON.stringify([width, this.viewportHeight, this.scrollTop, shelves.map(shelf => [shelf.pinned, shelf.top, shelf.height, shelf.rows, shelf.limit, shelf.hidden.map(tab => [tab.id, tab.name, tab.multiMode ?? '', tab.multiMode === 'same' ? (tab.multiTargets ?? []).filter(target => target.enabled).length : 0, tab.file?.path ?? ''])])])
     if (signature !== this.signature) {
       this.signature = signature
       if (heightChanged) this.group.relayout()

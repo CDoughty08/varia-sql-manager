@@ -1486,3 +1486,281 @@ describe('Round 2 Editor Surfaces regressions', () => {
     expect(markers[2]).toMatchObject({ startLineNumber: 5, startColumn: 15, endLineNumber: 6, endColumn: 1 })
   })
 })
+
+describe('Round 3 Editor Surfaces regressions', () => {
+  it('Finding 1: consumes pendingOpen synchronously via useLayoutEffect and expires unmatched pendingOpen only after two animation frames', async () => {
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextId = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      const id = ++nextId
+      frames.set(id, cb)
+      return id
+    })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => { frames.delete(id) })
+    cleanups.push(() => { vi.unstubAllGlobals() })
+
+    const flushOneFrame = () => {
+      const batch = [...frames.entries()]
+      frames.clear()
+      for (const [, cb] of batch) cb(performance.now())
+    }
+
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'SQL One', { database: 'master' })
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([['sql-1', [{ name: 'master', isSystem: true, isSnapshot: false }]]]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tabSurvive = documents.openMultiQuery({
+      mode: 'same',
+      name: 'Survive.sql',
+      targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+    })
+    // Survives the first pre-paint rAF and opens when mounted before the second frame.
+    requestMultiTargetPopover(tabSurvive.id, 'sqlserver')
+    flushOneFrame()
+    expect(frames.size).toBe(1)
+    await mount(createElement(MultiTargetPopover, { tabId: tabSurvive.id }))
+    expect(document.body.querySelector('.multi-target-popover[role="dialog"]')).not.toBeNull()
+    // Consuming pendingOpen cancelled the second frame.
+    expect(frames.size).toBe(0)
+    await act(async () => { document.body.querySelector<HTMLButtonElement>('.multi-target-popover-close')!.click() })
+
+    // Unmatched pendingOpen expires cleanly after two frames.
+    let tabExpire!: ReturnType<typeof documents.openMultiQuery>
+    await act(async () => {
+      tabExpire = documents.openMultiQuery({
+        mode: 'same',
+        name: 'Expire.sql',
+        targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+      })
+    })
+    requestMultiTargetPopover(tabExpire.id, 'sqlserver')
+    flushOneFrame()
+    flushOneFrame()
+    await mount(createElement(MultiTargetPopover, { tabId: tabExpire.id }))
+    expect(document.body.querySelector('.multi-target-popover')).toBeNull()
+  })
+
+  it('Finding 2: place() uses raw available space to flip above in short viewports and clamps top and maxHeight inside viewport bounds', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'SQL One', { database: 'master' })
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([['sql-1', [{ name: 'master', isSystem: true, isSnapshot: false }]]]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+    })
+
+    const originalInnerHeight = window.innerHeight
+    const originalInnerWidth = window.innerWidth
+    let innerHeight = 200
+    Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => innerHeight })
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 800 })
+    cleanups.push(() => {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalInnerWidth })
+    })
+
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    const trigger = host.querySelector<HTMLButtonElement>('.multi-target-trigger')!
+    let box = { top: 150, bottom: 176, left: 200, right: 450, width: 250, height: 26, x: 200, y: 150, toJSON: () => ({}) }
+    vi.spyOn(trigger, 'getBoundingClientRect').mockImplementation(() => box)
+
+    await act(async () => { trigger.click() })
+    const dialog = document.body.querySelector<HTMLElement>('.multi-target-popover')!
+    const body = dialog.querySelector<HTMLElement>('.multi-target-popover-body')!
+    let bodyScrollHeight = 60
+    Object.defineProperty(dialog, 'offsetWidth', { configurable: true, get: () => 380 })
+    Object.defineProperty(dialog, 'offsetHeight', { configurable: true, get: () => 100 })
+    Object.defineProperty(body, 'clientHeight', { configurable: true, get: () => 60 })
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => bodyScrollHeight })
+
+    // Short viewport (200px), trigger near bottom (rawBelow=12, rawAbove=138), naturalHeight=100 -> must flip above!
+    await act(async () => { window.dispatchEvent(new Event('resize')) })
+    expect(dialog.style.top).toBe('46px')
+    expect(dialog.style.maxHeight).toBe('138px')
+
+    // Very short viewport (120px) where neither side fits 80px -> top is clamped so panel stays inside [8, innerHeight - 8].
+    innerHeight = 120
+    box = { top: 22, bottom: 98, left: 200, right: 450, width: 250, height: 76, x: 200, y: 22, toJSON: () => ({}) }
+    bodyScrollHeight = 200
+    await act(async () => { window.dispatchEvent(new Event('resize')) })
+    const top = parseFloat(dialog.style.top)
+    const maxHeight = parseFloat(dialog.style.maxHeight)
+    expect(maxHeight).toBe(80)
+    expect(top).toBeGreaterThanOrEqual(8)
+    expect(top + maxHeight).toBeLessThanOrEqual(innerHeight - 8)
+  })
+
+  it('Finding 3: clearing a detached row tags data-row-key and moves focus to that row checkbox or falls back to the popover dialog', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    cleanups.push(() => { vi.unstubAllGlobals() })
+
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'Detached One', { database: 'master' })
+    addSqlConnection(connections, 'sql-2', 'Detached Two', { database: 'master' })
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([
+      ['sql-1', [{ name: 'master', isSystem: true, isSnapshot: false }]],
+      ['sql-2', [{ name: 'master', isSystem: true, isSnapshot: false }]]
+    ]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const targetId1 = connections.get('sql-1')!.targetId!
+    const targetId2 = connections.get('sql-2')!.targetId!
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { targetId: targetId1, provider: 'sqlserver', database: 'master', enabled: true, attachWanted: false },
+        { targetId: targetId2, provider: 'sqlserver', database: 'master', enabled: true, attachWanted: false }
+      ]
+    })
+
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+
+    const dialog = document.body.querySelector<HTMLElement>('.multi-target-popover')!
+    const row1 = dialog.querySelector<HTMLElement>('.multi-target-row[data-row-key="live:sql-1"]')!
+    expect(row1).not.toBeNull()
+    const removeBtn1 = row1.querySelector<HTMLButtonElement>('.multi-target-clear')!
+    removeBtn1.focus()
+    await act(async () => { removeBtn1.click() })
+    await act(async () => { while (frames.length) frames.shift()!(performance.now()) })
+
+    const row1Check = dialog.querySelector<HTMLInputElement>('.multi-target-row[data-row-key="live:sql-1"] .multi-target-check')!
+    expect(document.activeElement).toBe(row1Check)
+
+    // If the row disappears before the rAF runs, focus falls back to the dialog container instead of document.body.
+    const row2 = dialog.querySelector<HTMLElement>('.multi-target-row[data-row-key="live:sql-2"]')!
+    const removeBtn2 = row2.querySelector<HTMLButtonElement>('.multi-target-clear')!
+    removeBtn2.focus()
+    await act(async () => { removeBtn2.click() })
+    await act(async () => { connections.remove('sql-2') })
+    await act(async () => { while (frames.length) frames.shift()!(performance.now()) })
+    expect(document.activeElement).toBe(dialog)
+  })
+
+  it('Finding 4: resets filter, unblocks rows, and rescues focus when target count drops to or below filter threshold while open', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    const dbMap = new Map<string, readonly DatabaseInfo[]>()
+    for (let i = 1; i <= 9; i++) {
+      addSqlConnection(connections, `sql-${i}`, `Server ${i}`, { database: 'master' })
+      dbMap.set(`sql-${i}`, [{ name: 'master', isSystem: true, isSnapshot: false }])
+    }
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(dbMap)
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [{ connectionId: 'sql-1', provider: 'sqlserver', database: 'master', enabled: true }]
+    })
+
+    const { host, rerender } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    await act(async () => { host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click() })
+
+    const dialog = document.body.querySelector<HTMLElement>('.multi-target-popover')!
+    const filterInput = dialog.querySelector<HTMLInputElement>('.multi-target-filter-input')!
+    expect(filterInput).not.toBeNull()
+    filterInput.focus()
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      setter.call(filterInput, 'Server 9')
+      filterInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(dialog.querySelectorAll('.multi-target-row')).toHaveLength(1)
+
+    // Drop below threshold (> 8 -> 7 rows) while filterInput is focused.
+    await act(async () => {
+      connections.remove('sql-9')
+      connections.remove('sql-8')
+    })
+    await rerender(createElement(MultiTargetPopover, { tabId: tab.id }))
+
+    expect(dialog.querySelector('.multi-target-filter-input')).toBeNull()
+    expect(dialog.querySelectorAll('.multi-target-row')).toHaveLength(7)
+    expect(document.activeElement).toBe(dialog)
+
+    // Re-crossing above threshold starts with an empty filter input.
+    await act(async () => {
+      addSqlConnection(connections, 'sql-8', 'Server 8', { database: 'master' })
+      addSqlConnection(connections, 'sql-9', 'Server 9', { database: 'master' })
+    })
+    await rerender(createElement(MultiTargetPopover, { tabId: tab.id }))
+    expect(dialog.querySelector<HTMLInputElement>('.multi-target-filter-input')!.value).toBe('')
+    expect(dialog.querySelectorAll('.multi-target-row')).toHaveLength(9)
+  })
+
+  it('Finding 5: keeps constant "Stack vertically" label on stack toggle button across aria-pressed states', async () => {
+    const { connections, documents, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'SQL One', { database: 'SalesDB' })
+    addBqConnection(connections, 'bq-1', 'BQ One', { database: 'sales_dw' })
+
+    const tab = documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 1;',
+      targets: [
+        { connectionId: 'sql-1', provider: 'sqlserver', database: 'SalesDB', enabled: true },
+        { connectionId: 'bq-1', provider: 'bigquery', database: 'sales_dw', enabled: true }
+      ]
+    })
+
+    const primarySlot = createRef<HTMLDivElement>()
+    const { host } = await mount(createElement(CrossEngineEditor, { tabId: tab.id, visible: true, primarySlotRef: primarySlot }))
+    const stackBtn = host.querySelector<HTMLButtonElement>('.cross-engine-stack-btn')!
+    expect(stackBtn.textContent).toBe('Stack vertically')
+    expect(stackBtn.getAttribute('aria-pressed')).toBe('false')
+
+    await act(async () => { stackBtn.click() })
+    expect(stackBtn.textContent).toBe('Stack vertically')
+    expect(stackBtn.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('Finding 6: moves focus to next/previous chip remove button or add button after removing a chip', async () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    cleanups.push(() => { vi.unstubAllGlobals() })
+
+    const { connections, documents, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'SQL One', { database: 'SalesDB' })
+    addSqlConnection(connections, 'sql-2', 'SQL Two', { database: 'SalesDB' })
+    addSqlConnection(connections, 'sql-3', 'SQL Three', { database: 'SalesDB' })
+
+    const tab = documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 1;',
+      targets: [
+        { connectionId: 'sql-1', provider: 'sqlserver', database: 'SalesDB', enabled: true },
+        { connectionId: 'sql-2', provider: 'sqlserver', database: 'SalesDB', enabled: true },
+        { connectionId: 'sql-3', provider: 'sqlserver', database: 'SalesDB', enabled: true }
+      ]
+    })
+
+    const primarySlot = createRef<HTMLDivElement>()
+    const { host } = await mount(createElement(CrossEngineEditor, { tabId: tab.id, visible: true, primarySlotRef: primarySlot }))
+    const sqlPane = host.querySelector<HTMLElement>('.cross-engine-pane[data-cross-dialect="sqlserver"]')!
+
+    // Remove middle chip (SQL Two) -> focus moves to next chip remove button (Remove SQL Three).
+    const removeTwo = sqlPane.querySelector<HTMLButtonElement>('button[aria-label="Remove SQL Two"]')!
+    removeTwo.focus()
+    await act(async () => { removeTwo.click() })
+    await act(async () => { while (frames.length) frames.shift()!(performance.now()) })
+    expect(document.activeElement).toBe(sqlPane.querySelector('button[aria-label="Remove SQL Three"]'))
+
+    // Remove last chip (SQL Three) -> focus moves to previous chip remove button (Remove SQL One).
+    const removeThree = sqlPane.querySelector<HTMLButtonElement>('button[aria-label="Remove SQL Three"]')!
+    await act(async () => { removeThree.click() })
+    await act(async () => { while (frames.length) frames.shift()!(performance.now()) })
+    expect(document.activeElement).toBe(sqlPane.querySelector('button[aria-label="Remove SQL One"]'))
+
+    // Remove final chip (SQL One) -> focus moves to the pane's add button.
+    const removeOne = sqlPane.querySelector<HTMLButtonElement>('button[aria-label="Remove SQL One"]')!
+    await act(async () => { removeOne.click() })
+    await act(async () => { while (frames.length) frames.shift()!(performance.now()) })
+    expect(document.activeElement).toBe(sqlPane.querySelector('.cross-engine-add-btn'))
+  })
+})
