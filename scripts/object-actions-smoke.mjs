@@ -2195,7 +2195,7 @@ try {
   const agentPropertiesDialog = () => page.getByRole('dialog', { name: 'SQL Server Agent Properties', exact: true })
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Properties')
   await expect(agentPropertiesDialog().getByText('NT Service\\SQLSERVERAGENT', { exact: true })).toBeVisible()
-  const agentRestart = agentPropertiesDialog().getByRole('checkbox', { name: 'Auto restart SQL Server Agent if it stops unexpectedly', exact: true })
+  const agentRestart = agentPropertiesDialog().getByRole('switch', { name: 'Auto restart SQL Server Agent if it stops unexpectedly', exact: true })
   await expect(agentRestart).toBeChecked()
   await agentRestart.uncheck()
   await agentPropertiesDialog().getByRole('button', { name: 'History', exact: true }).click()
