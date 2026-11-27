@@ -1979,3 +1979,36 @@ describe('the search pickers in a popout', () => {
     }
   })
 })
+
+describe('refreshBigQueryScopes', () => {
+  it('resolves false when an earlier queued scope fails even if a subsequent scope succeeds', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    const batch = service.refreshBigQueryScopes('bq', [
+      { project: 'varia-alpha', dataset: 'ds1' },
+      { project: 'varia-alpha', dataset: 'ds2' }
+    ])
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds1' } })
+
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds2' } })
+
+    // A second caller joining after ds1 already failed still resolves true if remaining scopes succeed.
+    const laterCaller = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    pendingIndex[3]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+
+    expect(await batch).toBe(false)
+    expect(await laterCaller).toBe(true)
+    service.dispose()
+  })
+})

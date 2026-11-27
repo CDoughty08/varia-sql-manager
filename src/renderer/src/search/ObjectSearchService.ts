@@ -454,8 +454,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           // part way would still say there is no index while the search finds what it read.
           if (result.code === 'CANCELLED') this.readStatus(connectionId)
         }
+        this.recordBuildOutcome(connectionId, result.ok)
         this.nextRefresh(connectionId)
-        if (!this.getSnapshot().indexes[connectionId]?.requestId) this.settleBuildWaiters(connectionId, result.ok)
+        if (!this.getSnapshot().indexes[connectionId]?.requestId) this.settleBuildWaiters(connectionId)
       }, error => {
         onUnexpectedError(error)
         const entry = this.getSnapshot().indexes[connectionId]
@@ -523,13 +524,19 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Currently running scoped refresh key per connection, kept separate from completed `indexedScopes`. */
   private readonly inFlightScope = new Map<string, string>()
   /** Waiters awaiting completion of a connection's active build and queued refreshes. */
-  private readonly buildWaiters = new Map<string, Set<(ok: boolean) => void>>()
+  private readonly buildWaiters = new Map<string, Set<{ ok: boolean; readonly resolve: (ok: boolean) => void }>>()
 
-  private settleBuildWaiters(connectionId: string, ok: boolean): void {
+  private recordBuildOutcome(connectionId: string, ok: boolean): void {
+    const waiters = this.buildWaiters.get(connectionId)
+    if (!waiters || ok) return
+    for (const waiter of waiters) waiter.ok = false
+  }
+
+  private settleBuildWaiters(connectionId: string, ok = true): void {
     const waiters = this.buildWaiters.get(connectionId)
     if (!waiters) return
     this.buildWaiters.delete(connectionId)
-    for (const resolve of waiters) resolve(ok)
+    for (const waiter of waiters) waiter.resolve(ok && waiter.ok)
   }
 
   /**
@@ -553,7 +560,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     return new Promise<boolean>(resolve => {
       let set = this.buildWaiters.get(connectionId)
       if (!set) { set = new Set(); this.buildWaiters.set(connectionId, set) }
-      set.add(resolve)
+      set.add({ ok: true, resolve })
     })
   }
 

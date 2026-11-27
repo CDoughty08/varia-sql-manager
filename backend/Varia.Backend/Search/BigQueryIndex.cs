@@ -441,7 +441,7 @@ internal sealed class BigQueryReader(ObjectIndexLimits limits, StringPool pool, 
     /// one that did not.</summary>
     internal static long Weight(BigQueryDetail detail)
     {
-        static long Text(string? value) => value is null ? 0 : IndexMemory.StringBytes(Math.Min(value.Length, BigQueryIndexLimits.FactChars));
+        static long Text(string? value) => value is { Length: > 0 } ? IndexMemory.StringBytes(Math.Min(value.Length, BigQueryIndexLimits.FactChars)) : 0;
         var bytes = Text(detail.Signature) + Text(detail.Partitioning) + Text(detail.Clustering) + Text(detail.Description);
         foreach (var column in detail.Columns)
             bytes += IndexMemory.RecordBytes + IndexMemory.TypedBytes + (column.Description is { Length: > 0 } text ? BigQueryFacts.DescriptionBytes + Text(text) : 0);

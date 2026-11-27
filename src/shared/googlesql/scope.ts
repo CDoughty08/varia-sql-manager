@@ -601,6 +601,7 @@ function hasFromAlias(statement: Statement, before: number, open: number, first:
       const prev = prevAtLevel(statement, at, open)
       const isExprEnd = !isName(toks[at])
         || isWord(toks[at], 'END')
+        || (prev >= 0 && isPunct(toks[prev], '+', '-', '*', '/'))
         || (prev >= 0 && isWord(toks[prev], 'OF') && isWord(toks[prevAtLevel(statement, prev, open)], 'AS'))
         || isIntervalUnit(statement, at, open)
       if (isExprEnd) {
@@ -611,6 +612,7 @@ function hasFromAlias(statement: Statement, before: number, open: number, first:
     break
   }
   if (at < 0 || !isName(toks[at])) return false
+  if (toks[at].kind === 'word' && notAliases.has(toks[at].upper)) return false
   const prev2 = prevAtLevel(statement, at, open)
   const prev2Tok = prev2 >= 0 ? toks[prev2] : undefined
   if (!prev2Tok || isPunct(prev2Tok, '.') || isPunct(prev2Tok, '-') || isPunct(prev2Tok, ',')) return false
@@ -635,12 +637,13 @@ function placeOf(statement: Statement, first: number, open: number): 'object' | 
   if (isWord(previous, 'USING') && isWord(toks[open + 1] ?? toks[0], 'MERGE')) return 'object'
   if (isPunct(previous, ',') && from) return 'object'
   // After a table, its alias, a subquery, or a table-operator/time-travel suffix in FROM: an alias or the next clause's keyword.
-  if (from?.kind === 'items' && (isName(previous) || isClosedGroup(statement, before, first) || (before >= 0 && valueEnds.has(toks[before].kind) && systemTimeBefore(statement, before, open) >= 0))) return 'afterFromTable'
+  const prevBefore = before >= 0 ? prevAtLevel(statement, before, open) : -1
+  if (from?.kind === 'items' && (isName(previous) || (isPiece(previous) && prevBefore >= 0 && isPunct(toks[prevBefore], '-')) || isClosedGroup(statement, before, first) || (before >= 0 && valueEnds.has(toks[before].kind) && systemTimeBefore(statement, before, open) >= 0))) return 'afterFromTable'
   return 'expression'
 }
 
 /** Whether token `index` is in its block's FROM clause: among its items (and whether directly after JOIN), or in a join's ON or USING condition. */
-function fromPlace(statement: Statement, index: number, open: number): { readonly kind: 'items' | 'condition'; readonly inJoin: boolean } | undefined {
+function fromPlace(statement: Statement, index: number, open: number): { readonly kind: 'items' | 'condition'; readonly inJoin: boolean; readonly mergeUsing?: boolean } | undefined {
   const { toks } = statement
   const merge = isWord(toks[open + 1] ?? toks[0], 'MERGE')
   let condition = false
@@ -663,7 +666,7 @@ function fromPlace(statement: Statement, index: number, open: number): { readonl
     if (isPunct(token, ',')) { sawComma = true; continue }
     if (token.kind !== 'word') continue
     if (token.upper === 'FROM' || token.upper === 'JOIN' || (token.upper === 'USING' && merge)) {
-      return { kind: !sawComma && condition ? 'condition' : 'items', inJoin: !sawComma && !sawClosedUsing && token.upper === 'JOIN' }
+      return { kind: !sawComma && condition ? 'condition' : 'items', inJoin: !sawComma && !sawClosedUsing && token.upper === 'JOIN', ...!sawComma && token.upper === 'USING' && merge ? { mergeUsing: true } : {} }
     }
     if (!sawComma && token.upper === 'ON') condition = true
     else if (!sawComma && token.upper === 'USING') {
@@ -734,6 +737,7 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
       const rawBodyEnd = token.open ? token.end : token.end - 1
       const rawBody = text.slice(token.start + 1, rawBodyEnd)
       const firstSpace = token.open ? rawBody.search(/\s/) : -1
+      if (token.open && firstSpace >= 0 && offset > token.start + 1 + firstSpace) return none(empty)
       const bodyEnd = firstSpace >= 0 ? Math.max(offset, token.start + 1 + firstSpace) : rawBodyEnd
       const body = firstSpace >= 0 ? rawBody.slice(0, firstSpace) : rawBody
       const before = text.slice(token.start + 1, offset)
@@ -761,13 +765,16 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   const scope = scopeAt(statement, open, offset)
   const place = placeOf(statement, chain.first, open)
   let site: CompletionSite
-  if (place === 'object') site = { kind: 'object', qualifier: parts }
+  if (place === 'object') {
+    if (current >= 0 && isPiece(toks[current])) word = { ...word, end: toks[dashedSpan(toks, current)[1]].end }
+    site = { kind: 'object', qualifier: parts }
+  }
   else if (place === 'alias') site = castCalls.has(googleSqlCallContext(text, offset)?.name.toUpperCase() ?? '') ? { kind: 'castType' } : { kind: 'none' }
   else if (parts.length) site = { kind: 'member', qualifier: parts }
   else if (place === 'afterFromTable') {
     const before = prevAtLevel(statement, chain.first, open)
     const from = fromPlace(statement, chain.first, open)
-    site = { kind: 'afterFromTable', hasAlias: hasFromAlias(statement, before, open, chain.first), inJoin: from?.inJoin ?? false }
+    site = { kind: 'afterFromTable', hasAlias: hasFromAlias(statement, before, open, chain.first), inJoin: from?.inJoin ?? false, ...from?.mergeUsing ? { mergeUsing: true } : {} }
   } else if (place === 'statementStart') site = { kind: 'statementStart' }
   else site = { kind: 'expression' }
   return { site, scope, word }

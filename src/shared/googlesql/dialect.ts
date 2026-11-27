@@ -19,9 +19,13 @@ const statementStartKeywords: readonly string[] = [
   'CALL', 'DECLARE', 'SET', 'BEGIN', 'EXPLAIN', 'EXPORT', 'LOAD', 'ASSERT', 'EXECUTE'
 ]
 const castTypes: readonly string[] = [...googleSqlTypes, 'ARRAY', 'STRUCT', 'RANGE']
-function afterFromKeywords(hasAlias = false, inJoin = false): readonly string[] {
+function afterFromKeywords(hasAlias = false, inJoin = false, mergeUsing = false): readonly string[] {
   const list: string[] = []
   if (!hasAlias) list.push('AS')
+  if (mergeUsing) {
+    list.push('ON')
+    return list
+  }
   if (inJoin) list.push('ON', 'USING')
   list.push(
     'WHERE', 'JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'CROSS JOIN',
@@ -80,7 +84,7 @@ export function googleSqlDialect(defaults: GoogleSqlDefaults): CompletionDialect
     keywords,
     keywordsFor(site) {
       switch (site.kind) {
-        case 'afterFromTable': return afterFromKeywords(site.hasAlias, site.inJoin)
+        case 'afterFromTable': return afterFromKeywords(site.hasAlias, site.inJoin, site.mergeUsing)
         case 'statementStart': return statementStartKeywords
         case 'castType': return castTypes
         default: return keywords

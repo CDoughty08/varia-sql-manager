@@ -66,7 +66,13 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   /** The connection (and generation) each tab's error came from: it goes when the tab moves to another or reconnects. */
   private readonly errorKeys = new Map<string, string>()
   private readonly indexSignatures = new Map<string, string>()
-  private readonly refreshOps = new Map<string, { readonly key: string; readonly cancel: () => void; readonly work: Promise<boolean> }>()
+  private readonly refreshOps = new Map<string, {
+    readonly key: string
+    readonly cancel: () => void
+    readonly isCancelled: () => boolean
+    readonly work: Promise<boolean>
+    waiters: number
+  }>()
   private inFlight = 0
   private disposed = false
 
@@ -188,45 +194,67 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) throw new Error('Connect this query to a live database before refreshing IntelliSense.')
     const key = cacheKey(connection)
     const existing = this.refreshOps.get(document.id)
-    if (existing && existing.key === key) {
-      if (!token) return existing.work
-      return new Promise<boolean>(resolve => {
-        const sub = token.onCancellationRequested(() => { sub.dispose(); resolve(false) })
-        void existing.work.then(ok => { sub.dispose(); resolve(token.isCancellationRequested ? false : ok) }, () => { sub.dispose(); resolve(false) })
-      })
+    let op: {
+      readonly key: string
+      readonly cancel: () => void
+      readonly isCancelled: () => boolean
+      work: Promise<boolean>
+      waiters: number
     }
-    if (existing) existing.cancel()
-    this.caches.get(key)?.clear()
-    this.failure(document.id, key, undefined)
-    const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
-    const scopes = extractBigQueryRefreshScopes(model.getValue(), connection.server, dataset)
-    if (!this.options.refreshScopes) return true
-    let cancelled = false
-    let settleCancel = () => {}
-    const cancelledPromise = new Promise<boolean>(resolve => { settleCancel = () => resolve(false) })
-    const cancel = () => { if (cancelled) return; cancelled = true; settleCancel() }
-    const cancelBinding = token?.onCancellationRequested(cancel)
-    const op: { readonly key: string; readonly cancel: () => void; work: Promise<boolean> } = { key, cancel, work: Promise.resolve(false) }
-    const work = (async () => {
-      try {
-        const result = await Promise.race([
-          this.options.refreshScopes!(connection.id, scopes).catch(() => false),
-          cancelledPromise
-        ])
-        return !cancelled && !this.disposed && result
-      } finally {
-        cancelBinding?.dispose()
-        if (this.refreshOps.get(document.id) === op) {
-          this.refreshOps.delete(document.id)
-          this.publishSnapshot()
+    if (existing && existing.key === key && !existing.isCancelled()) {
+      op = existing
+    } else {
+      if (existing) existing.cancel()
+      this.caches.get(key)?.clear()
+      this.failure(document.id, key, undefined)
+      const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
+      const scopes = extractBigQueryRefreshScopes(model.getValue(), connection.server, dataset)
+      if (!this.options.refreshScopes) return true
+      let cancelled = false
+      let settleCancel = () => {}
+      const cancelledPromise = new Promise<boolean>(resolve => { settleCancel = () => resolve(false) })
+      const cancel = () => { if (cancelled) return; cancelled = true; settleCancel() }
+      const created = { key, cancel, isCancelled: () => cancelled, work: Promise.resolve(false), waiters: 0 }
+      const work = (async () => {
+        try {
+          const result = await Promise.race([
+            this.options.refreshScopes!(connection.id, scopes).catch(() => false),
+            cancelledPromise
+          ])
+          return !cancelled && !this.disposed && result
+        } finally {
+          if (this.refreshOps.get(document.id) === created) {
+            this.refreshOps.delete(document.id)
+            this.publishSnapshot()
+          }
+          this.caches.get(key)?.clear()
         }
-        this.caches.get(key)?.clear()
+      })()
+      created.work = work
+      op = created
+      this.refreshOps.set(document.id, op)
+      this.publishSnapshot()
+    }
+    if (!token) {
+      op.waiters++
+      return op.work.finally(() => { op.waiters = Math.max(0, op.waiters - 1) })
+    }
+    return new Promise<boolean>(resolve => {
+      let settled = false
+      op.waiters++
+      const finish = (ok: boolean) => {
+        if (settled) return
+        settled = true
+        sub.dispose()
+        op.waiters = Math.max(0, op.waiters - 1)
+        resolve(ok)
       }
-    })()
-    op.work = work
-    this.refreshOps.set(document.id, op)
-    this.publishSnapshot()
-    return work
+      const sub = token.onCancellationRequested(() => {
+        finish(false)
+        if (op.waiters === 0) op.cancel()
+      })
+      void op.work.then(ok => finish(token.isCancellationRequested ? false : ok), () => finish(false))
+    })
   }
 
   /** What a model's requests use: its BigQuery tab, the tab's live connection (if any) and the names it resolves unqualified names to. */
@@ -279,8 +307,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   }
 
   private failure(documentId: string | undefined, key: string, error?: string): void {
-    if (documentId && error) this.errorKeys.set(documentId, key)
-    if (this.disposed || !documentId || this.getSnapshot().errors.get(documentId) === error) return
+    if (this.disposed || !documentId) return
+    const document = this.documents.get(documentId)
+    const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
+    if (!document || !isQueryDocument(document) || !connection || !isLiveConnection(connection) || !isBigQueryConnection(connection) || cacheKey(connection) !== key) return
+    if (error) this.errorKeys.set(documentId, key); else this.errorKeys.delete(documentId)
+    if (this.getSnapshot().errors.get(documentId) === error) return
     const errors = new Map(this.getSnapshot().errors)
     if (error) errors.set(documentId, error); else errors.delete(documentId)
     this.publish({ ...this.getSnapshot(), errors })

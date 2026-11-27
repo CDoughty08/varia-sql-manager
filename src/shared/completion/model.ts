@@ -54,7 +54,7 @@ export type CompletionSite =
   | { readonly kind: 'object'; readonly qualifier: readonly string[] }
   | { readonly kind: 'member'; readonly qualifier: readonly string[] }
   | { readonly kind: 'expression' }
-  | { readonly kind: 'afterFromTable'; readonly hasAlias?: boolean; readonly inJoin?: boolean }
+  | { readonly kind: 'afterFromTable'; readonly hasAlias?: boolean; readonly inJoin?: boolean; readonly mergeUsing?: boolean }
   | { readonly kind: 'statementStart' }
   | { readonly kind: 'castType' }
   | { readonly kind: 'datePart'; readonly functionName?: string }

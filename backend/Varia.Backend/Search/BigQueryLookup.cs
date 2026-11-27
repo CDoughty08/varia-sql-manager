@@ -21,11 +21,16 @@ internal sealed class BigQueryLookup
     private readonly HashSet<string> starred;
     private readonly Action? arraysBuilt;
     private readonly Dictionary<string, Dictionary<string, DatabaseIndex>> reads = new(StringComparer.Ordinal);
+    private readonly HashSet<string> projectSet;
+    private readonly Dictionary<string, string?> projectIgnoreCase = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> namesOnly;
     private readonly HashSet<string> partialProjects;
     private readonly Dictionary<string, ObjectIndexSkip> projectListingSkips;
     private readonly Dictionary<(string Project, string Dataset), ObjectIndexSkip> datasetSkips;
     private readonly List<ObjectIndexSkip> skips;
+    private readonly HashSet<string> projectsWithListingSkip = new(StringComparer.Ordinal);
+    private readonly HashSet<string> projectsWithAnyDatasetSkip = new(StringComparer.Ordinal);
+    private readonly HashSet<string> projectsWithUnreadDatasetSkip = new(StringComparer.Ordinal);
     private readonly bool building, built;
 
     internal BigQueryLookup(string billing, IReadOnlyList<string> extras, IEnumerable<DatabaseIndex> held, IEnumerable<string>? namesOnly, IEnumerable<ObjectIndexSkip> skips,
@@ -37,17 +42,45 @@ internal sealed class BigQueryLookup
         this.starred = new HashSet<string>(starredProjects ?? [], StringComparer.Ordinal);
         this.keepFree = keepFree;
         Projects = [billing, .. extras.Where(extra => extra != billing).Distinct(StringComparer.Ordinal)];
+        this.projectSet = new HashSet<string>(Projects, StringComparer.Ordinal);
+        foreach (var project in Projects)
+        {
+            if (projectIgnoreCase.TryGetValue(project, out var existing))
+            {
+                if (existing is not null && existing != project) projectIgnoreCase[project] = null;
+            }
+            else
+            {
+                projectIgnoreCase[project] = project;
+            }
+        }
         foreach (var read in held)
         {
             if (read.Dataset is not { } dataset) continue;
             if (!reads.TryGetValue(read.Database, out var datasets)) reads[read.Database] = datasets = new(StringComparer.Ordinal);
             datasets[dataset] = read;
         }
-        this.namesOnly = [.. namesOnly ?? []];
+        this.namesOnly = new HashSet<string>(namesOnly ?? [], StringComparer.Ordinal);
         this.partialProjects = new HashSet<string>(partialProjects ?? [], StringComparer.Ordinal);
         this.projectListingSkips = projectListingSkips is null ? new(StringComparer.Ordinal) : new(projectListingSkips, StringComparer.Ordinal);
         this.datasetSkips = datasetSkips is null ? new() : new(datasetSkips);
         this.skips = [.. skips];
+        foreach (var project in this.projectListingSkips.Keys) projectsWithListingSkip.Add(project);
+        foreach (var key in this.datasetSkips.Keys)
+        {
+            projectsWithAnyDatasetSkip.Add(key.Project);
+            if (!reads.TryGetValue(key.Project, out var datasets) || !datasets.ContainsKey(key.Dataset)) projectsWithUnreadDatasetSkip.Add(key.Project);
+        }
+        foreach (var skip in this.skips)
+        {
+            if (skip.Project is not { } proj) continue;
+            if (skip.Database == "") projectsWithListingSkip.Add(proj);
+            else
+            {
+                projectsWithAnyDatasetSkip.Add(proj);
+                if (!reads.TryGetValue(proj, out var datasets) || !datasets.ContainsKey(skip.Database)) projectsWithUnreadDatasetSkip.Add(proj);
+            }
+        }
         (this.building, this.built, this.budget, this.arraysBuilt) = (building, built, budget, arraysBuilt);
     }
 
@@ -67,7 +100,7 @@ internal sealed class BigQueryLookup
         : "discovered";
 
     /// <summary>The project as the connection names it: exact, else the one that differs only in case; null when the connection has none such.</summary>
-    public string? Project(string name) => Resolve(Projects, name);
+    public string? Project(string name) => projectSet.TryGetValue(name, out var exact) ? exact : projectIgnoreCase.GetValueOrDefault(name);
 
     /// <summary>The state of a project as a whole: Absent when the connection has no such project, Skipped when its datasets could
     /// not be listed and none was read, Partial when its list may be short (a listing or a dataset's read failed), Building while a
@@ -75,18 +108,14 @@ internal sealed class BigQueryLookup
     public LookupState ProjectState(string project)
     {
         if (Project(project) is not { } known) return LookupState.Absent;
-        var listing = projectListingSkips.ContainsKey(known) || skips.Any(skip => skip.Project == known && skip.Database == "");
+        var listing = projectsWithListingSkip.Contains(known);
         // Datasets read before a listing that failed (or was cut) still answer, but the list may be short; so it is when a dataset
         // listed but never read is left out of it.
-        if (reads.TryGetValue(known, out var held))
-            return listing || partialProjects.Contains(known)
-                || datasetSkips.Keys.Any(key => key.Project == known && !held.ContainsKey(key.Dataset))
-                || skips.Any(skip => skip.Project == known && skip.Database != "" && !held.ContainsKey(skip.Database)) ? LookupState.Partial : LookupState.Ready;
+        if (reads.ContainsKey(known))
+            return listing || partialProjects.Contains(known) || projectsWithUnreadDatasetSkip.Contains(known) ? LookupState.Partial : LookupState.Ready;
         if (listing) return LookupState.Skipped;
         // Listed, but every dataset's read failed (or was refused for the budget): none answers.
-        if (partialProjects.Contains(known)
-            || datasetSkips.Keys.Any(key => key.Project == known)
-            || skips.Any(skip => skip.Project == known && skip.Database != "")) return building ? LookupState.Building : LookupState.Partial;
+        if (partialProjects.Contains(known) || projectsWithAnyDatasetSkip.Contains(known)) return building ? LookupState.Building : LookupState.Partial;
         return building ? LookupState.Building : Index == "none" ? LookupState.Absent : LookupState.Ready;
     }
 

@@ -166,8 +166,10 @@ internal static partial class BigQueryIndexChecks
         var longDescText = new string('d', BigQueryIndexLimits.FactChars + 400);
         var longDesc = BigQueryEntries.FromTable(new Google.Apis.Bigquery.v2.Data.Table { Type = "VIEW", Description = longDescText, View = new() { Query = "SELECT 1" } });
         var emptyDesc = new BigQueryDetail(null, null, null, []);
-        check(blankDesc.Description is null && longDesc.Description == longDescText && BigQueryReader.Weight(longDesc) > BigQueryReader.Weight(emptyDesc),
-            "FromTable normalizes empty descriptions to null and Weight accounts for table descriptions");
+        var emptyStrings = new BigQueryDetail(null, null, null, [], Partitioning: "", Clustering: "", Signature: "", Description: "");
+        check(blankDesc.Description is null && longDesc.Description == longDescText && BigQueryReader.Weight(longDesc) > BigQueryReader.Weight(emptyDesc)
+            && BigQueryReader.Weight(emptyStrings) == 0,
+            "FromTable normalizes empty descriptions to null and Weight ignores empty strings while accounting for table descriptions");
         var descEntry = new BigQueryEntry("bqView", "bqViews", null, "v", 1, null, Detail: longDesc);
         var plainEntry = descEntry with { Detail = longDesc with { Description = null } };
         var baseLimits = new ObjectIndexLimits { MemoryBytes = 64_000, NamesReserveBytes = 0 };
@@ -246,5 +248,42 @@ internal static partial class BigQueryIndexChecks
             $"the request is bounded (path depth, requests, prefix length, exact needs a prefix) and a handle BigQuery does not own is refused: {tooDeep} {tooMany} {exactWithout} {emptyPart} {longPrefix} {sqlServer}");
         var lane = harness.Service.LaneOf("language.lookup");
         check(lane == Varia.Backend.Protocol.RequestLane.Metadata, "language.lookup runs on the metadata lane: " + lane);
+
+        // 5,000-project O(1) ProjectState & EditorLookup.One scaling with 50,000 datasetSkips and 256 skips.
+        var largeExtras = Enumerable.Range(1, 4999).Select(i => $"proj-{i:D4}").ToList();
+        var largePool = new StringPool(new IndexBudget(16 << 20));
+        var largeReader = new BigQueryReader(baseLimits, largePool, null);
+        var heldProj2 = largeReader.Read("proj-0002", "ds_held", [], false, false)!;
+        var heldProj3 = largeReader.Read("proj-0003", "ds_held", [], false, false)!;
+        var largeDatasetSkips = new Dictionary<(string Project, string Dataset), ObjectIndexSkip>();
+        for (var p = 3000; p < 5000; p++)
+            for (var d = 0; d < 25; d++)
+                largeDatasetSkips[($"proj-{p:D4}", $"ds_{d:D2}")] = new($"ds_{d:D2}", "PERMISSION_DENIED", "x", Project: $"proj-{p:D4}");
+        largeDatasetSkips[("proj-0002", "ds_held")] = new("ds_held", "TIMEOUT", "x", Project: "proj-0002");
+        largeDatasetSkips[("proj-0003", "ds_unread")] = new("ds_unread", "TIMEOUT", "x", Project: "proj-0003");
+        var largeSkips = Enumerable.Range(0, 256).Select(i => new ObjectIndexSkip($"skip_{i}", "PERMISSION_DENIED", "x", Project: $"proj-{2500 + i:D4}")).ToList();
+        var largeLookup = new BigQueryLookup("proj-0000", largeExtras, [heldProj2, heldProj3], null, largeSkips,
+            building: false, built: true, new IndexBudget(16 << 20), partialProjects: ["proj-0004"],
+            projectListingSkips: new Dictionary<string, ObjectIndexSkip>(StringComparer.Ordinal) { ["proj-0005"] = new("", "API_DISABLED", "x", Project: "proj-0005") },
+            datasetSkips: largeDatasetSkips);
+        // Warm JIT before timing the 5,000-project case 0 lookup.
+        _ = EditorLookup.Answer(largeLookup, new LanguageLookupArgs(id, [new([], Limit: 500)]));
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var page1 = EditorLookup.Answer(largeLookup, new LanguageLookupArgs(id, [new([], Limit: 2000)]));
+        var allStatesOk = true;
+        for (var i = 0; i < largeLookup.Projects.Count; i++)
+        {
+            var p = largeLookup.Projects[i];
+            var expected = i == 2 ? LookupState.Ready
+                : i == 3 || i == 4 || (i >= 2500 && i < 2756) || i >= 3000 ? LookupState.Partial
+                : i == 5 ? LookupState.Skipped
+                : LookupState.Ready;
+            if (largeLookup.ProjectState(p) != expected) { allStatesOk = false; break; }
+        }
+        watch.Stop();
+        check(allStatesOk && page1.Answers[0].Items.Count == 2000 && page1.Answers[0].Items[0].Partial is null
+            && page1.Answers[0].Items[2].Partial is null && page1.Answers[0].Items[3].Partial == true && page1.Answers[0].Items[4].Partial == true
+            && watch.ElapsedMilliseconds < 1000,
+            $"5,000-project ProjectState and EditorLookup case 0 stay O(1) across 50,000 datasetSkips and 256 skips ({watch.ElapsedMilliseconds} ms)");
     }
 }

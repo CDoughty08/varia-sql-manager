@@ -437,7 +437,7 @@ describe('IndexCompletionService', () => {
     await f.completeAt(tab1.id, 'SELECT * FROM |')
     expect(f.languageLookup).toHaveBeenCalledTimes(2)
 
-    // Token cancellation settles false cleanly.
+    // Token cancellation settles false cleanly when it is the only caller.
     const secondRefresh = deferred<boolean>()
     refreshScopes.mockImplementationOnce(async () => secondRefresh.promise)
     const cts = cancellationSource()
@@ -447,6 +447,20 @@ describe('IndexCompletionService', () => {
     secondRefresh.resolve(true)
     await Promise.resolve()
 
+    // Concurrent callers sharing a deduplicated refresh: cancelling one caller does not cancel the other or clear refreshing status.
+    const sharedRefresh = deferred<boolean>()
+    refreshScopes.mockImplementationOnce(async () => sharedRefresh.promise)
+    const cts1 = cancellationSource()
+    const caller1 = f.service.refreshCache(tab1.id, cts1.token)
+    const caller2 = f.service.refreshCache(tab1.id)
+    expect(f.service.availability(tab1.id)?.label).toBe('IntelliSense refreshing')
+    cts1.cancel()
+    expect(await caller1).toBe(false)
+    expect(f.service.availability(tab1.id)?.label).toBe('IntelliSense refreshing')
+    sharedRefresh.resolve(true)
+    expect(await caller2).toBe(true)
+    expect(f.service.availability(tab1.id)?.label).toBe('IntelliSense')
+
     // Closing a tab mid-refresh cancels cleanly without throwing.
     const thirdRefresh = deferred<boolean>()
     refreshScopes.mockImplementationOnce(async () => thirdRefresh.promise)
@@ -455,6 +469,34 @@ describe('IndexCompletionService', () => {
     await f.documents.close(tab1.id)
     expect(await onClose).toBe(false)
     thirdRefresh.resolve(true)
+  })
+
+  it('ignores stale languageLookup failures after a tab switches connections', async () => {
+    const firstLookup = deferred<ApiResult<LanguageLookupResult>>()
+    const secondLookup = deferred<ApiResult<LanguageLookupResult>>()
+    let call = 0
+    const f = createFixture({
+      lookup: async () => (++call === 1 ? firstLookup.promise : secondLookup.promise)
+    })
+    f.connections.add(
+      { id: bqConnId2, providerId: 'bigquery', generation: 1, server: 'varia-beta', database: 'census', serverVersion: 'BigQuery' },
+      { provider: 'bigquery', project: 'varia-beta', dataset: 'census', authentication: 'gcloud' }
+    )
+    const tab = f.documents.create('q1.sql', '', 'sales', bqConnId)
+
+    const staleCompletion = f.completeAt(tab.id, 'SELECT * FROM |')
+    f.documents.update(tab.id, { connectionId: bqConnId2, database: 'census' })
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    firstLookup.resolve({ ok: false, code: 'TIMEOUT', error: 'conn1 exploded' })
+    await staleCompletion
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+    expect(f.service.getSnapshot().errors.get(tab.id)).toBeUndefined()
+
+    const freshCompletion = f.completeAt(tab.id, 'SELECT * FROM |')
+    secondLookup.resolve({ ok: true, value: { index: 'ready', answers: [{ state: 'ready', path: ['varia-beta', 'census'], truncated: false, items: [] }] } })
+    await freshCompletion
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
   })
 
   it('clears only the affected connection LookupCache at 0 ms on ObjectSearchService build, refresh and DDL stale updates (F11)', async () => {
