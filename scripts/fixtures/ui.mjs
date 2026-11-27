@@ -279,6 +279,11 @@ export const part = {
   // The Schedules Timeline (src/renderer/src/agent/TimelineView.ts): a run's bar in a lane (hidden from assistive technology, as
   // the live region announces the active run), to click one where it is drawn.
   agentTimelineBar: '.agent-timeline-bar:not([hidden])',
+  // Job › Steps balanced 3-column step card flow row (src/renderer/src/agent/JobSteps.tsx).
+  stepFlow: '.agent-step-flow',
+  stepFlowType: '.agent-step-type',
+  stepFlowOk: '.agent-step-ok',
+  stepFlowBad: '.agent-step-bad',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',
@@ -1099,6 +1104,20 @@ export const inspectorTabs = frame => frame.getByRole('tablist', { name: 'Object
 export const inspectorTab = (frame, name) => inspectorTabs(frame).getByRole('tab', { name: new RegExp(`^${escaped(name)}(?:\\s|\\(|$)`) })
 export const inspectorTabLabels = frame => inspectorTabs(frame).getByRole('tab').locator(part.inspectorTabLabel)
 export const inspectorPanel = frame => frame.getByRole('tabpanel')
+/** Measures balanced 3-column step card geometry (44px type badge + aligned ✓ and ✗ columns) in Chromium. */
+export const stepCardFlowGeometry = listbox => listbox.getByRole('option').evaluateAll((cards, selectors) => cards.map(card => {
+  const type = card.querySelector(selectors.type)?.getBoundingClientRect()
+  const ok = card.querySelector(selectors.ok)?.getBoundingClientRect()
+  const bad = card.querySelector(selectors.bad)?.getBoundingClientRect()
+  return {
+    typeText: card.querySelector(selectors.type)?.textContent?.trim() ?? '',
+    typeWidth: Math.round(type?.width ?? 0),
+    okX: Math.round(ok?.x ?? -1),
+    badX: Math.round(bad?.x ?? -1),
+    okHeight: Math.round(ok?.height ?? 0),
+    badHeight: Math.round(bad?.height ?? 0)
+  }
+}), { type: part.stepFlowType, ok: part.stepFlowOk, bad: part.stepFlowBad })
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
 export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')
