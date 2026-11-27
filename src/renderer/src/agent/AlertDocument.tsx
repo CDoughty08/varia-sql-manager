@@ -117,7 +117,7 @@ function CounterValues({ state, draft, service }: Pick<Props, 'state' | 'draft' 
     </button>
     {reading?.result?.error && <p className="property-field-error" role="alert"><Icon name="error" />{reading.result.error.message}</p>}
     {reading?.result && !reading.result.error && (values.length === 0 ? <p className="field-note">No instance of this counter on the server.</p>
-      : <table className="properties-table" aria-label="Current values">
+      : <table className="agent-table" aria-label="Current values">
         <thead><tr><th scope="col">Instance</th><th scope="col">Value</th></tr></thead>
         <tbody>{values.map(value => <tr key={value.instance} data-selected={value.instance === draft.instance || undefined}><td>{value.instance || '(none)'}</td><td>{value.value.toLocaleString()}</td></tr>)}</tbody>
       </table>)}

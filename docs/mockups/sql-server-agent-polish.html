@@ -1,0 +1,2674 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density="compact" data-option="a" data-callouts="on">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Varia SQL Manager — SQL Server Agent UX &amp; Visual Polish Lab</title>
+<style>
+/* ============================================================================
+   VARIA SQL MANAGER — CALM PRO DESIGN TOKENS
+   Mirrors src/shared/theme/palette.ts & src/shared/theme/metrics.ts (WP-1–WP-6 & OP-0)
+   ============================================================================ */
+:root {
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+
+  /* Metrics — Compact (Default) */
+  --h-header: 40px;
+  --h-bar: 36px;
+  --h-tab: 34px;
+  --h-control: 26px;
+  --h-row: 22px;
+  --h-status: 24px;
+  --rad-sm: 4px;
+  --rad-lg: 8px;
+  --rad-pill: 999px;
+  --sp-0: 2px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Type Scale */
+  --sz-xs: 11px; --ln-xs: 16px;
+  --sz-sm: 12px; --ln-sm: 16px;
+  --sz-md: 13px; --ln-md: 20px;
+  --sz-lg: 15px; --ln-lg: 20px;
+  --sz-xl: 20px; --ln-xl: 26px;
+
+  /* Varia Dark Palette */
+  --canvas: #16181d;
+  --panel: #16181d;
+  --sidebar: #111317;
+  --chrome: #111317;
+  --raised: #1c1f25;
+  --overlay: #1d2026;
+  --input: #101216;
+  --hover: #262a32;
+  --active: #30343e;
+  --selection: #21273b;
+  --selection-strong: #29314f;
+  --accent-surface: #232842;
+
+  --text: #d9dce3;
+  --text-strong: #f5f6f8;
+  --text-secondary: #bcc1cb;
+  --text-tertiary: #a3a9b5;
+  --text-muted: #9298a4;
+  --text-accent: #bcc5ff;
+
+  --border: #262a31;
+  --border-subtle: #1f2228;
+  --border-strong: #2e323a;
+  --separator: #30343c;
+
+  /* Approach B Calm Resting Borders (WP-1) */
+  --control-border: #3a404d;
+  --control-border-hover: #525a6c;
+  --input-border: #3a404d;
+  --legacy-border: #6a7184;
+  --tonal-fill: rgba(255, 255, 255, 0.045);
+  --tonal-fill-hover: rgba(255, 255, 255, 0.08);
+
+  --accent: #8f9cff;
+  --accent-hover: #a8b2ff;
+  --on-accent: #0e1230;
+  --focus: #8f9cff;
+
+  --error: #f39a9a;
+  --error-surface: #3a1d22;
+  --error-surface-text: #f6bcc1;
+  --warning: #e4bb6a;
+  --warning-surface: #33291a;
+  --warning-surface-text: #f0d49e;
+  --success: #74d19c;
+  --success-surface: rgba(116, 209, 156, 0.14);
+  --success-text: #a6e8bf;
+  --info-surface: rgba(110, 164, 234, 0.14);
+  --info-text: #b7d3fa;
+
+  --icon: #a3a9b5;
+  --icon-muted: #7f8694;
+  --icon-folder: #bfa878;
+  --chart-blue: #3987e5;
+  --chart-purple: #9085e9;
+  --chart-yellow: #c98500;
+  --chart-green: #199e70;
+
+  --syn-kw: #93a4ff;
+  --syn-str: #9fd4a9;
+  --syn-cmt: #868e9b;
+  --syn-num: #e8b97d;
+  --syn-fn: #d4a9f2;
+
+  --grid-alt: rgba(217, 220, 227, 0.02);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.52);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.62);
+
+  /* Lab Chrome */
+  --lab-bg: #0b0d11;
+  --lab-surface: #12151c;
+  --lab-card: #161922;
+  --lab-border: #232836;
+  --callout-bg: rgba(143, 156, 255, 0.13);
+  --callout-border: rgba(143, 156, 255, 0.42);
+  --callout-bug-bg: rgba(243, 154, 154, 0.14);
+  --callout-bug-border: rgba(243, 154, 154, 0.48);
+}
+
+[data-theme="light"] {
+  --canvas: #ffffff;
+  --panel: #ffffff;
+  --sidebar: #f7f8fa;
+  --chrome: #f7f8fa;
+  --raised: #f1f3f6;
+  --overlay: #ffffff;
+  --input: #ffffff;
+  --hover: #dfe2e7;
+  --active: #d6dae0;
+  --selection: #e7ebfc;
+  --selection-strong: #d9e0fb;
+  --accent-surface: #dde1f9;
+
+  --text: #1c1f26;
+  --text-strong: #0a0c10;
+  --text-secondary: #3a404b;
+  --text-tertiary: #4d5461;
+  --text-muted: #5c6370;
+  --text-accent: #3240b0;
+
+  --border: #e3e6eb;
+  --border-subtle: #eceef2;
+  --border-strong: #d4d8df;
+  --separator: #dcdfe5;
+
+  --control-border: #c2c8d4;
+  --control-border-hover: #9aa3b4;
+  --input-border: #c2c8d4;
+  --legacy-border: #878e9b;
+  --tonal-fill: rgba(15, 23, 42, 0.04);
+  --tonal-fill-hover: rgba(15, 23, 42, 0.075);
+
+  --accent: #4453d0;
+  --accent-hover: #3744b8;
+  --on-accent: #ffffff;
+  --focus: #4453d0;
+
+  --error: #b42229;
+  --error-surface: #fdecec;
+  --error-surface-text: #8f1d24;
+  --warning: #875800;
+  --warning-surface: #fff5dc;
+  --warning-surface-text: #6b4400;
+  --success: #146f3b;
+  --success-surface: rgba(20, 111, 59, 0.11);
+  --success-text: #0f5a2f;
+  --info-surface: rgba(37, 99, 168, 0.1);
+  --info-text: #1c4e8a;
+
+  --icon: #4d5461;
+  --icon-muted: #6b7280;
+  --icon-folder: #8a6d33;
+  --chart-blue: #2a78d6;
+  --chart-purple: #6250d6;
+  --chart-yellow: #a87200;
+  --chart-green: #12936a;
+
+  --syn-kw: #3442c2;
+  --syn-str: #1a6d3d;
+  --syn-cmt: #6b7280;
+  --syn-num: #9a5b13;
+  --syn-fn: #7a3eb1;
+
+  --grid-alt: rgba(15, 23, 42, 0.02);
+  --shadow-popover: 0 8px 24px rgba(15, 23, 42, 0.14);
+  --shadow-dialog: 0 16px 48px rgba(15, 23, 42, 0.22);
+
+  --lab-bg: #eef0f5;
+  --lab-surface: #ffffff;
+  --lab-card: #f8f9fc;
+  --lab-border: #d8dde6;
+  --callout-bg: rgba(68, 83, 208, 0.09);
+  --callout-border: rgba(68, 83, 208, 0.36);
+  --callout-bug-bg: rgba(180, 34, 41, 0.09);
+  --callout-bug-border: rgba(180, 34, 41, 0.38);
+}
+
+[data-density="comfortable"] {
+  --h-header: 44px;
+  --h-bar: 40px;
+  --h-tab: 38px;
+  --h-control: 28px;
+  --h-row: 26px;
+  --h-status: 26px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--lab-bg); color: var(--text); font-family: var(--font-ui); font-size: var(--sz-md); line-height: var(--ln-md); -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* Themed thin scrollbars (WP-1) */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(146, 152, 164, 0.28); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(146, 152, 164, 0.48); border: 2px solid transparent; background-clip: content-box; }
+
+/* ============================================================================
+   DESIGN LAB SHELL (Outer Presentation Chrome)
+   ============================================================================ */
+.lab-top {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--lab-surface); border-bottom: 1px solid var(--lab-border);
+  padding: 10px 20px; display: flex; flex-direction: column; gap: 8px;
+}
+.lab-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lab-brand { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.lab-brand-mark {
+  width: 24px; height: 24px; border-radius: 6px; background: var(--accent); color: var(--on-accent);
+  display: grid; place-items: center; font-weight: 700; font-size: 13px;
+}
+.lab-brand h1 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-strong); line-height: 18px; }
+.lab-brand span { font-size: 11px; color: var(--text-muted); display: block; line-height: 14px; }
+
+.lab-seg {
+  display: inline-flex; background: var(--lab-card); border: 1px solid var(--lab-border);
+  border-radius: 6px; padding: 2px; gap: 2px;
+}
+.lab-seg button {
+  height: 24px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent;
+  color: var(--text-secondary); font-size: 11.5px; font-weight: 500; transition: background 80ms var(--ease);
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.lab-seg button:hover { color: var(--text-strong); background: var(--tonal-fill); }
+.lab-seg button.is-on { background: var(--selection-strong); color: var(--text-accent); font-weight: 600; }
+.lab-seg button.is-on.is-baseline { background: var(--error-surface); color: var(--error-surface-text); }
+.lab-seg button.is-on.is-opt-b { background: var(--success-surface); color: var(--success-text); }
+
+.lab-panels {
+  display: flex; align-items: center; gap: 4px; overflow-x: auto; padding-bottom: 2px;
+}
+.lab-panel-btn {
+  height: 28px; padding: 0 11px; border-radius: 6px; border: 1px solid transparent;
+  background: transparent; color: var(--text-secondary); font-size: 12px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.lab-panel-btn:hover { background: var(--tonal-fill); color: var(--text-strong); }
+.lab-panel-btn.is-on {
+  background: var(--lab-card); border-color: var(--control-border); color: var(--text-strong); font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.lab-panel-badge {
+  font-size: 10px; padding: 0 5px; height: 15px; border-radius: 99px;
+  display: inline-flex; align-items: center; font-weight: 600;
+  background: var(--error-surface); color: var(--error-surface-text);
+}
+.lab-panel-badge.polish { background: var(--selection); color: var(--text-accent); }
+
+.lab-stage { max-width: 1460px; margin: 16px auto 40px; padding: 0 20px; display: flex; flex-direction: column; gap: 14px; }
+
+/* Sub-controls & Context Strip above Window */
+.lab-context {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 9px 14px; border-radius: 8px; background: var(--lab-surface); border: 1px solid var(--lab-border);
+  font-size: 12px;
+}
+.lab-context-desc { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.lab-mode-tag {
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; white-space: nowrap;
+  background: var(--selection-strong); color: var(--text-accent);
+}
+.lab-mode-tag.is-baseline { background: var(--error-surface); color: var(--error-surface-text); }
+.lab-mode-tag.is-opt-b { background: var(--success-surface); color: var(--success-text); }
+.lab-context-text { color: var(--text-secondary); }
+.lab-context-text strong { color: var(--text-strong); font-weight: 600; }
+.lab-subtools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Simulated Varia Workbench Window */
+.varia-win {
+  height: 670px; background: var(--canvas); border: 1px solid var(--border-strong);
+  border-radius: 10px; overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: var(--shadow-dialog); position: relative;
+}
+.varia-tabstrip {
+  height: 36px; flex: none; background: var(--chrome); border-bottom: 1px solid var(--border);
+  display: flex; align-items: stretch; padding: 0 8px 0 0; gap: 0; user-select: none;
+}
+.varia-doctab {
+  display: flex; align-items: center; gap: 7px; padding: 0 12px; border-right: 1px solid var(--border);
+  font-size: 12px; color: var(--text-muted); max-width: 260px; white-space: nowrap;
+}
+.varia-doctab.is-active {
+  background: var(--canvas); color: var(--text-strong); font-weight: 500;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.varia-doctab .env-pill {
+  font-size: 10px; font-weight: 600; padding: 0 5px; height: 15px; border-radius: 3px;
+  display: inline-flex; align-items: center; background: rgba(230, 103, 103, 0.16);
+  color: #f6b2b2; border: 1px solid rgba(230, 103, 103, 0.36);
+}
+[data-theme="light"] .varia-doctab .env-pill { color: #a11c2b; background: rgba(196, 43, 60, 0.1); border-color: rgba(196, 43, 60, 0.32); }
+.varia-doctab .dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.varia-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+.varia-status {
+  height: var(--h-status); flex: none; background: var(--chrome); border-top: 1px solid var(--border);
+  padding: 0 10px; display: flex; align-items: center; gap: 10px; font-size: var(--sz-xs); color: var(--text-muted);
+}
+.varia-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block; }
+.varia-status .sep { width: 1px; height: 12px; background: var(--separator); }
+.varia-status .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+/* Callout Banner (toggleable) */
+.callout-strip {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 12px; font-size: 11.5px; line-height: 16px;
+  background: var(--callout-bg); border-bottom: 1px solid var(--callout-border); color: var(--text);
+}
+.callout-strip.is-bug { background: var(--callout-bug-bg); border-bottom-color: var(--callout-bug-border); }
+.callout-strip strong { color: var(--text-strong); font-weight: 600; }
+.callout-tag {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: 3px; background: var(--accent); color: var(--on-accent);
+}
+.callout-strip.is-bug .callout-tag { background: var(--error); color: #1b0a0c; }
+[data-callouts="off"] .callout-strip, [data-callouts="off"] .inline-callout { display: none !important; }
+.inline-callout {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 600; background: var(--callout-bug-bg); border: 1px solid var(--callout-bug-border);
+  color: var(--error-surface-text); white-space: nowrap;
+}
+.inline-callout.is-win { background: var(--callout-bg); border-color: var(--callout-border); color: var(--text-accent); }
+
+/* Decision Cards below Window */
+.lab-decisions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1020px) { .lab-decisions { grid-template-columns: 1fr; } }
+.lab-card {
+  background: var(--lab-surface); border: 1px solid var(--lab-border); border-radius: 8px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.lab-card.is-picked { border-color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
+.lab-card.is-picked-b { border-color: var(--success); box-shadow: inset 0 2px 0 var(--success); }
+.lab-card.is-picked-base { border-color: var(--error); box-shadow: inset 0 2px 0 var(--error); }
+.lab-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.lab-card h3 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text-strong); }
+.lab-card ul { margin: 0; padding-left: 16px; font-size: 12px; color: var(--text-secondary); line-height: 18px; }
+.lab-card li + li { margin-top: 3px; }
+.lab-card li strong { color: var(--text-strong); font-weight: 600; }
+
+/* ============================================================================
+   CALM PRO SHARED UI PRIMITIVES (DocumentHeader, ObjectInspectorFrame, Kit)
+   ============================================================================ */
+.ic { width: 14px; height: 14px; flex: none; display: inline-block; vertical-align: -2px; }
+.ic-sm { width: 12px; height: 12px; }
+
+.doc-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
+.doc-header {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; background: var(--canvas); border-bottom: 1px solid var(--border);
+}
+.doc-header.no-border { border-bottom: 0; padding-bottom: 6px; }
+.doc-heading { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.doc-crumbs { display: flex; align-items: center; gap: 4px; font-size: var(--sz-xs); color: var(--text-muted); width: 100%; line-height: 14px; }
+.doc-title { margin: 0; font-size: var(--sz-lg); line-height: var(--ln-lg); font-weight: 600; color: var(--text-strong); }
+.doc-subtitle { font-size: var(--sz-sm); color: var(--text-muted); }
+.doc-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+
+/* Buttons (Approach B Calm Chrome) */
+.v-btn {
+  height: var(--h-control); padding: 0 9px; border-radius: var(--rad-sm);
+  border: 1px solid var(--control-border); background: transparent; color: var(--text);
+  font-size: var(--sz-sm); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  transition: background 80ms var(--ease), border-color 80ms var(--ease);
+}
+.v-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--control-border-hover); color: var(--text-strong); }
+.v-btn:disabled { opacity: 0.45; cursor: default; }
+.v-btn.ghost { border-color: transparent; color: var(--text-secondary); }
+.v-btn.ghost:hover:not(:disabled) { background: var(--tonal-fill-hover); border-color: transparent; color: var(--text-strong); }
+.v-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.v-btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
+.v-btn.danger { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+.v-btn.danger:hover:not(:disabled) { background: var(--error-surface); border-color: var(--error); color: var(--error-surface-text); }
+.v-btn.sm { height: 22px; padding: 0 7px; font-size: var(--sz-xs); }
+.v-btn.icon-only { width: var(--h-control); padding: 0; justify-content: center; }
+.v-btn.is-pressed { background: var(--selection-strong); border-color: var(--accent); color: var(--text-accent); }
+.v-split { display: inline-flex; }
+.v-split > .v-btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.v-split > .v-btn:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; padding: 0 5px; }
+.v-sep { width: 1px; height: 16px; background: var(--separator); margin: 0 2px; flex: none; }
+.v-link { border: 0; background: none; padding: 0; color: var(--text-accent); font-size: inherit; display: inline-flex; align-items: center; gap: 4px; }
+.v-link:hover { text-decoration: underline; }
+
+/* Inputs & Selects */
+.v-input, .v-select, .v-textarea {
+  height: var(--h-control); padding: 0 8px; border-radius: var(--rad-sm);
+  border: 1px solid var(--input-border); background: var(--input); color: var(--text);
+  font-size: var(--sz-sm); outline: none; min-width: 0;
+}
+.v-input:focus, .v-select:focus, .v-textarea:focus { border-color: var(--focus); }
+.v-textarea { height: auto; padding: 6px 8px; line-height: 18px; resize: vertical; }
+.v-input.is-changed, .v-select.is-changed { font-weight: 600; border-color: color-mix(in srgb, var(--accent) 55%, var(--input-border)); }
+.v-search {
+  display: inline-flex; align-items: center; gap: 6px; height: var(--h-control);
+  padding: 0 8px; border: 1px solid var(--input-border); border-radius: var(--rad-sm);
+  background: var(--input); color: var(--text-muted); font-size: var(--sz-sm);
+}
+.v-search input { border: 0; background: transparent; outline: none; color: var(--text); width: 100%; min-width: 0; }
+
+/* Status Pills & Live Pill */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px;
+  border-radius: var(--rad-pill); font-size: var(--sz-xs); font-weight: 500; white-space: nowrap;
+}
+.pill.sm { height: 18px; padding: 0 6px; font-size: 10.5px; }
+.pill.ok { background: var(--success-surface); color: var(--success-text); }
+.pill.err { background: var(--error-surface); color: var(--error-surface-text); }
+.pill.warn { background: var(--warning-surface); color: var(--warning-surface-text); }
+.pill.run { background: var(--selection-strong); color: var(--text-accent); }
+.pill.mut { background: var(--raised); color: var(--text-muted); border: 1px solid var(--border); }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* Segmented Control */
+.seg {
+  display: inline-flex; height: var(--h-control); border: 1px solid var(--control-border);
+  border-radius: var(--rad-sm); overflow: hidden; background: var(--input);
+}
+.seg button {
+  border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  padding: 0 9px; font-size: var(--sz-sm); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--hover); color: var(--text-strong); }
+.seg button.is-on { background: var(--selection-strong); color: var(--text-accent); font-weight: 600; }
+.seg .cnt { font-size: 10.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.seg button.is-on .cnt { color: var(--text-accent); opacity: 0.85; }
+
+/* Switch (from Options / Table Properties) */
+.v-switch {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: var(--sz-sm); color: var(--text-secondary);
+  border: 0; background: none; padding: 0;
+}
+.v-switch-track {
+  width: 30px; height: 16px; border-radius: 99px; background: var(--active); border: 1px solid var(--control-border);
+  position: relative; transition: background 100ms var(--ease); flex: none;
+}
+.v-switch-track::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--text-secondary); transition: transform 100ms var(--ease);
+}
+.v-switch.is-on .v-switch-track { background: var(--accent); border-color: var(--accent); }
+.v-switch.is-on .v-switch-track::after { transform: translateX(14px); background: var(--on-accent); }
+
+/* Hero KPI Strip (ObjectInspectorFrame OP-0) */
+.kpi-strip {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
+  padding: 2px 16px 10px; font-size: var(--sz-sm); background: var(--canvas);
+}
+.kpi-item { display: inline-flex; align-items: baseline; gap: 6px; }
+.kpi-label { font-size: var(--sz-xs); color: var(--text-muted); }
+.kpi-val { font-weight: 600; color: var(--text-strong); }
+.kpi-val.err { color: var(--error); }
+.kpi-val.ok { color: var(--success); }
+.kpi-val.acc { color: var(--text-accent); }
+.kpi-sub { font-size: var(--sz-xs); color: var(--text-muted); }
+
+/* Horizontal Inspector Tabs (ObjectInspectorFrame OP-0) */
+.insp-tabbar {
+  flex: none; display: flex; align-items: stretch; gap: 2px; padding: 0 12px;
+  height: var(--h-tab); background: var(--canvas); border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.insp-tab {
+  border: 0; background: transparent; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--sz-sm); color: var(--text-secondary); border-bottom: 2px solid transparent;
+  margin-bottom: -1px; white-space: nowrap;
+}
+.insp-tab:hover { color: var(--text-strong); background: var(--tonal-fill); }
+.insp-tab.is-on { color: var(--text-strong); font-weight: 600; border-bottom-color: var(--accent); }
+.insp-tab .cnt {
+  font-size: 10.5px; padding: 0 5px; height: 16px; border-radius: 99px;
+  background: var(--raised); color: var(--text-muted); display: inline-flex; align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.insp-tab.is-on .cnt { background: var(--selection-strong); color: var(--text-accent); }
+.insp-tab .mod-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.insp-tab .err-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--error); }
+.insp-tab .kidx { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); opacity: 0.65; }
+
+/* Inspector Split + Resizable Vitals Rail */
+.insp-split { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.insp-flow { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 14px 16px 20px; }
+.insp-fill { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.insp-vitals {
+  flex: none; min-width: 0; background: var(--sidebar);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.insp-vitals-head {
+  height: var(--h-bar); flex: none; padding: 0 12px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: var(--sz-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary);
+}
+.insp-vitals-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.vitals-block-title {
+  margin: 0 0 6px; font-size: var(--sz-xs); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary);
+}
+
+/* Unified Group Eyebrow Heading (TableProperties / Options parity) */
+.group-eyebrow {
+  margin: 14px 0 6px; font-size: var(--sz-xs); line-height: var(--ln-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.group-eyebrow:first-child { margin-top: 0; }
+
+/* Unified PropertyField Grid (Strict 160px Label Column, zero saw-tooth) */
+.pf-list { display: flex; flex-direction: column; gap: 6px; }
+.pf-row { display: grid; grid-template-columns: 160px minmax(0, 420px); align-items: center; column-gap: 12px; min-height: var(--h-control); }
+.pf-row.wide { grid-template-columns: 160px minmax(0, 1fr); }
+.pf-row.top { align-items: start; }
+.pf-label { font-size: var(--sz-sm); color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.pf-row.is-changed .pf-label { color: var(--text-strong); font-weight: 600; }
+.pf-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: none; }
+.pf-ctrl { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pf-ctrl > .v-input, .pf-ctrl > .v-select, .pf-ctrl > .v-textarea { width: 100%; }
+.pf-two { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 8px; width: 100%; }
+.pf-note { grid-column: 2; font-size: var(--sz-xs); color: var(--text-muted); margin-top: 2px; line-height: 15px; }
+
+/* Two-column ultra-dense form (Option B) */
+.pf-2col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 24px; }
+.pf-2col .pf-row { grid-template-columns: 112px minmax(0, 1fr); }
+.pf-2col .pf-span2 { grid-column: 1 / -1; }
+
+/* FactGrid (OP-0 Click-to-Copy Key/Value Grid) */
+.fact-grid { display: grid; grid-template-columns: 160px minmax(0, 1fr); margin: 0; font-size: var(--sz-sm); }
+.fact-grid.compact { grid-template-columns: 92px minmax(0, 1fr); font-size: var(--sz-xs); }
+.fact-grid dt, .fact-grid dd {
+  margin: 0; padding: 4px 0; border-bottom: 1px solid var(--border-subtle); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fact-grid dt { color: var(--text-muted); padding-right: 10px; }
+.fact-grid dd { color: var(--text); display: flex; align-items: center; gap: 6px; }
+.fact-grid dt:nth-last-of-type(1), .fact-grid dd:last-of-type { border-bottom: 0; }
+
+/* Calm Pro Data Table (replaces broken unstyled .properties-table on <table>) */
+.v-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--sz-sm); border: 1px solid var(--border); border-radius: var(--rad-sm); overflow: hidden; }
+.v-table th {
+  text-align: left; font-weight: 600; font-size: var(--sz-xs); color: var(--text-tertiary);
+  background: var(--raised); height: 24px; padding: 0 10px; border-bottom: 1px solid var(--border);
+  white-space: nowrap; position: sticky; top: 0; z-index: 2;
+}
+.v-table td {
+  height: var(--h-row); padding: 3px 10px; border-bottom: 1px solid var(--border-subtle);
+  color: var(--text); vertical-align: middle; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.v-table tbody tr:last-child td { border-bottom: 0; }
+.v-table tbody tr:hover td { background: var(--hover); }
+.v-table tbody tr.is-sel td { background: var(--selection-strong); color: var(--text-strong); }
+.v-table tbody tr.is-dim td { color: var(--text-muted); }
+.v-table tbody tr.is-err td:first-child { box-shadow: inset 2px 0 0 var(--error); }
+.v-table tbody tr.is-run td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.v-table th.num, .v-table td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.v-table.borderless { border: 0; border-radius: 0; }
+
+/* Script Drawer Footer (closed compact strip) */
+.script-bar {
+  flex: none; height: 28px; padding: 0 12px; border-top: 1px solid var(--border);
+  background: var(--chrome); display: flex; align-items: center; gap: 8px;
+  font-size: var(--sz-xs); color: var(--text-muted);
+}
+.script-bar strong { color: var(--text-secondary); font-weight: 600; }
+
+/* ============================================================================
+   BASELINE (TODAY) SIMULATION HELPERS — Shows actual current codebase defects
+   ============================================================================ */
+.legacy-doc-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.legacy-nav {
+  flex: 0 0 176px; border-right: 1px solid var(--border); padding: 8px 0;
+  display: flex; flex-direction: column; background: var(--canvas);
+}
+.legacy-nav-item {
+  height: 24px; padding: 0 12px; border: 0; background: transparent; text-align: left;
+  font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; justify-content: space-between;
+}
+.legacy-nav-item.is-on { background: var(--selection); color: var(--text-strong); box-shadow: inset 2px 0 0 var(--accent); }
+.legacy-sections { flex: 1; min-width: 0; overflow-y: auto; padding: 0 16px 20px; }
+.legacy-sec { padding-top: 12px; }
+.legacy-sec + .legacy-sec { margin-top: 12px; border-top: 1px solid var(--border); }
+.legacy-sec h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.legacy-raw-table { border-collapse: separate; border-spacing: 2px; font-size: 12px; margin: 4px 0; }
+.legacy-raw-table th { text-align: center; font-weight: 700; padding: 2px 6px; }
+.legacy-raw-table td { padding: 2px 6px; }
+.legacy-btn {
+  height: 26px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--legacy-border);
+  background: transparent; color: var(--text); font-size: 12px; display: inline-flex; align-items: center; gap: 5px;
+}
+.legacy-scroll-box {
+  border: 1px solid var(--border); overflow-y: auto; border-radius: 4px;
+}
+
+/* ============================================================================
+   PANEL-SPECIFIC LAYOUTS
+   ============================================================================ */
+
+/* Resizable Vertical Sash (mirrors ObjectInspectorFrame .inspector-vitals-sash) */
+.v-sash {
+  flex: none; width: 5px; margin: 0 -2px; position: relative; z-index: 6;
+  cursor: col-resize; touch-action: none; user-select: none; outline: none;
+}
+.v-sash::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px;
+  background: var(--border); transition: background 80ms var(--ease), width 80ms var(--ease), left 80ms var(--ease);
+}
+.v-sash:hover::after, .v-sash:focus-visible::after, .v-sash.is-dragging::after {
+  background: var(--accent); width: 2px; left: 1.5px;
+}
+.sash-hud {
+  position: fixed; z-index: 200; pointer-events: none;
+  padding: 2px 7px; border-radius: 4px; background: var(--overlay);
+  border: 1px solid var(--accent); color: var(--text-strong);
+  font-family: var(--font-mono); font-size: 11px; box-shadow: var(--shadow-popover);
+  display: none; white-space: nowrap;
+}
+.sash-hud.is-show { display: block; }
+
+/* --- 1. JOB DOCUMENT: STEPS & HISTORY --- */
+.steps-fill { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.steps-list-pane {
+  flex: none; min-width: 0; background: var(--sidebar);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.steps-list-head {
+  height: var(--h-bar); flex: none; padding: 0 10px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+}
+.steps-list-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
+.step-card {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; grid-template-areas: "no name badge" "no flow flow";
+  gap: 3px 7px; padding: 6px 8px; border-radius: var(--rad-sm); border: 1px solid transparent;
+  background: transparent; text-align: left; width: 100%;
+}
+.step-card:hover { background: var(--hover); }
+.step-card.is-sel { background: var(--selection-strong); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.step-no {
+  grid-area: no; width: 20px; height: 20px; border-radius: 4px; background: var(--raised);
+  color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  display: grid; place-items: center; margin-top: 1px;
+}
+.step-card.is-sel .step-no { background: var(--accent); color: var(--on-accent); }
+.step-name { grid-area: name; font-size: var(--sz-sm); font-weight: 500; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-badge { grid-area: badge; display: flex; gap: 4px; align-items: center; }
+/* Balanced 3-column flow grid: fixed 44px type badge + two equal 1fr outcome columns so ✓ and ✗ align cleanly across all steps */
+.step-flow {
+  grid-area: flow; display: grid; grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center; column-gap: 8px; font-size: 11px; line-height: 16px; color: var(--text-muted);
+}
+.step-flow.sched-meta { grid-template-columns: minmax(0, 1fr) auto; }
+.step-flow .ok, .step-flow .bad {
+  display: inline-flex; align-items: center; gap: 3px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.step-flow .ok { color: var(--success); }
+.step-flow .bad { color: var(--error); }
+.step-flow .glyph { flex: none; font-weight: 600; }
+.step-flow .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-type-tag {
+  font-family: var(--font-mono); font-size: 10px; line-height: 16px; height: 16px; width: 44px;
+  text-align: center; border-radius: 3px; background: var(--raised); color: var(--text-tertiary);
+  border: 1px solid var(--border-subtle); flex: none;
+}
+
+.step-edit-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.step-edit-head {
+  flex: none; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--canvas);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.step-edit-meta { flex: none; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 6px; }
+.step-cmd-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.step-cmd-bar {
+  flex: none; height: 30px; padding: 0 14px; background: var(--raised); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; font-size: var(--sz-xs); color: var(--text-secondary);
+}
+.monaco-mock {
+  flex: 1; min-height: 0; overflow: auto; background: var(--input); padding: 8px 0;
+  font-family: var(--font-mono); font-size: 12px; line-height: 19px;
+}
+.monaco-line { display: flex; padding: 0 12px 0 0; }
+.monaco-ln { width: 38px; text-align: right; padding-right: 12px; color: var(--icon-muted); user-select: none; flex: none; }
+.monaco-code { white-space: pre; color: var(--text); }
+.syn-kw { color: var(--syn-kw); font-weight: 500; }
+.syn-str { color: var(--syn-str); }
+.syn-cmt { color: var(--syn-cmt); font-style: italic; }
+.syn-num { color: var(--syn-num); }
+.syn-fn { color: var(--syn-fn); }
+.step-edit-foot {
+  flex: none; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--canvas);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.step-flow-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.step-flow-cell { display: flex; align-items: center; gap: 8px; font-size: var(--sz-xs); color: var(--text-secondary); }
+.step-flow-cell .v-select { flex: 1; }
+
+/* Job History Fill Layout */
+.hist-top-bar {
+  flex: none; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--raised);
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+}
+.spark-bars { display: flex; align-items: flex-end; gap: 3px; height: 26px; width: 170px; position: relative; }
+.spark-bars::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 13px; border-top: 1px dashed var(--text-muted); opacity: 0.65;
+}
+.spark-bars i { flex: 1; border-radius: 1.5px 1.5px 0 0; background: var(--chart-blue); opacity: 0.8; }
+.spark-bars i.is-fail { background: var(--error); opacity: 0.95; }
+.hist-split { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.hist-runs-list { flex: none; min-width: 0; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; background: var(--sidebar); }
+.hist-run-item {
+  border: 0; background: transparent; border-radius: var(--rad-sm); padding: 6px 8px; text-align: left;
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 2px 6px; width: 100%;
+}
+.hist-run-item:hover { background: var(--hover); }
+.hist-run-item.is-sel { background: var(--selection-strong); }
+.hist-run-when { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-strong); }
+.hist-run-dur { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); text-align: right; }
+.hist-run-sub { grid-column: 2 / 4; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-detail-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.hist-detail-top { flex: none; padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.hist-msg-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.hist-msg-head {
+  flex: none; height: 30px; padding: 0 14px; background: var(--raised); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; font-size: var(--sz-xs);
+}
+.hist-msg-pre {
+  flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 10px 14px;
+  background: var(--input); font-family: var(--font-mono); font-size: 12px; line-height: 18px;
+  white-space: pre-wrap; color: var(--text);
+}
+
+/* --- 2. JOB ACTIVITY MONITOR --- */
+.jam-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 10px 16px 4px; flex: none; }
+.jam-tile {
+  border: 1px solid var(--border); border-radius: var(--rad-lg); background: var(--raised);
+  padding: 8px 12px; text-align: left; display: flex; flex-direction: column; gap: 2px;
+}
+.jam-tile:hover { border-color: var(--control-border-hover); }
+.jam-tile.is-on { border-color: var(--accent); background: var(--selection); }
+.jam-tile .tl { font-size: var(--sz-xs); color: var(--text-muted); }
+.jam-tile .tv { font-size: var(--sz-xl); line-height: var(--ln-xl); font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.jam-tile .tv.err { color: var(--error); }
+.jam-tile .tv.acc { color: var(--accent); }
+.jam-tile .tv.warn { color: var(--warning); }
+
+/* Option B Ultra-Dense Unified KPI Filter Bar */
+.jam-dense-bar {
+  flex: none; min-height: var(--h-bar); padding: 6px 14px; border-bottom: 1px solid var(--border);
+  background: var(--canvas); display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.kpi-chip {
+  height: var(--h-control); padding: 0 9px; border-radius: var(--rad-sm);
+  border: 1px solid var(--border); background: var(--raised); color: var(--text-secondary);
+  font-size: var(--sz-xs); display: inline-flex; align-items: center; gap: 6px;
+}
+.kpi-chip:hover { border-color: var(--control-border-hover); color: var(--text-strong); }
+.kpi-chip.is-on { background: var(--selection-strong); border-color: var(--accent); color: var(--text-accent); font-weight: 600; }
+.kpi-chip b { font-family: var(--font-mono); font-size: 12px; color: var(--text-strong); }
+.kpi-chip.err b { color: var(--error); }
+.kpi-chip.acc b { color: var(--accent); }
+.kpi-chip.warn b { color: var(--warning); }
+
+.jam-toolbar {
+  flex: none; padding: 6px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.jam-sel-bar {
+  flex: none; padding: 5px 16px; background: var(--selection); border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  display: flex; align-items: center; gap: 6px; font-size: var(--sz-sm);
+}
+.jam-grid-wrap { flex: 1; min-height: 0; overflow: auto; }
+.jam-drawer {
+  flex: none; height: 176px; border-top: 2px solid var(--border-strong); background: var(--canvas);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.jam-drawer-head {
+  flex: none; height: 30px; padding: 0 12px; background: var(--raised); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px; font-size: var(--sz-xs);
+}
+.jam-drawer-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+
+/* --- 3. LOG FILE VIEWER --- */
+.lfv-layout { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.lfv-rail {
+  flex: none; min-width: 0; background: var(--sidebar);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.lfv-rail-top { flex: none; padding: 8px; border-bottom: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 6px; }
+.lfv-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0; }
+.lfv-group-hdr {
+  padding: 4px 10px; font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary); display: flex; align-items: center; justify-content: space-between;
+}
+.lfv-src {
+  height: var(--h-row); padding: 0 10px; display: flex; align-items: center; gap: 7px;
+  font-size: var(--sz-sm); color: var(--text); cursor: pointer;
+}
+.lfv-src:hover { background: var(--hover); }
+.lfv-src.indent { padding-left: 24px; }
+.lfv-src span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.lfv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.lfv-bottom {
+  flex: none; height: 212px; border-top: 2px solid var(--border-strong);
+  display: flex; min-height: 0; overflow: hidden;
+}
+
+/* --- 4. SCHEDULES & TIMELINE --- */
+.sched-split { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.sched-grid-pane { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.sched-detail-pane {
+  flex: none; min-width: 0; background: var(--sidebar);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.sched-detail-head {
+  flex: none; padding: 9px 14px; border-bottom: 1px solid var(--border); background: var(--canvas);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.sched-detail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.sched-sentence {
+  padding: 8px 10px; border-radius: var(--rad-sm); background: var(--selection);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  font-size: var(--sz-sm); color: var(--text-strong); line-height: 17px;
+}
+.sched-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sched-card {
+  padding: 8px 10px; border-radius: var(--rad-sm); border: 1px solid var(--border); background: var(--canvas);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sched-card h4 { margin: 0 0 2px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); display: flex; justify-content: space-between; }
+
+/* Timeline Gantt */
+.tl-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.tl-grid { flex: 1; min-height: 0; overflow-y: auto; background: var(--canvas); }
+.tl-row { display: flex; height: 28px; border-bottom: 1px solid var(--border-subtle); align-items: stretch; }
+.tl-row.head { height: 24px; background: var(--raised); position: sticky; top: 0; z-index: 2; border-bottom-color: var(--border); font-size: var(--sz-xs); color: var(--text-tertiary); }
+.tl-name { flex: 0 0 270px; padding: 0 12px; display: flex; align-items: center; gap: 6px; border-right: 1px solid var(--border); font-size: var(--sz-sm); overflow: hidden; }
+.tl-name b { font-weight: 500; color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-name small { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+.tl-lane { flex: 1; position: relative; background: repeating-linear-gradient(90deg, transparent 0, transparent calc(12.5% - 1px), var(--border-subtle) calc(12.5% - 1px), var(--border-subtle) 12.5%); }
+.tl-tick { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; padding-left: 5px; font-family: var(--font-mono); font-size: 10.5px; }
+.tl-bar { position: absolute; top: 6px; height: 15px; border-radius: 3px; background: var(--chart-blue); opacity: 0.82; }
+.tl-bar.ov { background: var(--warning); opacity: 1; }
+.tl-bar.off { background: transparent; border: 1px dashed var(--text-muted); opacity: 0.7; }
+.tl-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--error); z-index: 2; }
+.tl-overlap-drawer {
+  flex: none; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--warning-surface);
+  color: var(--warning-surface-text); font-size: var(--sz-sm); display: flex; align-items: center; gap: 10px;
+}
+
+/* --- 5. AGENT OVERVIEW --- */
+.ov-check-list { border: 1px solid var(--border); border-radius: var(--rad-lg); overflow: hidden; background: var(--canvas); }
+.ov-check {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) 156px; column-gap: 10px; row-gap: 2px;
+  padding: 9px 14px; border-top: 1px solid var(--border-subtle); align-items: center;
+}
+.ov-check:first-child { border-top: 0; }
+.ov-check-icon { grid-row: span 2; align-self: start; padding-top: 2px; }
+.ov-check-title { font-size: var(--sz-sm); font-weight: 600; color: var(--text-strong); }
+.ov-check-detail { grid-column: 2; font-size: var(--sz-xs); color: var(--text-secondary); line-height: 17px; }
+.ov-check-fix { grid-column: 3; grid-row: 1 / 3; display: flex; justify-content: flex-end; }
+.ov-obj-chip {
+  display: inline-flex; align-items: center; padding: 0 6px; height: 17px; border-radius: 4px;
+  background: var(--raised); border: 1px solid var(--border); color: var(--text-accent);
+  font-size: 11px; margin: 0 2px; vertical-align: baseline;
+}
+.ov-obj-chip:hover { border-color: var(--accent); background: var(--selection); }
+
+/* --- 6. OPERATORS MATRIX --- */
+.matrix-cell {
+  width: 34px; height: 22px; border-radius: 4px; border: 1px solid transparent; background: transparent;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--text-muted);
+  display: inline-grid; place-items: center;
+}
+.matrix-cell:hover { background: var(--hover); color: var(--text-strong); }
+.matrix-cell.is-set { background: var(--selection); color: var(--text-accent); }
+.matrix-cell.is-changed { border-color: var(--warning); background: var(--warning-surface); color: var(--warning-surface-text); }
+
+/* --- 8. AGENT PROPERTIES MODAL --- */
+.modal-scrim {
+  flex: 1; min-height: 0; background: rgba(8, 10, 14, 0.56); display: grid; place-items: center; padding: 18px;
+}
+.modal-win {
+  width: 760px; max-width: 100%; height: 550px; background: var(--overlay);
+  border: 1px solid var(--control-border); border-radius: var(--rad-lg);
+  box-shadow: var(--shadow-dialog); display: flex; flex-direction: column; overflow: hidden;
+}
+.modal-head {
+  height: var(--h-header); padding: 0 14px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 14px; color: var(--text-strong);
+}
+.modal-foot {
+  padding: 10px 14px; border-top: 1px solid var(--border); background: var(--chrome);
+  display: flex; align-items: center; gap: 8px; justify-content: flex-end;
+}
+.ratio-track { height: 7px; border-radius: 4px; background: var(--raised); overflow: hidden; display: flex; gap: 2px; }
+.ratio-seg { height: 100%; border-radius: 2px; }
+
+/* Warning banner */
+.v-banner {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 16px;
+  background: var(--warning-surface); color: var(--warning-surface-text);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 35%, transparent); font-size: var(--sz-sm);
+}
+
+/* Helper chip pills inside forms */
+.op-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: var(--h-control); padding: 0 4px 0 8px;
+  border: 1px solid var(--control-border); border-radius: var(--rad-sm); background: var(--raised); font-size: var(--sz-sm);
+}
+.op-chip .m {
+  min-width: 20px; height: 18px; border-radius: 3px; border: 0; background: transparent;
+  color: var(--text-muted); font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+}
+.op-chip .m.is-on { background: var(--selection-strong); color: var(--text-accent); }
+</style>
+</head>
+<body>
+
+<header class="lab-top">
+  <div class="lab-row">
+    <div class="lab-brand">
+      <div class="lab-brand-mark">V</div>
+      <div>
+        <h1>SQL Server Agent — UX &amp; Visual Polish Design Lab</h1>
+        <span>Calm Pro Cohesion · Zero Scroll-in-Scroll · Tight Alignment · Consistent Typography</span>
+      </div>
+    </div>
+
+    <div class="lab-seg" role="group" aria-label="Design option">
+      <button type="button" data-set-option="today">Today (Baseline)</button>
+      <button type="button" data-set-option="a" class="is-on">Option A · Unified Inspector</button>
+      <button type="button" data-set-option="b">Option B · Ultra-Dense Pro</button>
+    </div>
+
+    <div class="lab-seg" role="group" aria-label="Color theme">
+      <button type="button" data-set-theme="dark" class="is-on">Dark</button>
+      <button type="button" data-set-theme="light">Light</button>
+    </div>
+
+    <div class="lab-seg" role="group" aria-label="Density">
+      <button type="button" data-set-density="compact" class="is-on">Compact</button>
+      <button type="button" data-set-density="comfortable">Comfortable</button>
+    </div>
+
+    <div class="lab-seg" role="group" aria-label="Annotations">
+      <button type="button" id="btn-callouts" class="is-on">Callouts: On</button>
+    </div>
+  </div>
+
+  <nav class="lab-panels" aria-label="Agent panels">
+    <button type="button" class="lab-panel-btn is-on" data-panel="job">Job Document <span class="lab-panel-badge polish">Inspector</span></button>
+    <button type="button" class="lab-panel-btn" data-panel="jam">Job Activity Monitor <span class="lab-panel-badge polish">Density</span></button>
+    <button type="button" class="lab-panel-btn" data-panel="lfv">Log File Viewer <span class="lab-panel-badge">CSS Bug</span></button>
+    <button type="button" class="lab-panel-btn" data-panel="schedules">Schedules &amp; Timeline <span class="lab-panel-badge">Chrome</span></button>
+    <button type="button" class="lab-panel-btn" data-panel="overview">Agent Overview</button>
+    <button type="button" class="lab-panel-btn" data-panel="operators">Operators &amp; Alerts <span class="lab-panel-badge">Flex Bug</span></button>
+    <button type="button" class="lab-panel-btn" data-panel="proxies">Proxies &amp; Credentials</button>
+    <button type="button" class="lab-panel-btn" data-panel="props">Agent Properties</button>
+  </nav>
+</header>
+
+<main class="lab-stage">
+  <section class="lab-context" id="lab-context"></section>
+
+  <section class="varia-win" aria-label="Simulated Varia SQL Manager window">
+    <div class="varia-tabstrip" id="varia-tabstrip"></div>
+    <div class="varia-body" id="varia-body"></div>
+    <div class="varia-status" id="varia-status">
+      <span class="dot"></span>
+      <span>prod-sql-01.corp.local</span>
+      <span class="sep"></span>
+      <span class="mono">SQL Server 2025 (17.0)</span>
+      <span class="sep"></span>
+      <span>sa (sysadmin)</span>
+      <div class="right">
+        <span style="color:var(--text-accent)">● Finance – Nightly GL Load: step 2 of 4</span>
+        <span class="sep"></span>
+        <span>Server time: <span class="mono">2026-11-26 14:46</span></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="lab-decisions" id="lab-decisions"></section>
+</main>
+<div class="sash-hud" id="sash-hud" aria-hidden="true"></div>
+
+<script>
+// ============================================================================
+// PERSISTED RESIZABLE RAILS (mirrors Varia followPointerDrag + Vitals/Options prefs)
+// ============================================================================
+const RAIL_STORAGE_KEY = 'varia.agentPolishMock.rails.v1';
+const RAIL_SPECS = {
+  jobVitals:        { side: 'right', def: 256, min: 220, max: 420, minOther: 420, label: 'Resize Job Vitals rail' },
+  jobStepsRail:     { side: 'left',  def: 304, min: 252, max: 480, minOther: 360, label: 'Resize Steps list' },
+  jobSchedulesRail: { side: 'left',  def: 284, min: 236, max: 460, minOther: 360, label: 'Resize Attached schedules list' },
+  jobHistoryRail:   { side: 'left',  def: 276, min: 232, max: 440, minOther: 380, label: 'Resize History runs list' },
+  jamDrawerMsg:     { side: 'right', def: 440, min: 260, max: 720, minOther: 320, label: 'Resize Last run message preview' },
+  lfvRail:          { side: 'left',  def: 236, min: 188, max: 380, minOther: 460, label: 'Resize Select logs rail' },
+  lfvMsg:           { side: 'right', def: 430, min: 260, max: 720, minOther: 300, label: 'Resize Message details pane' },
+  schedDetail:      { side: 'right', def: 472, min: 360, max: 660, minOther: 340, label: 'Resize Schedule editor inspector' },
+  opSide:           { side: 'right', def: 264, min: 220, max: 400, minOther: 380, label: 'Resize Selected operator rail' }
+};
+
+function loadRailWidths() {
+  const out = {};
+  for (const [k, spec] of Object.entries(RAIL_SPECS)) out[k] = spec.def;
+  try {
+    const raw = typeof localStorage !== 'undefined' && localStorage.getItem(RAIL_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      for (const [k, spec] of Object.entries(RAIL_SPECS)) {
+        const v = Number(parsed[k]);
+        if (Number.isFinite(v)) out[k] = Math.min(spec.max, Math.max(spec.min, Math.round(v)));
+      }
+    }
+  } catch {}
+  return out;
+}
+function saveRailWidths(widths) {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(RAIL_STORAGE_KEY, JSON.stringify(widths)); } catch {}
+}
+
+// ============================================================================
+// STATE & INLINE SVG ICONS
+// ============================================================================
+const state = {
+  panel: 'job',
+  option: 'a',          // 'today' | 'a' | 'b'
+  theme: 'dark',
+  density: 'compact',
+  callouts: true,
+  widths: loadRailWidths(),
+  // Per-panel interactive sub-state
+  jobTab: 'steps',      // 'general' | 'steps' | 'schedules' | 'notifications' | 'history'
+  jobStep: 1,           // 0..3
+  jobVitals: true,
+  jamSelected: 2,       // 0 | 1 | 2
+  jamDrawer: true,
+  jamStopped: false,
+  jamFilter: 'all',
+  lfvErrorLog: false,
+  lfvRailOpen: true,
+  schedMode: 'grid',    // 'grid' | 'timeline'
+  schedSelected: 0,
+  opView: 'matrix',     // 'matrix' | 'alert' | 'operator'
+  proxyView: 'proxy',   // 'proxy' | 'credential'
+  propsPage: 'history'  // 'general' | 'history'
+};
+
+const railW = key => state.widths[key] ?? RAIL_SPECS[key].def;
+const sashHtml = key => {
+  const spec = RAIL_SPECS[key];
+  const val = railW(key);
+  return `<div class="v-sash" role="separator" aria-orientation="vertical" aria-label="${spec.label}" aria-valuemin="${spec.min}" aria-valuemax="${spec.max}" aria-valuenow="${val}" tabindex="0" data-sash="${key}" title="Drag to resize · Double-click to reset (${spec.def} px)"></div>`;
+};
+
+const I = {
+  play: '<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><path d="M4 3l9 5-9 5V3z"/></svg>',
+  stop: '<svg class="ic" viewBox="0 0 16 16" fill="currentColor"><rect x="3.5" y="3.5" width="9" height="9" rx="1.2"/></svg>',
+  refresh: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M13 8a5 5 0 1 1-1.3-3.4M13 2.5v2.7h-2.7"/></svg>',
+  save: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 2.5h8l2.5 2.5v8.5h-11v-11zM5.5 2.5v3.5h5v-3.5M5.5 13.5v-4h5v4"/></svg>',
+  plus: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v10M3 8h10"/></svg>',
+  trash: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 4.5h10M6 4.5V3h4v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>',
+  copy: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5" y="5" width="8" height="8.5" rx="1"/><path d="M3 10.5V3h7.5"/></svg>',
+  search: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>',
+  chevDown: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"/></svg>',
+  chevRight: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4"/></svg>',
+  check: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8.5l3.2 3.2L13 4.5"/></svg>',
+  err: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M5.7 5.7l4.6 4.6M10.3 5.7l-4.6 4.6"/></svg>',
+  warn: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 2.2L14.2 13H1.8L8 2.2zM8 6.2v3.3M8 11.2v.4"/></svg>',
+  layout: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.2"/><path d="M10 2.5v11"/></svg>',
+  gear: '<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.3"/><path d="M8 2v1.6M8 12.4V14M2 8h1.6M12.4 8H14M3.8 3.8l1.1 1.1M11.1 11.1l1.1 1.1M12.2 3.8l-1.1 1.1M4.9 11.1l-1.1 1.1"/></svg>',
+  clock: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="5.8"/><path d="M8 4.8V8l2.3 1.5"/></svg>',
+  pin: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M5.5 3h5l-.6 4 1.6 1.6v1H4.5v-1L6.1 7l-.6-4zM8 9.6V14"/></svg>',
+  ext: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M9.5 3H13v3.5M13 3L7.5 8.5M11 9.5V13H3V5h3.5"/></svg>',
+  up: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 12.5V3.5M4.5 7L8 3.5 11.5 7"/></svg>',
+  down: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3.5v9M4.5 9L8 12.5 11.5 9"/></svg>',
+  close: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
+  lock: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="3.5" y="7" width="9" height="6.5" rx="1.2"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>',
+  user: '<svg class="ic ic-sm" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="5.2" r="2.5"/><path d="M3.2 13.5c.7-2.6 2.5-3.8 4.8-3.8s4.1 1.2 4.8 3.8"/></svg>'
+};
+
+const sw = (on, label = '') => `<button type="button" class="v-switch ${on ? 'is-on' : ''}" onclick="this.classList.toggle('is-on')"><span class="v-switch-track"></span>${label ? `<span>${label}</span>` : ''}</button>`;
+
+// ============================================================================
+// MOCK DATA
+// ============================================================================
+const JOB_STEPS = [
+  { no: 1, name: 'Validate source feed', type: 'TSQL', typeShort: 'TSQL', db: 'FinanceDW', ok: 'Go to the next step', okShort: 'Next step', bad: 'Quit the job reporting failure', badShort: 'Quit (fail)', start: true,
+    code: [
+      '<span class="syn-cmt">-- Verify staging batch completeness before load</span>',
+      '<span class="syn-kw">IF NOT EXISTS</span> (<span class="syn-kw">SELECT</span> <span class="syn-num">1</span> <span class="syn-kw">FROM</span> stg.BatchControl <span class="syn-kw">WHERE</span> Status = <span class="syn-str">\'Ready\'</span>)',
+      '  <span class="syn-kw">THROW</span> <span class="syn-num">51000</span>, <span class="syn-str">\'Staging feed has not arrived for today.\'</span>, <span class="syn-num">1</span>;'
+    ] },
+  { no: 2, name: 'Load General Ledger SSIS', type: 'SSIS', typeShort: 'SSIS', db: 'SSISDB', ok: 'Go to the next step', okShort: 'Next step', bad: 'Go to step 4: Archive failed batch files', badShort: 'Go to step 4', start: false,
+    pkg: '\\SSISDB\\Finance\\NightlyGL\\LoadLedger.dtsx', env: 'Prod_Finance',
+    code: [
+      '<span class="syn-cmt">-- SSIS Catalog Package: \\SSISDB\\Finance\\NightlyGL\\LoadLedger.dtsx</span>',
+      '<span class="syn-cmt">-- Environment: Prod_Finance · 64-bit runtime · Basic logging</span>'
+    ] },
+  { no: 3, name: 'Rebuild reporting aggregates', type: 'TSQL', typeShort: 'TSQL', db: 'FinanceDW', ok: 'Quit the job reporting success', okShort: 'Quit (ok)', bad: 'Go to step 4: Archive failed batch files', badShort: 'Go to step 4', start: false,
+    code: [
+      '<span class="syn-kw">EXEC</span> rpt.usp_RefreshLedgerMart',
+      '  @AsOfDate = <span class="syn-fn">CAST</span>(<span class="syn-fn">SYSDATETIME</span>() <span class="syn-kw">AS DATE</span>),',
+      '  @FullRebuild = <span class="syn-num">0</span>;'
+    ] },
+  { no: 4, name: 'Archive failed batch files', type: 'PowerShell', typeShort: 'PS', db: 'Proxy: FileShareWriter', ok: 'Quit the job reporting failure', okShort: 'Quit (fail)', bad: 'Quit the job reporting failure', badShort: 'Quit (fail)', start: false,
+    code: [
+      '<span class="syn-cmt"># Move rejected CSVs to quarantine share</span>',
+      'Move-Item <span class="syn-str">\'\\\\files01\\finance\\in\\*.csv\'</span> <span class="syn-str">\'\\\\files01\\finance\\quarantine\\\'</span>'
+    ] }
+];
+
+const JAM_JOBS = [
+  { name: 'Finance – Nightly GL Load', enabled: true, status: 'Running (step 2/4)', last: 'Failed', lastRun: '2026-11-26 02:00:01', nextRun: '2026-11-27 02:00:00', dur: '00:12:41', cat: 'ETL – Finance', owner: 'sa', tone: 'run' },
+  { name: 'Sales – Hourly Warehouse Sync', enabled: true, status: 'Idle', last: 'Failed', lastRun: '2026-11-26 14:00:00', nextRun: '2026-11-26 15:00:00', dur: '00:04:18', cat: 'ETL – Sales', owner: 'CORP\\svc_etl', tone: 'err' },
+  { name: 'BI – Customer Churn Scoring', enabled: true, status: 'Between retries', last: 'Failed', lastRun: '2026-11-26 13:30:00', nextRun: '2026-11-26 14:55:00', dur: '00:08:05', cat: 'Analytics', owner: 'CORP\\svc_ml', tone: 'warn' },
+  { name: 'DBA – Index Maintenance', enabled: true, status: 'Idle', last: 'Succeeded', lastRun: '2026-11-26 03:00:00', nextRun: '2026-11-27 03:00:00', dur: '00:24:19', cat: 'Database Maintenance', owner: 'sa', tone: 'ok' },
+  { name: 'DBA – Transaction Log Backup', enabled: true, status: 'Idle', last: 'Succeeded', lastRun: '2026-11-26 14:45:00', nextRun: '2026-11-26 15:00:00', dur: '00:00:14', cat: 'Database Maintenance', owner: 'sa', tone: 'ok' },
+  { name: 'Ops – Backup Verification', enabled: true, status: 'Idle', last: 'Succeeded', lastRun: '2026-11-26 05:30:00', nextRun: '2026-11-27 05:30:00', dur: '00:11:02', cat: 'Database Maintenance', owner: 'sa', tone: 'ok' },
+  { name: 'Finance – Month-End Close', enabled: false, status: 'Idle', last: 'Succeeded', lastRun: '2026-10-31 23:00:00', nextRun: '(Not scheduled)', dur: '00:41:50', cat: 'ETL – Finance', owner: 'CORP\\jlee', tone: 'dim' },
+  { name: 'Legacy – Export Payroll CSV', enabled: false, status: 'Idle', last: 'Canceled', lastRun: '2026-09-15 01:00:00', nextRun: '(Not scheduled)', dur: '00:01:12', cat: 'Uncategorized', owner: 'CORP\\old_svc', tone: 'dim' }
+];
+
+const SCHEDULES = [
+  { name: 'Nightly 02:00 ETL Window', when: 'Daily at 02:00', enabled: true, jobs: 4, owner: 'sa', next: '2026-11-27 02:00:00', sentence: 'Occurs every day at 02:00:00. Schedule will be used starting on 2025-01-01.' },
+  { name: 'Every 15 minutes (Logs)', when: 'Every 15 min', enabled: true, jobs: 2, owner: 'sa', next: '2026-11-26 15:00:00', sentence: 'Occurs every day every 15 minute(s) between 00:00:00 and 23:59:59.' },
+  { name: 'Hourly Business Sync', when: 'Weekdays · hourly 06:00–20:00', enabled: true, jobs: 3, owner: 'CORP\\svc_etl', next: '2026-11-26 15:00:00', sentence: 'Occurs every week on Mon, Tue, Wed, Thu, Fri every 1 hour(s) between 06:00:00 and 20:00:00.' },
+  { name: 'Sunday Maintenance 03:00', when: 'Weekly Sun at 03:00', enabled: true, jobs: 2, owner: 'sa', next: '2026-11-29 03:00:00', sentence: 'Occurs every week on Sunday at 03:00:00.' },
+  { name: 'Q3 Ad-hoc Backfill', when: 'Daily at 04:30', enabled: false, jobs: 0, owner: 'CORP\\jlee', next: 'Disabled', sentence: 'Occurs every day at 04:30:00 (Disabled).' }
+];
+
+// ============================================================================
+// PANEL 1: JOB DOCUMENT
+// ============================================================================
+function renderJobPanel() {
+  const opt = state.option;
+  const tab = state.jobTab;
+  const step = JOB_STEPS[state.jobStep];
+
+  if (opt === 'today') {
+    return `
+      <div class="callout-strip is-bug">
+        <span class="callout-tag">Baseline Issues</span>
+        <span><strong>Nested scrolls:</strong> Outer stacked sections scroll + inner Monaco (220px) + inner History runs (360px) + inner Message (240px). <strong>Saw-tooth labels:</strong> General uses <code>minmax(160px,30%)</code>, Steps uses <code>140px</code>, Facts uses <code>max-content</code>. <strong>Unstyled tables</strong> (<code>.properties-table</code> on <code>&lt;table&gt;</code>) + <strong>176px left nav rail</strong> cramping Steps/Schedules.</span>
+      </div>
+      <div class="doc-frame">
+        <header class="doc-header">
+          <div class="doc-heading">
+            <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent › Jobs</div>
+            <h1 class="doc-title">Finance – Nightly GL Load</h1>
+            <span class="doc-subtitle">Job Properties</span>
+            <span class="pill err">Idle · Last run failed</span>
+          </div>
+          <div class="doc-actions">
+            <span class="v-split"><button class="legacy-btn">${I.play}Start</button><button class="legacy-btn">${I.chevDown}</button></span>
+            <button class="legacy-btn">Reload</button>
+            <button class="v-btn primary">Save · 2 changes</button>
+          </div>
+        </header>
+        <div class="legacy-doc-body">
+          <nav class="legacy-nav">
+            ${['General','Steps','Schedules','Notifications','Targets','Alerts','History'].map((t, i) =>
+              `<button class="legacy-nav-item ${i === 1 ? 'is-on' : ''}">${t}${t==='Steps'?'<span class="inline-callout">176px rail</span>':''}</button>`
+            ).join('')}
+          </nav>
+          <div class="legacy-sections">
+            <section class="legacy-sec">
+              <h2>General</h2>
+              <div class="pf-list" style="gap:4px">
+                <div class="pf-row"><span class="pf-label">Name</span><input class="v-input" value="Finance – Nightly GL Load"></div>
+                <div class="pf-row"><span class="pf-label">Owner</span><input class="v-input" value="sa"></div>
+              </div>
+              <dl style="display:grid;grid-template-columns:max-content 1fr;gap:2px 12px;font-size:12px;color:var(--text-muted);margin:8px 0 0">
+                <dt>Created</dt><dd style="margin:0">2025-02-14 09:18:22 <span class="inline-callout">max-content saw-tooth &amp; proportional timestamp</span></dd>
+                <dt>Last run</dt><dd style="margin:0">2026-11-26 02:00:01 · Last run failed</dd>
+              </dl>
+            </section>
+            <section class="legacy-sec">
+              <h2>Steps <span class="inline-callout">Scroll inside outer scroll · 140px label grid</span></h2>
+              <div style="display:grid;grid-template-columns:210px minmax(0,1fr);gap:12px">
+                <div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+                  ${JOB_STEPS.map((s, idx) => `<div style="padding:4px 6px;border-radius:4px;${idx===1?'background:var(--selection-strong)':''}">${s.no} ${s.name}<div style="font-size:11px;color:var(--text-muted)">${s.type} · ✓ ${s.ok}</div></div>`).join('')}
+                  <div style="display:flex;gap:4px;margin-top:4px"><button class="legacy-btn">${I.plus}Add step</button><select class="v-select" style="width:74px"><option>T-SQL</option></select></div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <div style="display:flex;gap:4px;flex-wrap:wrap"><button class="legacy-btn">Move up</button><button class="legacy-btn">Move down</button><button class="legacy-btn">Make Start step</button><button class="legacy-btn" style="color:var(--error)">Delete</button></div>
+                  <div style="display:grid;grid-template-columns:140px 1fr;gap:6px;align-items:center;font-size:12px"><label>Step name</label><input class="v-input" value="${step.name}"></div>
+                  <div style="height:120px;border:1px solid var(--legacy-border);border-radius:4px;overflow:auto;background:var(--input);padding:6px;font-family:var(--font-mono);font-size:12px">
+                    ${step.code.join('<br>')}
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="legacy-sec">
+              <h2>History <span class="inline-callout">Triple scroll trap + .agent-history CSS collision (double 32px padding!)</span></h2>
+              <div style="padding:10px 16px;border:1px dashed var(--error);border-radius:4px">
+                <div style="display:grid;grid-template-columns:180px 1fr;gap:10px">
+                  <div class="legacy-scroll-box" style="height:105px;padding:4px;font-size:11.5px">
+                    <div style="padding:3px;background:var(--selection)">✕ 2026-11-26 02:00 · 12m</div>
+                    <div style="padding:3px">✓ 2026-11-25 02:00 · 18m</div>
+                    <div style="padding:3px">✓ 2026-11-24 02:00 · 17m</div>
+                    <div style="padding:3px">✓ 2026-11-23 02:00 · 19m</div>
+                  </div>
+                  <div>
+                    <table class="legacy-raw-table"><thead><tr><th>Step</th><th>Outcome</th><th>Duration</th></tr></thead><tbody><tr><td>1 · Validate</td><td>Succeeded</td><td>00:00:08</td></tr><tr><td>2 · Load GL</td><td>Failed</td><td>00:12:33</td></tr></tbody></table>
+                    <div class="legacy-scroll-box" style="height:48px;padding:4px;font-family:var(--font-mono);font-size:11px;margin-top:4px">Executed as user: CORP\svc_etl. Execution ID: 48213. Package failed due to timeout...</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="script-bar"><strong>Script</strong> · 48 lines</div>
+      </div>`;
+  }
+
+  // Option A (Unified ObjectInspectorFrame) vs Option B (Ultra-Dense Pro)
+  const isB = opt === 'b';
+  const showVitals = !isB && state.jobVitals;
+
+  let tabBody = '';
+  if (tab === 'general') {
+    tabBody = `<div class="insp-flow">
+      <div class="group-eyebrow"><span>Identity &amp; Configuration</span><span class="inline-callout is-win">${isB ? '2-column ultra-dense · zero scroll' : '160px unified rail · metadata moved to Vitals'}</span></div>
+      <div class="${isB ? 'pf-2col' : 'pf-list'}">
+        <div class="pf-row is-changed">
+          <span class="pf-label"><span class="pf-dot"></span>Name</span>
+          <div class="pf-ctrl"><input class="v-input is-changed" value="Finance – Nightly GL Load"></div>
+        </div>
+        <div class="pf-row">
+          <span class="pf-label">Owner</span>
+          <div class="pf-ctrl"><input class="v-input mono" value="sa"></div>
+        </div>
+        <div class="pf-row">
+          <span class="pf-label">Category</span>
+          <div class="pf-ctrl"><select class="v-select"><option>ETL – Finance</option><option>Database Maintenance</option></select></div>
+        </div>
+        <div class="pf-row">
+          <span class="pf-label">Enabled</span>
+          <div class="pf-ctrl">${sw(true, 'Runs on attached schedules')}</div>
+        </div>
+        <div class="pf-row top ${isB ? 'pf-span2' : ''}">
+          <span class="pf-label" style="padding-top:4px">Description</span>
+          <div class="pf-ctrl"><textarea class="v-textarea" rows="${isB ? 2 : 3}">Loads nightly general ledger feeds from ERP staging into FinanceDW, refreshes reporting marts, and quarantines rejected batch files on error.</textarea></div>
+        </div>
+      </div>
+      ${isB ? `
+        <div class="group-eyebrow" style="margin-top:16px"><span>Lifecycle &amp; Execution Metadata</span><span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:0">Click any row to copy</span></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 24px">
+          <dl class="fact-grid">
+            <dt>Created</dt><dd class="mono">2025-02-14 09:18:22</dd>
+            <dt>Last modified</dt><dd class="mono">2026-11-24 16:04:11</dd>
+          </dl>
+          <dl class="fact-grid">
+            <dt>Start step</dt><dd>1 · Validate source feed</dd>
+            <dt>Target server</dt><dd class="mono">prod-sql-01.corp.local (Local)</dd>
+          </dl>
+        </div>` : `
+        <div class="group-eyebrow" style="margin-top:18px"><span>Target Server</span></div>
+        <dl class="fact-grid">
+          <dt>Target</dt><dd class="mono">prod-sql-01.corp.local <span class="pill mut sm">Local server</span></dd>
+          <dt>Multi-server</dt><dd style="color:var(--text-muted)">Not configured (MSX/TSX targets not enabled)</dd>
+        </dl>`}
+    </div>`;
+  } else if (tab === 'steps') {
+    tabBody = `<div class="insp-fill">
+      <div class="steps-fill">
+        <div class="steps-list-pane" data-rail="jobStepsRail" style="width:${railW('jobStepsRail')}px">
+          <div class="steps-list-head">
+            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-tertiary)">Steps · 4</span>
+            <div style="display:flex;gap:4px">
+              <button class="v-btn sm">${I.plus}Add</button>
+              <button class="v-btn sm ghost" title="List / Flow view">Flow</button>
+            </div>
+          </div>
+          <div class="steps-list-scroll">
+            ${JOB_STEPS.map((s, idx) => `
+              <button type="button" class="step-card ${idx === state.jobStep ? 'is-sel' : ''}" onclick="state.jobStep=${idx};render()">
+                <span class="step-no">${s.no}</span>
+                <span class="step-name" title="${s.name}">${s.name}</span>
+                <span class="step-badge">
+                  ${s.start ? '<span class="pill run sm">Start</span>' : ''}
+                  ${idx === 1 ? '<span class="pill warn sm">1 warn</span>' : ''}
+                </span>
+                <span class="step-flow">
+                  <span class="step-type-tag" title="${s.type}">${s.typeShort}</span>
+                  <span class="ok" title="On success: ${s.ok}"><span class="glyph">✓</span><span class="lbl">${s.okShort}</span></span>
+                  <span class="bad" title="On failure: ${s.bad}"><span class="glyph">✗</span><span class="lbl">${s.badShort}</span></span>
+                </span>
+              </button>
+            `).join('')}
+          </div>
+          <div style="padding:6px 10px;border-top:1px solid var(--border);font-size:11px;color:var(--text-muted)">
+            Drag edge to resize · <span class="mono">Alt+↑/↓</span> reorders steps
+          </div>
+        </div>
+        ${sashHtml('jobStepsRail')}
+        <div class="step-edit-pane">
+          <div class="step-edit-head">
+            <span class="pill mut sm mono">Step ${step.no} of 4</span>
+            <input class="v-input" style="flex:1;min-width:160px;font-weight:600" value="${step.name}" aria-label="Step name">
+            <div class="seg">
+              ${['TSQL','SSIS','PowerShell','CmdExec'].map(t => `<button class="${step.type===t?'is-on':''}">${t==='TSQL'?'T-SQL':t}</button>`).join('')}
+            </div>
+            <span class="v-sep"></span>
+            <button class="v-btn ghost icon-only" title="Move up">${I.up}</button>
+            <button class="v-btn ghost icon-only" title="Move down">${I.down}</button>
+            <button class="v-btn ghost icon-only" title="Make Start step">${I.pin}</button>
+            <button class="v-btn danger icon-only" title="Delete step">${I.trash}</button>
+          </div>
+          <div class="step-edit-meta">
+            <div class="${isB ? 'pf-2col' : 'pf-list'}">
+              <div class="pf-row">
+                <span class="pf-label">${step.type === 'TSQL' ? 'Database' : step.type === 'SSIS' ? 'SSIS Package' : 'Run as'}</span>
+                <div class="pf-ctrl">
+                  ${step.type === 'TSQL'
+                    ? `<select class="v-select mono"><option>${step.db}</option><option>master</option></select>`
+                    : step.type === 'SSIS'
+                      ? `<input class="v-input mono" value="${step.pkg}"><button class="v-btn sm">Browse…</button>`
+                      : `<select class="v-select"><option>${step.db}</option><option>SQL Server Agent Service Account</option></select>`}
+                </div>
+              </div>
+              ${step.type === 'SSIS' ? `<div class="pf-row">
+                <span class="pf-label">Environment</span>
+                <div class="pf-ctrl"><select class="v-select mono"><option>${step.env}</option><option>(None)</option></select><label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap"><input type="checkbox"> 32-bit</label></div>
+              </div>` : ''}
+            </div>
+          </div>
+          <div class="step-cmd-wrap">
+            <div class="step-cmd-bar">
+              <span><strong>${step.type === 'SSIS' ? 'Parameters & Package Configuration' : 'Command'}</strong> · <span class="mono">${step.db}</span></span>
+              <div style="display:flex;gap:4px">
+                ${step.type === 'TSQL' ? `<button class="v-btn sm ghost">${I.check}Parse</button><button class="v-btn sm ghost">${I.ext}Open in query window</button>` : `<button class="v-btn sm ghost">Load from file…</button>`}
+              </div>
+            </div>
+            ${step.type === 'SSIS' ? `
+              <div style="flex:1;min-height:0;overflow:auto;padding:10px 14px">
+                <table class="v-table">
+                  <thead><tr><th>Parameter</th><th>Scope</th><th>Value</th><th>Comes from</th></tr></thead>
+                  <tbody>
+                    <tr><td class="mono">BatchDate</td><td>Package</td><td><input class="v-input mono" style="height:22px;width:160px" value="@[System::StartTime]"></td><td><span class="pill run sm">Environment</span></td></tr>
+                    <tr class="is-err"><td class="mono">TargetServer <span class="pill warn sm">required</span></td><td>Project</td><td><input class="v-input mono" style="height:22px;width:160px" placeholder="Enter value…"></td><td style="color:var(--warning)">Missing value</td></tr>
+                    <tr class="is-dim"><td class="mono">BatchSize</td><td>Package</td><td class="mono">10000</td><td>Design default</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            ` : `
+              <div class="monaco-mock">
+                ${step.code.map((ln, i) => `<div class="monaco-line"><span class="monaco-ln">${i+1}</span><span class="monaco-code">${ln}</span></div>`).join('')}
+              </div>
+            `}
+          </div>
+          <div class="step-edit-foot">
+            <div class="step-flow-row">
+              <div class="step-flow-cell"><span style="color:var(--success);font-weight:600;width:72px">✓ Success</span><select class="v-select"><option>${step.ok}</option><option>Quit reporting success</option></select></div>
+              <div class="step-flow-cell"><span style="color:var(--error);font-weight:600;width:72px">✗ Failure</span><select class="v-select"><option>${step.bad}</option><option>Quit reporting failure</option></select></div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--text-muted)">
+              <button class="v-link" style="color:var(--text-secondary)">${I.chevRight} <strong>More options</strong> · Retry 2× every 5 min · Output to <span class="mono">D:\\AgentLogs\\gl_load.log</span></button>
+              <span class="inline-callout is-win">Zero scroll-in-scroll · Editor fills remaining height</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  } else if (tab === 'notifications') {
+    tabBody = `<div class="insp-flow">
+      <div class="group-eyebrow"><span>Operator Notifications</span><span class="inline-callout is-win">Aligned 2-track Level + Operator columns</span></div>
+      <div class="pf-list">
+        <div class="pf-row is-changed">
+          <span class="pf-label"><span class="pf-dot"></span>E-mail</span>
+          <div class="pf-ctrl"><div class="pf-two"><select class="v-select is-changed"><option>When the job fails</option><option>Never</option></select><select class="v-select"><option>DBA On-Call</option><option>Finance Ops</option></select></div></div>
+        </div>
+        <div class="pf-row">
+          <span class="pf-label">Page</span>
+          <div class="pf-ctrl"><div class="pf-two"><select class="v-select"><option>Never</option><option>When the job fails</option></select><input class="v-input" disabled placeholder="—"></div></div>
+        </div>
+        <div class="pf-row">
+          <span class="pf-label">Net send</span>
+          <div class="pf-ctrl"><div class="pf-two"><select class="v-select"><option>Never</option></select><input class="v-input" disabled placeholder="Deprecated in SQL Server"></div></div>
+        </div>
+      </div>
+      <div class="group-eyebrow" style="margin-top:16px"><span>System &amp; Cleanup Actions</span></div>
+      <div class="pf-list">
+        <div class="pf-row">
+          <span class="pf-label">Windows event log</span>
+          <div class="pf-ctrl"><select class="v-select"><option>When the job fails</option><option>Never</option></select></div>
+        </div>
+        <div class="pf-row">
+          <span class="pf-label">Auto-delete job</span>
+          <div class="pf-ctrl"><select class="v-select"><option>Never</option><option>When the job succeeds</option></select></div>
+        </div>
+      </div>
+      <div class="group-eyebrow" style="margin-top:16px"><span>Alerts That Trigger This Job</span><button class="v-btn sm">${I.plus}New alert for this job…</button></div>
+      <table class="v-table">
+        <thead><tr><th>Alert Name</th><th>Condition</th><th>Enabled</th><th style="width:90px"></th></tr></thead>
+        <tbody>
+          <tr><td style="font-weight:500">Sev 020 – Fatal Error in Current Process</td><td class="mono">Severity 20</td><td><span class="pill ok sm">Enabled</span></td><td style="text-align:right"><button class="v-btn sm ghost">Remove</button></td></tr>
+        </tbody>
+      </table>
+    </div>`;
+  } else if (tab === 'history') {
+    tabBody = `<div class="insp-fill">
+      <div class="hist-top-bar">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div class="spark-bars" title="Duration last 14 runs vs usual 18m 10s">
+            <i style="height:52%"></i><i style="height:56%"></i><i style="height:49%"></i><i style="height:60%"></i>
+            <i style="height:54%"></i><i class="is-fail" style="height:32%"></i><i style="height:58%"></i><i style="height:55%"></i>
+            <i style="height:62%"></i><i style="height:51%"></i><i style="height:53%"></i><i style="height:57%"></i>
+            <i style="height:61%"></i><i class="is-fail" style="height:42%"></i>
+          </div>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text-strong)">Duration · last 14 runs <span class="mono" style="color:var(--text-muted);font-weight:400">· usual 18m 10s</span></div>
+            <div style="font-size:11px;color:var(--text-muted)">2 failed in last 14 runs · median of last 10 succeeded runs</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="seg"><button class="is-on">All <span class="cnt">14</span></button><button>Failed <span class="cnt">2</span></button></div>
+          <button class="v-btn sm ghost">${I.ext}Log File Viewer</button>
+        </div>
+      </div>
+      <div class="hist-split">
+        <div class="hist-runs-list" data-rail="jobHistoryRail" style="width:${railW('jobHistoryRail')}px">
+          <button class="hist-run-item is-sel">
+            <span style="color:var(--error)">${I.err}</span>
+            <span class="hist-run-when">2026-11-26 02:00:01</span>
+            <span class="hist-run-dur">12m 41s</span>
+            <span class="hist-run-sub">Failed at step 2 · Schedule 14</span>
+          </button>
+          <button class="hist-run-item">
+            <span style="color:var(--success)">${I.check}</span>
+            <span class="hist-run-when">2026-11-25 02:00:00</span>
+            <span class="hist-run-dur">18m 14s</span>
+            <span class="hist-run-sub">Succeeded · Schedule 14</span>
+          </button>
+          <button class="hist-run-item">
+            <span style="color:var(--success)">${I.check}</span>
+            <span class="hist-run-when">2026-11-24 02:00:02</span>
+            <span class="hist-run-dur">17m 48s</span>
+            <span class="hist-run-sub">Succeeded · Schedule 14</span>
+          </button>
+          <button class="hist-run-item">
+            <span style="color:var(--error)">${I.err}</span>
+            <span class="hist-run-when">2026-11-21 02:00:00</span>
+            <span class="hist-run-dur">09m 11s</span>
+            <span class="hist-run-sub">Failed at step 2 · User sa</span>
+          </button>
+          <button class="hist-run-item">
+            <span style="color:var(--success)">${I.check}</span>
+            <span class="hist-run-when">2026-11-20 02:00:01</span>
+            <span class="hist-run-dur">18m 02s</span>
+            <span class="hist-run-sub">Succeeded · Schedule 14</span>
+          </button>
+        </div>
+        ${sashHtml('jobHistoryRail')}
+        <div class="hist-detail-pane">
+          <div class="hist-detail-top">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="pill err">Failed</span>
+                <span class="mono" style="font-size:12px;color:var(--text-strong)">2026-11-26 02:00:01</span>
+                <span class="mono" style="font-size:11.5px;color:var(--text-muted)">12m 41s (usual 18m 10s) · Schedule 14</span>
+              </div>
+              <div style="display:flex;gap:6px">
+                <button class="v-btn sm">Edit step 2</button>
+                <button class="v-btn sm">${I.play}Start at step 2</button>
+              </div>
+            </div>
+            <table class="v-table">
+              <thead><tr><th>Step</th><th>Outcome</th><th class="num">Duration</th><th class="num">Retries</th><th>Details</th></tr></thead>
+              <tbody>
+                <tr><td>1 · Validate source feed</td><td><span class="pill ok sm">Succeeded</span></td><td class="num">00:00:08</td><td class="num">0</td><td></td></tr>
+                <tr class="is-sel is-err"><td>2 · Load General Ledger SSIS</td><td><span class="pill err sm">Failed</span></td><td class="num">00:12:33</td><td class="num">2</td><td><button class="v-link">${I.ext}SSIS execution 48213</button></td></tr>
+                <tr><td>4 · Archive failed batch files</td><td><span class="pill ok sm">Succeeded</span></td><td class="num">00:00:04</td><td class="num">0</td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="hist-msg-pane">
+            <div class="hist-msg-head">
+              <strong>Step 2 message</strong>
+              <span style="color:var(--text-muted)">Load General Ledger SSIS · 2 retries</span>
+              <button class="v-btn sm ghost" style="margin-left:auto">${I.copy}Copy</button>
+            </div>
+            <pre class="hist-msg-pre">Executed as user: CORP\svc_etl. Microsoft (R) SQL Server Execute Package Utility Version 17.0.1000.7.
+Started: 02:00:09 AM. Execution ID: 48213.
+Error: SSIS Error Code DTS_E_OLEDBERROR. An OLE DB error has occurred. Error code: 0x80004005.
+Description: "Lock request time out period exceeded." on target table [dbo].[FactGeneralLedger].
+The package execution failed. The step failed.</pre>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  } else {
+    // Schedules tab inside Job Document
+    tabBody = `<div class="insp-fill">
+      <div class="steps-fill">
+        <div class="steps-list-pane" data-rail="jobSchedulesRail" style="width:${railW('jobSchedulesRail')}px">
+          <div class="steps-list-head">
+            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-tertiary)">Attached · 2</span>
+            <button class="v-btn sm">${I.plus}New</button>
+          </div>
+          <div style="padding:6px;border-bottom:1px solid var(--border-subtle)">
+            <div class="v-search">${I.search}<input placeholder="Attach shared schedule…"></div>
+          </div>
+          <div class="steps-list-scroll">
+            <button class="step-card is-sel">
+              <span class="step-no">${I.clock}</span>
+              <span class="step-name">Nightly 02:00 ETL Window</span>
+              <span class="step-badge"><span class="pill mut sm">Shared · 4</span></span>
+              <span class="step-flow sched-meta"><span>Daily at 02:00</span><span class="mono">Next 02:00</span></span>
+            </button>
+            <button class="step-card">
+              <span class="step-no">${I.clock}</span>
+              <span class="step-name">Month-End Catchup</span>
+              <span class="step-badge"><span class="pill mut sm">Disabled</span></span>
+              <span class="step-flow sched-meta"><span>Monthly day 1 at 04:00</span><span></span></span>
+            </button>
+          </div>
+        </div>
+        ${sashHtml('jobSchedulesRail')}
+        <div class="insp-flow" style="padding:12px 16px">
+          <div class="sched-sentence" style="margin-bottom:10px">
+            <strong>Occurs every day at 02:00:00.</strong> <span style="color:var(--text-secondary)">Shared with 3 other jobs — edits move all of them.</span>
+            <button class="v-link" style="margin-left:8px">${I.copy}Copy for this job only</button>
+          </div>
+          <div class="pf-list">
+            <div class="pf-row"><span class="pf-label">Name</span><div class="pf-ctrl"><input class="v-input" value="Nightly 02:00 ETL Window"></div></div>
+            <div class="pf-row"><span class="pf-label">Enabled</span><div class="pf-ctrl">${sw(true, 'Runs on this schedule')}</div></div>
+            <div class="pf-row"><span class="pf-label">Occurs</span><div class="pf-ctrl"><select class="v-select" style="width:120px"><option>Daily</option><option>Weekly</option></select><span style="font-size:12px;color:var(--text-muted)">every</span><input class="v-input mono" style="width:60px" value="1"><span style="font-size:12px;color:var(--text-muted)">day(s)</span></div></div>
+            <div class="pf-row"><span class="pf-label">Daily frequency</span><div class="pf-ctrl"><div class="seg"><button class="is-on">Once at</button><button>Every</button></div><input class="v-input mono" style="width:110px" value="02:00:00"></div></div>
+          </div>
+          <div class="sched-cards" style="margin-top:12px">
+            <div class="sched-card">
+              <h4><span>Next 5 runs</span><span class="mono">server time</span></h4>
+              <div class="mono" style="font-size:11.5px;line-height:19px">2026-11-27 02:00:00<br>2026-11-28 02:00:00<br>2026-11-29 02:00:00</div>
+              <div style="font-size:11px;color:var(--warning);margin-top:4px">${I.warn} Overlaps with DBA – Index Maintenance</div>
+            </div>
+            <div class="sched-card">
+              <h4><span>Also used by</span><span class="mono">3 jobs</span></h4>
+              <div style="font-size:12px;line-height:20px;color:var(--text-secondary)">• Sales – Daily Rollup<br>• BI – Customer Refresh<br>• Ops – Staging Cleanup</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  return `
+    <div class="callout-strip">
+      <span class="callout-tag">${isB ? 'Option B · Ultra-Dense' : 'Option A · Unified Inspector'}</span>
+      <span>${isB
+        ? '<strong>Maximum canvas space:</strong> Compact inline Hero KPI strip replaces Vitals rail (+256px width), 2-column form grids eliminate vertical scrolling on General, and Steps/History run full-bleed <code>layout: fill</code>.'
+        : '<strong>Full Table Properties parity (<code>ObjectInspectorFrame</code>):</strong> Horizontal <code>Ctrl+1..5</code> tabs retire the 176px left rail, balanced 3-column step cards align <code>TSQL/SSIS/PS</code> + <code>✓</code> + <code>✗</code> vertically, and every left/right rail has a persisted draggable sash (double-click to reset).'}</span>
+    </div>
+    <div class="doc-frame">
+      <header class="doc-header no-border">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent › Jobs</div>
+          <h1 class="doc-title">Finance – Nightly GL Load</h1>
+          <span class="doc-subtitle">Job</span>
+          <span class="pill err"><span class="dot"></span>Idle · Last run failed</span>
+        </div>
+        <div class="doc-actions">
+          <span class="v-split"><button class="v-btn">${I.play}Start</button><button class="v-btn" title="Start once at step">${I.chevDown}</button></span>
+          ${!isB ? `<button class="v-btn ghost ${state.jobVitals ? 'is-pressed' : ''}" onclick="state.jobVitals=!state.jobVitals;render()">${I.layout}Vitals</button>` : ''}
+          <button class="v-btn ghost">${I.refresh}Reload</button>
+          <button class="v-btn primary">${I.save}Save · 2</button>
+        </div>
+      </header>
+      <dl class="kpi-strip">
+        <div class="kpi-item"><dt class="kpi-label">Last Run</dt><dd class="kpi-val err mono">Failed · 02:00</dd></div>
+        <div class="kpi-item"><dt class="kpi-label">Duration</dt><dd class="kpi-val mono">12m 41s <span class="kpi-sub">(usual 18m 10s)</span></dd></div>
+        <div class="kpi-item"><dt class="kpi-label">Next Run</dt><dd class="kpi-val mono">Tomorrow 02:00</dd></div>
+        <div class="kpi-item"><dt class="kpi-label">Owner</dt><dd class="kpi-val mono">sa</dd></div>
+      </dl>
+      <div class="insp-tabbar" role="tablist">
+        ${[
+          { id:'general', label:'General', idx:1, mod:true },
+          { id:'steps', label:'Steps', idx:2, cnt:'4', warn:true },
+          { id:'schedules', label:'Schedules', idx:3, cnt:'2' },
+          { id:'notifications', label:'Notifications & Alerts', idx:4, cnt:'1', mod:true },
+          { id:'history', label:'History', idx:5, cnt:'14' }
+        ].map(t => `<button type="button" class="insp-tab ${tab===t.id?'is-on':''}" onclick="state.jobTab='${t.id}';render()">
+          <span class="kidx">${t.idx}</span><span>${t.label}</span>
+          ${t.cnt ? `<span class="cnt">${t.cnt}</span>` : ''}
+          ${t.mod ? '<span class="mod-dot" title="Modified"></span>' : ''}
+          ${t.warn ? '<span class="err-dot" title="1 warning"></span>' : ''}
+        </button>`).join('')}
+      </div>
+      <div class="insp-split">
+        ${tabBody}
+        ${showVitals ? `${sashHtml('jobVitals')}<aside class="insp-vitals" data-rail="jobVitals" style="width:${railW('jobVitals')}px">
+          <div class="insp-vitals-head"><span>Job Vitals</span><button class="v-btn sm ghost icon-only" onclick="state.jobVitals=false;render()">${I.close}</button></div>
+          <div class="insp-vitals-body">
+            <div>
+              <h4 class="vitals-block-title">Live Status</h4>
+              <dl class="fact-grid compact">
+                <dt>State</dt><dd><span class="pill err sm">Last failed</span></dd>
+                <dt>Enabled</dt><dd><span class="pill ok sm">Yes</span></dd>
+                <dt>Next run</dt><dd class="mono">Nov 27 02:00</dd>
+                <dt>Usual time</dt><dd class="mono">18m 10s</dd>
+              </dl>
+            </div>
+            <div>
+              <h4 class="vitals-block-title">Identity</h4>
+              <dl class="fact-grid compact">
+                <dt>Owner</dt><dd class="mono">sa</dd>
+                <dt>Category</dt><dd>ETL – Finance</dd>
+                <dt>Start step</dt><dd>1 · Validate</dd>
+                <dt>Created</dt><dd class="mono">2025-02-14</dd>
+                <dt>Modified</dt><dd class="mono">2026-11-24</dd>
+              </dl>
+            </div>
+            <div>
+              <h4 class="vitals-block-title">Problems (1)</h4>
+              <div style="font-size:11.5px;color:var(--warning);line-height:16px">${I.warn} Step 2 (SSIS): required parameter <span class="mono">TargetServer</span> has no value.</div>
+            </div>
+          </div>
+        </aside>` : ''}
+      </div>
+      <div class="script-bar">
+        ${I.chevRight} <strong>Script</strong> · 48 lines <span style="margin-left:auto">Hover any field for description · <span class="mono">Ctrl+1–5</span> switches tabs</span>
+      </div>
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 2: JOB ACTIVITY MONITOR
+// ============================================================================
+function renderJamPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  const isB = opt === 'b';
+  const selCount = state.jamSelected;
+
+  const filtered = JAM_JOBS.filter(j => {
+    if (state.jamFilter === 'run') return j.tone === 'run';
+    if (state.jamFilter === 'err') return j.tone === 'err' || j.last === 'Failed';
+    if (state.jamFilter === 'dim') return !j.enabled;
+    return true;
+  });
+
+  const rowsHtml = filtered.map((j, idx) => {
+    const isSel = idx < selCount;
+    const pillCls = j.last === 'Failed' ? 'err' : j.last === 'Succeeded' ? 'ok' : 'mut';
+    return `<tr class="${isSel ? 'is-sel' : ''} ${j.tone==='dim'?'is-dim':''} ${j.tone==='err'?'is-err':j.tone==='run'?'is-run':''}">
+      <td style="font-weight:500">${j.name}</td>
+      <td>${j.enabled ? 'Yes' : 'No'}</td>
+      <td>${j.tone==='run' ? `<span class="pill run sm">${j.status}</span>` : j.tone==='warn' ? `<span class="pill warn sm">${j.status}</span>` : j.status}</td>
+      <td><span class="pill ${pillCls} sm">${j.last}</span></td>
+      <td class="num">${j.lastRun}</td>
+      <td class="num">${j.nextRun}</td>
+      <td class="num">${j.dur}</td>
+      <td>${j.cat}</td>
+      <td class="mono">${j.owner}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Baseline Issues' : isB ? 'Option B · Ultra-Dense' : 'Option A · Calm Consolidated'}</span>
+      <span>${isToday
+        ? '<strong>4 stacked chrome bars (~230px) before row 1:</strong> Large KPI tiles duplicate the exact same <code>All / Running / Failed / Disabled</code> chips row directly below them, followed by 10 ungrouped bulk buttons that wrap even when 0 jobs are selected. Last Run drawer is fixed 180px with no message preview.'
+        : isB
+          ? '<strong>Single unified KPI-Filter + Search bar (+84px grid height!):</strong> Interactive KPI chips merge Tiles + View filter into one 36px strip. Bulk action bar appears contextually only when rows are selected (click "0 / 1 / 2 selected" above to test!).'
+          : '<strong>Consolidated 2-row chrome:</strong> Slim 52px clickable KPI tiles replace the redundant View chip strip (+38px height), toolbar groups Search + primary actions with hairline dividers and a <code>More ▾</code> menu, and Last Run drawer adds an inline failure message preview.'}</span>
+    </div>
+    <div class="doc-frame">
+      <header class="doc-header">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent</div>
+          <h1 class="doc-title">Job Activity Monitor</h1>
+          <span class="pill ok"><span class="dot"></span>Live · 5 s</span>
+        </div>
+        <div class="doc-actions">
+          <button class="v-btn ghost">${I.refresh}Refresh</button>
+          <button class="v-btn primary">${I.plus}New Job…</button>
+        </div>
+      </header>
+      ${state.jamStopped ? `<div class="v-banner">${I.warn}<span>SQL Server Agent is stopped on prod-sql-01.corp.local. Status shows msdb's last reading.</span><button class="v-btn sm" style="margin-left:auto">${I.play}Start Agent…</button></div>` : ''}
+      ${isToday ? `
+        <div class="jam-tiles">
+          <button class="jam-tile"><span class="tl">Running</span><span class="tv acc">1</span></button>
+          <button class="jam-tile"><span class="tl">Last run failed</span><span class="tv err">3</span></button>
+          <button class="jam-tile"><span class="tl">Between retries</span><span class="tv warn">1</span></button>
+          <button class="jam-tile"><span class="tl">Disabled</span><span class="tv">2</span></button>
+        </div>
+        <div class="jam-toolbar">
+          <div class="seg"><button class="is-on">All 8</button><button>Running 1</button><button>Failed 3</button><button>Disabled 2</button></div>
+          <span class="inline-callout">Duplicate filter row!</span>
+          <div class="v-search" style="width:200px">${I.search}<input placeholder="Filter jobs"></div>
+        </div>
+        <div class="jam-toolbar" style="gap:4px">
+          <span style="font-size:12px;color:var(--text-muted);margin-right:6px">${selCount ? selCount + ' jobs selected' : 'No job selected'}</span>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>Start</button>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>Stop</button>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>Enable</button>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>Disable</button>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>Change owner…</button>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>Attach schedule…</button>
+          <button class="legacy-btn" ${selCount!==1?'disabled':''}>Open</button>
+          <button class="legacy-btn" ${selCount!==1?'disabled':''}>Last run</button>
+          <button class="legacy-btn" ${!selCount?'disabled':''}>View history</button>
+          <button class="legacy-btn" ${selCount!==1?'disabled':''}>Create Job Like This…</button>
+        </div>
+      ` : isB ? `
+        <div class="jam-dense-bar">
+          <button class="kpi-chip ${state.jamFilter==='all'?'is-on':''}" onclick="state.jamFilter='all';render()">All <b>8</b></button>
+          <button class="kpi-chip acc ${state.jamFilter==='run'?'is-on':''}" onclick="state.jamFilter='run';render()">Running <b>1</b></button>
+          <button class="kpi-chip err ${state.jamFilter==='err'?'is-on':''}" onclick="state.jamFilter='err';render()">Failed <b>3</b></button>
+          <button class="kpi-chip warn">Retrying <b>1</b></button>
+          <button class="kpi-chip ${state.jamFilter==='dim'?'is-on':''}" onclick="state.jamFilter='dim';render()">Disabled <b>2</b></button>
+          <span class="v-sep"></span>
+          <div class="v-search" style="width:220px">${I.search}<input placeholder="Filter jobs, owner, category…"></div>
+          <button class="v-btn sm ghost" style="margin-left:auto" onclick="state.jamDrawer=!state.jamDrawer;render()">${state.jamDrawer ? I.chevDown : I.chevRight}Last run pane</button>
+        </div>
+        ${selCount > 0 ? `<div class="jam-sel-bar">
+          <strong class="tnum">${selCount} ${selCount===1?'job':'jobs'} selected</strong>
+          <span class="v-sep"></span>
+          <button class="v-btn sm">${I.play}Start</button>
+          <button class="v-btn sm danger">${I.stop}Stop</button>
+          <button class="v-btn sm">Enable</button>
+          <button class="v-btn sm">Disable</button>
+          <span class="v-sep"></span>
+          <button class="v-btn sm ghost">Change owner…</button>
+          <button class="v-btn sm ghost">Attach schedule…</button>
+          <button class="v-btn sm ghost">View history</button>
+          ${selCount === 1 ? '<button class="v-btn sm ghost">Create like this…</button><button class="v-btn sm primary" style="margin-left:auto">Open Job</button>' : ''}
+        </div>` : ''}
+      ` : `
+        <div class="jam-tiles" style="padding:8px 16px 6px">
+          <button class="jam-tile ${state.jamFilter==='run'?'is-on':''}" style="padding:6px 10px" onclick="state.jamFilter=state.jamFilter==='run'?'all':'run';render()"><span class="tl">Running</span><span class="tv acc" style="font-size:18px;line-height:22px">1</span></button>
+          <button class="jam-tile ${state.jamFilter==='err'?'is-on':''}" style="padding:6px 10px" onclick="state.jamFilter=state.jamFilter==='err'?'all':'err';render()"><span class="tl">Last run failed</span><span class="tv err" style="font-size:18px;line-height:22px">3</span></button>
+          <button class="jam-tile" style="padding:6px 10px"><span class="tl">Between retries</span><span class="tv warn" style="font-size:18px;line-height:22px">1</span></button>
+          <button class="jam-tile ${state.jamFilter==='dim'?'is-on':''}" style="padding:6px 10px" onclick="state.jamFilter=state.jamFilter==='dim'?'all':'dim';render()"><span class="tl">Disabled</span><span class="tv" style="font-size:18px;line-height:22px">2</span></button>
+        </div>
+        <div class="jam-toolbar" style="padding:5px 16px">
+          <div class="v-search" style="width:230px">${I.search}<input placeholder="Filter jobs…"></div>
+          <span class="v-sep"></span>
+          <span style="font-size:11.5px;color:var(--text-muted)">${selCount ? `<strong style="color:var(--text-strong)">${selCount} selected</strong>` : 'Select a job'}</span>
+          <button class="v-btn sm ghost" ${!selCount?'disabled':''}>${I.play}Start</button>
+          <button class="v-btn sm ghost" ${!selCount?'disabled':''}>${I.stop}Stop</button>
+          <button class="v-btn sm ghost" ${!selCount?'disabled':''}>Enable / Disable ${I.chevDown}</button>
+          <button class="v-btn sm ghost" ${!selCount?'disabled':''}>More actions ${I.chevDown}</button>
+          <button class="v-btn sm ghost" style="margin-left:auto" onclick="state.jamDrawer=!state.jamDrawer;render()">${state.jamDrawer ? I.chevDown : I.chevRight}Last run</button>
+        </div>
+      `}
+      <div class="jam-grid-wrap">
+        <table class="v-table borderless">
+          <thead><tr><th>Name</th><th>Enabled</th><th>Status</th><th>Last Outcome</th><th class="num">Last Run</th><th class="num">Next Run</th><th class="num">Duration</th><th>Category</th><th>Owner</th></tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+      ${state.jamDrawer ? `<section class="jam-drawer">
+        <div class="jam-drawer-head">
+          <strong>Last run: Sales – Hourly Warehouse Sync</strong>
+          <span class="pill err sm">Failed</span>
+          <span class="mono" style="color:var(--text-muted)">2026-11-26 14:00:00 · 00:04:18</span>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            ${!isToday ? '<button class="v-btn sm ghost">Open Job</button><button class="v-btn sm ghost">Log File Viewer</button>' : ''}
+            <button class="v-btn sm ghost icon-only" onclick="state.jamDrawer=false;render()">${I.close}</button>
+          </div>
+        </div>
+        <div class="jam-drawer-body">
+          <div style="flex:1;min-width:0;overflow:auto">
+            <table class="v-table borderless">
+              <thead><tr><th>Step</th><th>Outcome</th><th class="num">Duration</th><th class="num">Retries</th></tr></thead>
+              <tbody>
+                <tr><td>1 · Extract delta rows</td><td><span class="pill ok sm">Succeeded</span></td><td class="num">00:01:12</td><td class="num">0</td></tr>
+                <tr class="is-sel is-err"><td>2 · Merge SalesFact</td><td><span class="pill err sm">Failed</span></td><td class="num">00:03:06</td><td class="num">1</td></tr>
+              </tbody>
+            </table>
+          </div>
+          ${!isToday ? `${sashHtml('jamDrawerMsg')}<div data-rail="jamDrawerMsg" style="flex:none;width:${railW('jamDrawerMsg')}px;display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--input)">
+            <div style="padding:4px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-muted);display:flex;justify-content:space-between">
+              <span>Step 2 message (inline preview)</span><button class="v-link">${I.copy}Copy</button>
+            </div>
+            <pre style="margin:0;padding:8px 10px;overflow:auto;font-family:var(--font-mono);font-size:11.5px;line-height:17px;white-space:pre-wrap">Violation of PRIMARY KEY constraint 'PK_SalesFact'. Cannot insert duplicate key in object 'dbo.SalesFact'. The duplicate key value is (20261126, 449102). [SQLSTATE 23000]</pre>
+          </div>` : ''}
+        </div>
+      </section>` : ''}
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 3: LOG FILE VIEWER (MESSAGES / HISTORY & ERROR LOGS)
+// ============================================================================
+function renderLfvPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  const isB = opt === 'b';
+
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Real CSS Bug Found!' : isB ? 'Option B · Ultra-Dense' : 'Option A · Clean Split'}</span>
+      <span>${isToday
+        ? '<strong>Live CSS Collision (<code>styles.css:3688</code> vs <code>3849</code>):</strong> Job History\'s <code>.agent-history-body { display: grid; grid-template-columns: minmax(220px,1fr) minmax(320px,2fr); align-items: start; }</code> literally overwrites Log File Viewer\'s flex layout! Result: <code>Select logs</code> bloats to 33% width, grids collapse vertically, and no search exists for 100+ jobs.'
+        : isB
+          ? '<strong>Collapsible source rail + tabbed Job History / Agent Error Log:</strong> Collapsing <code>Select logs</code> gives 100% width to the Runs &amp; Message Inspector; checking both jobs and error logs switches cleanly via tabs instead of crushing two stacked grids.'
+          : '<strong>Dedicated <code>.lfv-*</code> namespace fixes the CSS collision:</strong> Crisp 232px searchable <code>Select logs</code> rail, unified 1-row filter bar, full-height Runs grid, and resizable Steps + Message Details inspector with semantic highlights.'}</span>
+    </div>
+    <div class="doc-frame">
+      <header class="doc-header">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent</div>
+          <h1 class="doc-title">Log File Viewer</h1>
+          <span class="doc-subtitle">${state.lfvErrorLog ? 'Agent Error Log' : 'Job History'}</span>
+          <span class="pill ok"><span class="dot"></span>Live · 15 s</span>
+        </div>
+        <div class="doc-actions">
+          ${!isToday ? `<button class="v-btn ghost ${state.lfvRailOpen?'is-pressed':''}" onclick="state.lfvRailOpen=!state.lfvRailOpen;render()">${I.layout}Sources</button>` : ''}
+          <button class="v-btn ghost">${I.refresh}Refresh</button>
+          <button class="v-btn ghost">Delete History…</button>
+          <button class="v-btn ghost">Recycle…</button>
+        </div>
+      </header>
+      <div class="lfv-layout" style="${isToday ? 'display:grid;grid-template-columns:minmax(220px,1fr) minmax(320px,2fr);align-items:start;gap:12px;padding:12px 16px' : ''}">
+        ${(isToday || state.lfvRailOpen) ? `<aside class="lfv-rail" data-rail="lfvRail" style="${isToday ? 'border:1px solid var(--border);height:320px' : `width:${railW('lfvRail')}px`}">
+          ${!isToday ? `<div class="lfv-rail-top">
+            <div class="v-search">${I.search}<input placeholder="Filter jobs &amp; logs…"></div>
+          </div>` : `<div style="padding:6px 8px;font-weight:600;font-size:12px">Select logs <span class="inline-callout">33% bloated!</span></div>`}
+          <div class="lfv-rail-scroll">
+            <div class="lfv-group-hdr"><span>SQL Server Agent Jobs</span><span class="mono">3 / 8</span></div>
+            <label class="lfv-src"><input type="checkbox"> <strong>All jobs</strong></label>
+            <label class="lfv-src indent"><input type="checkbox" checked> <span>Finance – Nightly GL Load</span></label>
+            <label class="lfv-src indent"><input type="checkbox" checked> <span>Sales – Hourly Warehouse Sync</span></label>
+            <label class="lfv-src indent"><input type="checkbox" checked> <span>BI – Customer Churn Scoring</span></label>
+            <label class="lfv-src indent"><input type="checkbox"> <span style="color:var(--text-muted)">DBA – Index Maintenance</span></label>
+            <div class="lfv-group-hdr" style="margin-top:8px"><span>Agent Error Logs</span></div>
+            <label class="lfv-src indent"><input type="checkbox" ${state.lfvErrorLog?'checked':''} onchange="state.lfvErrorLog=this.checked;render()"> <span>Current – 2026-11-26</span></label>
+            <label class="lfv-src indent"><input type="checkbox"> <span style="color:var(--text-muted)">Archive #1 – 2026-11-19</span></label>
+          </div>
+          ${!isToday ? `<div style="padding:6px 10px;border-top:1px solid var(--border);font-size:11px;color:var(--text-muted)">Retention: 10,000 rows · 500/job</div>` : ''}
+        </aside>${!isToday ? sashHtml('lfvRail') : ''}` : ''}
+        <div class="lfv-main">
+          <div class="jam-toolbar" style="padding:6px 12px">
+            <div class="seg"><button>24 h</button><button class="is-on">7 days</button><button>30 days</button><button>All</button></div>
+            <select class="v-select" style="width:118px"><option>Outcome: All</option><option>Failed</option><option>Succeeded</option></select>
+            <div class="v-search" style="flex:1;max-width:240px">${I.search}<input placeholder="Message contains…"></div>
+            <input class="v-input mono" style="width:68px" placeholder="Step #">
+            ${isB && state.lfvErrorLog ? `<div class="seg" style="margin-left:auto"><button class="is-on">Job Runs (18)</button><button>Error Log (42)</button></div>` : ''}
+          </div>
+          <div style="flex:1;min-height:0;overflow:auto">
+            <table class="v-table borderless">
+              <thead><tr><th>Job</th><th>Outcome</th><th class="num">Started (server time)</th><th class="num">Duration</th><th class="num">Steps</th><th>Summary</th></tr></thead>
+              <tbody>
+                <tr class="is-sel is-err"><td style="font-weight:500">Sales – Hourly Warehouse Sync</td><td><span class="pill err sm">Failed</span></td><td class="num">2026-11-26 14:00:00</td><td class="num">00:04:18</td><td class="num">2</td><td style="color:var(--text-secondary)">The job failed. Step 2 (Merge SalesFact) raised error 2627.</td></tr>
+                <tr class="is-err"><td style="font-weight:500">BI – Customer Churn Scoring</td><td><span class="pill warn sm">Retry</span></td><td class="num">2026-11-26 13:30:00</td><td class="num">00:08:05</td><td class="num">3</td><td style="color:var(--text-secondary)">Retry 1 of 3 scheduled in 5 minutes.</td></tr>
+                <tr class="is-err"><td style="font-weight:500">Finance – Nightly GL Load</td><td><span class="pill err sm">Failed</span></td><td class="num">2026-11-26 02:00:01</td><td class="num">00:12:41</td><td class="num">4</td><td style="color:var(--text-secondary)">SSIS Execution ID: 48213 failed on Lock timeout.</td></tr>
+                <tr><td style="font-weight:500">Sales – Hourly Warehouse Sync</td><td><span class="pill ok sm">Succeeded</span></td><td class="num">2026-11-26 13:00:00</td><td class="num">00:03:52</td><td class="num">2</td><td style="color:var(--text-secondary)">The job succeeded. Invoked by Schedule 18.</td></tr>
+                <tr><td style="font-weight:500">Finance – Nightly GL Load</td><td><span class="pill ok sm">Succeeded</span></td><td class="num">2026-11-25 02:00:00</td><td class="num">00:18:14</td><td class="num">3</td><td style="color:var(--text-secondary)">The job succeeded. Invoked by Schedule 14.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="lfv-bottom" style="${isToday ? 'height:170px' : ''}">
+            <div style="flex:1;min-width:0;overflow:auto">
+              <table class="v-table borderless">
+                <thead><tr><th>Step</th><th>Outcome</th><th class="num">Duration</th><th class="num">Retries</th></tr></thead>
+                <tbody>
+                  <tr><td>0 · Job outcome</td><td><span class="pill err sm">Failed</span></td><td class="num">00:04:18</td><td class="num">0</td></tr>
+                  <tr><td>1 · Extract delta rows</td><td><span class="pill ok sm">Succeeded</span></td><td class="num">00:01:12</td><td class="num">0</td></tr>
+                  <tr class="is-sel is-err"><td>2 · Merge SalesFact</td><td><span class="pill err sm">Failed</span></td><td class="num">00:03:06</td><td class="num">1</td></tr>
+                </tbody>
+              </table>
+            </div>
+            ${!isToday ? sashHtml('lfvMsg') : ''}
+            <div class="hist-msg-pane" data-rail="lfvMsg" style="flex:none;width:${isToday ? '42%' : railW('lfvMsg') + 'px'}">
+              <div class="hist-msg-head">
+                <strong>Step 2: Merge SalesFact</strong>
+                <span class="mono" style="color:var(--text-muted)">00:03:06</span>
+                <button class="v-btn sm ghost" style="margin-left:auto">${I.copy}Copy</button>
+              </div>
+              <pre class="hist-msg-pre">Executed as user: CORP\svc_etl. Violation of PRIMARY KEY constraint 'PK_SalesFact'. Cannot insert duplicate key in object 'dbo.SalesFact'. The duplicate key value is (20261126, 449102). [SQLSTATE 23000] (Error 2627)  The statement has been terminated. [SQLSTATE 01000] (Error 3621).  The step failed.</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 4: SCHEDULES & TIMELINE
+// ============================================================================
+function renderSchedulesPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  const isB = opt === 'b';
+  const sel = SCHEDULES[state.schedSelected];
+
+  const timelineHtml = `
+    <div class="tl-wrap">
+      <div class="jam-toolbar" style="padding:6px 16px">
+        <div class="seg"><button class="is-on">Next 24 hours</button><button>Next 7 days</button></div>
+        <span class="v-sep"></span>
+        <button class="v-btn sm ghost">Zoom +</button>
+        <button class="v-btn sm ghost">Zoom −</button>
+        <button class="v-btn sm ghost">Show all</button>
+        <span style="margin-left:auto;font-size:11.5px;color:var(--text-muted)">Click a bar to open job · <span class="mono">Shift+Click</span> opens schedule</span>
+      </div>
+      <div class="tl-grid">
+        <div class="tl-row head">
+          <div class="tl-name">Job / Usual Duration</div>
+          <div class="tl-lane">
+            ${['15:00','18:00','21:00','00:00','03:00','06:00','09:00','12:00'].map((t, i) => `<span class="tl-tick" style="left:${i*12.5}%">${t}</span>`).join('')}
+          </div>
+        </div>
+        ${[
+          { name:'DBA – Transaction Log Backup', dur:'14s', bars:[2,6,10,14,18,22,26,30,34,38,42,46,50,54,58,62,66,70,74,78,82,86,90,94], w:1.1 },
+          { name:'Sales – Hourly Warehouse Sync', dur:'4m', bars:[4,12,20,28,72,80,88,96], w:2.2 },
+          { name:'Finance – Nightly GL Load', dur:'18m', bars:[45.8], w:7.5, ov:true },
+          { name:'DBA – Index Maintenance', dur:'24m', bars:[50], w:9.2, ov:true },
+          { name:'Ops – Backup Verification', dur:'11m', bars:[60.4], w:4.8 },
+          { name:'Finance – Month-End Close', dur:'42m', bars:[36], w:11, off:true }
+        ].map(r => `<div class="tl-row">
+          <div class="tl-name" style="${r.off?'opacity:0.55':''}"><b>${r.name}</b><small>${r.dur}</small></div>
+          <div class="tl-lane">
+            <span class="tl-now" style="left:1.5%"></span>
+            ${r.bars.map(x => `<span class="tl-bar ${r.ov?'ov':''} ${r.off?'off':''}" style="left:${x}%;width:${r.w}%"></span>`).join('')}
+          </div>
+        </div>`).join('')}
+      </div>
+      <div class="tl-overlap-drawer">
+        ${I.warn}
+        <span><strong>1 overlap detected:</strong> <span class="mono">02:10–02:18</span> · <strong>DBA – Index Maintenance</strong> starts during <strong>Finance – Nightly GL Load</strong>.</span>
+        <button class="v-btn sm" style="margin-left:auto" onclick="state.schedMode='grid';render()">Edit schedule</button>
+      </div>
+    </div>`;
+
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Baseline Issues' : isB ? 'Option B · Ultra-Dense' : 'Option A · Unified Document'}</span>
+      <span>${isToday
+        ? '<strong>Missing <code>DocumentFrame</code> header completely:</strong> Opens straight into a raw toolbar with no breadcrumbs, title, or connection context. Raw checkboxes in grid, cramped 360px detail column forcing heavy scroll on ScheduleEditor, and unaligned flex-wrap time inputs.'
+        : isB
+          ? '<strong>Unified <code>DocumentFrame</code> + Compact 2-Column Schedule Editor:</strong> Header hosts <code>Grid | Timeline</code> switch, Grid adds a mono <code>Next Run</code> column and crisp <code>Switch</code> toggles, and Detail Editor fits without scrolling.'
+          : '<strong>Full Calm Pro cohesion:</strong> Wrapped in <code>DocumentFrame</code> with breadcrumbs + actions, wider 470px detail inspector with tinted schedule summary bar, aligned 2-card <code>Next 5 runs</code> + <code>Jobs using it</code>, and collapsible Timeline overlap drawer.'}</span>
+    </div>
+    <div class="doc-frame">
+      ${!isToday ? `<header class="doc-header">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent</div>
+          <h1 class="doc-title">Schedules</h1>
+          <span class="pill mut mono">${SCHEDULES.length} shared</span>
+        </div>
+        <div class="doc-actions">
+          <div class="seg">
+            <button class="${state.schedMode==='grid'?'is-on':''}" onclick="state.schedMode='grid';render()">Grid</button>
+            <button class="${state.schedMode==='timeline'?'is-on':''}" onclick="state.schedMode='timeline';render()">Timeline</button>
+          </div>
+          <span class="v-sep"></span>
+          <button class="v-btn ghost">${I.refresh}Refresh</button>
+          <button class="v-btn primary">${I.plus}New schedule</button>
+        </div>
+      </header>` : `<div class="jam-toolbar" style="padding:10px 16px">
+        <input class="v-input" style="width:190px" placeholder="Filter schedules or jobs">
+        <div class="seg"><button class="${state.schedMode==='grid'?'is-on':''}" onclick="state.schedMode='grid';render()">Grid</button><button class="${state.schedMode==='timeline'?'is-on':''}" onclick="state.schedMode='timeline';render()">Timeline</button></div>
+        <div class="seg"><button class="is-on">All 5</button><button>Unused 1</button><button>Disabled 1</button></div>
+        <button class="legacy-btn">New</button><button class="legacy-btn">Duplicate</button><button class="legacy-btn">Delete</button>
+        <span class="inline-callout">No DocumentHeader!</span>
+      </div>`}
+      ${state.schedMode === 'timeline' ? timelineHtml : `
+        ${!isToday ? `<div class="jam-toolbar" style="padding:6px 16px">
+          <div class="v-search" style="width:220px">${I.search}<input placeholder="Filter schedules or jobs…"></div>
+          <div class="seg"><button class="is-on">All <span class="cnt">5</span></button><button>Unused <span class="cnt">1</span></button><button>Disabled <span class="cnt">1</span></button></div>
+          <span class="v-sep"></span>
+          <button class="v-btn sm ghost">${I.copy}Duplicate</button>
+          <button class="v-btn sm danger">${I.trash}Delete</button>
+          <span style="margin-left:auto;font-size:11px;color:var(--text-muted)">All times in server local time</span>
+        </div>` : ''}
+        <div class="sched-split">
+          <div class="sched-grid-pane">
+            <table class="v-table borderless">
+              <thead><tr><th>Name</th><th>When</th><th>Enabled</th><th class="num">Jobs</th>${!isToday?'<th class="num">Next Run</th>':''}<th>Owner</th></tr></thead>
+              <tbody>
+                ${SCHEDULES.map((s, idx) => `<tr class="${idx===state.schedSelected?'is-sel':''} ${!s.enabled?'is-dim':''}" onclick="state.schedSelected=${idx};render()" style="cursor:pointer">
+                  <td style="font-weight:500">${s.name}</td>
+                  <td>${s.when}</td>
+                  <td>${isToday ? `<input type="checkbox" ${s.enabled?'checked':''}>` : sw(s.enabled)}</td>
+                  <td class="num">${s.jobs || '<span style="color:var(--text-muted)">unused</span>'}</td>
+                  ${!isToday ? `<td class="num">${s.next}</td>` : ''}
+                  <td class="mono">${s.owner}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          ${!isToday ? sashHtml('schedDetail') : ''}
+          <aside class="sched-detail-pane" data-rail="schedDetail" style="width:${isToday ? 350 : railW('schedDetail')}px${isToday ? ';border-left:1px solid var(--border)' : ''}">
+            <div class="sched-detail-head">
+              <div>
+                <div style="font-weight:600;font-size:13px;color:var(--text-strong)">${sel.name}</div>
+                <div style="font-size:11px;color:var(--text-muted)">Owner <span class="mono">${sel.owner}</span></div>
+              </div>
+              <div style="display:flex;gap:6px">
+                <button class="v-btn sm ghost">Discard</button>
+                <button class="v-btn sm primary">${I.save}Save</button>
+              </div>
+            </div>
+            <div class="sched-detail-body">
+              <div class="sched-sentence">${sel.sentence}</div>
+              <div class="pf-list">
+                <div class="pf-row" style="grid-template-columns:108px minmax(0,1fr)"><span class="pf-label">Name</span><div class="pf-ctrl"><input class="v-input" value="${sel.name}"></div></div>
+                <div class="pf-row" style="grid-template-columns:108px minmax(0,1fr)"><span class="pf-label">Presets</span><div class="pf-ctrl" style="flex-wrap:wrap;gap:4px">
+                  <button class="v-btn sm is-pressed">Daily</button><button class="v-btn sm">Weekdays</button><button class="v-btn sm">Weekly</button><button class="v-btn sm">Every N min</button>
+                </div></div>
+                <div class="pf-row" style="grid-template-columns:108px minmax(0,1fr)"><span class="pf-label">Occurs</span><div class="pf-ctrl"><select class="v-select" style="width:100px"><option>Daily</option><option>Weekly</option></select><span style="font-size:11.5px;color:var(--text-muted)">every</span><input class="v-input mono" style="width:52px" value="1"><span style="font-size:11.5px;color:var(--text-muted)">day</span></div></div>
+                <div class="pf-row" style="grid-template-columns:108px minmax(0,1fr)"><span class="pf-label">Daily freq.</span><div class="pf-ctrl"><div class="seg"><button class="is-on">Once</button><button>Every</button></div><input class="v-input mono" style="width:94px" value="02:00:00"></div></div>
+                <div class="pf-row" style="grid-template-columns:108px minmax(0,1fr)"><span class="pf-label">Duration</span><div class="pf-ctrl"><input class="v-input mono" style="width:112px" value="2025-01-01"><span style="font-size:11.5px;color:var(--text-muted)">to</span><button class="v-btn sm ghost">No end date</button></div></div>
+              </div>
+              <div class="sched-cards" style="${isToday ? 'grid-template-columns:1fr' : ''}">
+                <div class="sched-card">
+                  <h4><span>Next 5 runs</span><span class="mono">server</span></h4>
+                  <div class="mono" style="font-size:11px;line-height:18px;color:var(--text)">2026-11-27 02:00:00<br>2026-11-28 02:00:00<br>2026-11-29 02:00:00<br>2026-11-30 02:00:00<br>2026-12-01 02:00:00</div>
+                </div>
+                <div class="sched-card">
+                  <h4><span>Jobs using it</span><span class="mono">${sel.jobs}</span></h4>
+                  <div style="font-size:11.5px;line-height:20px;color:var(--text-secondary)">
+                    <div style="display:flex;justify-content:space-between"><span>Finance – Nightly GL</span><button class="v-link">Detach</button></div>
+                    <div style="display:flex;justify-content:space-between"><span>Sales – Daily Rollup</span><button class="v-link">Detach</button></div>
+                  </div>
+                  <div style="display:flex;gap:4px;margin-top:auto;padding-top:6px"><select class="v-select" style="height:22px;font-size:11px;flex:1"><option>Attach a job…</option></select><button class="v-btn sm">Attach</button></div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>`}
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 5: AGENT OVERVIEW
+// ============================================================================
+function renderOverviewPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  const isB = opt === 'b';
+
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Baseline Issues' : isB ? 'Option B · Zero-Scroll Summary' : 'Option A · Calm Pro Hierarchy'}</span>
+      <span>${isToday
+        ? '<strong>Redundant sub-header row:</strong> Service status box + metadata + <code>Properties</code> button sit in a custom row below <code>DocumentHeader</code> instead of inside it. Passing &amp; failing checks mix in one long list, and inline job links have no visual chip contrast.'
+        : isB
+          ? '<strong>Fits on 1 screen with zero scroll:</strong> Service status &amp; <code>Properties</code> hoisted into <code>DocumentHeader</code>, clickable KPI tiles jump straight to filtered JAM, and 4 Passing checks fold into a compact single-line green summary strip.'
+          : '<strong>Unified DocumentHeader + FactLine + Grouped Health Checks:</strong> Crisp right-aligned action buttons on a fixed 156px column eliminate saw-tooth button edges, and job/schedule names render as clickable Calm Pro object chips.'}</span>
+    </div>
+    <div class="doc-frame">
+      <header class="doc-header ${!isToday?'no-border':''}">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent</div>
+          <h1 class="doc-title">SQL Server Agent</h1>
+          <span class="doc-subtitle">Overview</span>
+          ${!isToday ? '<span class="pill ok"><span class="dot"></span>Running · Automatic</span>' : '<span class="pill ok">Live · 60 s</span>'}
+        </div>
+        <div class="doc-actions">
+          ${!isToday ? `<button class="v-btn ghost">${I.gear}Properties</button>` : ''}
+          <button class="v-btn ghost">${I.refresh}Check again</button>
+        </div>
+      </header>
+      ${!isToday ? `<dl class="kpi-strip" style="border-bottom:1px solid var(--border);padding-bottom:8px">
+        <div class="kpi-item"><dt class="kpi-label">Service Account</dt><dd class="kpi-val mono" style="font-weight:500">NT Service\\SQLSERVERAGENT</dd></div>
+        <div class="kpi-item"><dt class="kpi-label">Version</dt><dd class="kpi-val mono" style="font-weight:500">17.0.1000.7 (Enterprise)</dd></div>
+        <div class="kpi-item"><dt class="kpi-label">Checked</dt><dd class="kpi-val mono" style="font-weight:400;color:var(--text-secondary)">14:46:12 · live 60 s</dd></div>
+      </dl>` : ''}
+      <div class="insp-flow" style="max-width:980px">
+        ${isToday ? `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:12px">
+          <span style="padding:1px 8px;border:1px solid var(--success);border-radius:4px;color:var(--success);font-weight:600">Running</span>
+          <span style="color:var(--text-muted)">Automatic · NT Service\\SQLSERVERAGENT · prod-sql-01 (17.0.1000.7)</span>
+          <button class="legacy-btn" style="margin-left:auto">${I.gear}Properties</button>
+          <span class="inline-callout">Duplicated header!</span>
+        </div>` : ''}
+        <div class="jam-tiles" style="padding:0 0 12px">
+          <button class="jam-tile"><span class="tl">Total jobs</span><span class="tv">28</span><span style="font-size:11px;color:var(--text-muted)">24 enabled · 4 disabled</span></button>
+          <button class="jam-tile"><span class="tl">Failed (24 h)</span><span class="tv err">3</span><span style="font-size:11px;color:var(--text-muted)">Click to view in JAM →</span></button>
+          <button class="jam-tile"><span class="tl">Running now</span><span class="tv acc">1</span><span style="font-size:11px;color:var(--text-muted)">Finance – Nightly GL</span></button>
+          <button class="jam-tile"><span class="tl">Alerts (7 d)</span><span class="tv warn">2</span><span style="font-size:11px;color:var(--text-muted)">Sev 20 fired twice</span></button>
+        </div>
+        <div class="group-eyebrow"><span>Needs Attention · 3 of 7 Checks</span></div>
+        <div class="ov-check-list">
+          <div class="ov-check">
+            <span class="ov-check-icon" style="color:var(--error)">${I.err}</span>
+            <span class="ov-check-title">3 jobs failed in the last 24 hours</span>
+            <span class="ov-check-detail">Last run failed on <button class="ov-obj-chip">Finance – Nightly GL Load</button> <button class="ov-obj-chip">Sales – Hourly Warehouse Sync</button> and <button class="ov-obj-chip">BI – Customer Churn Scoring</button> (retrying).</span>
+            <span class="ov-check-fix"><button class="v-btn sm">Show in JAM</button></span>
+          </div>
+          <div class="ov-check">
+            <span class="ov-check-icon" style="color:var(--warning)">${I.warn}</span>
+            <span class="ov-check-title">1 job owner cannot log in</span>
+            <span class="ov-check-detail"><button class="ov-obj-chip">Legacy – Export Payroll CSV</button> is owned by disabled login <span class="mono">CORP\old_svc</span>.</span>
+            <span class="ov-check-fix"><button class="v-btn sm">Change owner…</button></span>
+          </div>
+          <div class="ov-check">
+            <span class="ov-check-icon" style="color:var(--warning)">${I.warn}</span>
+            <span class="ov-check-title">History retention covers less than 7 days</span>
+            <span class="ov-check-detail">The 1,000-row total log cap is reached in ~3.2 days at current job step volume.</span>
+            <span class="ov-check-fix"><button class="v-btn sm">History settings…</button></span>
+          </div>
+        </div>
+        ${isB ? `
+          <div style="margin-top:10px;padding:8px 12px;border-radius:var(--rad-sm);border:1px solid var(--border);background:var(--raised);display:flex;align-items:center;gap:8px;font-size:12px">
+            <span style="color:var(--success)">${I.check}</span>
+            <strong style="color:var(--text-strong)">4 checks passed</strong>
+            <span style="color:var(--text-muted)">· Notifications · Recommended alerts (11/11) · Database Mail · No unused schedules</span>
+            <button class="v-link" style="margin-left:auto">Expand</button>
+          </div>
+        ` : `
+          <div class="group-eyebrow" style="margin-top:14px"><span>Passing · 4 Checks</span></div>
+          <div class="ov-check-list">
+            <div class="ov-check" style="padding:6px 14px"><span class="ov-check-icon" style="color:var(--success)">${I.check}</span><span class="ov-check-title">Recommended alerts installed</span><span class="ov-check-detail">All 11 severity 17, 19–25 and error 823–825 alerts are enabled.</span><span class="ov-check-fix"></span></div>
+            <div class="ov-check" style="padding:6px 14px"><span class="ov-check-icon" style="color:var(--success)">${I.check}</span><span class="ov-check-title">Database Mail configured</span><span class="ov-check-detail">Agent mail profile <span class="mono">Prod_Alerts</span> is active and enabled.</span><span class="ov-check-fix"></span></div>
+          </div>
+        `}
+      </div>
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 6: OPERATORS & ALERTS
+// ============================================================================
+function renderOperatorsPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  const view = state.opView;
+
+  if (view === 'alert') {
+    return `
+      <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+        <span class="callout-tag">${isToday ? 'Baseline Issues' : 'Option A / B · Single-Screen Alert'}</span>
+        <span>${isToday
+          ? 'Alert has only 3 short sections (When / Then / Options), yet pays for a 176px left <code>SectionNav</code> rail and raw checkboxes for Include Error Text.'
+          : 'Dropping the redundant left rail lets When / Then / Options breathe cleanly on one aligned 160px form rail (zero scroll!) with crisp operator chips and <code>Switch</code> toggles.'}</span>
+      </div>
+      <div class="doc-frame">
+        <header class="doc-header">
+          <div class="doc-heading">
+            <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent › Alerts</div>
+            <h1 class="doc-title">Sev 020 – Fatal Error in Current Process</h1>
+            <span class="pill warn">Last fired Nov 25 18:14 · 2 times</span>
+          </div>
+          <div class="doc-actions"><button class="v-btn ghost">${I.refresh}Reload</button><button class="v-btn primary">${I.save}Save</button></div>
+        </header>
+        <div class="insp-flow">
+          <div class="group-eyebrow"><span>When</span></div>
+          <div class="${opt==='b'?'pf-2col':'pf-list'}">
+            <div class="pf-row"><span class="pf-label">Name</span><div class="pf-ctrl"><input class="v-input" value="Sev 020 – Fatal Error in Current Process"></div></div>
+            <div class="pf-row"><span class="pf-label">Enabled</span><div class="pf-ctrl">${sw(true, 'Responds when triggered')}</div></div>
+            <div class="pf-row"><span class="pf-label">Raise on</span><div class="pf-ctrl"><div class="seg"><button class="is-on">Severity</button><button>Error #</button></div><select class="v-select mono" style="width:90px"><option>020</option></select></div></div>
+            <div class="pf-row"><span class="pf-label">Database</span><div class="pf-ctrl"><select class="v-select"><option>(All databases)</option><option>FinanceDW</option></select></div></div>
+          </div>
+          <div class="group-eyebrow" style="margin-top:14px"><span>Then</span></div>
+          <div class="pf-list">
+            <div class="pf-row"><span class="pf-label">Run job</span><div class="pf-ctrl"><select class="v-select"><option>Finance – Nightly GL Load</option><option>(No job)</option></select></div></div>
+            <div class="pf-row"><span class="pf-label">Notify operators</span><div class="pf-ctrl" style="flex-wrap:wrap">
+              <span class="op-chip">${I.user}<span>DBA On-Call</span><button class="m is-on">E</button><button class="m is-on">P</button><button class="m">N</button><button class="v-btn sm ghost icon-only">${I.close}</button></span>
+              <span class="op-chip">${I.user}<span>Finance Ops</span><button class="m is-on">E</button><button class="m">P</button><button class="m">N</button><button class="v-btn sm ghost icon-only">${I.close}</button></span>
+              <select class="v-select" style="width:145px"><option>Add operator…</option></select>
+              <button class="v-btn sm">${I.plus}New operator</button>
+            </div></div>
+          </div>
+          <div class="group-eyebrow" style="margin-top:14px"><span>Options</span></div>
+          <div class="${opt==='b'?'pf-2col':'pf-list'}">
+            <div class="pf-row"><span class="pf-label">Delay (seconds)</span><div class="pf-ctrl"><input class="v-input mono" style="width:96px" value="300"><span style="font-size:11.5px;color:var(--text-muted)">5 minutes between responses</span></div></div>
+            <div class="pf-row"><span class="pf-label">Occurrence count</span><div class="pf-ctrl"><strong class="mono">2</strong><span style="font-size:11.5px;color:var(--text-muted)">since 2026-10-01</span><button class="v-btn sm">Reset count</button></div></div>
+          </div>
+        </div>
+        <div class="script-bar">${I.chevRight} <strong>Script</strong> · 18 lines</div>
+      </div>`;
+  }
+
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Real Layout Bug Found!' : 'Option A / B · Full-Height Matrix'}</span>
+      <span>${isToday
+        ? '<strong>Flex-row 3-column bug (<code>OperatorsDocument.tsx:200</code>):</strong> <code>&lt;JobsTable /&gt;</code> sits inside <code>.agent-operators-body { display: flex }</code> right next to <code>&lt;SidePane /&gt;</code> as a squished 3rd horizontal column, while the matrix is trapped inside <code>max-height: 60vh</code> inside an outer scroller!'
+        : '<strong>Fixed layout &amp; zero scroll-in-scroll:</strong> <code>Alerts × Operators</code> and <code>Jobs Notifying Operators</code> become clean Inspector Tabs (<code>layout: fill</code>), matrix pills use Calm Pro highlights, and the right Operator Inspector uses <code>FactGrid</code>.'}</span>
+    </div>
+    <div class="doc-frame">
+      <header class="doc-header ${!isToday?'no-border':''}">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent › Operators</div>
+          <h1 class="doc-title">Operators and Notifications</h1>
+        </div>
+        <div class="doc-actions">
+          <button class="v-btn ghost">${I.check}Add recommended alerts…</button>
+          <button class="v-btn ghost">${I.plus}New operator</button>
+          <button class="v-btn primary">${I.save}Save · 1</button>
+        </div>
+      </header>
+      ${!isToday ? `<div class="insp-tabbar">
+        <button class="insp-tab is-on">Alerts Matrix <span class="cnt">11</span></button>
+        <button class="insp-tab">Jobs Notifying Operators <span class="cnt">6</span></button>
+      </div>` : ''}
+      <div class="insp-split" style="${isToday ? 'padding:12px 16px;gap:12px;align-items:flex-start' : ''}">
+        <div style="flex:1;min-width:0;min-height:0;overflow:auto;${isToday ? 'max-height:290px;border:1px dashed var(--error)' : ''}">
+          <table class="v-table ${!isToday?'borderless':''}">
+            <thead><tr><th>Alert</th><th style="text-align:center;background:var(--selection);color:var(--text-accent)">DBA On-Call</th><th style="text-align:center">Finance Ops</th><th style="text-align:center">BI Team</th></tr></thead>
+            <tbody>
+              ${[
+                ['Error 823 – I/O Read Failure', 'EP', '·', '·', false],
+                ['Error 824 – Logical I/O Error', 'EP', '·', '·', false],
+                ['Error 825 – Read-Retry Required', 'E', '·', '·', true],
+                ['Sev 017 – Insufficient Resources', 'E', 'E', '·', false],
+                ['Sev 020 – Fatal Error in Process', 'EP', 'E', '·', false],
+                ['Sev 024 – Hardware Error', 'EP', '·', 'E', false],
+                ['Sev 025 – Fatal System Error', 'EP', '·', '·', false]
+              ].map(([name, a, b, c, chg]) => `<tr>
+                <td style="font-weight:500">${name}</td>
+                <td style="text-align:center;background:color-mix(in srgb, var(--selection) 45%, transparent)"><button class="matrix-cell ${a!=='·'?'is-set':''} ${chg?'is-changed':''}">${a}</button></td>
+                <td style="text-align:center"><button class="matrix-cell ${b!=='·'?'is-set':''}">${b}</button></td>
+                <td style="text-align:center"><button class="matrix-cell ${c!=='·'?'is-set':''}">${c}</button></td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+        ${!isToday ? sashHtml('opSide') : ''}
+        <aside class="insp-vitals" data-rail="opSide" style="width:${isToday ? 260 : railW('opSide')}px${isToday ? ';border-left:1px solid var(--border)' : ''}">
+          <div class="insp-vitals-head"><span>Selected Operator</span></div>
+          <div class="insp-vitals-body">
+            <div style="display:flex;align-items:center;gap:8px;font-weight:600;color:var(--text-strong)">${I.user} DBA On-Call <span class="pill ok sm">Enabled</span></div>
+            <dl class="fact-grid compact">
+              <dt>E-mail</dt><dd class="mono">dba-oncall@corp.io</dd>
+              <dt>Pager</dt><dd class="mono">pager@corp.io</dd>
+              <dt>Alerts</dt><dd>11 alerts</dd>
+              <dt>Jobs</dt><dd>6 jobs</dd>
+            </dl>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <button class="v-btn sm">${I.ext}Open Operator</button>
+              <button class="v-btn sm">Send test e-mail</button>
+              <button class="v-btn sm danger">${I.trash}Delete &amp; reassign…</button>
+            </div>
+          </div>
+        </aside>
+        ${isToday ? `<div style="flex:0 0 180px;border:1px dashed var(--error);padding:8px;font-size:11px">
+          <span class="inline-callout">3rd flex column bug!</span>
+          <div style="margin-top:6px;font-weight:600">Jobs that notify operators</div>
+          <div style="color:var(--text-muted);margin-top:4px">Squished beside SidePane instead of stacked or tabbed!</div>
+        </div>` : ''}
+      </div>
+      <div class="script-bar">Click or press <span class="mono">Space</span> on any cell to cycle <strong>E</strong> (E-mail) → <strong>EP</strong> (Both) → <strong>P</strong> (Pager) → <strong>·</strong> (None)</div>
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 7: PROXIES & CREDENTIALS
+// ============================================================================
+function renderProxiesPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Baseline Issues' : 'Option A / B · Compact Single-Screen'}</span>
+      <span>${isToday
+        ? '176px left nav rail for 4 small sections, unstyled <code>.properties-table</code> in References, and raw checkboxes for Subsystems.'
+        : 'Clean <code>ObjectInspectorFrame</code> tabs (Proxy | Subsystems | Principals | References), aligned <code>PropertyField</code> + <code>Switch</code>, crisp subsystem pills, and styled References table — fits with zero scrolling.'}</span>
+    </div>
+    <div class="doc-frame">
+      <header class="doc-header no-border">
+        <div class="doc-heading">
+          <div class="doc-crumbs">prod-sql-01.corp.local › SQL Server Agent › Proxies</div>
+          <h1 class="doc-title">FileShareWriter</h1>
+          <span class="doc-subtitle">Proxy Account</span>
+          <span class="pill ok"><span class="dot"></span>Enabled</span>
+        </div>
+        <div class="doc-actions"><button class="v-btn ghost">${I.refresh}Reload</button><button class="v-btn primary">${I.save}Save</button></div>
+      </header>
+      <div class="insp-tabbar">
+        <button class="insp-tab is-on">Proxy &amp; Subsystems</button>
+        <button class="insp-tab">Principals <span class="cnt">2</span></button>
+        <button class="insp-tab">References <span class="cnt">3</span></button>
+      </div>
+      <div class="insp-flow">
+        <div class="group-eyebrow"><span>Proxy Identity</span></div>
+        <div class="${opt==='b'?'pf-2col':'pf-list'}">
+          <div class="pf-row"><span class="pf-label">Name</span><div class="pf-ctrl"><input class="v-input" value="FileShareWriter"></div></div>
+          <div class="pf-row"><span class="pf-label">Enabled</span><div class="pf-ctrl">${sw(true, 'Steps may run as this proxy')}</div></div>
+          <div class="pf-row ${opt==='b'?'pf-span2':''}"><span class="pf-label">Credential</span><div class="pf-ctrl"><select class="v-select mono"><option>Cred_FileShare (CORP\svc_fileshare)</option></select><button class="v-btn sm">${I.plus}New credential</button></div></div>
+          <div class="pf-row ${opt==='b'?'pf-span2':''}"><span class="pf-label">Description</span><div class="pf-ctrl"><input class="v-input" value="Used by ETL PowerShell and CmdExec steps writing to \\files01\finance"></div></div>
+        </div>
+        <div class="group-eyebrow" style="margin-top:16px"><span>Active Subsystems · 3 of 10</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 14px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--rad-sm);background:var(--raised);font-size:12px">
+          ${[['PowerShell',true],['Operating system (CmdExec)',true],['SQL Server Integration Services',true],['Analysis Services Command',false],['Analysis Services Query',false],['Replication Distributor',false]].map(([s,on]) =>
+            `<label style="display:flex;align-items:center;gap:6px;color:${on?'var(--text-strong)':'var(--text-muted)'}"><input type="checkbox" ${on?'checked':''}> ${s}</label>`
+          ).join('')}
+        </div>
+        <div class="group-eyebrow" style="margin-top:16px"><span>Job Steps Using This Proxy</span></div>
+        <table class="v-table">
+          <thead><tr><th>Job</th><th>Step</th><th>Subsystem</th></tr></thead>
+          <tbody>
+            <tr><td style="font-weight:500">Finance – Nightly GL Load</td><td>4 · Archive failed batch files</td><td class="mono">PowerShell</td></tr>
+            <tr><td style="font-weight:500">Sales – Hourly Warehouse Sync</td><td>3 · Export summary CSV</td><td class="mono">CmdExec</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="script-bar">${I.chevRight} <strong>Script</strong> · 14 lines (credential secret redacted as <code>&lt;secret&gt;</code>)</div>
+    </div>`;
+}
+
+// ============================================================================
+// PANEL 8: SQL SERVER AGENT PROPERTIES (MODAL DIALOG)
+// ============================================================================
+function renderPropsPanel() {
+  const opt = state.option;
+  const isToday = opt === 'today';
+  return `
+    <div class="callout-strip ${isToday ? 'is-bug' : ''}">
+      <span class="callout-tag">${isToday ? 'Baseline Issues' : 'Option A / B · Calm Pro Modal'}</span>
+      <span>${isToday
+        ? 'Legacy <code>ObjectDialog</code> uses raw <code>&lt;fieldset&gt;</code> borders, hardcoded <code>28px</code> inputs (mismatching <code>--varia-control: 26px</code>), <code>176px</code> custom fact grid, and plain checkboxes.'
+        : 'Upgraded to Calm Pro spacing, <code>Switch</code> controls, visual history capacity meter (<code>RatioBar</code>), right-aligned tabular numbers in <strong>What this keeps</strong>, and unified inline purge confirmation.'}</span>
+    </div>
+    <div class="modal-scrim">
+      <div class="modal-win">
+        <div class="modal-head">
+          <span>SQL Server Agent Properties — prod-sql-01.corp.local</span>
+          <button class="v-btn sm ghost icon-only">${I.close}</button>
+        </div>
+        <div class="insp-tabbar" style="background:var(--chrome)">
+          <button class="insp-tab ${state.propsPage==='general'?'is-on':''}" onclick="state.propsPage='general';render()">General</button>
+          <button class="insp-tab ${state.propsPage==='history'?'is-on':''}" onclick="state.propsPage='history';render()">History <span class="mod-dot"></span></button>
+        </div>
+        <div class="insp-flow" style="padding:14px 16px">
+          ${state.propsPage === 'general' ? `
+            <div class="group-eyebrow"><span>Agent Service</span></div>
+            <dl class="fact-grid" style="margin-bottom:10px">
+              <dt>Service account</dt><dd class="mono">NT Service\\SQLSERVERAGENT</dd>
+              <dt>Starts automatically</dt><dd><span class="pill ok sm">Yes</span></dd>
+            </dl>
+            <div class="pf-list">
+              <div class="pf-row"><span class="pf-label">Auto-restart SQL Server</span><div class="pf-ctrl">${sw(true, 'Restart if it stops unexpectedly')}</div></div>
+              <div class="pf-row"><span class="pf-label">Auto-restart Agent</span><div class="pf-ctrl">${sw(true, 'Restart if it stops unexpectedly')}</div></div>
+            </div>
+            <div class="group-eyebrow" style="margin-top:16px"><span>Error Log (Read-only)</span></div>
+            <dl class="fact-grid">
+              <dt>File name</dt><dd class="mono">D:\\MSSQL\\Log\\SQLAGENT.OUT</dd>
+              <dt>Execution trace</dt><dd>Off</dd>
+            </dl>
+          ` : `
+            <div class="group-eyebrow"><span>Job History Log Retention</span></div>
+            ${!isToday ? `<div style="margin-bottom:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rad-sm);background:var(--raised)">
+              <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:5px"><span style="color:var(--text-secondary)">Current log usage</span><strong class="mono">984 / 1,000 rows (98.4%)</strong></div>
+              <div class="ratio-track"><span class="ratio-seg" style="width:98.4%;background:var(--warning)"></span></div>
+            </div>` : ''}
+            <div class="pf-list">
+              <div class="pf-row"><span class="pf-label">Limit history log size</span><div class="pf-ctrl">${isToday ? '<label><input type="checkbox" checked> Limit size of job history log</label>' : sw(true, 'Cap total and per-job history rows')}</div></div>
+              <div class="pf-row is-changed"><span class="pf-label"><span class="pf-dot"></span>Max log size (rows)</span><div class="pf-ctrl"><input class="v-input mono is-changed" style="width:120px" value="10000"><span style="font-size:11.5px;color:var(--text-muted)">now 984 rows (was 1,000)</span></div></div>
+              <div class="pf-row"><span class="pf-label">Max rows per job</span><div class="pf-ctrl"><input class="v-input mono" style="width:120px" value="500"></div></div>
+            </div>
+            <div class="group-eyebrow" style="margin-top:14px"><span>What This Keeps · Based on Last 7 Days</span></div>
+            <table class="v-table">
+              <thead><tr><th>Job</th><th class="num">Rows / day</th><th class="num">Kept now</th><th class="num">Kept after OK</th></tr></thead>
+              <tbody>
+                <tr><td style="font-weight:500">DBA – Transaction Log Backup</td><td class="num">96 / day</td><td class="num" style="color:var(--warning)">3.2 days</td><td class="num" style="color:var(--success)">5.2 days</td></tr>
+                <tr><td style="font-weight:500">Sales – Hourly Warehouse Sync</td><td class="num">42 / day</td><td class="num" style="color:var(--warning)">3.2 days</td><td class="num" style="color:var(--success)">11.9 days</td></tr>
+                <tr><td style="font-weight:500">Finance – Nightly GL Load</td><td class="num">5 / day</td><td class="num" style="color:var(--warning)">3.2 days</td><td class="num" style="color:var(--success)">32 days</td></tr>
+              </tbody>
+            </table>
+            <div class="group-eyebrow" style="margin-top:14px"><span>Delete Old History Now</span></div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px">
+              <span style="color:var(--text-secondary)">Older than</span>
+              <input class="v-input mono" style="width:62px" value="30">
+              <select class="v-select" style="width:92px"><option>days</option><option>weeks</option><option>months</option></select>
+              <button class="v-btn danger sm">Delete history…</button>
+              <span style="font-size:11px;color:var(--text-muted)">Before 2026-10-27 · ~412 rows</span>
+            </div>
+          `}
+        </div>
+        <div class="modal-foot">
+          <button class="v-btn ghost" style="margin-right:auto">Script</button>
+          <button class="v-btn">Cancel</button>
+          <button class="v-btn primary">OK</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ============================================================================
+// CONTEXT BAR + DECISION COMPARISON CARDS
+// ============================================================================
+const META = {
+  job: {
+    tab: 'Job Properties – Finance – Nightly GL Load',
+    dirty: true,
+    subtools: () => `
+      <div class="lab-seg">
+        ${[['general','General'],['steps','Steps'],['schedules','Schedules'],['notifications','Notifications'],['history','History']].map(([id,lbl]) =>
+          `<button class="${state.jobTab===id?'is-on':''}" onclick="state.jobTab='${id}';render()">${lbl}</button>`
+        ).join('')}
+      </div>`,
+    desc: 'Migrating Job Document from legacy stacked scroll-spy <code>DocumentFrame</code> to <code>ObjectInspectorFrame</code> (same shell as Table Properties).',
+    cards: [
+      { key:'today', title:'Today (Baseline)', items:['<strong>Nested scroll traps:</strong> Stacked sections + 220px Monaco + 360px History runs + 240px message box.', '<strong>176px left SectionNav</strong> permanently steals width from Steps &amp; Schedules.', '<strong>3 competing label grids:</strong> 160px/30%, 140px (Steps), max-content (Facts).'] },
+      { key:'a', title:'Option A · Unified Inspector (Recommended)', items:['<strong>Zero scroll-in-scroll:</strong> <code>flow</code> tabs for General/Notifications; <code>fill</code> full-height tabs for Steps, Schedules, History.', '<strong>Collapsible Vitals rail</strong> keeps live status, owner, usual duration, and problems visible on every tab.', '<strong>Monaco expands</strong> to fill 100% of available height in Steps.'] },
+      { key:'b', title:'Option B · Ultra-Dense Pro', items:['<strong>No side Vitals rail:</strong> Uses only the compact 1-line Hero KPI strip (+256px horizontal room).', '<strong>2-column form grids</strong> fit all of General &amp; Lifecycle metadata on 1 screen with zero scroll.', 'Best for smaller laptop screens or side-by-side split editor groups.'] }
+    ]
+  },
+  jam: {
+    tab: 'Job Activity Monitor – prod-sql-01',
+    dirty: false,
+    subtools: () => `
+      <div class="lab-seg">
+        ${[0,1,2].map(n => `<button class="${state.jamSelected===n?'is-on':''}" onclick="state.jamSelected=${n};render()">${n} selected</button>`).join('')}
+      </div>
+      <div class="lab-seg">
+        <button class="${state.jamDrawer?'is-on':''}" onclick="state.jamDrawer=!state.jamDrawer;render()">Last Run: ${state.jamDrawer?'On':'Off'}</button>
+        <button class="${state.jamStopped?'is-on':''}" onclick="state.jamStopped=!state.jamStopped;render()">Agent Stopped</button>
+      </div>`,
+    desc: 'Reclaiming vertical grid height by removing redundant filter chrome and surfacing contextual selection actions + inline failure messages.',
+    cards: [
+      { key:'today', title:'Today (Baseline)', items:['<strong>~230px stacked chrome</strong> before row 1 of the Jobs grid.', '<strong>Duplicate filters:</strong> 4 clickable KPI tiles AND 4 identical View chips right below them.', '<strong>10 ungrouped bulk buttons</strong> wrap onto 2 rows even when nothing is selected.'] },
+      { key:'a', title:'Option A · Calm Consolidated', items:['<strong>Slim 52px KPI tiles</strong> become the sole View filter (removes duplicate chip row, +38px height).', '<strong>Grouped toolbar</strong> with hairline dividers + <code>More actions ▾</code> overflow.', '<strong>Split Last Run drawer</strong> adds inline step error message preview with Copy.'] },
+      { key:'b', title:'Option B · Ultra-Dense Pro (Recommended)', items:['<strong>1-row KPI-Filter + Search bar</strong> collapses Tiles + View + Search into 36px (+84px grid height!).', '<strong>Contextual Selection Bar</strong> appears only when 1+ jobs are selected — calm at rest, instant verbs on selection.', 'Maximizes visible job rows on 1080p &amp; docked split layouts.'] }
+    ]
+  },
+  lfv: {
+    tab: 'Log File Viewer – prod-sql-01',
+    dirty: false,
+    subtools: () => `
+      <div class="lab-seg">
+        <button class="${state.lfvRailOpen?'is-on':''}" onclick="state.lfvRailOpen=!state.lfvRailOpen;render()">Sources Rail: ${state.lfvRailOpen?'Open':'Hidden'}</button>
+        <button class="${state.lfvErrorLog?'is-on':''}" onclick="state.lfvErrorLog=!state.lfvErrorLog;render()">Error Log Checked</button>
+      </div>`,
+    desc: 'Fixing the live <code>.agent-history-body</code> CSS collision and upgrading the 3-pane log/message inspector.',
+    cards: [
+      { key:'today', title:'Today (Baseline — Live Bug)', items:['<strong>Real CSS collision:</strong> <code>styles.css:3849</code> overwrites Log File Viewer\'s flex layout with Job History\'s <code>1fr 2fr</code> grid!', '<strong>No search in Select logs</strong> — unusable on servers with 100+ Agent jobs.', '<strong>Fixed 220px bottom split</strong> cannot be resized when reading long stack traces.'] },
+      { key:'a', title:'Option A · Clean Split (Recommended)', items:['<strong>Dedicated <code>.lfv-*</code> classes</strong> restore crisp 232px rail + full-height main pane.', '<strong>Inline search box</strong> inside collapsible <code>Select logs</code> rail with grouped counts.', '<strong>Resizable Steps + Message Details</strong> inspector with mono timestamps &amp; copy button.'] },
+      { key:'b', title:'Option B · Ultra-Dense Tabbed', items:['<strong>Tabbed Job Runs | Agent Error Log</strong> when both are checked — never squishes two grids vertically.', '<strong>Collapsible rail</strong> toggle in DocumentHeader gives 100% width for reading wide error messages.', 'Compact retention footer pinned cleanly inside the rail.'] }
+    ]
+  },
+  schedules: {
+    tab: 'Schedules – prod-sql-01',
+    dirty: false,
+    subtools: () => `
+      <div class="lab-seg">
+        <button class="${state.schedMode==='grid'?'is-on':''}" onclick="state.schedMode='grid';render()">Grid Mode</button>
+        <button class="${state.schedMode==='timeline'?'is-on':''}" onclick="state.schedMode='timeline';render()">Timeline (Gantt)</button>
+      </div>`,
+    desc: 'Bringing Schedules onto <code>DocumentFrame</code>, upgrading Enabled checkboxes to <code>Switch</code>, and eliminating editor scroll.',
+    cards: [
+      { key:'today', title:'Today (Baseline)', items:['<strong>Missing DocumentHeader:</strong> Only Agent tab that skips <code>DocumentFrame</code> breadcrumbs and title.', '<strong>Cramped 320–420px side pane</strong> forces heavy scrolling inside <code>ScheduleEditor</code>.', '<strong>Raw checkboxes</strong> in the grid and ragged wrapped inputs in Occurs / Daily frequency.'] },
+      { key:'a', title:'Option A · Unified Document (Recommended)', items:['<strong>Full <code>DocumentFrame</code> header</strong> with <code>Grid | Timeline</code> switch and primary <code>New schedule</code> verb.', '<strong>Next Run mono column</strong> + inline <code>Switch</code> toggles in grid; wider 470px detail pane.', '<strong>2-column Next 5 Runs + Jobs Using It</strong> cards and compact Timeline overlap bar.'] },
+      { key:'b', title:'Option B · Ultra-Dense Pro', items:['Same unified header &amp; grid polish, with tighter 108px label rails in the detail editor.', 'Keeps the full schedule editor + next 5 runs + attached jobs visible with zero vertical scrolling.'] }
+    ]
+  },
+  overview: {
+    tab: 'Agent Overview – prod-sql-01',
+    dirty: false,
+    subtools: () => '',
+    desc: 'Eliminating duplicate header metadata and grouping Health Checks by actionability.',
+    cards: [
+      { key:'today', title:'Today (Baseline)', items:['<strong>Duplicated header strip:</strong> Status badge, metadata, and Properties sit below <code>DocumentHeader</code>.', '<strong>Flat check list:</strong> 3 failures mixed with 4 passing rows forces unnecessary scrolling.', '<strong>Saw-tooth links &amp; buttons:</strong> Unbounded button widths and plain underlined job names.'] },
+      { key:'a', title:'Option A · Calm Pro Hierarchy', items:['<strong>Hoists StatusPill + Properties</strong> into <code>DocumentHeader</code> + compact <code>FactLine</code>.', '<strong>Clickable KPI tiles</strong> navigate directly to filtered Job Activity Monitor.', '<strong>Fixed 156px right action column</strong> + Calm Pro clickable object chips.'] },
+      { key:'b', title:'Option B · Zero-Scroll Summary (Recommended)', items:['<strong>Folds Passing checks</strong> into a single expandable green summary bar.', 'Entire Agent health picture fits comfortably on one screen with zero scroll.'] }
+    ]
+  },
+  operators: {
+    tab: 'Operators & Alerts – prod-sql-01',
+    dirty: true,
+    subtools: () => `
+      <div class="lab-seg">
+        <button class="${state.opView==='matrix'?'is-on':''}" onclick="state.opView='matrix';render()">Notifications Matrix</button>
+        <button class="${state.opView==='alert'?'is-on':''}" onclick="state.opView='alert';render()">Alert Document</button>
+      </div>`,
+    desc: 'Fixing the 3-column flex bug in Operators &amp; Notifications and streamlining Alert/Operator editors.',
+    cards: [
+      { key:'today', title:'Today (Baseline — Live Bug)', items:['<strong>3rd flex-column bug:</strong> <code>JobsTable</code> renders horizontally beside <code>SidePane</code> in <code>.agent-operators-body</code>.', '<strong>Nested scroll:</strong> Matrix capped at <code>max-height: 60vh</code> inside outer document scroll.', '<strong>Wasted rail:</strong> Alert &amp; Operator docs pay 176px for 3 short sections.'] },
+      { key:'a', title:'Option A · Tabbed Full-Height Matrix (Recommended)', items:['<strong>2 clean tabs:</strong> <code>Alerts Matrix</code> and <code>Jobs Notifying Operators</code> each get 100% height.', '<strong>Pill matrix cells</strong> (<code>E</code>, <code>EP</code>, <code>P</code>) with selected-column wash &amp; amber dirty border.', '<strong>Alert &amp; Operator docs</strong> drop the 176px rail for a crisp single-screen layout.'] },
+      { key:'b', title:'Option B · Ultra-Dense 2-Column Forms', items:['Applies compact 2-column form grids on Alert When/Options and Operator General/Pager Duty so every field sits above the fold.'] }
+    ]
+  },
+  proxies: {
+    tab: 'Proxy Account – FileShareWriter',
+    dirty: false,
+    subtools: () => '',
+    desc: 'Aligning Proxy &amp; Credential documents with <code>ObjectInspectorFrame</code> and styled Calm Pro tables.',
+    cards: [
+      { key:'today', title:'Today (Baseline)', items:['<strong>176px left nav rail</strong> for 2–4 small sections (Credential has only 2 sections!).', '<strong>Unstyled <code>.properties-table</code></strong> on References table.', '<strong>Raw checkboxes</strong> for Credential "Change identity and password".'] },
+      { key:'a', title:'Option A · Unified Inspector (Recommended)', items:['<strong>Compact Inspector Tabs</strong> (<code>Proxy &amp; Subsystems</code> | <code>Principals</code> | <code>References</code>).', '<strong>Styled References table</strong> and tinted Subsystem card surface.', '<code>Switch</code> controls and unified 160px label rail.'] },
+      { key:'b', title:'Option B · Ultra-Dense Single Screen', items:['2-column Proxy Identity grid lets Proxy + Subsystems + References fit on one clean view with zero scroll.'] }
+    ]
+  },
+  props: {
+    tab: 'Query1.sql (SQL Server Agent Properties Modal)',
+    dirty: false,
+    subtools: () => `
+      <div class="lab-seg">
+        <button class="${state.propsPage==='general'?'is-on':''}" onclick="state.propsPage='general';render()">General</button>
+        <button class="${state.propsPage==='history'?'is-on':''}" onclick="state.propsPage='history';render()">History &amp; Retention</button>
+      </div>`,
+    desc: 'Modernizing the modal SQL Server Agent Properties dialog to match Options &amp; Table Properties polish.',
+    cards: [
+      { key:'today', title:'Today (Baseline)', items:['<strong>Legacy <code>ObjectDialog</code> chrome:</strong> Heavy <code>&lt;fieldset&gt;</code> boxes and hardcoded <code>28px</code> inputs.', '<strong>Inconsistent label grid:</strong> 176px custom <code>.agent-service-facts</code>.', '<strong>Plain retention table</strong> with italic text instead of semantic warning/success coloring.'] },
+      { key:'a', title:'Option A · Calm Pro Modal (Recommended)', items:['<strong>Visual <code>RatioBar</code></strong> shows current history log fill (98.4% warning) at a glance.', '<strong><code>Switch</code> + <code>FactGrid</code> + styled Retention table</strong> with right-aligned mono rates and green/amber kept-duration contrast.', '<strong>Consistent 26px controls</strong> matching <code>--varia-control</code>.'] },
+      { key:'b', title:'Option B · Promote to Document Tab', items:['Optional future step: open Agent Properties as a tab inside Agent Overview (just like Database/Table Properties) instead of a modal dialog.'] }
+    ]
+  }
+};
+
+function render() {
+  document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.density = state.density;
+  document.documentElement.dataset.option = state.option;
+  document.documentElement.dataset.callouts = state.callouts ? 'on' : 'off';
+
+  // Sync top controls
+  document.querySelectorAll('[data-set-option]').forEach(b => {
+    const on = b.dataset.setOption === state.option;
+    b.className = on ? ('is-on ' + (state.option==='today'?'is-baseline':state.option==='b'?'is-opt-b':'')) : '';
+  });
+  document.querySelectorAll('[data-set-theme]').forEach(b => b.classList.toggle('is-on', b.dataset.setTheme === state.theme));
+  document.querySelectorAll('[data-set-density]').forEach(b => b.classList.toggle('is-on', b.dataset.setDensity === state.density));
+  document.querySelectorAll('[data-panel]').forEach(b => b.classList.toggle('is-on', b.dataset.panel === state.panel));
+  const cBtn = document.getElementById('btn-callouts');
+  cBtn.classList.toggle('is-on', state.callouts);
+  cBtn.textContent = 'Callouts: ' + (state.callouts ? 'On' : 'Off');
+
+  const meta = META[state.panel];
+  const modeLbl = state.option === 'today' ? 'Today (Baseline)' : state.option === 'a' ? 'Option A · Unified Inspector' : 'Option B · Ultra-Dense Pro';
+  const modeCls = state.option === 'today' ? 'is-baseline' : state.option === 'b' ? 'is-opt-b' : '';
+
+  document.getElementById('lab-context').innerHTML = `
+    <div class="lab-context-desc">
+      <span class="lab-mode-tag ${modeCls}">${modeLbl}</span>
+      <span class="lab-context-text">${meta.desc}</span>
+    </div>
+    <div class="lab-subtools">${meta.subtools()}</div>`;
+
+  document.getElementById('varia-tabstrip').innerHTML = `
+    <div class="varia-doctab"><span>Query1.sql</span><span class="env-pill">PROD</span></div>
+    <div class="varia-doctab is-active">
+      ${meta.dirty ? '<span class="dirty-dot"></span>' : ''}
+      <span>${meta.tab}</span>
+      <span class="env-pill">PROD</span>
+    </div>
+    <div class="varia-doctab"><span>dbo.FactGeneralLedger · Table</span></div>`;
+
+  const renderers = {
+    job: renderJobPanel,
+    jam: renderJamPanel,
+    lfv: renderLfvPanel,
+    schedules: renderSchedulesPanel,
+    overview: renderOverviewPanel,
+    operators: renderOperatorsPanel,
+    proxies: renderProxiesPanel,
+    props: renderPropsPanel
+  };
+  document.getElementById('varia-body').innerHTML = renderers[state.panel]();
+  wireSashes();
+
+  document.getElementById('lab-decisions').innerHTML = meta.cards.map(c => {
+    const picked = c.key === state.option;
+    const cls = picked ? (c.key === 'today' ? 'is-picked-base' : c.key === 'b' ? 'is-picked-b' : 'is-picked') : '';
+    return `<article class="lab-card ${cls}" style="cursor:pointer" onclick="state.option='${c.key}';render()">
+      <div class="lab-card-head">
+        <h3>${c.title}</h3>
+        ${picked ? '<span class="pill run sm">Viewing</span>' : '<span style="font-size:11px;color:var(--text-muted)">Click to preview</span>'}
+      </div>
+      <ul>${c.items.map(i => `<li>${i}</li>`).join('')}</ul>
+    </article>`;
+  }).join('');
+}
+
+// ============================================================================
+// INTERACTIVE SASH RESIZER (Pointer drag + Keyboard + Dbl-click reset + localStorage)
+// ============================================================================
+function clampRail(key, next, containerWidth) {
+  const spec = RAIL_SPECS[key];
+  const dynamicMax = containerWidth > 0 ? Math.max(spec.min, Math.min(spec.max, containerWidth - spec.minOther)) : spec.max;
+  return Math.round(Math.min(dynamicMax, Math.max(spec.min, next)));
+}
+
+function wireSashes() {
+  const hud = document.getElementById('sash-hud');
+  const root = document.getElementById('varia-body');
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  root.querySelectorAll('[data-sash]').forEach(sash => {
+    const key = sash.dataset.sash;
+    const spec = RAIL_SPECS[key];
+    const parent = sash.parentElement;
+    const rail = parent && parent.querySelector(`[data-rail="${key}"]`);
+    if (!spec || !rail) return;
+
+    const applyWidth = (px, persist) => {
+      const clamped = clampRail(key, px, parent.clientWidth);
+      state.widths[key] = clamped;
+      rail.style.width = clamped + 'px';
+      sash.setAttribute('aria-valuenow', String(clamped));
+      if (persist) saveRailWidths(state.widths);
+      return clamped;
+    };
+
+    sash.addEventListener('pointerdown', ev => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      sash.classList.add('is-dragging');
+      sash.setPointerCapture(ev.pointerId);
+      const startX = ev.clientX;
+      const startW = rail.getBoundingClientRect().width || railW(key);
+      let latest = startW;
+
+      const showHud = (x, y, w) => {
+        if (!hud) return;
+        hud.textContent = `${w} px (min ${spec.min} · dbl-click resets)`;
+        hud.style.left = Math.min(window.innerWidth - 220, x + 12) + 'px';
+        hud.style.top = Math.max(8, y - 28) + 'px';
+        hud.classList.add('is-show');
+      };
+      showHud(ev.clientX, ev.clientY, Math.round(startW));
+
+      const onMove = mv => {
+        const delta = mv.clientX - startX;
+        const next = spec.side === 'left' ? startW + delta : startW - delta;
+        latest = applyWidth(next, false);
+        showHud(mv.clientX, mv.clientY, latest);
+      };
+      const onUp = () => {
+        sash.classList.remove('is-dragging');
+        if (hud) hud.classList.remove('is-show');
+        sash.removeEventListener('pointermove', onMove);
+        sash.removeEventListener('pointerup', onUp);
+        sash.removeEventListener('pointercancel', onUp);
+        saveRailWidths(state.widths);
+      };
+      sash.addEventListener('pointermove', onMove);
+      sash.addEventListener('pointerup', onUp);
+      sash.addEventListener('pointercancel', onUp);
+    });
+
+    sash.addEventListener('dblclick', () => {
+      applyWidth(spec.def, true);
+    });
+
+    sash.addEventListener('keydown', ev => {
+      if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      const step = ev.shiftKey ? 24 : 12;
+      if (ev.key === 'Home') { ev.preventDefault(); applyWidth(spec.def, true); return; }
+      if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+        ev.preventDefault();
+        const dir = ev.key === 'ArrowRight' ? 1 : -1;
+        const delta = spec.side === 'left' ? dir * step : -dir * step;
+        applyWidth(railW(key) + delta, true);
+      }
+    });
+  });
+}
+
+// Wire top controls
+document.querySelectorAll('[data-set-option]').forEach(b => b.addEventListener('click', () => { state.option = b.dataset.setOption; render(); }));
+document.querySelectorAll('[data-set-theme]').forEach(b => b.addEventListener('click', () => { state.theme = b.dataset.setTheme; render(); }));
+document.querySelectorAll('[data-set-density]').forEach(b => b.addEventListener('click', () => { state.density = b.dataset.setDensity; render(); }));
+document.querySelectorAll('[data-panel]').forEach(b => b.addEventListener('click', () => { state.panel = b.dataset.panel; render(); }));
+document.getElementById('btn-callouts').addEventListener('click', () => { state.callouts = !state.callouts; render(); });
+
+render();
+</script>
+</body>
+</html>
