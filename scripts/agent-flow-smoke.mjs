@@ -7,7 +7,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentFrame, documentTab, documentVerb, gridPart, liveGrid, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentTab, documentVerb, gridPart, inspectorTab, liveGrid, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -43,6 +43,7 @@ try {
 
   step = 'switch'
   // Every document opens on List; the switch leads the list's header, then the graph's toolbar.
+  await inspectorTab(job, 'Steps').click()
   const views = job.getByRole('radiogroup', { name: 'Steps view', exact: true })
   await expect(views.getByRole('radio', { name: 'List' })).toHaveAttribute('aria-checked', 'true')
   // A radio group's keys: one tab stop, and the arrow chooses Flow.
@@ -109,12 +110,12 @@ try {
   await expect(item(3)).toHaveAccessibleName(/On failure, go to step 1, loop\./)
 
   step = 'offscreen'
-  // Scrolled to History, the graph releases its canvas (and GPU context); back on Steps a new one draws it where it was.
+  // Switched to History, the graph unmounts and releases its canvas (and GPU context); back on Steps a new one draws it where it was.
   const before = await item(1).boundingBox()
-  await job.getByRole('button', { name: 'History', exact: true }).click()
-  await expect(tree).not.toBeInViewport()
+  await inspectorTab(job, 'History').click()
+  await expect(tree).toHaveCount(0)
   await expect(tree.locator('canvas')).toHaveCount(0)
-  await tree.scrollIntoViewIfNeeded()
+  await inspectorTab(job, 'Steps').click()
   await expect(tree.locator('canvas')).toBeVisible()
   const after = await item(1).boundingBox()
   expect([Math.round(after.x - before.x), after.width]).toEqual([0, before.width])

@@ -6,7 +6,7 @@
 // every state; this only draws it.
 import { useEffect, type ClipboardEvent } from 'react'
 import {
-  createSeveralText, severalCell, severalDifferences, severalDisabled, severalDoneText, severalLocked, severalOtherCount, severalSummary, type SeveralCheck, type SeveralColumn,
+  createSeveralText, severalCell, severalDifferences, severalDisabled, severalDoneText, severalLocked, severalOtherCount, severalSelectOption, severalSummary, type SeveralCheck, type SeveralColumn,
   type SeveralContext, type SeveralRow
 } from '../../../shared/agent/create-several.ts'
 import Icon from '../Icon'
@@ -26,7 +26,7 @@ function Cell({ state, service, context, row, at, column, error }: Props & { rea
   const label = `${column.label}, row ${at}`
   const id = cellId(state.id, row.key, column.id)
   const editable = service.canEditSeveral(state.id)
-  const set = (value: string) => service.setSeveralCell(state.id, row.key, column.id, value)
+  const set = (value: string | undefined) => service.setSeveralCell(state.id, row.key, column.id, value)
   // Several lines pasted into a cell are rows copied from a spreadsheet.
   const paste = (event: ClipboardEvent<HTMLElement>) => {
     const text = event.clipboardData.getData('text/plain')
@@ -36,10 +36,31 @@ function Cell({ state, service, context, row, at, column, error }: Props & { rea
   let input
   switch (column.kind) {
     case 'check': input = <input type="checkbox" {...common} checked={cell.value === 'true'} onChange={event => set(String(event.target.checked))} />; break
-    case 'select': input = <select {...common} className="property-input" value={shown} onChange={event => set(event.target.value)}>
-      <option value="">{column.text(base) || '(none)'}</option>
-      {column.options?.filter(option => option.value !== base).map(option => <option key={option.value} value={option.value}>{option.label || '(none)'}</option>)}
-    </select>; break
+    case 'select': {
+      // Collision-free DOM option values ('inherit', 'opt:<index>') prevent any SQL Server object named '(none)' or '__inherit__' from colliding.
+      const allOptions = column.options ?? []
+      const options = allOptions.filter(option => option.value !== base)
+      const selected = !cell.changed
+        ? 'inherit'
+        : (() => {
+            const matched = severalSelectOption(allOptions, cell.value)
+            if (!matched) return 'custom'
+            if (matched.value === base) return 'inherit'
+            const index = options.indexOf(matched)
+            return index >= 0 ? `opt:${index}` : 'custom'
+          })()
+      input = <select {...common} className="property-input" value={selected} onChange={event => {
+        if (event.target.value === 'inherit') { set(undefined); return }
+        const match = /^opt:([0-9]+)$/.exec(event.target.value)
+        const option = match ? options[Number(match[1])] : undefined
+        if (option) set(option.value)
+      }}>
+        <option value="inherit">{column.text(base) || '(none)'}</option>
+        {selected === 'custom' && <option value="custom" disabled hidden>{cell.value}</option>}
+        {options.map((option, index) => <option key={`opt:${index}`} value={`opt:${index}`}>{option.label || '(none)'}</option>)}
+      </select>
+      break
+    }
     case 'command': input = <textarea {...common} className="property-input agent-copy-mono" rows={1} spellCheck={false} value={shown} placeholder={base.split(/\r?\n/, 1)[0]} onChange={event => set(event.target.value)} onPaste={paste} />; break
     default: input = <input type="text" {...common} className="property-input" spellCheck={false} inputMode={column.kind === 'number' ? 'numeric' : undefined} value={shown} placeholder={base}
       onChange={event => set(event.target.value)} onPaste={paste} />
