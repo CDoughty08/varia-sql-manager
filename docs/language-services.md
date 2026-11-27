@@ -130,7 +130,7 @@ the query's metadata cache after schema changes, for its provider, connection an
 preserves unsaved SQL, execution sessions, transactions and temporary tables. On SQL Server it calls `language.refresh`
 and waits for the provider's readiness notification; on BigQuery it clears the connection's `LookupCache` immediately
 and runs a scoped `explorer.index` refresh for the datasets referenced by the tab (or its default dataset and billing
-project). The status bar shows `SQL: Refreshing` (`IntelliSense refreshing`) and, on SQL Server, failures; changing the
+project). The status bar shows `SQL: Refreshing` (`IntelliSense refreshing`) and failures; changing the
 query's target, disconnecting or closing it discards an obsolete result.
 
 ### Authentication

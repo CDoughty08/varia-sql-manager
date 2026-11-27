@@ -68,14 +68,23 @@ internal static class EditorLookup
         }
     }
 
+    private static int ReserveBytes(LanguageLookupPath request) =>
+        request.Path.Count * (5 + EditorLookupLimits.SegmentChars * 3) + 256;
+
     /// <summary>Answers every request from one snapshot of a BigQuery connection's index.</summary>
     public static LanguageLookupResult Answer(BigQueryLookup lookup, LanguageLookupArgs args)
     {
         Validate(args);
         var left = EditorLookupLimits.TotalItems;
         var bytesLeft = EditorLookupLimits.TotalBytes - 64;
+        var reserveForLater = 0;
+        for (var i = 1; i < args.Requests.Count; i++) reserveForLater += ReserveBytes(args.Requests[i]);
         var answers = new List<LanguageLookupAnswer>(args.Requests.Count);
-        foreach (var request in args.Requests) answers.Add(One(lookup, request, ref left, ref bytesLeft));
+        for (var i = 0; i < args.Requests.Count; i++)
+        {
+            if (i > 0) reserveForLater -= ReserveBytes(args.Requests[i]);
+            answers.Add(One(lookup, args.Requests[i], ref left, ref bytesLeft, reserveForLater));
+        }
         return new(lookup.Index, answers);
     }
 
@@ -84,7 +93,7 @@ internal static class EditorLookup
         LookupState.Ready => "ready", LookupState.Partial => "partial", LookupState.Building => "building", LookupState.Skipped => "skipped", _ => "absent"
     };
 
-    private static LanguageLookupAnswer One(BigQueryLookup lookup, LanguageLookupPath request, ref int left, ref int bytesLeft)
+    private static LanguageLookupAnswer One(BigQueryLookup lookup, LanguageLookupPath request, ref int left, ref int bytesLeft, int reserveForLater)
     {
         var path = request.Path;
         var prefix = request.Prefix ?? "";
@@ -99,17 +108,20 @@ internal static class EditorLookup
         }
         (List<LanguageLookupItem> Items, bool Truncated) Take(IEnumerable<LanguageLookupItem> items, ref int remaining, ref int remainingBytes, int overheadBytes)
         {
-            remainingBytes = Math.Max(0, remainingBytes - overheadBytes);
+            var available = Math.Max(0, remainingBytes - reserveForLater - overheadBytes);
+            var spentOnItems = 0;
             var list = new List<LanguageLookupItem>();
             var truncated = false;
             foreach (var item in items)
             {
                 if (list.Count >= limit) { truncated = true; break; }
                 var itemBytes = ItemBytes(item);
-                if (itemBytes > remainingBytes) { truncated = true; break; }
-                remainingBytes -= itemBytes;
+                if (itemBytes > available) { truncated = true; break; }
+                available -= itemBytes;
+                spentOnItems += itemBytes;
                 list.Add(item);
             }
+            remainingBytes = Math.Max(0, remainingBytes - overheadBytes - spentOnItems);
             remaining -= list.Count;
             return (list, truncated);
         }
@@ -174,17 +186,32 @@ internal static class EditorLookup
                 var details = request.Details == true;
                 var columns = lookup.Columns(entry).Where(column => Keeps(column.Name));
                 var resolvedPath = new List<string> { dataset.Project, dataset.Dataset, entry.Name };
+                var baseOverhead = AnswerOverheadBytes(resolvedPath, dataset.Skip?.Code);
+                var availableForObject = Math.Max(0, bytesLeft - reserveForLater - baseOverhead);
+                LanguageLookupObject? shownOut = shown;
+                var shownOmitted = false;
+                if (ObjectBytes(shownOut) > availableForObject)
+                {
+                    var compact = shown with { Partitioning = null, Clustering = null, Signature = null, Description = null };
+                    if (ObjectBytes(compact) <= availableForObject)
+                        shownOut = compact;
+                    else
+                    {
+                        shownOut = null;
+                        shownOmitted = true;
+                    }
+                }
                 var (items, truncated) = Take(columns.Select(column => new LanguageLookupItem(column.Name, "bqColumn", column.Entry.Subtype, column.Type?.TypeName,
                     column.Type is { } type ? (type.Flags & TypedFlags.Nullable) != 0 : null, Description: details ? BigQueryLookup.Description(column) : null)),
-                    ref left, ref bytesLeft, AnswerOverheadBytes(resolvedPath, dataset.Skip?.Code, shown));
-                return new(State(dataset.State), resolvedPath, items, truncated, shown, dataset.Skip?.Code);
+                    ref left, ref bytesLeft, baseOverhead + ObjectBytes(shownOut));
+                return new(State(dataset.State), resolvedPath, items, truncated || shownOmitted, shownOut, dataset.Skip?.Code);
             }
         }
     }
 
     // Columns the budget left out make the object's details incomplete, whatever its facts say.
     // A model has no columns for the second pass to read: outside a project read by name only, it is as detailed as it gets.
-    // Columns left out take a table's detail; a routine's signature is not a child and stays.
+    // Columns left out take a table's detail; a routine's signature and a model's facts have no children and stay.
     private static bool IsDetailed(BigQueryLookup lookup, BigQueryLookupDataset dataset, LookupObject entry, BigQueryObjectFacts? facts) =>
-        (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && (entry.Kind == "bqRoutine" || dataset.Held?.ChildrenLeftOut != true);
+        (facts?.Detailed == true || entry.Kind == "bqModel" && !lookup.NamesOnly(dataset.Project)) && (entry.Kind is "bqRoutine" or "bqModel" || dataset.Held?.ChildrenLeftOut != true);
 }

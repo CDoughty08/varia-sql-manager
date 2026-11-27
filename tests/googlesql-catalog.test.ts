@@ -6,6 +6,7 @@ import {
 import { renderGoogleSqlDocs } from '../src/shared/googlesql/docs'
 import { googleSqlCallContext, scanGoogleSql } from '../src/shared/googlesql/lexer'
 import { googleSqlConfiguration, googleSqlLanguage, googleSqlSignatureHelp, googleSqlSignatureHelpProvider } from '../src/renderer/src/languages/googlesql'
+import { getWordAtText } from 'monaco-editor/editor/common/core/wordHelper.js'
 
 const unique = (list: readonly string[]) => new Set(list).size === list.length
 
@@ -90,6 +91,19 @@ describe('GoogleSQL catalogue', () => {
     expect(words('SELECT 10-2.5')).toEqual(['SELECT', '10', '2.5'])
     expect(words('SELECT -2.5')).toEqual(['SELECT', '-2.5'])
     expect(words('SELECT a - b -- comment')).toEqual(['SELECT', 'a', 'b', 'comment'])
+    expect(words('SELECT a--comment')).toEqual(['SELECT', 'a', 'comment'])
+    expect(words('SELECT * FROM my-project--comment')).toEqual(['SELECT', 'FROM', 'my-project', 'comment'])
+    // Trailing hyphen keeps `leadingWord` non-empty in Monaco SuggestModel._onNewContext on backspace/incomplete retrigger.
+    const wordAt = (sqlWithCaret: string) => {
+      const col = sqlWithCaret.indexOf('|') + 1
+      const line = sqlWithCaret.replace('|', '')
+      return getWordAtText(col, googleSqlConfiguration.wordPattern!, line, 0)
+    }
+    expect(wordAt('SELECT * FROM my-project-|')).toEqual({ word: 'my-project-', startColumn: 15, endColumn: 26 })
+    expect(wordAt('SELECT * FROM my-|')).toEqual({ word: 'my-', startColumn: 15, endColumn: 18 })
+    expect(wordAt('SELECT * FROM my-project-| ds')).toEqual({ word: 'my-project-', startColumn: 15, endColumn: 26 })
+    expect(wordAt('SELECT * FROM my-project-123|')).toEqual({ word: 'my-project-123', startColumn: 15, endColumn: 29 })
+    expect(wordAt('SELECT a--comment|')).toEqual({ word: 'comment', startColumn: 11, endColumn: 18 })
   })
 
   it('keeps docs/googlesql.md in sync', async () => {

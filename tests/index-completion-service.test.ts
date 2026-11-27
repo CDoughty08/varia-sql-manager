@@ -171,7 +171,10 @@ function createFixture(options: {
       ...(options.refreshScopes
         ? { refreshScopes: options.refreshScopes }
         : objectSearch
-          ? { refreshScopes: (id, scopes) => objectSearch.refreshBigQueryScopes(id, scopes) }
+          ? {
+              refreshScopes: (id, scopes) => objectSearch.refreshBigQueryScopes(id, scopes),
+              refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes)
+            }
           : {}),
       ...(objectSearch ? { indexState: objectSearch } : {})
     }
@@ -552,5 +555,55 @@ describe('IndexCompletionService', () => {
     const callsAfterDispose = f.languageLookup.mock.calls.length
     f.objectSearch!.build(bqConnId)
     expect(f.languageLookup).toHaveBeenCalledTimes(callsAfterDispose)
+  })
+
+  it('surfaces explorer.index failures on both initial build and scoped refresh while keeping cancel/disconnect silent', async () => {
+    const f = createFixture({ withSearch: true })
+    const tab = f.documents.create('q1.sql', 'SELECT * FROM orders', 'sales', bqConnId)
+
+    // 1. Initial build fails during Ctrl+Shift+R: refreshCache rejects with real index error & availability shows IntelliSense unavailable.
+    f.explorerIndex.mockResolvedValueOnce({ ok: false, code: 'TIMEOUT', error: 'BigQuery metadata timed out.' })
+    await expect(f.service.refreshCache(tab.id)).rejects.toThrow('BigQuery metadata timed out.')
+    expect(f.service.availability(tab.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'BigQuery metadata timed out.' })
+
+    // 2. Subsequent build succeeds: clears error back to IntelliSense.
+    f.explorerIndex.mockResolvedValueOnce({ ok: true, value: { elapsedMs: 1, status: makeStatus() } })
+    expect(await f.service.refreshCache(tab.id)).toBe(true)
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    // 3. Scoped refresh on ready index fails: refreshCache rejects with scoped error & availability shows IntelliSense unavailable.
+    f.explorerIndex.mockResolvedValueOnce({ ok: false, code: 'TIMEOUT', error: 'Dataset refresh timed out.' })
+    await expect(f.service.refreshCache(tab.id)).rejects.toThrow('Dataset refresh timed out.')
+    expect(f.service.availability(tab.id)).toEqual({ label: 'IntelliSense unavailable', detail: 'Dataset refresh timed out.' })
+
+    // 4. Token-backed refresh rejects if not cancelled, and settles false if token cancelled before failure.
+    const errScope = deferred<ApiResult<ObjectIndexResult>>()
+    f.explorerIndex.mockImplementationOnce(async () => errScope.promise)
+    const activeToken = cancellationSource()
+    const failingWithToken = f.service.refreshCache(tab.id, activeToken.token)
+    errScope.resolve({ ok: false, code: 'PERMISSION_DENIED', error: 'Access denied.' })
+    await expect(failingWithToken).rejects.toThrow('Access denied.')
+
+    // Recover before testing deliberate cancellation / stopBuild / disconnect.
+    f.explorerIndex.mockResolvedValueOnce({ ok: true, value: { elapsedMs: 1, status: makeStatus() } })
+    expect(await f.service.refreshCache(tab.id)).toBe(true)
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    // 5. Deliberate stopBuild (CANCELLED) settles false cleanly without throwing or marking unavailable.
+    const stopped = deferred<ApiResult<ObjectIndexResult>>()
+    f.explorerIndex.mockImplementationOnce(async () => stopped.promise)
+    const stopPromise = f.service.refreshCache(tab.id)
+    f.objectSearch!.stopBuild(bqConnId)
+    stopped.resolve({ ok: false, code: 'CANCELLED', error: 'Cancelled' })
+    expect(await stopPromise).toBe(false)
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    // 6. Disconnect mid-refresh settles false cleanly without throwing.
+    const disconnected = deferred<ApiResult<ObjectIndexResult>>()
+    f.explorerIndex.mockImplementationOnce(async () => disconnected.promise)
+    const disconnectPromise = f.service.refreshCache(tab.id)
+    f.connections.remove(bqConnId)
+    expect(await disconnectPromise).toBe(false)
+    disconnected.resolve({ ok: false, code: 'CONNECTION_LOST', error: 'Disconnected' })
   })
 })

@@ -138,11 +138,16 @@ internal static partial class BigQueryIndexChecks
             "a shard outside the group's range, or the prefix in another case, names no group");
         var salesRead = held.Single(read => read.Database == "varia-alpha" && read.Dataset == "sales");
         salesRead.ChildrenLeftOut = true;
-        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"), PathRequest("varia-alpha", "sales", "to_cents"), PathRequest("varia-alpha", "sales"))).Answers;
+        var cut = (await Lookup(PathRequest("varia-alpha", "sales", "orders"), PathRequest("varia-alpha", "sales", "to_cents"), PathRequest("varia-alpha", "sales", "orders_forecast"), PathRequest("varia-alpha", "sales"))).Answers;
         salesRead.ChildrenLeftOut = false;
         check(cut[0].Object is { Detailed: false, Description: "Orders placed online." } && cut[0].State == "partial" && cut[1].Object is { Detailed: true }
-            && cut[2].Items.Single(item => item.Name == "orders").Partial == true && cut[2].Items.Single(item => item.Name == "to_cents").Partial is null,
-            "a table whose dataset's columns were left out is not detailed and its item is marked partial; a routine's signature keeps it detailed");
+            && cut[2].Object is { Kind: "bqModel", Detailed: true }
+            && cut[3].Items.Single(item => item.Name == "orders").Partial == true
+            && cut[3].Items.Single(item => item.Name == "to_cents").Partial is null
+            && cut[3].Items.Single(item => item.Name == "orders_forecast").Partial is null,
+            "a table whose dataset's columns were left out is not detailed and its item is marked partial; routines and models stay detailed");
+        var namesOnlyWithModelRead = wideReadModelCheck(id, new ObjectIndexLimits { MemoryBytes = 64_000, NamesReserveBytes = 0 });
+        check(namesOnlyWithModelRead, "a bqModel in a namesOnly project is marked Detailed: false and Partial: true even though models have no columns");
         var census = (await Lookup(PathRequest("varia-beta", "census", "population"))).Answers[0];
         var discoveredTable = (await Lookup(PathRequest("bigquery-public-data", "samples", "shakespeare"))).Answers[0];
         check(census is { State: "ready", Object: { Detailed: true }, Items.Count: > 0 }
@@ -314,7 +319,39 @@ internal static partial class BigQueryIndexChecks
         var wideEncoded = Varia.Backend.Protocol.JsonBridge.Encode(new { Result = wideRes }, HostChecks.Json);
         check(wideRes.Answers[0].Items.Count > 0 && wideRes.Answers[0].Truncated && wideRes.Answers[1].Truncated
             && wideRes.Answers.Sum(answer => answer.Items.Count) < EditorLookupLimits.TotalItems
-            && wideEncoded.Length <= Varia.Backend.Protocol.ProtocolLimits.ResponseBody,
-            $"EditorLookup byte budget truncates max-width 4,000-item case 2 details:true batches below ProtocolLimits.ResponseBody ({wideEncoded.Length} B)");
+            && wideEncoded.Length <= Varia.Backend.Protocol.ProtocolLimits.ResponseBody
+            && wideEncoded.Length <= EditorLookupLimits.TotalBytes,
+            $"EditorLookup byte budget truncates max-width 4,000-item case 2 details:true batches below TotalBytes ({wideEncoded.Length} B)");
+
+        // Worst-case 16-request case 3 details:true batch where request 0 drains 12 MiB still encodes strictly <= EditorLookupLimits.TotalBytes.
+        var maxCols = Enumerable.Range(0, EditorLookupLimits.Items).Select(i =>
+            new BigQueryColumn($"c_{i:D4}_{new string('あ', 500)}", false, "STRING", true, descText)).ToList();
+        var maxProj = new string('p', 900);
+        var maxDataset = new string('d', 900);
+        var maxTableEntries = Enumerable.Range(0, EditorLookupLimits.Requests).Select(i =>
+            new BigQueryEntry("bqTable", "bqTables", null, $"t_{i:D2}_{new string('お', 900)}", 1, null,
+                Shards: new($"t_{i:D2}_", 2, "20260101", "20260102"),
+                Detail: new BigQueryDetail(null, null, null, maxCols, Rows: 123, Bytes: 456,
+                    Partitioning: partText, Clustering: clustText, Signature: sigText, Description: descText))).ToList();
+        var case3Pool = new StringPool(new IndexBudget(256 << 20));
+        var case3Reader = new BigQueryReader(new ObjectIndexLimits { MemoryBytes = 256 << 20, NamesReserveBytes = 0 }, case3Pool, null);
+        var case3Read = case3Reader.Read(maxProj, maxDataset, maxTableEntries, true, true)!;
+        var case3Lookup = new BigQueryLookup(maxProj, [], [case3Read], null, [], building: false, built: true, new IndexBudget(256 << 20));
+        var case3Requests = maxTableEntries.Select(e => new LanguageLookupPath([maxProj, maxDataset, e.Name], Limit: EditorLookupLimits.Items, Details: true)).ToList();
+        var case3Res = EditorLookup.Answer(case3Lookup, new LanguageLookupArgs(id, case3Requests));
+        var case3Encoded = Varia.Backend.Protocol.JsonBridge.Encode(new { Result = case3Res }, HostChecks.Json);
+        check(case3Res.Answers[0].Object is not null && case3Res.Answers[0].Items.Count > 0
+            && case3Encoded.Length <= EditorLookupLimits.TotalBytes,
+            $"EditorLookup 16-request max-width case 3 batch stays <= EditorLookupLimits.TotalBytes ({case3Encoded.Length} B <= {EditorLookupLimits.TotalBytes} B)");
+    }
+
+    static bool wideReadModelCheck(string id, ObjectIndexLimits wideBaseLimits)
+    {
+        var pool = new StringPool(new IndexBudget(wideBaseLimits.MemoryBytes));
+        var read = new BigQueryReader(wideBaseLimits, pool, null).Read("p", "d", [new("bqModel", "bqModels", null, "m", 1, null)], false, false)!;
+        read.ChildrenLeftOut = true;
+        var namesOnlyLookup = new BigQueryLookup("p", [], [read], ["p"], [], building: false, built: true, new IndexBudget(1 << 20));
+        var res = EditorLookup.Answer(namesOnlyLookup, new LanguageLookupArgs(id, [new(["p", "d", "m"]), new(["p", "d"])]));
+        return res.Answers[0].Object is { Detailed: false } && res.Answers[1].Items.Single(item => item.Name == "m").Partial == true;
     }
 }

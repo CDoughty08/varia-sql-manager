@@ -313,6 +313,81 @@ describe('GoogleSQL scope reader', () => {
     expect(read('SELECT * FROM my-project-123456.|').site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
   })
 
+  it('reads unquoted digit-starting dataset and table segments after a dot in object sites without breaking numbers', () => {
+    const numOnly = read('SELECT * FROM my-proj.123|')
+    expect(numOnly.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(numOnly.word).toEqual({ start: 22, end: 25, typed: '123', quoted: false })
+
+    const afterNumDot = read('SELECT * FROM my-proj.456.|')
+    expect(afterNumDot.site).toEqual({ kind: 'object', qualifier: ['my-proj', '456'] })
+    expect(afterNumDot.word).toEqual({ start: 26, end: 26, typed: '', quoted: false })
+
+    const numWord = read('SELECT * FROM my-proj.2024_sales|')
+    expect(numWord.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(numWord.word).toEqual({ start: 22, end: 32, typed: '2024_sales', quoted: false })
+
+    const midNumWord = read('SELECT * FROM my-proj.20|24_sales')
+    expect(midNumWord.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(midNumWord.word).toEqual({ start: 22, end: 32, typed: '20', quoted: false })
+
+    const afterNumWordDot = read('SELECT * FROM my-proj.2024_sales.|')
+    expect(afterNumWordDot.site).toEqual({ kind: 'object', qualifier: ['my-proj', '2024_sales'] })
+    expect(afterNumWordDot.word).toEqual({ start: 33, end: 33, typed: '', quoted: false })
+
+    const twoNumSegments = read('SELECT * FROM my-proj.123.456|')
+    expect(twoNumSegments.site).toEqual({ kind: 'object', qualifier: ['my-proj', '123'] })
+    expect(twoNumSegments.word).toEqual({ start: 26, end: 29, typed: '456', quoted: false })
+
+    const numDashed = read('SELECT * FROM my-proj.123-prod|')
+    expect(numDashed.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(numDashed.word).toEqual({ start: 22, end: 30, typed: '123-prod', quoted: false })
+
+    expect(read('SELECT * FROM my-proj.123 |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM my-proj.2024_sales |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM my-proj.2024_sales d |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    const sourceRead = read('SELECT o.| FROM my-proj.2024_sales.orders o')
+    expect(sourceRead.site).toEqual({ kind: 'member', qualifier: ['o'] })
+    expect(names(sourceRead.scope.sources)).toEqual(['o=my-proj.2024_sales.orders'])
+    const hoverRead = at('SELECT * FROM my-proj.2024_sales.ord|ers')
+    expect(readGoogleSqlHover(hoverRead.text, hoverRead.offset)).toMatchObject({ parts: ['my-proj', '2024_sales', 'orders'], at: 2, object: true })
+
+    // Numeric literals and non-object digit expressions stay non-completable.
+    for (const sql of ['SELECT 1.5|', 'SELECT .5|', 'SELECT 123|', 'WHERE a = 123|', 'SELECT a.123|', 'SELECT a.456.|', 'SELECT a.2024_sales|']) {
+      expect(read(sql).site, sql).toEqual({ kind: 'none' })
+    }
+  })
+
+  it('suppresses ON and USING after CROSS JOIN and NATURAL JOIN while keeping them on other joins', async () => {
+    for (const sql of [
+      'SELECT * FROM a CROSS JOIN b |',
+      'SELECT * FROM a NATURAL JOIN b |',
+      'SELECT * FROM a NATURAL LEFT JOIN b |',
+      'SELECT * FROM a NATURAL LEFT OUTER JOIN b |',
+      'SELECT * FROM a JOIN b ON a.id = b.id CROSS JOIN c |'
+    ]) {
+      const reading = read(sql)
+      expect(reading.site, sql).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+      const labels = (await complete(sql)).labels('keyword')
+      expect(labels, sql).not.toContain('ON')
+      expect(labels, sql).not.toContain('USING')
+      expect(labels, sql).toContain('WHERE')
+    }
+    for (const sql of [
+      'SELECT * FROM a JOIN b |',
+      'SELECT * FROM a INNER JOIN b |',
+      'SELECT * FROM a LEFT JOIN b |',
+      'SELECT * FROM a RIGHT JOIN b |',
+      'SELECT * FROM a FULL OUTER JOIN b |',
+      'SELECT * FROM a CROSS JOIN b JOIN c |'
+    ]) {
+      const reading = read(sql)
+      expect(reading.site, sql).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: true })
+      const labels = (await complete(sql)).labels('keyword')
+      expect(labels, sql).toContain('ON')
+      expect(labels, sql).toContain('USING')
+    }
+  })
+
   it('reads deeply nested subqueries in bounded time and without overflowing', () => {
     const depth = 3000
     const text = 'SELECT '.padEnd(7) + '* FROM ('.repeat(depth) + 'SELECT id FROM t' + ') q'.repeat(depth)

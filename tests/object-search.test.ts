@@ -2054,4 +2054,26 @@ describe('refreshBigQueryScopes', () => {
     expect(await sharedB).toBe(false)
     service.dispose()
   })
+
+  it('distinguishes backend errors from deliberate cancellations in refreshBigQueryScopesOutcome', async () => {
+    const { service, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    const failed = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'Dataset refresh timed out.' })
+    expect(await failed).toEqual({ ok: false, error: 'Dataset refresh timed out.' })
+
+    const stopped = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds2' }])
+    service.stopBuild('bq')
+    pendingIndex[2]({ ok: false, code: 'CANCELLED', error: 'Cancelled.' })
+    expect(await stopped).toEqual({ ok: false, cancelled: true })
+
+    const disconnected = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    connections.set([])
+    expect(await disconnected).toEqual({ ok: false, cancelled: true })
+    service.dispose()
+  })
 })

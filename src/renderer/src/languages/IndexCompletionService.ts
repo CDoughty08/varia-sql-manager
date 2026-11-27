@@ -7,6 +7,7 @@ import { hoverFromIndex } from '../../../shared/completion/hover'
 import { LookupCache } from '../../../shared/completion/lookup-cache'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionWord, IndexLookup } from '../../../shared/completion/model'
 import type { BigQueryIndexScope, ObjectIndexStatus } from '../../../shared/explorer/search'
+import type { BigQueryScopeRefreshResult } from '../search/ObjectSearchService'
 import { googleSqlDialect } from '../../../shared/googlesql/dialect'
 import { scanGoogleSql } from '../../../shared/googlesql/lexer'
 import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../../../shared/googlesql/scope'
@@ -24,6 +25,7 @@ import { googleSqlLanguageId } from './googlesql'
 type LookupApi = Pick<VariaApi, 'languageLookup'>
 interface Snapshot {
   readonly errors: ReadonlyMap<string, string>
+  readonly indexErrors: ReadonlyMap<string, string>
   readonly indexes: ReadonlyMap<string, 'none' | 'building' | 'ready'>
   readonly refreshing: ReadonlySet<string>
 }
@@ -40,6 +42,8 @@ export interface IndexCompletionOptions {
   readonly ensureIndex: (connectionId: string) => void
   /** Refreshes the scopes a query tab reads and settles when the refresh completes. */
   readonly refreshScopes?: (connectionId: string, scopes: readonly BigQueryIndexScope[]) => Promise<boolean>
+  /** Refreshes scopes and distinguishes deliberate cancellation/disconnect from a backend/index failure. */
+  readonly refreshScopesOutcome?: (connectionId: string, scopes: readonly BigQueryIndexScope[]) => Promise<BigQueryScopeRefreshResult>
   /** Search Objects' index state store: updates `Snapshot.indexes` and clears `LookupCache` immediately on build changes. */
   readonly indexState?: IndexStateStore
 }
@@ -78,7 +82,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
 
   constructor(monaco: typeof Monaco, private readonly api: LookupApi, private readonly documents: DocumentService, private readonly connections: ConnectionService,
     private readonly options: IndexCompletionOptions) {
-    super({ errors: new Map(), indexes: new Map(), refreshing: new Set() })
+    super({ errors: new Map(), indexErrors: new Map(), indexes: new Map(), refreshing: new Set() })
     this.bindings.push(monaco.languages.registerCompletionItemProvider(googleSqlLanguageId, {
       triggerCharacters: ['.', '`'],
       provideCompletionItems: async (model, position, _context, token) => {
@@ -171,9 +175,10 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const snapshot = this.getSnapshot()
     if (snapshot.refreshing.has(documentId))
       return { label: 'IntelliSense refreshing', detail: 'Refreshing schema suggestions for this query’s connection and dataset.' }
-    const error = snapshot.errors.get(documentId)
+    const key = cacheKey(connection)
+    const error = snapshot.errors.get(documentId) ?? snapshot.indexErrors.get(key)
     if (error) return { label: 'IntelliSense unavailable', detail: error }
-    const index = snapshot.indexes.get(cacheKey(connection))
+    const index = snapshot.indexes.get(key)
     if (index === 'building') return { label: 'IntelliSense indexing', detail: 'Search Objects is reading this connection’s metadata; suggestions fill in as it reads each dataset. Ctrl+Space opens suggestions.' }
     if (index === 'none') return { label: 'IntelliSense', detail: 'Table and column suggestions come from this connection’s Search Objects index, which has not been built. Build it in Search Objects, or turn on Options › Object Explorer › Index objects when a server connects. Ctrl+Space opens suggestions.' }
     return { label: 'IntelliSense', detail: 'Completion and hover use this connection’s Search Objects index (free metadata reads; nothing runs in BigQuery). Ctrl+Space opens suggestions.' }
@@ -209,19 +214,32 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       this.failure(document.id, key, undefined)
       const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
       const scopes = extractBigQueryRefreshScopes(model.getValue(), connection.server, dataset)
-      if (!this.options.refreshScopes) return true
+      if (!this.options.refreshScopesOutcome && !this.options.refreshScopes) return true
       let cancelled = false
       let settleCancel = () => {}
-      const cancelledPromise = new Promise<boolean>(resolve => { settleCancel = () => resolve(false) })
+      const cancelledPromise = new Promise<BigQueryScopeRefreshResult>(resolve => { settleCancel = () => resolve({ ok: false, cancelled: true }) })
       const cancel = () => { if (cancelled) return; cancelled = true; settleCancel() }
       const created = { key, cancel, isCancelled: () => cancelled, work: Promise.resolve(false), waiters: 0 }
+      const refreshCall: Promise<BigQueryScopeRefreshResult> = this.options.refreshScopesOutcome
+        ? this.options.refreshScopesOutcome(connection.id, scopes)
+        : this.options.refreshScopes!(connection.id, scopes).then(ok => (ok ? { ok: true } : { ok: false, cancelled: true }))
       const work = (async () => {
         try {
           const result = await Promise.race([
-            this.options.refreshScopes!(connection.id, scopes).catch(() => false),
+            refreshCall,
             cancelledPromise
           ])
-          return !cancelled && !this.disposed && result
+          if (cancelled || this.disposed || !this.isCurrentTarget(document.id, key)) return false
+          if (result.ok) return true
+          if (result.cancelled) return false
+          const message = result.error || 'The BigQuery index refresh failed.'
+          this.failure(document.id, key, message)
+          throw new Error(message)
+        } catch (error) {
+          if (cancelled || this.disposed || !this.isCurrentTarget(document.id, key)) return false
+          const message = error instanceof Error && error.message ? error.message : 'The BigQuery index refresh failed.'
+          this.failure(document.id, key, message)
+          throw error instanceof Error ? error : new Error(message)
         } finally {
           if (this.refreshOps.get(document.id) === created) {
             this.refreshOps.delete(document.id)
@@ -239,7 +257,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       op.waiters++
       return op.work.finally(() => { op.waiters = Math.max(0, op.waiters - 1) })
     }
-    return new Promise<boolean>(resolve => {
+    return new Promise<boolean>((resolve, reject) => {
       let settled = false
       op.waiters++
       const finish = (ok: boolean) => {
@@ -249,11 +267,21 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         op.waiters = Math.max(0, op.waiters - 1)
         resolve(ok)
       }
+      const fail = (error: unknown) => {
+        if (settled) return
+        settled = true
+        sub.dispose()
+        op.waiters = Math.max(0, op.waiters - 1)
+        reject(error)
+      }
       const sub = token.onCancellationRequested(() => {
         finish(false)
         if (op.waiters === 0) op.cancel()
       })
-      void op.work.then(ok => finish(token.isCancellationRequested ? false : ok), () => finish(false))
+      void op.work.then(
+        ok => finish(token.isCancellationRequested ? false : ok),
+        error => { if (token.isCancellationRequested) finish(false); else fail(error) }
+      )
     })
   }
 
@@ -306,11 +334,16 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     } finally { this.inFlight-- }
   }
 
-  private failure(documentId: string | undefined, key: string, error?: string): void {
-    if (this.disposed || !documentId) return
+  private isCurrentTarget(documentId: string, key: string): boolean {
     const document = this.documents.get(documentId)
     const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
-    if (!document || !isQueryDocument(document) || !connection || !isLiveConnection(connection) || !isBigQueryConnection(connection) || cacheKey(connection) !== key) return
+    return !!document && isQueryDocument(document) && documentProvider(document) === 'bigquery'
+      && !!connection && isLiveConnection(connection) && isBigQueryConnection(connection) && cacheKey(connection) === key
+  }
+
+  private failure(documentId: string | undefined, key: string, error?: string): void {
+    if (this.disposed || !documentId) return
+    if (!this.isCurrentTarget(documentId, key)) return
     if (error) this.errorKeys.set(documentId, key); else this.errorKeys.delete(documentId)
     if (this.getSnapshot().errors.get(documentId) === error) return
     const errors = new Map(this.getSnapshot().errors)
@@ -324,9 +357,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const live = new Set(this.connections.getSnapshot().filter(connection => isLiveConnection(connection) && isBigQueryConnection(connection)).map(cacheKey))
     for (const key of [...this.caches.keys()]) if (!live.has(key)) { this.caches.delete(key); this.ensured.delete(key) }
     for (const [id, op] of [...this.refreshOps.entries()]) {
-      const document = this.documents.get(id)
-      const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
-      if (!document || !isQueryDocument(document) || documentProvider(document) !== 'bigquery' || !connection || !isLiveConnection(connection) || !isBigQueryConnection(connection) || cacheKey(connection) !== op.key) {
+      if (!this.isCurrentTarget(id, op.key)) {
         this.refreshOps.delete(id)
         op.cancel()
       }
@@ -338,11 +369,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       return !!connection && cacheKey(connection) === this.errorKeys.get(id)
     }))
     for (const id of [...this.errorKeys.keys()]) if (!errors.has(id)) this.errorKeys.delete(id)
+    const indexErrors = new Map([...snapshot.indexErrors].filter(([key]) => live.has(key)))
     const indexes = new Map([...snapshot.indexes].filter(([key]) => live.has(key)))
     const refreshing = new Set(this.refreshOps.keys())
     const refreshingChanged = refreshing.size !== snapshot.refreshing.size || [...refreshing].some(id => !snapshot.refreshing.has(id))
-    if (errors.size !== snapshot.errors.size || indexes.size !== snapshot.indexes.size || refreshingChanged) {
-      this.publish({ errors, indexes, refreshing })
+    if (errors.size !== snapshot.errors.size || indexErrors.size !== snapshot.indexErrors.size || indexes.size !== snapshot.indexes.size || refreshingChanged) {
+      this.publish({ errors, indexErrors, indexes, refreshing })
     }
     this.syncIndexes()
   }
@@ -352,6 +384,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     const raw = this.options.indexState.getSnapshot().indexes
     const snapshot = this.getSnapshot()
     const indexes = new Map(snapshot.indexes)
+    const indexErrors = new Map(snapshot.indexErrors)
     let changed = false
     const liveIds = new Set<string>()
     for (const connection of this.connections.getSnapshot()) {
@@ -379,16 +412,23 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       } else if (indexes.has(key)) {
         indexes.delete(key); changed = true
       }
+      const indexError = entry?.requestId ? undefined : entry?.error
+      if (indexError) {
+        if (indexErrors.get(key) !== indexError) { indexErrors.set(key, indexError); changed = true }
+      } else if (indexErrors.delete(key)) {
+        changed = true
+      }
     }
     for (const id of [...this.indexSignatures.keys()]) if (!liveIds.has(id)) this.indexSignatures.delete(id)
-    if (changed) this.publish({ ...snapshot, indexes })
+    if (changed) this.publish({ ...snapshot, indexes, indexErrors })
   }
 
-  private publishSnapshot(patch: Partial<Pick<Snapshot, 'errors' | 'indexes'>> = {}): void {
+  private publishSnapshot(patch: Partial<Pick<Snapshot, 'errors' | 'indexErrors' | 'indexes'>> = {}): void {
     if (this.disposed) return
     const current = this.getSnapshot()
     this.publish({
       errors: patch.errors ?? current.errors,
+      indexErrors: patch.indexErrors ?? current.indexErrors,
       indexes: patch.indexes ?? current.indexes,
       refreshing: new Set(this.refreshOps.keys())
     })

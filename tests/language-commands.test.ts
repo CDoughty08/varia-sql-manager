@@ -87,4 +87,23 @@ describe('IntelliSense refresh command', () => {
     expect(await f.commands.execute('edit.refreshIntelliSense', undefined, 'keybinding')).toBe(false)
     expect(f.indexCompletion.refreshCache).toHaveBeenCalledTimes(2)
   })
+
+  it('surfaces BigQuery index refresh errors in the command banner and returns false', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const f = fixture()
+    f.connections.add(
+      { id: 'bq-a', providerId: 'bigquery', server: 'varia-alpha', database: 'sales', serverVersion: 'BigQuery', generation: 1 },
+      { provider: 'bigquery', project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' }
+    )
+    const tab = f.documents.create('bq.sql', 'SELECT * FROM orders', 'sales', 'bq-a')
+    f.indexCompletion.refreshCache.mockRejectedValueOnce(new Error('BigQuery metadata timed out.'))
+    expect(await f.commands.execute('edit.refreshIntelliSense', undefined, 'keybinding')).toBe(false)
+    expect(f.indexCompletion.refreshCache).toHaveBeenCalledWith(tab.id)
+    expect(f.commands.getSnapshot().error).toContain('BigQuery metadata timed out.')
+    // Clean cancellation / disconnect returns false without setting an error banner.
+    f.commands.clearError()
+    f.indexCompletion.refreshCache.mockResolvedValueOnce(false)
+    expect(await f.commands.execute('edit.refreshIntelliSense', undefined, 'keybinding')).toBe(true)
+    expect(f.commands.getSnapshot().error).toBe('')
+  })
 })

@@ -100,6 +100,17 @@ class Statement {
         this.inside = { ...token, text: slice, upper: '' }
       }
       if (token.kind === 'whitespace' || token.kind === 'comment' || token.start < start || token.end > end) continue
+      // `my-proj.123`, `my-proj.2024_sales`: the scanner reads `.123` / `.2024` as a number starting with `.`; split off `.` when adjacent to a name/segment.
+      if (token.kind === 'number' && text.charCodeAt(token.start) === 46 && token.end - token.start >= 2) {
+        const prev = scanned[i - 1]
+        const dotAfterName = !!prev && prev.end === token.start
+          && (prev.kind === 'word' || prev.kind === 'quotedIdentifier' || (prev.kind === 'number' && toks.length >= 2 && (isPunct(toks.at(-2), '.') || isPunct(toks.at(-2), '-'))))
+        if (dotAfterName) {
+          toks.push({ kind: 'punctuation', start: token.start, end: token.start + 1, text: '.', upper: '' })
+          toks.push({ kind: 'number', start: token.start + 1, end: token.end, text: text.slice(token.start + 1, token.end), upper: '' })
+          continue
+        }
+      }
       // `my-proj-2.sales`: the scanner reads `2.` as a number; a name follows, so it is `2` then a dot.
       // So is a dashed name's last piece before a dot (my-project-123456.), whatever follows.
       if (token.kind === 'number' && text.charCodeAt(token.end - 1) === 46 && token.end - token.start >= 2) {
@@ -307,7 +318,11 @@ class BlockReader {
       const first = dashed(toks, run, at)
       const parts = [...first.parts]
       at = first.next
-      while (isPunct(toks[run[at]], '.') && isName(toks[run[at + 1]])) { for (const part of partsOf(toks[run[at + 1]])) parts.push(part); at += 2 }
+      while (isPunct(toks[run[at]], '.') && isPiece(toks[run[at + 1]])) {
+        const nextSeg = dashed(toks, run, at + 1)
+        for (const part of nextSeg.parts) parts.push(part)
+        at = nextSeg.next
+      }
       // A table-valued function's columns are not indexed.
       if (isPunct(toks[run[at]], '(') && !target) return { next: at + 1 }
       source = { kind: 'object', name: parts.at(-1)!, parts, span: { start: token.start, end: toks[run[at - 1]].end } }
@@ -441,27 +456,42 @@ function implicitUnnest(source: ScopeSource, earlier: ReadonlySet<string>): Scop
   return earlier.has(source.parts[0].toLowerCase()) ? { kind: 'unnest', name: source.name, path: source.parts } : source
 }
 
-/** Whether a token can be a piece of a dashed name (a word or a number). */
+/** Whether a token can be a piece of a dashed or digit-starting name (a word or a number). */
 const isPiece = (token: Tok | undefined): token is Tok => !!token && (token.kind === 'word' || token.kind === 'number')
 
-/** The first and last pieces of the dashed name (`my-proj-2`, no spaces) around piece `index` of the statement's tokens. */
-function dashedSpan(toks: readonly Tok[], index: number): [number, number] {
+/** The first and last pieces of an unquoted segment (`my-proj-2`, `2024_sales`, `2024_sales-v2`, no spaces) around piece `index`. */
+function segmentSpan(toks: readonly Tok[], index: number): [number, number] {
   let lo = index, hi = index
-  while (isPunct(toks[lo - 1], '-') && toks[lo - 1].end === toks[lo].start && isPiece(toks[lo - 2]) && toks[lo - 2].end === toks[lo - 1].start) lo -= 2
-  while (isPunct(toks[hi + 1], '-') && toks[hi + 1].start === toks[hi].end && isPiece(toks[hi + 2]) && toks[hi + 2].start === toks[hi + 1].end) hi += 2
+  for (;;) {
+    if (isPunct(toks[lo - 1], '-') && toks[lo - 1].end === toks[lo].start && isPiece(toks[lo - 2]) && toks[lo - 2].end === toks[lo - 1].start) lo -= 2
+    else if (toks[lo].kind === 'word' && toks[lo - 1]?.kind === 'number' && toks[lo - 1].end === toks[lo].start) lo--
+    else break
+  }
+  for (;;) {
+    if (isPunct(toks[hi + 1], '-') && toks[hi + 1].start === toks[hi].end && isPiece(toks[hi + 2]) && toks[hi + 2].start === toks[hi + 1].end) hi += 2
+    else if (toks[hi].kind === 'number' && toks[hi + 1]?.kind === 'word' && toks[hi + 1].start === toks[hi].end) hi++
+    else break
+  }
   return [lo, hi]
 }
 
-/** A name at run position `at` with any dashed words joined on (`my-proj-2`, written without backticks in FROM). */
+/** A name at run position `at` with any dashed or digit-starting pieces (`my-proj-2`, `2024_sales`) joined on. */
 function dashed(toks: readonly Tok[], run: Run, at: number): { parts: string[]; next: number } {
   const token = toks[run[at]]
-  if (token.kind !== 'word') return { parts: partsOf(token), next: at + 1 }
+  if (!isPiece(token)) return { parts: partsOf(token), next: at + 1 }
   let text = token.text, end = token.end
   at++
-  while (isPunct(toks[run[at]], '-') && toks[run[at]].start === end && (toks[run[at + 1]]?.kind === 'word' || toks[run[at + 1]]?.kind === 'number') && toks[run[at + 1]].start === toks[run[at]].end) {
-    text += '-' + toks[run[at + 1]].text
-    end = toks[run[at + 1]].end
-    at += 2
+  for (;;) {
+    const next = toks[run[at]]
+    if (next?.kind === 'word' && next.start === end && toks[run[at - 1]]?.kind === 'number') {
+      text += next.text
+      end = next.end
+      at++
+    } else if (isPunct(next, '-') && next.start === end && isPiece(toks[run[at + 1]]) && toks[run[at + 1]].start === next.end) {
+      text += '-' + toks[run[at + 1]].text
+      end = toks[run[at + 1]].end
+      at += 2
+    } else break
   }
   return { parts: [text], next: at }
 }
@@ -631,7 +661,12 @@ function hasFromAlias(statement: Statement, before: number, open: number, first:
   }
   if (at < 0 || !isName(toks[at])) return false
   if (toks[at].kind === 'word' && notAliases.has(toks[at].upper)) return false
-  const prev2 = prevAtLevel(statement, at, open)
+  let prev2 = prevAtLevel(statement, at, open)
+  // An adjacent `2024` + `_sales` after `.` (`FROM my-proj.2024_sales `) is one segment, not `2024` aliased as `_sales`.
+  if (prev2 >= 0 && toks[prev2].kind === 'number' && toks[prev2].end === toks[at].start) {
+    const beforeNum = prevAtLevel(statement, prev2, open)
+    if (beforeNum >= 0 && isPunct(toks[beforeNum], '.')) return false
+  }
   const prev2Tok = prev2 >= 0 ? toks[prev2] : undefined
   if (!prev2Tok || isPunct(prev2Tok, '.') || isPunct(prev2Tok, '-') || isPunct(prev2Tok, ',')) return false
   if (isWord(toks[at], 'OFFSET') && isWord(prev2Tok, 'WITH')) return false
@@ -656,8 +691,21 @@ function placeOf(statement: Statement, first: number, open: number): 'object' | 
   if (isPunct(previous, ',') && from) return 'object'
   // After a table, its alias, a subquery, or a table-operator/time-travel suffix in FROM: an alias or the next clause's keyword.
   const prevBefore = before >= 0 ? prevAtLevel(statement, before, open) : -1
-  if (from?.kind === 'items' && (isName(previous) || (isPiece(previous) && prevBefore >= 0 && isPunct(toks[prevBefore], '-')) || isClosedGroup(statement, before, first) || (before >= 0 && valueEnds.has(toks[before].kind) && systemTimeBefore(statement, before, open) >= 0))) return 'afterFromTable'
+  if (from?.kind === 'items' && (isName(previous) || (isPiece(previous) && prevBefore >= 0 && isPunct(toks[prevBefore], '-', '.')) || isClosedGroup(statement, before, first) || (before >= 0 && valueEnds.has(toks[before].kind) && systemTimeBefore(statement, before, open) >= 0))) return 'afterFromTable'
   return 'expression'
+}
+
+/** Whether `CROSS` or `NATURAL` (e.g. `CROSS JOIN`, `NATURAL LEFT OUTER JOIN`) forbids `ON`/`USING` for `JOIN` at `joinIndex`. */
+function isConditionlessJoin(statement: Statement, joinIndex: number, open: number): boolean {
+  const { toks } = statement
+  let at = prevAtLevel(statement, joinIndex, open)
+  while (at >= 0) {
+    const token = toks[at]
+    if (token.kind !== 'word' || token.upper === 'JOIN' || !joinWords.has(token.upper)) return false
+    if (token.upper === 'CROSS' || token.upper === 'NATURAL') return true
+    at = prevAtLevel(statement, at, open)
+  }
+  return false
 }
 
 /** Whether token `index` is in its block's FROM clause: among its items (and whether directly after JOIN), or in a join's ON or USING condition. */
@@ -684,7 +732,8 @@ function fromPlace(statement: Statement, index: number, open: number): { readonl
     if (isPunct(token, ',')) { sawComma = true; continue }
     if (token.kind !== 'word') continue
     if (token.upper === 'FROM' || token.upper === 'JOIN' || (token.upper === 'USING' && merge)) {
-      return { kind: !sawComma && condition ? 'condition' : 'items', inJoin: !sawComma && !sawClosedUsing && token.upper === 'JOIN', ...!sawComma && token.upper === 'USING' && merge ? { mergeUsing: true } : {} }
+      const inJoin = !sawComma && !sawClosedUsing && token.upper === 'JOIN' && !isConditionlessJoin(statement, at, open)
+      return { kind: !sawComma && condition ? 'condition' : 'items', inJoin, ...!sawComma && token.upper === 'USING' && merge ? { mergeUsing: true } : {} }
     }
     if (!sawComma && token.upper === 'ON') condition = true
     else if (!sawComma && token.upper === 'USING') {
@@ -699,26 +748,31 @@ function fromPlace(statement: Statement, index: number, open: number): { readonl
 }
 
 /** The name chain that ends just before token or position `end`: the parts written before the one typed, and its first token. */
-function chainBefore(statement: Statement, end: number): { parts: string[]; first: number } | undefined {
-  const { toks } = statement
+function chainBefore(statement: Statement, end: number, allowDigitSegment = false): { parts: string[]; first: number; usedDigitSegment: boolean } | undefined {
+  const { toks, text } = statement
   const reversed: string[][] = []
   let at = end - 1
-  if (!isPunct(toks[at], '.')) return { parts: [], first: end }
+  let usedDigitSegment = false
+  if (!isPunct(toks[at], '.')) return { parts: [], first: end, usedDigitSegment }
   while (isPunct(toks[at], '.')) {
-    const name = toks[at - 1]
-    // A dashed project written without backticks (my-proj-2.ds.): its words (and numbers) join into one part.
-    const plain = name?.kind === 'word' || (name?.kind === 'number' && isPunct(toks[at - 2], '-'))
-    if (!plain && (!isName(name) || name.open)) return undefined
-    let start = at - 1, text = name.text
-    while (plain && isPunct(toks[start - 1], '-') && toks[start - 1].end === toks[start].start
-      && (toks[start - 2]?.kind === 'word' || toks[start - 2]?.kind === 'number') && toks[start - 2].end === toks[start - 1].start) {
-      text = toks[start - 2].text + '-' + text
-      start -= 2
+    const prev = toks[at - 1]
+    if (!prev) return undefined
+    if (prev.kind === 'quotedIdentifier') {
+      if (prev.open) return undefined
+      reversed.push(partsOf(prev))
+      at -= 2
+      continue
     }
-    reversed.push(plain ? [text] : partsOf(name))
-    at = start - 1
+    if (!isPiece(prev)) return undefined
+    const [lo, hi] = segmentSpan(toks, at - 1)
+    if (toks[lo].kind === 'number') {
+      if (!allowDigitSegment || !isPunct(toks[lo - 1], '.') || toks[lo - 1].end !== toks[lo].start) return undefined
+      usedDigitSegment = true
+    }
+    reversed.push([text.slice(toks[lo].start, toks[hi].end)])
+    at = lo - 1
   }
-  return { parts: reversed.reverse().flat(), first: at + 1 }
+  return { parts: reversed.reverse().flat(), first: at + 1, usedDigitSegment }
 }
 
 /** What completion finds at `offset` in `text`. */
@@ -732,23 +786,39 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
   let word = empty, next = toks.findIndex(token => token.start >= offset), qualifier: string[] = []
   if (next < 0) next = toks.length
   const current = toks.findIndex(token => token.start < offset && offset <= token.end)
-  // A dashed project typed without backticks where a table goes (FROM my-pro): the word starts at its first piece.
+  // A dashed or digit-starting unquoted segment where a table goes (FROM my-pro, FROM my-proj.123, FROM my-proj.2024_sales).
   const at = current >= 0 && isPiece(toks[current]) ? current : -1
   const leftOf = at >= 0 ? at : next
   const startsAt = at >= 0 ? toks[at].start : offset
   if (isPunct(toks[leftOf - 1], '-') && toks[leftOf - 1].end === startsAt && isPiece(toks[leftOf - 2]) && toks[leftOf - 2].end === toks[leftOf - 1].start) {
-    const [lo] = dashedSpan(toks, leftOf - 2)
-    const open = statement.parentAt(toks[lo].start)
-    const chain = chainBefore(statement, lo)
-    if (chain && placeOf(statement, chain.first, open) === 'object') {
-      const right = at >= 0 ? at : (next < toks.length && isPiece(toks[next]) && toks[next].start === offset ? next : -1)
-      const end = right >= 0 ? toks[dashedSpan(toks, right)[1]].end : offset
-      word = { start: toks[lo].start, end, typed: text.slice(toks[lo].start, offset), quoted: false }
-      return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
+    const [lo] = segmentSpan(toks, leftOf - 2)
+    if (toks[lo].kind === 'word' || (isPunct(toks[lo - 1], '.') && toks[lo - 1].end === toks[lo].start)) {
+      const open = statement.parentAt(toks[lo].start)
+      const chain = chainBefore(statement, lo, true)
+      if (chain && placeOf(statement, chain.first, open) === 'object') {
+        const right = at >= 0 ? at : (next < toks.length && isPiece(toks[next]) && toks[next].start === offset ? next : -1)
+        const end = right >= 0 ? toks[segmentSpan(toks, right)[1]].end : offset
+        word = { start: toks[lo].start, end, typed: text.slice(toks[lo].start, offset), quoted: false }
+        return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
+      }
     }
   }
   if (current >= 0) {
     const token = toks[current]
+    if (isPiece(token)) {
+      const [lo, hi] = segmentSpan(toks, current)
+      if (toks[lo].kind === 'number') {
+        if (isPunct(toks[lo - 1], '.') && toks[lo - 1].end === toks[lo].start) {
+          const open = statement.parentAt(toks[lo].start)
+          const chain = chainBefore(statement, lo, true)
+          if (chain && placeOf(statement, chain.first, open) === 'object') {
+            word = { start: toks[lo].start, end: toks[hi].end, typed: text.slice(toks[lo].start, offset), quoted: false }
+            return { site: { kind: 'object', qualifier: chain.parts }, scope: scopeAt(statement, open, offset), word }
+          }
+        }
+        return none(empty)
+      }
+    }
     if (token.kind === 'number' || token.kind === 'string' || token.kind === 'parameter' || token.kind === 'systemVariable') return none(empty)
     if (token.kind === 'word') { word = { start: token.start, end: token.end, typed: text.slice(token.start, offset), quoted: false }; next = current }
     else if (token.kind === 'quotedIdentifier' && (offset < token.end || token.open)) {
@@ -777,15 +847,16 @@ export function readGoogleSqlCompletion(text: string, offset: number): Completio
       next = current
     }
   }
-  const chain = chainBefore(statement, next)
+  const chain = chainBefore(statement, next, true)
   if (!chain) return none(word)
   const parts = [...chain.parts, ...qualifier]
   const open = statement.parentAt(word.start)
-  const scope = scopeAt(statement, open, offset)
   const place = placeOf(statement, chain.first, open)
+  if (chain.usedDigitSegment && place !== 'object') return none(word)
+  const scope = scopeAt(statement, open, offset)
   let site: CompletionSite
   if (place === 'object') {
-    if (current >= 0 && isPiece(toks[current])) word = { ...word, end: toks[dashedSpan(toks, current)[1]].end }
+    if (current >= 0 && isPiece(toks[current])) word = { ...word, end: toks[segmentSpan(toks, current)[1]].end }
     site = { kind: 'object', qualifier: parts }
   }
   else if (place === 'alias') site = castCalls.has(googleSqlCallContext(text, offset)?.name.toUpperCase() ?? '') ? { kind: 'castType' } : { kind: 'none' }
@@ -806,26 +877,58 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
   if (statement.inside && statement.inside.kind !== 'quotedIdentifier') return
   const under = toks.findIndex(token => (token.kind === 'word' || token.kind === 'number' || token.kind === 'quotedIdentifier') && token.start <= offset && offset < token.end)
   if (under < 0) return
-  // A dashed project written without backticks in FROM (my-proj.sales.orders) is one part; elsewhere `a-b` is a subtraction.
-  const dashedFirst = (index: number) => isPiece(toks[index]) ? dashedSpan(toks, index)[0] : index
-  let at = under, first = under, last = under
-  let [lo, hi] = isPiece(toks[under]) ? dashedSpan(toks, under) : [under, under]
-  if (lo !== hi) { first = hi; last = hi }
+  // In an object site (`FROM my-proj.2024_sales.orders`), dashed and digit-starting segments after `.` join into parts; elsewhere `a-b` is a subtraction.
+  const segBounds = (index: number): [number, number] => isPiece(toks[index]) ? segmentSpan(toks, index) : [index, index]
+  const [uLo, uHi] = segBounds(under)
+  if (toks[uLo].kind !== 'number' || (isPunct(toks[uLo - 1], '.') && toks[uLo - 1].end === toks[uLo].start)) {
+    const segs: [number, number][] = [[uLo, uHi]]
+    let left = uLo
+    while (isPunct(toks[left - 1], '.') && (isPiece(toks[left - 2]) || toks[left - 2]?.kind === 'quotedIdentifier')) {
+      const [sLo, sHi] = segBounds(left - 2)
+      if (toks[sLo].kind === 'number' && !(isPunct(toks[sLo - 1], '.') && toks[sLo - 1].end === toks[sLo].start)) break
+      segs.unshift([sLo, sHi])
+      left = sLo
+    }
+    let right = uHi
+    while (isPunct(toks[right + 1], '.') && (isPiece(toks[right + 2]) || toks[right + 2]?.kind === 'quotedIdentifier')) {
+      const [sLo, sHi] = segBounds(right + 2)
+      segs.push([sLo, sHi])
+      right = sHi
+    }
+    const firstTok = segs[0][0]
+    const objOpen = statement.parentAt(toks[firstTok].start)
+    if (placeOf(statement, firstTok, objOpen) === 'object') {
+      const parts: string[] = []
+      let atIndex = 0
+      for (const [sLo, sHi] of segs) {
+        const isCurrent = sLo <= under && under <= sHi
+        const own = sLo === sHi && toks[sLo].kind === 'quotedIdentifier' ? partsOf(toks[sLo]) : [text.slice(toks[sLo].start, toks[sHi].end)]
+        if (isCurrent) {
+          if (sLo === sHi && toks[sLo].kind === 'quotedIdentifier') {
+            const inner = text.slice(toks[sLo].start + 1, offset)
+            const rawBodyEnd = toks[sLo].open ? toks[sLo].end : toks[sLo].end - 1
+            const rawBody = text.slice(toks[sLo].start + 1, rawBodyEnd)
+            const firstSpace = toks[sLo].open ? rawBody.search(/\s/) : -1
+            const body = firstSpace >= 0 ? rawBody.slice(0, firstSpace) : rawBody
+            const fullDomain = domainProjectPrefix(body)
+            const partIndex = fullDomain && inner.length <= fullDomain.length ? 0 : splitQuotedParts(inner).length - 1
+            atIndex = parts.length + Math.min(own.length - 1, partIndex)
+          } else atIndex = parts.length
+        }
+        for (const part of own) parts.push(part)
+      }
+      return { parts, at: atIndex, span: { start: toks[segs[0][0]].start, end: toks[segs.at(-1)![1]].end }, object: true, scope: scopeAt(statement, objOpen, offset) }
+    }
+  }
+  if (!isName(toks[under])) return
+  let first = under, last = under
   while (isPunct(toks[first - 1], '.') && isName(toks[first - 2])) first -= 2
   while (isPunct(toks[last + 1], '.') && isName(toks[last + 2])) last += 2
-  lo = dashedFirst(first)
-  const dashedObject = lo < first && placeOf(statement, lo, statement.parentAt(toks[lo].start)) === 'object'
-  if (!dashedObject) {
-    if (!isName(toks[under])) return
-    at = first = last = under
-    while (isPunct(toks[first - 1], '.') && isName(toks[first - 2])) first -= 2
-    while (isPunct(toks[last + 1], '.') && isName(toks[last + 2])) last += 2
-  } else if (under < first) at = first
   const parts: string[] = []
   let index = 0
   for (let token = first; token <= last; token += 2) {
-    const own = token === first && dashedObject ? [text.slice(toks[lo].start, toks[first].end)] : partsOf(toks[token])
-    if (token === at) {
+    const own = partsOf(toks[token])
+    if (token === under) {
       if (toks[token].kind === 'quotedIdentifier') {
         // The part of a dotted quoted path the caret is on.
         const inner = text.slice(toks[token].start + 1, offset)
@@ -840,7 +943,6 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
     }
     for (const part of own) parts.push(part)
   }
-  if (dashedObject) first = lo
   const open = statement.parentAt(toks[first].start)
   const place = placeOf(statement, first, open)
   // A name followed by '(' is a call: a function, not a column.

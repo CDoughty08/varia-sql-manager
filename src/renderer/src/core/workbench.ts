@@ -671,6 +671,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, {
     ensureIndex: id => objectSearch.ensureIndex(id),
     refreshScopes: (id, scopes) => objectSearch.refreshBigQueryScopes(id, scopes),
+    refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes),
     indexState: objectSearch
   })
   const bigQueryProperties = new BigQueryPropertiesService({
