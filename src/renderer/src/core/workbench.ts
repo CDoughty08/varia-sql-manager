@@ -672,7 +672,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ensureIndex: id => objectSearch.ensureIndex(id),
     refreshScopes: (id, scopes) => objectSearch.refreshBigQueryScopes(id, scopes),
     refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes),
-    indexState: objectSearch
+    indexState: objectSearch,
+    jitHydrateEnabled: () => settings.get('textEditor.googleSql.jitHydrate'),
+    starProject: async (connectionId, project) => {
+      const connection = connections.get(connectionId)
+      const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
+      if (!connection || !principal) return false
+      const result = await bigQueryStarred.setStarred(connectionId, principal, project, true)
+      if (!result.ok) { commands.reportError(result.error); return false }
+      objectSearch.refreshBigQuery(connectionId, { scope: { project } })
+      return true
+    }
   })
   const bigQueryProperties = new BigQueryPropertiesService({
     api, documents, connections, results, scriptingOptions,

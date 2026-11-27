@@ -151,14 +151,26 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
   the objects the scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, clause-specific
   keywords, how a written name becomes an index path, keywords and functions. GoogleSQL's are
   `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
-- **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
-  `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects (billing, starred
-  and discovered accessible projects). `x.` lists a project's
+- **Objects and cross-project jump.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
+  `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects ranked
+  **Billing → ★ Starred → Recently Queried → Discovered** (with clear tier descriptions including `Names only · memory cap`
+  and `Wave 3 indexing…`; Billing and Starred projects are never truncated behind the 500-item page cap). Once 2 or more
+  characters are typed at an unqualified `FROM`/`JOIN` position, a bounded cross-project fuzzy jump (`mode: 'jump'`, up to
+  50 hits in RAM) surfaces matching tables, views, routines and models across indexed datasets ranked **Default dataset →
+  Billing → ★ Starred → Recently Queried → Discovered**, inserting compact `dataset.table` for the billing project or
+  `` `project.dataset.table` `` for cross-project matches. `x.` lists a project's
   datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
   item with its range, and a wildcard (`events_*`) or one of its shards within the range reads the newest shard's columns
   (`events_*` reads the `events_YYYYMMDD` group even beside `events_summary`; `ev*` over two groups, or a group and a
   table, reads none). Hyphenated project and table identifiers (`my-proj-2`) use a hyphen-safe `wordPattern` so typing
   or filtering across `-` keeps suggestions anchored without breaking subtraction expressions.
+- **On-demand JIT hydration.** When **Options › Text Editor › GoogleSQL › Fetch schemas on demand for tables without
+  indexed columns** (`textEditor.googleSql.jitHydrate`, on by default) is enabled and a query references a table or routine
+  in a tracked project whose columns have not been indexed yet (Wave 3 still running or stopped at the memory cap),
+  IntelliSense fetches just that object via `language.hydrate` (free REST `tables.get` / `routines.get`, never billed,
+  rate-limited and cached under the shared 512 MiB memory budget with a 2-minute negative cache for 404/403). Unstarred
+  external/public projects (such as `bigquery-public-data`) are never fetched automatically; completion and hover offer
+  one-click **Fetch schema (free)** and **★ Star project** actions instead.
 - **Clause keywords and alias safety.** After a `FROM` or `JOIN` table, subquery, `UNNEST`, or alias (`afterFromTable`),
   only valid `FROM`-clause continuations are suggested (`AS` when unaliased, `ON`/`USING` inside `JOIN`, `WHERE`, joins,
   `GROUP BY`, `ORDER BY`, `TABLESAMPLE`, etc. — never `TABLE`, `ABORT`, or data types). At `statementStart` only statement

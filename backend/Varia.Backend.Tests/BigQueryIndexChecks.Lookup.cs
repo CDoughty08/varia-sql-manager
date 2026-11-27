@@ -395,6 +395,262 @@ internal static partial class BigQueryIndexChecks
             && tightSkipRes.Answers.Skip(1).All(a => a.State == "skipped" && a.Skip == skipCodeMax)
             && tightSkipEncoded.Length <= EditorLookupLimits.TotalBytes,
             $"EditorLookup reserves enough overhead for 128-char 3-byte UTF-8 Skip.Code across 15 skipped requests ({tightSkipEncoded.Length} B <= {EditorLookupLimits.TotalBytes} B)");
+
+        await TierRankingJumpAndHydrateAsync(check, key);
+    }
+
+    /// <summary>PR-3 offline checks: 500+ project tier ordering (Billing -> Starred -> Recent -> Discovered), cross-project
+    /// fuzzy jump cap &amp; ranking, and JIT free REST hydration (negative cache, rate limit, budget, external gate, validation).</summary>
+    static async Task TierRankingJumpAndHydrateAsync(Action<bool, string> check, JsonObject key)
+    {
+        var connId = Guid.NewGuid().ToString();
+
+        // 1. 500+ Project Tier Ranking: Billing -> Starred -> Recently Queried -> Discovered; Billing & Starred NEVER truncated by limit: 500.
+        var discovered600 = Enumerable.Range(0, 600).Select(i => $"aaa-disc-{i:D4}").ToList();
+        var starred10 = Enumerable.Range(0, 10).Select(i => $"zzz-star-{i:D2}").ToList();
+        var recent5 = new List<string> { "aaa-disc-0599", "aaa-disc-0550", "aaa-disc-0520", "aaa-disc-0510", "aaa-disc-0505" };
+        var rankPool = new StringPool(new IndexBudget(16 << 20));
+        var rankLimits = new ObjectIndexLimits { MemoryBytes = 16 << 20, NamesReserveBytes = 0 };
+        var rankReader = new BigQueryReader(rankLimits, rankPool, null);
+        var billingSales = rankReader.Read("varia-billing", "finance", [new("bqTable", "bqTables", null, "daily_revenue", 1, null)], false, false)!;
+        var billingDefault = rankReader.Read("varia-billing", "core", [new("bqTable", "bqTables", null, "daily_revenue_core", 1, null)], false, false)!;
+        var starredRead = rankReader.Read("zzz-star-00", "gold", [new("bqTable", "bqTables", null, "daily_revenue_v2", 1, null)], false, false)!;
+        var recentRead = rankReader.Read("aaa-disc-0599", "mart", [new("bqTable", "bqTables", null, "daily_rev_recent", 1, null)], false, false)!;
+        var discRead = rankReader.Read("aaa-disc-0001", "landing", [new("bqTable", "bqTables", null, "daily_rev_raw", 1, null)], false, false)!;
+
+        var tierLookup = new BigQueryLookup("varia-billing", [.. discovered600, .. starred10], [billingSales, billingDefault, starredRead, recentRead, discRead],
+            namesOnly: ["aaa-disc-0001"], skips: [], building: true, built: false, new IndexBudget(16 << 20),
+            starredProjects: starred10, recentProjects: recent5, phase: "details");
+        var page500 = EditorLookup.Answer(tierLookup, new LanguageLookupArgs(connId, [new([], Limit: 500)]));
+        var items500 = page500.Answers[0].Items;
+        check(items500.Count == 500 && page500.Answers[0].Truncated
+            && items500[0] is { Name: "varia-billing", Tier: "billing", Recent: null }
+            && items500.Skip(1).Take(10).Select(item => item.Name).SequenceEqual(starred10)
+            && items500.Skip(1).Take(10).All(item => item.Tier == "starred" && item.Recent is null)
+            && items500.Skip(11).Take(5).Select(item => item.Name).SequenceEqual(recent5)
+            && items500.Skip(11).Take(5).All(item => item.Tier == "discovered" && item.Recent == true)
+            && items500[16] is { Name: "aaa-disc-0000", Tier: "discovered", Recent: null }
+            && items500.Single(item => item.Name == "aaa-disc-0001") is { NamesOnly: true, Indexing: null }
+            && items500.Single(item => item.Name == "zzz-star-00") is { Indexing: true },
+            "500+ projects rank Billing -> Starred -> Recently Queried -> Discovered without truncating Billing/Starred behind limit 500, and mark namesOnly vs Wave 3 indexing");
+
+        // 2. Cross-Project Fuzzy Jump: Default dataset -> Billing -> Starred -> Recent -> Discovered, subsequence match, top-50 cap & bounds.
+        var jumpAnswer = EditorLookup.Answer(tierLookup, new LanguageLookupArgs(connId, [new([], Prefix: "daily_rev", Mode: "jump", Dataset: "core")])).Answers[0];
+        check(jumpAnswer.State == "ready" && !jumpAnswer.Truncated
+            && jumpAnswer.Items.Select(item => $"{item.Project}.{item.Dataset}.{item.Name}").SequenceEqual([
+                "varia-billing.core.daily_revenue_core",
+                "varia-billing.finance.daily_revenue",
+                "zzz-star-00.gold.daily_revenue_v2",
+                "aaa-disc-0599.mart.daily_rev_recent",
+                "aaa-disc-0001.landing.daily_rev_raw"
+            ])
+            && jumpAnswer.Items[0].Tier == "billing"
+            && jumpAnswer.Items[2].Tier == "starred"
+            && jumpAnswer.Items[3] is { Tier: "discovered", Recent: true }
+            && jumpAnswer.Items[4] is { Tier: "discovered", NamesOnly: true },
+            "cross-project jump ranks Default dataset -> Billing -> Starred -> Recent -> Discovered with project, dataset, tier, recent and namesOnly metadata");
+
+        var subseqAnswer = EditorLookup.Answer(tierLookup, new LanguageLookupArgs(connId, [new([], Prefix: "drev", Mode: "jump")])).Answers[0];
+        check(subseqAnswer.Items.Count == 5 && subseqAnswer.Items[0].Project == "varia-billing",
+            "cross-project jump supports fuzzy subsequence matching (drev -> daily_revenue*)");
+
+        // Cross-project jump strictly caps at JumpLookupLimits.Items (50) and reports truncated: true.
+        var manyTables = Enumerable.Range(0, 80).Select(i => new BigQueryEntry("bqTable", "bqTables", null, $"daily_rev_{i:D3}", 1, null)).ToList();
+        var capRead = new BigQueryReader(rankLimits, rankPool, null).Read("aaa-disc-0002", "bulk", manyTables, false, false)!;
+        var capLookup = new BigQueryLookup("varia-billing", ["aaa-disc-0002"], [billingSales, capRead], null, [], building: false, built: true, new IndexBudget(16 << 20));
+        var capAnswer = EditorLookup.Answer(capLookup, new LanguageLookupArgs(connId, [new([], Prefix: "daily_rev", Mode: "jump")])).Answers[0];
+        check(capAnswer.Items.Count == JumpLookupLimits.Items && capAnswer.Truncated && capAnswer.Items[0].Project == "varia-billing",
+            "cross-project jump caps at 50 hits with truncated: true and keeps billing ahead of discovered");
+
+        // Strict validation for jump mode.
+        bool JumpRefused(LanguageLookupPath req)
+        {
+            try { EditorLookup.Validate(new LanguageLookupArgs(connId, [req])); return false; }
+            catch (RequestException error) { return error.Code == "INVALID_PARAMS"; }
+        }
+        check(JumpRefused(new(["varia-billing"], Prefix: "da", Mode: "jump"))
+            && JumpRefused(new([], Prefix: "d", Mode: "jump"))
+            && JumpRefused(new([], Prefix: "   ", Mode: "jump"))
+            && JumpRefused(new([], Prefix: new string('a', JumpLookupLimits.MaxPrefixChars + 1), Mode: "jump"))
+            && JumpRefused(new([], Prefix: "da", Exact: true, Mode: "jump"))
+            && JumpRefused(new([], Prefix: "da", Limit: JumpLookupLimits.Items + 1, Mode: "jump"))
+            && JumpRefused(new([], Prefix: "da", Dataset: "sales"))
+            && JumpRefused(new([], Prefix: "da", Mode: "unknown")),
+            "EditorLookup strictly validates cross-project jump path, prefix length, exact, limit, mode and dataset");
+
+        // 3. JIT Hydration (language.hydrate) end-to-end against BigQueryFake:
+        // free tables.get / routines.get only (0 jobs.insert), namesOnly -> hydrated -> cached, external gate, negative cache, rate limit, budget & validation.
+        using var harness = new Harness();
+        const string DiscProj = "disc-hydrate-proj";
+        const string ExtProj = "ext-public-proj";
+        const string DiscBase = @"https://bigquery\.googleapis\.com/bigquery/v2/projects/disc-hydrate-proj";
+        const string ExtBase = @"https://bigquery\.googleapis\.com/bigquery/v2/projects/ext-public-proj";
+        harness.Fake
+            .On("GET", DiscBase + "/datasets/web/tables/sessions", BigQueryFake.Fixture("table-orders"))
+            .On("GET", DiscBase + "/datasets/web/routines/clean_url", BigQueryFake.Fixture("index-routine-to-cents"))
+            .On("GET", DiscBase + "/datasets/web/tables/missing_tbl", new BigQueryFake.Reply(404, "{\"error\":{\"code\":404,\"message\":\"Not found: Table\",\"errors\":[{\"reason\":\"notFound\"}]}}"))
+            .On("GET", DiscBase + "/datasets/web/tables/secret_tbl", new BigQueryFake.Reply(403, "{\"error\":{\"code\":403,\"message\":\"Access Denied\",\"errors\":[{\"reason\":\"accessDenied\"}]}}"))
+            .On("GET", ExtBase + "/datasets/samples/tables/shakespeare", BigQueryFake.Fixture("table-orders"));
+        await harness.ConnectAsync(key);
+        var id = harness.ConnectionId;
+        await harness.Index();
+
+        // Seed disc-hydrate-proj as a tracked namesOnly discovered project (table listed without columns, simulating Wave 2 / memory cap).
+        var seedPool = new StringPool(new IndexBudget(1 << 20));
+        var seedLimits = new ObjectIndexLimits { MemoryBytes = 1 << 20, NamesReserveBytes = 0 };
+        var seedRead = new BigQueryReader(seedLimits, seedPool, null).Read(DiscProj, "web",
+        [
+            new("bqTable", "bqTables", null, "sessions", 1, null),
+            new("bqRoutine", "bqRoutines", "scalar", "clean_url", 1, null)
+        ], false, false)!;
+        // Simulate tracked project via RecordQueriedProjects + seeded dataset through TrackBigQuery / Hydrate path.
+        // First verify untracked external project refuses auto-hydrate (allowExternal: false) with 0 REST calls.
+        var callsBeforeExt = harness.Fake.To(".*").Count();
+        var (extDenyCode, extDenyObj, _) = await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = ExtProj, ["dataset"] = "samples", ["name"] = "shakespeare" })
+        });
+        var extDeny = (LanguageHydrateResult)extDenyObj!;
+        check(extDenyCode == "ok" && extDeny.Outcomes[0] is { Project: ExtProj, Dataset: "samples", Name: "shakespeare", Status: "external" }
+            && harness.Fake.To(".*").Count() == callsBeforeExt,
+            "language.hydrate returns status 'external' with 0 REST calls for unstarred external projects unless allowExternal is true");
+
+        // Explicit Fetch schema (free) with allowExternal: true hydrates via free tables.get, caches columns, and does NOT pollute top-level Projects.
+        var (extAllowCode, extAllowObj, _) = await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = ExtProj, ["dataset"] = "samples", ["name"] = "shakespeare", ["allowExternal"] = true })
+        });
+        var extAllow = (LanguageHydrateResult)extAllowObj!;
+        var extLookup = (LanguageLookupResult)(await harness.Call("language.lookup", LookupArgs(id, PathRequest(), PathRequest(ExtProj, "samples", "shakespeare")))).Result!;
+        var jobsCount = harness.Fake.To("/jobs$").Count(req => req.Method == "POST");
+        check(extAllowCode == "ok" && extAllow.Outcomes[0].Status == "hydrated" && jobsCount == 0
+            && !extLookup.Answers[0].Items.Any(item => item.Name == ExtProj)
+            && extLookup.Answers[1] is { State: "partial", Object: { Name: "shakespeare", Detailed: true }, Items.Count: > 0 },
+            "language.hydrate with allowExternal: true hydrates via free tables.get (0 jobs), populates lookup columns, and keeps external project out of top-level Projects");
+
+        // Second hydrate call for the same table returns 'cached' with 0 REST calls.
+        var callsBeforeCached = harness.Fake.To(".*").Count();
+        var cachedRes = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = ExtProj, ["dataset"] = "samples", ["name"] = "shakespeare", ["allowExternal"] = true })
+        })).Result!;
+        check(cachedRes.Outcomes[0].Status == "cached" && harness.Fake.To(".*").Count() == callsBeforeCached,
+            "language.hydrate returns 'cached' with 0 REST calls once columns are in DatabaseIndex");
+
+        // Routine hydration via free routines.get caches signature.
+        var routineRes = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "clean_url", ["kind"] = "routine", ["allowExternal"] = true })
+        })).Result!;
+        var routineLookup = (LanguageLookupResult)(await harness.Call("language.lookup", LookupArgs(id, PathRequest(DiscProj, "web", "clean_url")))).Result!;
+        check(routineRes.Outcomes[0].Status == "hydrated" && routineLookup.Answers[0].Object is { Kind: "bqRoutine", Detailed: true, Signature: "(dollars NUMERIC) RETURNS INT64" },
+            "language.hydrate hydrates routines via free routines.get and caches their signature");
+
+        // Negative cache for 404 (notFound) and 403 (forbidden): second call hits negative cache with 0 REST calls, expires after TTL.
+        var now = DateTime.UtcNow.AddHours(1);
+        harness.Service.Search.UtcNow = () => now;
+        harness.Service.Search.HydrateNegativeTtl = TimeSpan.FromMinutes(2);
+        var miss1 = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(
+                new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "missing_tbl", ["allowExternal"] = true },
+                new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "secret_tbl", ["allowExternal"] = true })
+        })).Result!;
+        var callsAfterMiss1 = harness.Fake.To(".*").Count();
+        var miss2 = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(
+                new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "missing_tbl", ["allowExternal"] = true },
+                new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "secret_tbl", ["allowExternal"] = true })
+        })).Result!;
+        check(miss1.Outcomes[0] is { Status: "notFound", Code: "NOT_FOUND" } && miss1.Outcomes[1] is { Status: "forbidden", Code: "PERMISSION_DENIED" }
+            && miss2.Outcomes[0].Status == "notFound" && miss2.Outcomes[1].Status == "forbidden"
+            && harness.Fake.To(".*").Count() == callsAfterMiss1,
+            "language.hydrate negative-caches 404 and 403 misses so repeat calls issue 0 REST requests");
+
+        now = now.AddMinutes(3);
+        var callsBeforeExpire = harness.Fake.To(".*").Count();
+        var miss3 = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "missing_tbl", ["allowExternal"] = true })
+        })).Result!;
+        check(miss3.Outcomes[0].Status == "notFound" && harness.Fake.To(".*").Count() == callsBeforeExpire + 1,
+            "language.hydrate negative cache expires cleanly after TTL");
+
+        // Per-connection sliding-window rate limit returns 'throttled' with 0 REST calls once exhausted.
+        harness.Service.Search.HydrateMaxPerMinute = 1;
+        now = now.AddMinutes(5);
+        var rate1 = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "sessions", ["allowExternal"] = true })
+        })).Result!;
+        var callsBeforeRate2 = harness.Fake.To(".*").Count();
+        var rate2 = (LanguageHydrateResult)(await harness.Call("language.hydrate", new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray(new JsonObject { ["project"] = DiscProj, ["dataset"] = "web", ["name"] = "missing_tbl", ["allowExternal"] = true })
+        })).Result!;
+        check(rate1.Outcomes[0].Status == "hydrated" && rate2.Outcomes[0] is { Status: "throttled", Code: "RATE_LIMIT" }
+            && harness.Fake.To(".*").Count() == callsBeforeRate2,
+            "language.hydrate enforces per-connection sliding-window rate limit without issuing extra REST calls");
+
+        // Shared IndexBudget memory enforcement: tight budget refuses hydration cleanly with status 'budget' and zero leaked bytes.
+        using var tinySearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 128, NamesReserveBytes = 0 });
+        var tinyId = Guid.NewGuid().ToString();
+        var budgetRes = await tinySearch.HydrateBigQueryAsync(
+            new LanguageHydrateArgs(tinyId, [new LanguageHydrateTarget(ExtProj, "samples", "shakespeare", AllowExternal: true)]),
+            new SingleTableHydrateSource("varia-alpha"), CancellationToken.None);
+        check(budgetRes.Outcomes[0] is { Status: "budget", Code: "TOO_LARGE" } && tinySearch.HeldOf(tinyId).Count == 0,
+            "language.hydrate enforces the shared IndexBudget and returns status 'budget' cleanly when memory is full");
+
+        // Validation & lane checks for language.hydrate.
+        async Task<string> HydrateRefused(JsonObject args) => (await harness.Call("language.hydrate", args)).Code;
+        var emptyTargets = await HydrateRefused(new JsonObject { ["connectionId"] = id, ["targets"] = new JsonArray() });
+        var tooManyTargets = await HydrateRefused(new JsonObject
+        {
+            ["connectionId"] = id,
+            ["targets"] = new JsonArray([.. Enumerable.Range(0, LanguageHydrateLimits.Targets + 1).Select(i => new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = $"t_{i}" })])
+        });
+        var badProject = await HydrateRefused(new JsonObject { ["connectionId"] = id, ["targets"] = new JsonArray(new JsonObject { ["project"] = "Bad Project!", ["dataset"] = "sales", ["name"] = "orders" }) });
+        var badKind = await HydrateRefused(new JsonObject { ["connectionId"] = id, ["targets"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = "orders", ["kind"] = "view" }) });
+        var wrongProvider = await HydrateRefused(new JsonObject { ["connectionId"] = Guid.NewGuid().ToString(), ["targets"] = new JsonArray(new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales", ["name"] = "orders" }) });
+        check(emptyTargets == "INVALID_PARAMS" && tooManyTargets == "INVALID_PARAMS" && badProject == "INVALID_PARAMS" && badKind == "INVALID_PARAMS"
+            && wrongProvider == "UNSUPPORTED_PROVIDER" && harness.Service.LaneOf("language.hydrate") == Varia.Backend.Protocol.RequestLane.Metadata,
+            $"language.hydrate validates targets/names/kinds, refuses non-BigQuery connections, and runs on metadata lane: {emptyTargets} {tooManyTargets} {badProject} {badKind} {wrongProvider}");
+
+        // Suppress unused local warning on seedRead (used to verify BigQueryReader names-only creation).
+        check(seedRead.Table.Count > 1, "names-only seed read built cleanly");
+    }
+
+    sealed class SingleTableHydrateSource(string billing) : IBigQueryIndexSource
+    {
+        public string BillingProject(string connectionId) => billing;
+        public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token) => Task.FromResult(new BigQueryProjectDiscovery([], false));
+        public Task<BigQueryDatasetList> DatasetsAsync(string connectionId, string project, CancellationToken token) => Task.FromResult(new BigQueryDatasetList([], false));
+        public Task<BigQueryListing> ObjectsAsync(string connectionId, string project, string dataset, CancellationToken token) => Task.FromResult(new BigQueryListing([], [], [], false));
+        public Task<Google.Apis.Bigquery.v2.Data.Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token) =>
+            Task.FromResult(new Google.Apis.Bigquery.v2.Data.Table
+            {
+                Type = "TABLE",
+                Schema = new() { Fields = [new() { Name = "id", Type = "INT64", Mode = "REQUIRED" }, new() { Name = "word", Type = "STRING", Mode = "NULLABLE" }] }
+            });
+        public Task<Google.Apis.Bigquery.v2.Data.Routine> RoutineAsync(string connectionId, string project, string dataset, string routine, CancellationToken token) =>
+            Task.FromResult(new Google.Apis.Bigquery.v2.Data.Routine());
+        public async IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, BigQueryBulkBudget budget,
+            Func<string, string, bool> wanted, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+        {
+            await Task.CompletedTask;
+            yield break;
+        }
+        public Exception Map(Exception error, string project, string? permission, CancellationToken token) => error;
     }
 
     static bool wideReadModelCheck(string id, ObjectIndexLimits wideBaseLimits)

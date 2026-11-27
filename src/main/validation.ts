@@ -14,7 +14,7 @@ import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
 import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectSearchLimits, objectSearchParamsSchema } from '../shared/explorer/search.ts'
-import { languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
+import { languageHydrateRequestSchema, languageHydrateResultSchema, languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema, ssisExecutionSchema, ssisPackageRunsSchema } from '../shared/ssis/schema.ts'
@@ -105,7 +105,8 @@ export const requestSchemas = {
   'agent.counterValues': agentCounterValuesSchema,
   'agent.errorLogs': agentErrorLogsSchema,
   'language.parse': languageParseSchema,
-  'language.lookup': languageLookupRequestSchema
+  'language.lookup': languageLookupRequestSchema,
+  'language.hydrate': languageHydrateRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 /** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
@@ -153,7 +154,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'agent.counterValues': agentCounterValuesResultSchema,
   'agent.errorLogs': agentErrorLogsResultSchema,
   'language.parse': languageParseResultSchema,
-  'language.lookup': languageLookupResultSchema
+  'language.lookup': languageLookupResultSchema,
+  'language.hydrate': languageHydrateResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {

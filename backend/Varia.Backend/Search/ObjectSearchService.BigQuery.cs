@@ -20,6 +20,67 @@ internal sealed partial class ObjectSearchService
     /// <summary>The BigQuery kinds the index holds and the subtype variants a search's kinds may name (src/shared/explorer/search.ts).</summary>
     public static readonly string[] BigQueryKinds = ["bqDataset", "bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine", "bqModel", "bqColumn", .. SearchQuery.Variants];
 
+    private const int MaxRecentProjects = 64;
+    /// <summary>Negative cache TTL for 404/403 JIT hydration misses (test seam).</summary>
+    internal TimeSpan HydrateNegativeTtl { get; set; } = TimeSpan.FromMinutes(2);
+    /// <summary>Max free JIT REST calls per minute per connection (test seam).</summary>
+    internal int HydrateMaxPerMinute { get; set; } = LanguageHydrateLimits.MaxPerMinute;
+
+    private sealed partial class State
+    {
+        /// <summary>Recently queried projects on this connection (project → monotonic sequence, capped at <see cref="MaxRecentProjects"/>; under Gate).</summary>
+        public readonly Dictionary<string, long> RecentProjects = new(StringComparer.Ordinal);
+        public long RecentProjectsSeq;
+        /// <summary>External projects whose individual objects were hydrated via language.hydrate with allowExternal: true (excluded from top-level Projects until starred/discovered; under Gate).</summary>
+        public readonly HashSet<string> ExternalHydratedProjects = new(StringComparer.Ordinal);
+        /// <summary>Datasets holding only individual JIT-hydrated objects (no full dataset listing yet; reported Partial until indexed; under Gate).</summary>
+        public readonly HashSet<(string Project, string Dataset)> HydratedOnlyDatasets = [];
+        /// <summary>Short negative cache for 404/403 JIT hydration misses, bounded to <see cref="LanguageHydrateLimits.MaxNegativeEntries"/> (under Gate).</summary>
+        public readonly Dictionary<(string Project, string Dataset, string Name), (string Status, string? Code, DateTime ExpiresAt)> HydrateNegativeCache = [];
+        /// <summary>Per-connection sliding 60-second window of JIT REST hydration timestamps (UTC ticks; under Gate).</summary>
+        public readonly Queue<long> HydrateWindowTicks = new();
+        /// <summary>Per-connection concurrency gate for JIT REST calls.</summary>
+        public readonly SemaphoreSlim HydrateGate = new(LanguageHydrateLimits.MaxConcurrent, LanguageHydrateLimits.MaxConcurrent);
+        /// <summary>In-flight JIT hydrations keyed by target so concurrent requests coalesce (under Gate).</summary>
+        public readonly Dictionary<(string Project, string Dataset, string Name), Task<LanguageHydrateOutcome>> HydrateInFlight = [];
+    }
+
+    /// <summary>Records recently queried BigQuery projects so top-level project lookup and cross-project jump boost them above other discovered projects.</summary>
+    public void RecordQueriedProjects(string connectionId, IEnumerable<string> projects)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+        {
+            if (!state.BigQuery) return;
+            RecordQueriedProjectsLocked(state, projects);
+        }
+    }
+
+    private static void RecordQueriedProjectsLocked(State state, IEnumerable<string> projects)
+    {
+        foreach (var project in projects)
+        {
+            if (!BqNames.IsProject(project)) continue;
+            state.RecentProjects[project] = ++state.RecentProjectsSeq;
+            if (state.RecentProjects.Count > MaxRecentProjects)
+            {
+                string? oldest = null;
+                var oldestSeq = long.MaxValue;
+                foreach (var pair in state.RecentProjects)
+                    if (pair.Value < oldestSeq) { oldestSeq = pair.Value; oldest = pair.Key; }
+                if (oldest is not null) state.RecentProjects.Remove(oldest);
+            }
+        }
+    }
+
+    private static void ClearHydrateNegativeCacheLocked(State state, string? project = null, string? dataset = null)
+    {
+        if (state.HydrateNegativeCache.Count == 0) return;
+        if (project is null) { state.HydrateNegativeCache.Clear(); return; }
+        foreach (var key in state.HydrateNegativeCache.Keys.Where(k => k.Project == project && (dataset is null || k.Dataset == dataset)).ToList())
+            state.HydrateNegativeCache.Remove(key);
+    }
+
     /// <summary>Records that DDL changed a dataset (a CREATE, ALTER or DROP run from a query tab): the next build reads it whole, and a
     /// build asked for stale datasets only (Stale) reads just those. A connection with no BigQuery index keeps no mark.</summary>
     public void MarkStale(string connectionId, string project, string dataset)
@@ -29,6 +90,7 @@ internal sealed partial class ObjectSearchService
         {
             if (!state.BigQuery) return;
             state.Stale[(project, dataset)] = ++state.StaleMarks;
+            ClearHydrateNegativeCacheLocked(state, project, dataset);
             // What was saved of the dataset is stale from here: its file goes until a build has read it again.
             state.Index.Sink?.Stale(project, dataset);
         }
@@ -52,6 +114,7 @@ internal sealed partial class ObjectSearchService
         {
             if (!state.BigQuery) return;
             state.StaleProjects[project] = ++state.StaleMarks;
+            ClearHydrateNegativeCacheLocked(state, project);
             if (state.Index.Sink is { } sink)
                 foreach (var read in state.Index.Databases)
                     if (read.Database == project && read.Dataset is { } dataset) sink.Stale(project, dataset);
@@ -79,6 +142,7 @@ internal sealed partial class ObjectSearchService
         lock (state.Gate)
         {
             if (!state.BigQuery) return;
+            ClearHydrateNegativeCacheLocked(state, project, dataset);
             if (project == billingProject
                 || state.StarredProjects.Contains(project, StringComparer.Ordinal)
                 || state.DiscoveredProjects.Contains(project, StringComparer.Ordinal)
@@ -111,16 +175,22 @@ internal sealed partial class ObjectSearchService
         {
             if (!state.BigQuery) return new(billing, [], [], null, [], false, false, budget, Changed);
             var databases = state.Index.Databases;
+            var externalOnly = new HashSet<string>(state.ExternalHydratedProjects, StringComparer.Ordinal);
+            externalOnly.Remove(billing);
+            foreach (var project in state.StarredProjects) externalOnly.Remove(project);
+            foreach (var project in state.DiscoveredProjects) externalOnly.Remove(project);
             List<string> others =
             [
                 .. state.StarredProjects,
                 .. state.DiscoveredProjects,
-                .. databases.Where(read => read.Dataset is not null).Select(read => read.Database).Order(StringComparer.Ordinal)
+                .. databases.Where(read => read.Dataset is not null && !externalOnly.Contains(read.Database)).Select(read => read.Database).Order(StringComparer.Ordinal)
             ];
+            var recent = state.RecentProjects.OrderByDescending(pair => pair.Value).Select(pair => pair.Key).ToList();
             return new(billing, others, databases, state.NamesOnly, state.Skipped.ToList(), state.Building, state.Built, budget, Changed,
                 [.. state.PartialProjects], new Dictionary<string, ObjectIndexSkip>(state.ProjectListingSkips, StringComparer.Ordinal),
                 new Dictionary<(string Project, string Dataset), ObjectIndexSkip>(state.DatasetSkips), Limits.BigQueryNamesFloorBytes,
-                starredProjects: [.. state.StarredProjects]);
+                starredProjects: [.. state.StarredProjects], recentProjects: recent, phase: state.Phase,
+                externalHydratedProjects: [.. externalOnly], hydratedOnlyDatasets: [.. state.HydratedOnlyDatasets]);
         }
     }
 
@@ -230,6 +300,11 @@ internal sealed partial class ObjectSearchService
                 state.Definitions = definitions;
                 state.Bulk = null;
                 state.DatasetSkips.Clear();
+                ClearHydrateNegativeCacheLocked(state);
+            }
+            else if (scope is not null)
+            {
+                ClearHydrateNegativeCacheLocked(state, scope.Project, scope.Dataset);
             }
             state.InFlightProjects.Clear();
             if (scope is not null) state.InFlightProjects.Add(scope.Project);
@@ -307,6 +382,8 @@ internal sealed partial class ObjectSearchService
                     state.StaleProjects.Remove(gone);
                 state.DiscoveredProjects = [.. state.DiscoveredProjects.Where(allowed.Contains)];
                 state.PartialProjects.RemoveWhere(project => !allowed.Contains(project));
+                state.ExternalHydratedProjects.RemoveWhere(project => !allowed.Contains(project));
+                state.HydratedOnlyDatasets.RemoveWhere(pair => !allowed.Contains(pair.Project));
                 foreach (var gone in state.ProjectListingSkips.Keys.Where(project => !allowed.Contains(project)).ToList())
                     state.ProjectListingSkips.Remove(gone);
                 foreach (var gone in state.DatasetSkips.Keys.Where(key => !allowed.Contains(key.Project)).ToList())
@@ -1598,6 +1675,8 @@ internal sealed partial class ObjectSearchService
                         // A read that fit only without columns has no details left to read: they would not fit either.
                         built.Sync = new BigQuerySync(saved.Cut, childrenLeftOut ? 0 : saved.Pending, saved.Failed, detailsLeftOut, saved.Listing).ToBytes();
                         state.Index.Put(built);
+                        state.HydratedOnlyDatasets.Remove((project, dataset));
+                        state.ExternalHydratedProjects.Remove(project);
                         CheckedLocked(state, built.Key);
                         // A loaded read it replaces has been checked.
                         if (state.Saved.Remove(built.Database + "\u0001" + built.Dataset, out var replaced))
@@ -1641,4 +1720,265 @@ internal sealed partial class ObjectSearchService
     /// <summary>Why a BigQuery read was refused with memory still free: true whatever BigQuery itself holds, since SQL Server's
     /// use counts against the same limit. The renderer and the lookup know a memory skip by the words "memory limit".</summary>
     private string BigQueryPart => "BigQuery leaves part of the index's " + Size + " memory limit to SQL Server";
+
+    /// <summary>
+    /// language.hydrate: fetches schemas on demand via free REST <c>tables.get</c> / <c>routines.get</c> (never billed queries),
+    /// rate-limited through <paramref name="source"/> and a per-connection sliding window, cached into <see cref="DatabaseIndex"/>
+    /// under the shared memory budget, with a short negative cache for 404/403 misses. Never logs SQL, names or credentials.
+    /// </summary>
+    public async Task<LanguageHydrateResult> HydrateBigQueryAsync(LanguageHydrateArgs args, IBigQueryIndexSource source, CancellationToken token)
+    {
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
+        if (args.Targets is not { Count: > 0 and <= LanguageHydrateLimits.Targets }) throw Invalid("targets.");
+        foreach (var target in args.Targets)
+        {
+            if (target is null) throw Invalid("targets.");
+            if (!BqNames.IsProject(target.Project)) throw Invalid("project.");
+            if (!BqNames.IsDataset(target.Dataset)) throw Invalid("dataset.");
+            if (!BqNames.IsTable(target.Name) && !BqNames.IsRoutine(target.Name)) throw Invalid("name.");
+            if (target.Kind is not (null or "table" or "routine")) throw Invalid("kind.");
+        }
+        var billing = source.BillingProject(args.ConnectionId);
+        var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
+        var outcomes = new List<LanguageHydrateOutcome>(args.Targets.Count);
+        foreach (var target in args.Targets)
+        {
+            token.ThrowIfCancellationRequested();
+            outcomes.Add(await HydrateOneAsync(args.ConnectionId, billing, state, target, source, token));
+        }
+        return new(outcomes);
+    }
+
+    private async Task<LanguageHydrateOutcome> HydrateOneAsync(string connectionId, string billing, State state, LanguageHydrateTarget target,
+        IBigQueryIndexSource source, CancellationToken token)
+    {
+        var project = target.Project;
+        var dataset = target.Dataset;
+        var name = target.Name;
+        var allowExternal = target.AllowExternal == true;
+        var key = project + "\u0001" + dataset;
+        var cacheKey = (project, dataset, name);
+        Task<LanguageHydrateOutcome>? existing = null;
+        TaskCompletionSource<LanguageHydrateOutcome>? owner = null;
+        var tracked = false;
+        var isRoutine = target.Kind == "routine";
+
+        lock (state.Gate)
+        {
+            // Check if already cached with full details (and canonicalize name casing against any existing entry).
+            var held = state.Index.Get(key);
+            if (held is not null)
+            {
+                var table = held.Table;
+                var foundAt = FindTopLevelEntry(table, name);
+                if (foundAt >= 0)
+                {
+                    name = table.Name(foundAt);
+                    cacheKey = (project, dataset, name);
+                    if (table.Kind(foundAt) == "bqRoutine") isRoutine = true;
+                    var facts = held.Facts?.Of(foundAt);
+                    if (!held.ChildrenLeftOut && (facts?.Detailed == true || (table.Kind(foundAt) == "bqModel" && state.NamesOnly?.Contains(project, StringComparer.Ordinal) != true)))
+                        return new(project, dataset, name, "cached");
+                }
+            }
+
+            tracked = string.Equals(project, billing, StringComparison.Ordinal)
+                || state.StarredProjects.Contains(project, StringComparer.Ordinal)
+                || state.DiscoveredProjects.Contains(project, StringComparer.Ordinal)
+                || state.InFlightProjects.Contains(project)
+                || (state.Index.Databases.Any(read => read.Dataset is not null && read.Database == project)
+                    && !state.ExternalHydratedProjects.Contains(project));
+
+            if (!tracked && !allowExternal)
+                return new(project, dataset, name, "external");
+
+            // Check short negative cache for recent 404/403 misses.
+            var now = UtcNow();
+            if (state.HydrateNegativeCache.TryGetValue(cacheKey, out var negative))
+            {
+                if (negative.ExpiresAt > now)
+                    return new(project, dataset, name, negative.Status, negative.Code);
+                state.HydrateNegativeCache.Remove(cacheKey);
+            }
+
+            // Coalesce concurrent requests for the exact same target.
+            if (state.HydrateInFlight.TryGetValue(cacheKey, out existing))
+            {
+                // Wait outside Gate below.
+            }
+            else
+            {
+                // Rate limit check: respect principal throttling and per-connection sliding 60s window.
+                if (source.Throttled(connectionId))
+                    return new(project, dataset, name, "throttled", "QUOTA");
+                var cutoff = now.AddMinutes(-1).Ticks;
+                while (state.HydrateWindowTicks.Count > 0 && (state.HydrateWindowTicks.Peek() < cutoff || state.HydrateWindowTicks.Peek() > now.Ticks))
+                    state.HydrateWindowTicks.Dequeue();
+                if (state.HydrateWindowTicks.Count >= HydrateMaxPerMinute)
+                    return new(project, dataset, name, "throttled", "RATE_LIMIT");
+                state.HydrateWindowTicks.Enqueue(now.Ticks);
+
+                owner = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                state.HydrateInFlight[cacheKey] = owner.Task;
+            }
+        }
+
+        if (existing is not null)
+            return await existing.WaitAsync(token);
+
+        LanguageHydrateOutcome outcome;
+        try
+        {
+            await state.HydrateGate.WaitAsync(token);
+            try
+            {
+                BigQueryEntry freshEntry;
+                if (isRoutine)
+                {
+                    var routine = await source.RoutineAsync(connectionId, project, dataset, name, token);
+                    var detail = BigQueryEntries.FromRoutine(routine);
+                    freshEntry = new("bqRoutine", "bqRoutines", detail.Subtype ?? BigQueryEntries.RoutineSubtype(routine.RoutineType),
+                        name, routine.CreationTime ?? 0, routine.LastModifiedTime, Detail: detail);
+                }
+                else
+                {
+                    var table = await source.TableAsync(connectionId, project, dataset, name, token);
+                    var kind = BigQueryEntries.TableKind(table.Type) ?? ("bqTable", "bqTables", null);
+                    var detail = BigQueryEntries.FromTable(table);
+                    var created = table.CreationTime ?? 0;
+                    freshEntry = new(kind.Kind, kind.Folder, detail.Subtype ?? kind.Subtype, name, created, detail.Modified, Detail: detail);
+                }
+                outcome = MergeHydratedEntry(state, project, dataset, freshEntry, tracked);
+            }
+            catch (Exception error) when (!token.IsCancellationRequested && error is not RequestException { Code: "NOT_CONNECTED" })
+            {
+                var mapped = source.Map(error, project, isRoutine ? "bigquery.routines.get" : "bigquery.tables.get", token);
+                var code = mapped is RequestException request ? request.Code : "CATALOG_ERROR";
+                if (code == "NOT_FOUND")
+                {
+                    CacheHydrateNegative(state, cacheKey, "notFound", code);
+                    outcome = new(project, dataset, name, "notFound", code);
+                }
+                else if (code is "PERMISSION_DENIED" or "API_DISABLED")
+                {
+                    CacheHydrateNegative(state, cacheKey, "forbidden", code);
+                    outcome = new(project, dataset, name, "forbidden", code);
+                }
+                else if (code == "QUOTA")
+                {
+                    outcome = new(project, dataset, name, "throttled", code);
+                }
+                else
+                {
+                    outcome = new(project, dataset, name, "error", code);
+                }
+            }
+            finally
+            {
+                state.HydrateGate.Release();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
+            owner!.TrySetCanceled(token);
+            throw;
+        }
+        catch (Exception error)
+        {
+            lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
+            owner!.TrySetException(error);
+            throw;
+        }
+
+        lock (state.Gate) state.HydrateInFlight.Remove(cacheKey);
+        owner!.TrySetResult(outcome);
+        return outcome;
+    }
+
+    private void CacheHydrateNegative(State state, (string Project, string Dataset, string Name) key, string status, string? code)
+    {
+        var now = UtcNow();
+        var expires = now + HydrateNegativeTtl;
+        lock (state.Gate)
+        {
+            if (state.HydrateNegativeCache.Count >= LanguageHydrateLimits.MaxNegativeEntries)
+            {
+                foreach (var expired in state.HydrateNegativeCache.Where(pair => pair.Value.ExpiresAt <= now).Select(pair => pair.Key).ToList())
+                    state.HydrateNegativeCache.Remove(expired);
+                if (state.HydrateNegativeCache.Count >= LanguageHydrateLimits.MaxNegativeEntries)
+                {
+                    var oldest = state.HydrateNegativeCache.MinBy(pair => pair.Value.ExpiresAt).Key;
+                    state.HydrateNegativeCache.Remove(oldest);
+                }
+            }
+            state.HydrateNegativeCache[key] = (status, code, expires);
+        }
+    }
+
+    private LanguageHydrateOutcome MergeHydratedEntry(State state, string project, string dataset, BigQueryEntry freshEntry, bool tracked)
+    {
+        var key = project + "\u0001" + dataset;
+        var namesFloor = Limits.BigQueryNamesFloorBytes;
+        lock (state.Gate)
+        {
+            var old = state.Index.Get(key);
+            var definitions = state.Definitions;
+            var detailsFloor = Limits.BigQueryDetailsFloor(false, old is { Detailed: true });
+            var entries = new List<BigQueryEntry>();
+            var replaced = false;
+            if (old is not null)
+            {
+                var known = BigQueryEntries.Known(old, definitions, carry: true);
+                var table = old.Table;
+                for (var at = 0; at < table.Count; at++)
+                {
+                    if (table.Parent(at) >= 0) continue;
+                    var kind = table.Kind(at);
+                    if (kind == "bqDataset") continue;
+                    var existingName = table.Name(at);
+                    var facts = old.Facts?.Of(at);
+                    var shards = old.Facts?.Shards(at);
+                    if (!replaced && string.Equals(existingName, freshEntry.Name, StringComparison.Ordinal))
+                    {
+                        entries.Add(freshEntry with { Created = freshEntry.Created != 0 ? freshEntry.Created : facts?.Created ?? 0, Shards = shards });
+                        replaced = true;
+                        continue;
+                    }
+                    var existingDetail = known.TryGetValue(BigQueryEntries.Key(kind, existingName, shards), out var had) ? had.Detail : null;
+                    entries.Add(new(kind, table.Folder(at), table.Subtype(at), existingName, facts?.Created ?? 0, facts?.Listed, Shards: shards, Detail: existingDetail));
+                }
+            }
+            if (!replaced) entries.Add(freshEntry);
+            var built = new BigQueryReader(Limits, pool, old, namesFloor, detailsFloor).Read(project, dataset, entries, children: true, definitions: definitions);
+            if (built is null)
+                return new(project, dataset, freshEntry.Name, "budget", "TOO_LARGE");
+            // Individual JIT merges stay in memory only and never overwrite full saved dataset snapshots on disk.
+            built.SaveWhenHeld = false;
+            state.BigQuery = true;
+            state.Index.Put(built);
+            if (old is null) state.HydratedOnlyDatasets.Add((project, dataset));
+            if (!tracked) state.ExternalHydratedProjects.Add(project);
+            else RecordQueriedProjectsLocked(state, [project]);
+            state.HydrateNegativeCache.Remove((project, dataset, freshEntry.Name));
+        }
+        Changed();
+        return new(project, dataset, freshEntry.Name, "hydrated");
+    }
+
+    private static int FindTopLevelEntry(ObjectTable table, string name)
+    {
+        var close = -1;
+        var closeCount = 0;
+        for (var at = 0; at < table.Count; at++)
+        {
+            if (table.Parent(at) >= 0) continue;
+            var kind = table.Kind(at);
+            if (kind == "bqDataset") continue;
+            var entryName = table.Name(at);
+            if (entryName == name) return at;
+            if (string.Equals(entryName, name, StringComparison.OrdinalIgnoreCase)) { close = at; closeCount++; }
+        }
+        return closeCount == 1 ? close : -1;
+    }
 }

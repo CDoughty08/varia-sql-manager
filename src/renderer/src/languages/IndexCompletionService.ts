@@ -1,18 +1,18 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
-import { isBigQueryName } from '../../../shared/bigquery/names'
+import { bigQueryPath, isBigQueryName } from '../../../shared/bigquery/names'
 import { completeFromIndex } from '../../../shared/completion/complete'
 import { definitionFromIndex, IndexUnavailableError } from '../../../shared/completion/definition'
-import { hoverFromIndex } from '../../../shared/completion/hover'
-import { LookupCache } from '../../../shared/completion/lookup-cache'
+import { escapeMarkdown, hoverFromIndex } from '../../../shared/completion/hover'
+import { LookupCache, lookupCacheLimits } from '../../../shared/completion/lookup-cache'
 import type { CompletionDialect, CompletionItem, CompletionKind, CompletionWord, IndexLookup } from '../../../shared/completion/model'
 import type { BigQueryIndexScope, ObjectIndexStatus } from '../../../shared/explorer/search'
 import type { BigQueryScopeRefreshResult } from '../search/ObjectSearchService'
-import { googleSqlDialect } from '../../../shared/googlesql/dialect'
+import { googleSqlDialect, quoteGoogleSqlName } from '../../../shared/googlesql/dialect'
 import { scanGoogleSql } from '../../../shared/googlesql/lexer'
 import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../../../shared/googlesql/scope'
 import { languageLimits } from '../../../shared/language-service'
-import type { LanguageLookupPath } from '../../../shared/language-lookup'
+import { jumpLookupLimits, languageHydrateLimits, languageLookupLimits, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath } from '../../../shared/language-lookup'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { documentProvider, isQueryDocument } from '../documents'
@@ -22,7 +22,11 @@ import type { DocumentService } from '../services/documents'
 import { definitionErrors } from './definition'
 import { googleSqlLanguageId } from './googlesql'
 
-type LookupApi = Pick<VariaApi, 'languageLookup'>
+type LookupApi = Pick<VariaApi, 'languageLookup'> & Partial<Pick<VariaApi, 'languageHydrate'>>
+/** Scoped Monaco command ids for one-click JIT hydration and starring on unstarred external BigQuery projects. */
+export const hydrateTableCommandId = 'varia.bigquery.hydrateTable'
+export const starProjectCommandId = 'varia.bigquery.starProject'
+
 interface Snapshot {
   readonly errors: ReadonlyMap<string, string>
   readonly indexErrors: ReadonlyMap<string, string>
@@ -31,7 +35,7 @@ interface Snapshot {
 }
 /** What Go To Definition found in a BigQuery tab: an object of the index, on the tab's connection. */
 export interface FoundIndexObject { readonly connectionId: string; readonly kind: string; readonly subtype?: string; readonly project: string; readonly dataset: string; readonly name: string }
-interface Target { readonly documentId: string; readonly connectionId?: string; readonly key?: string; readonly dialect: CompletionDialect }
+interface Target { readonly documentId: string; readonly connectionId?: string; readonly key?: string; readonly project?: string; readonly dataset?: string; readonly dialect: CompletionDialect }
 export interface IndexStateEntry { readonly requestId?: string; readonly status?: ObjectIndexStatus; readonly error?: string }
 export interface IndexStateStore {
   getSnapshot(): { readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }
@@ -46,9 +50,13 @@ export interface IndexCompletionOptions {
   readonly refreshScopesOutcome?: (connectionId: string, scopes: readonly BigQueryIndexScope[]) => Promise<BigQueryScopeRefreshResult>
   /** Search Objects' index state store: updates `Snapshot.indexes` and clears `LookupCache` immediately on build changes. */
   readonly indexState?: IndexStateStore
+  /** Whether Options › Text Editor › GoogleSQL auto-hydrates Wave-3-pending / memory-capped tables on demand (default true). */
+  readonly jitHydrateEnabled?: () => boolean
+  /** Stars an external BigQuery project via PR #738's BigQueryStarredService and starts indexing it. */
+  readonly starProject?: (connectionId: string, project: string) => Promise<boolean>
 }
 /** Lookups in flight at once across every editor: past it, completion answers keywords and functions only, marked incomplete. */
-export const indexCompletionLimits = { inFlight: 4, refreshStatements: 32, refreshScopes: 16 } as const
+export const indexCompletionLimits = { inFlight: 4, refreshStatements: 32, refreshScopes: 16, jumpCacheEntries: 64 } as const
 
 const kinds: Readonly<Record<CompletionKind, keyof typeof Monaco.languages.CompletionItemKind>> = {
   keyword: 'Keyword', function: 'Function', container: 'Module', table: 'Class', view: 'Interface', routine: 'Method', model: 'Value',
@@ -56,17 +64,57 @@ const kinds: Readonly<Record<CompletionKind, keyof typeof Monaco.languages.Compl
 }
 /** Leaf identifier kinds whose completions exit an auto-closed trailing backtick; containers stay inside for `.` chaining. */
 const leafKinds: ReadonlySet<CompletionKind> = new Set(['table', 'view', 'routine', 'model', 'column', 'field', 'cte', 'alias'])
+const objectLabels: Readonly<Record<string, string>> = {
+  bqTable: 'Table', bqView: 'View', bqMaterializedView: 'Materialized view', bqExternalTable: 'External table', bqRoutine: 'Routine', bqModel: 'Model'
+}
+const subtypeLabels: Readonly<Record<string, string>> = {
+  snapshot: 'Snapshot', clone: 'Clone', procedure: 'Procedure', scalar: 'Function', tableValued: 'Table function', aggregate: 'Aggregate function'
+}
+
+interface JumpCacheEntry { readonly prefix: string; readonly dataset?: string; readonly answer: LanguageLookupAnswer; readonly at: number }
+interface HydrateTargetRef { readonly project: string; readonly dataset: string; readonly name: string }
+interface ProjectRankInfo { readonly tierRank: number; readonly order: number }
+
+/** Formats a BigQuery project's PR #738 tier & wave/memory-cap description for Monaco's structured label. */
+export function formatBigQueryProjectDetail(item: LanguageLookupItem): string {
+  const base = item.tier === 'billing' ? 'Billing'
+    : item.tier === 'starred' ? '★ Starred'
+    : item.recent ? 'Recent'
+    : item.tier === 'discovered' ? 'Discovered'
+    : 'Project'
+  const status = item.namesOnly || item.detail === 'names' ? 'Names only · memory cap'
+    : item.indexing ? 'Wave 3 indexing…'
+    : undefined
+  return status ? `${base} · ${status}` : base
+}
+
+/** Case-insensitive subsequence match matching the backend's JumpMatchScore so cached jump answers filter cleanly in RAM. */
+function jumpMatches(name: string, query: string): boolean {
+  if (name.length < query.length) return false
+  const lowName = name.toLowerCase(), lowQuery = query.toLowerCase()
+  if (lowName.includes(lowQuery)) return true
+  let qi = 0
+  for (let ni = 0; ni < lowName.length; ni++) {
+    if (lowName[ni] === lowQuery[qi] && ++qi === lowQuery.length) return true
+  }
+  return false
+}
 
 /**
  * Completion and hover for BigQuery tabs (the `googlesql` language), Varia's own from the Search Objects index (docs/language-services.md,
  * Completion from the index): the GoogleSQL scope reader reads the caret's statement, and the shared pipeline asks language.lookup for
- * the projects, datasets, tables and columns it needs. No language server is involved and nothing leaves the machine: the index is
- * in the backend's memory. SQL Server's tabs keep SqlLanguageService.
+ * the projects, datasets, tables and columns it needs. When enabled, Wave-3-pending or memory-capped tables referenced in a query
+ * are hydrated on demand via free REST `tables.get` / `routines.get` (`language.hydrate`); unstarred external projects offer
+ * one-click Fetch schema (free) and ★ Star project actions. SQL Server's tabs keep SqlLanguageService.
  */
 export class IndexCompletionService extends SnapshotStore<Snapshot> implements Disposable {
   private readonly bindings: Disposable[] = []
   private readonly caches = new Map<string, LookupCache>()
+  private readonly jumpCaches = new Map<string, JumpCacheEntry[]>()
+  private readonly hydrateAttempted = new Map<string, Set<string>>()
   private readonly ensured = new Set<string>()
+  /** Optional sidecar jump request batched into the next `language.lookup` IPC on the current completion turn. */
+  private readonly batchedJump = new Map<string, { readonly request: LanguageLookupPath; answer?: LanguageLookupAnswer; consumed: boolean }>()
   /** The connection (and generation) and origin each tab's error came from: it goes when the tab moves, reconnects, or a Search Objects build clears a refresh error. */
   private readonly errorMeta = new Map<string, { readonly key: string; readonly source: 'lookup' | 'refresh' }>()
   private readonly indexSignatures = new Map<string, string>()
@@ -80,7 +128,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   private inFlight = 0
   private disposed = false
 
-  constructor(monaco: typeof Monaco, private readonly api: LookupApi, private readonly documents: DocumentService, private readonly connections: ConnectionService,
+  constructor(private readonly monaco: typeof Monaco, private readonly api: LookupApi, private readonly documents: DocumentService, private readonly connections: ConnectionService,
     private readonly options: IndexCompletionOptions) {
     super({ errors: new Map(), indexErrors: new Map(), indexes: new Map(), refreshing: new Set() })
     this.bindings.push(monaco.languages.registerCompletionItemProvider(googleSqlLanguageId, {
@@ -92,9 +140,102 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         let read: ReturnType<typeof readGoogleSqlCompletion>
         try { read = readGoogleSqlCompletion(text, offset) } catch { return { incomplete: true, suggestions: [] } }
         if (read.site.kind === 'none') return { suggestions: [] }
+
+        const projectRanks = new Map<string, ProjectRankInfo>()
+        const objectLookups = new Map<string, { readonly path: readonly string[]; readonly answer: LanguageLookupAnswer }>()
+        const dialect = wrapProjectTierDialect(target.dialect)
+        const baseLookup = this.lookup(target)
+        const trackedLookup: IndexLookup = async requests => {
+          const answers = await baseLookup(requests)
+          if (!answers) return answers
+          answers.forEach((answer, idx) => {
+            const req = requests[idx]
+            if (!req) return
+            if (req.path.length === 0 && req.mode !== 'jump') {
+              answer.items.forEach((entry, order) => {
+                if (entry.kind !== 'bqProject') return
+                const tierRank = entry.tier === 'billing' ? 0 : entry.tier === 'starred' ? 1 : entry.recent ? 2 : 3
+                projectRanks.set(entry.name, { tierRank, order })
+              })
+            } else if (req.path.length === 3) {
+              objectLookups.set(req.path.join('\u0000'), { path: req.path, answer })
+            }
+          })
+          return answers
+        }
+
+        // Cross-project fuzzy table jump on `FROM <2+ chars>` (batched into the same language.lookup IPC when uncached).
+        const typedUnquoted = unquoteGoogleSqlName(read.word.typed, read.word.quoted)
+        const wantsJump = read.site.kind === 'object'
+          && read.site.qualifier.length === 0
+          && !typedUnquoted.includes('.')
+          && typedUnquoted.length >= jumpLookupLimits.minPrefixChars
+          && typedUnquoted.length <= jumpLookupLimits.maxPrefixChars
+          && !!target.connectionId
+          && !!target.key
+        let jumpAnswer: LanguageLookupAnswer | undefined
+        let jumpSlot: { readonly request: LanguageLookupPath; answer?: LanguageLookupAnswer; consumed: boolean } | undefined
+        if (wantsJump && target.key) {
+          jumpAnswer = this.findJumpCache(target.key, typedUnquoted, target.dataset)
+          if (!jumpAnswer) {
+            jumpSlot = {
+              request: { path: [], prefix: typedUnquoted, mode: 'jump', limit: jumpLookupLimits.items, ...target.dataset ? { dataset: target.dataset } : {} },
+              consumed: false
+            }
+            this.batchedJump.set(target.key, jumpSlot)
+          }
+        }
+
         // A failure is a value: an empty list the editor asks for again, never a rejection.
-        const list = await completeFromIndex(read, target.dialect, this.lookup(target)).catch(() => ({ items: [], incomplete: true }))
+        let list: Awaited<ReturnType<typeof completeFromIndex>>
+        try {
+          list = await completeFromIndex(read, dialect, trackedLookup).catch(() => ({ items: [], incomplete: true }))
+        } finally {
+          if (jumpSlot && target.key && this.batchedJump.get(target.key) === jumpSlot) this.batchedJump.delete(target.key)
+        }
         if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
+
+        if (wantsJump && !jumpAnswer && jumpSlot) {
+          if (jumpSlot.consumed) jumpAnswer = jumpSlot.answer
+          else if (target.connectionId && target.key) {
+            jumpAnswer = await this.fetchJumpAlone(target.connectionId, target.key, target.documentId, jumpSlot.request)
+            if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
+          }
+        }
+
+        // Hybrid JIT hydration: auto-hydrate Wave-3-pending / memory-capped tracked tables when enabled,
+        // and surface actionable Fetch schema (free) / ★ Star project prompts for unstarred external projects.
+        const { autoTargets, externalTargets } = classifyLookupTargets(objectLookups, target.project)
+        const asksColumns = read.site.kind === 'member' || read.site.kind === 'expression' || read.site.kind === 'joinCondition' || read.site.kind === 'unnestArg'
+        if (asksColumns && autoTargets.length > 0 && this.isJitHydrateEnabled() && this.api.languageHydrate && target.connectionId && target.key) {
+          const attempted = this.attemptedSet(target.key)
+          const fresh = autoTargets.filter(item => !attempted.has(hydrateKey(item))).slice(0, languageHydrateLimits.targets)
+          if (fresh.length > 0) {
+            for (const item of fresh) attempted.add(hydrateKey(item))
+            const hydrated = await this.api.languageHydrate({
+              connectionId: target.connectionId,
+              targets: fresh.map(item => ({ project: item.project, dataset: item.dataset, name: item.name, allowExternal: false }))
+            }).catch(() => undefined)
+            if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
+            if (hydrated?.ok) {
+              let anyHydrated = false
+              for (const outcome of hydrated.value.outcomes) {
+                if (outcome.status === 'hydrated' || outcome.status === 'cached') anyHydrated = true
+                else if (outcome.status === 'external') {
+                  if (!externalTargets.some(existing => existing.project === outcome.project && existing.dataset === outcome.dataset && existing.name === outcome.name)) {
+                    externalTargets.push({ project: outcome.project, dataset: outcome.dataset, name: outcome.name })
+                  }
+                }
+              }
+              if (anyHydrated) {
+                this.clearConnectionCaches(target.key, false)
+                list = await completeFromIndex(read, dialect, trackedLookup).catch(() => list)
+                if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return { suggestions: [] }
+              }
+            }
+          }
+        }
+
         const start = model.getPositionAt(read.word.start), end = model.getPositionAt(Math.max(read.word.end, offset))
         const insert = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: position.lineNumber, endColumn: position.column }
         const replace = { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column }
@@ -107,12 +248,40 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
             endLineNumber: position.lineNumber,
             endColumn: position.column + 1
           }) === '`'
+
+        const suggestions = list.items.map(item => suggestion(monaco, item, { insert, replace }, read.word, canExitBacktick, projectRanks))
+
+        // Append deduplicated cross-project fuzzy table jump hits ranked Billing → ★ Starred → Recent → Discovered.
+        if (jumpAnswer?.items.length && target.project) {
+          const existingDefaultNames = new Set(list.items.filter(item => item.kind !== 'container' && item.kind !== 'cte').map(item => item.label))
+          jumpAnswer.items.forEach((hit, index) => {
+            if (!hit.project || !hit.dataset) return
+            const isDefault = hit.project === target.project && !!target.dataset && hit.dataset.toLowerCase() === target.dataset.toLowerCase()
+            if (isDefault && existingDefaultNames.has(hit.name)) return
+            suggestions.push(jumpSuggestion(monaco, hit, index, target.project!, { insert, replace }, read.word, canExitBacktick))
+          })
+        }
+
+        // Actionable Fetch schema (free) / ★ Star project items when an unstarred external table (or unhydrated table with auto-hydrate off) has no columns.
+        const hasColumns = list.items.some(item => item.kind === 'column' || item.kind === 'field')
+        const actionableTargets = externalTargets.length > 0
+          ? externalTargets
+          : (!this.isJitHydrateEnabled() && read.site.kind === 'member' && !hasColumns ? autoTargets : [])
+        if (asksColumns && actionableTargets.length > 0 && target.connectionId && (read.site.kind === 'member' ? !hasColumns : true)) {
+          const picked = pickActionTarget(read, target.dialect, actionableTargets)
+          if (picked) {
+            const actions = actionSuggestions(monaco, target.connectionId, picked, target.project, { insert, replace }, read.word, hasColumns)
+            if (hasColumns) suggestions.push(...actions)
+            else suggestions.unshift(...actions)
+          }
+        }
+
         // Every site that reads the index stays incomplete while building; non-empty lists stay incomplete so exact matches re-rank via LookupCache.
         const asksIndex = read.site.kind === 'object' || read.site.kind === 'member' || read.site.kind === 'expression' || read.site.kind === 'joinCondition' || read.site.kind === 'unnestArg'
         const building = target.key && asksIndex ? this.caches.get(target.key)?.index !== 'ready' : false
         return {
-          incomplete: list.items.length > 0 || list.incomplete || building,
-          suggestions: list.items.map(item => suggestion(monaco, item, { insert, replace }, read.word, canExitBacktick))
+          incomplete: suggestions.length > 0 || list.incomplete || !!jumpAnswer?.truncated || building,
+          suggestions
         }
       }
     }), monaco.languages.registerHoverProvider(googleSqlLanguageId, {
@@ -123,18 +292,110 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
         let read: ReturnType<typeof readGoogleSqlHover>
         try { read = readGoogleSqlHover(model.getValue(), model.getOffsetAt(position)) } catch { return null }
         if (!read) return null
-        const hover = await hoverFromIndex(read, target.dialect, this.lookup(target)).catch(() => undefined)
-        if (!hover || token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return null
-        const start = model.getPositionAt(hover.span.start), end = model.getPositionAt(hover.span.end)
-        return { contents: [{ value: hover.markdown, isTrusted: false, supportHtml: false }], range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column } }
+        const objectLookups = new Map<string, { readonly path: readonly string[]; readonly answer: LanguageLookupAnswer }>()
+        const baseLookup = this.lookup(target)
+        const trackedLookup: IndexLookup = async requests => {
+          const answers = await baseLookup(requests)
+          if (!answers) return answers
+          answers.forEach((answer, idx) => {
+            const req = requests[idx]
+            if (req?.path.length === 3) objectLookups.set(req.path.join('\u0000'), { path: req.path, answer })
+          })
+          return answers
+        }
+        const hover = await hoverFromIndex(read, target.dialect, trackedLookup).catch(() => undefined)
+        if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return null
+        if (hover) {
+          const start = model.getPositionAt(hover.span.start), end = model.getPositionAt(hover.span.end)
+          return { contents: [{ value: hover.markdown, isTrusted: false, supportHtml: false }], range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column } }
+        }
+        // Unstarred external project hover prompt with one-click Fetch schema (free) and ★ Star project links.
+        if (target.connectionId) {
+          const { externalTargets } = classifyLookupTargets(objectLookups, target.project)
+          const hoveredPath = read.object ? target.dialect.objectPath(read.parts) : undefined
+          const matched = hoveredPath && hoveredPath.length === 3
+            ? externalTargets.find(item => item.project === hoveredPath[0] && item.dataset === hoveredPath[1] && item.name === hoveredPath[2])
+            : externalTargets[0]
+          if (matched) {
+            const start = model.getPositionAt(read.span.start), end = model.getPositionAt(read.span.end)
+            const fullName = `${matched.project}.${matched.dataset}.${matched.name}`
+            const hydrateArgs = encodeURIComponent(JSON.stringify([target.connectionId, matched.project, matched.dataset, matched.name]))
+            const starArgs = encodeURIComponent(JSON.stringify([target.connectionId, matched.project]))
+            const links = matched.project !== target.project
+              ? `[Fetch schema (free)](command:${hydrateTableCommandId}?${hydrateArgs}) · [★ Star ${matched.project}](command:${starProjectCommandId}?${starArgs})`
+              : `[Fetch schema (free)](command:${hydrateTableCommandId}?${hydrateArgs})`
+            return {
+              contents: [
+                {
+                  value: `**${escapeMarkdown(fullName)}** · Unstarred external project\n\nNot indexed yet. Fetch this table's columns with a free \`tables.get\` metadata call (0 B billed), or star the project for full indexing.`,
+                  isTrusted: false,
+                  supportHtml: false
+                },
+                {
+                  value: links,
+                  isTrusted: { enabledCommands: [hydrateTableCommandId, starProjectCommandId] },
+                  supportHtml: false
+                }
+              ],
+              range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column }
+            }
+          }
+        }
+        return null
       }
     }))
+    if (monaco.editor?.registerCommand) {
+      this.bindings.push(
+        monaco.editor.registerCommand(hydrateTableCommandId, (_accessor: unknown, connectionId?: unknown, project?: unknown, dataset?: unknown, name?: unknown) => {
+          if (typeof connectionId !== 'string' || typeof project !== 'string' || typeof dataset !== 'string' || typeof name !== 'string') return
+          void this.hydrateExternal(connectionId, project, dataset, name)
+        }),
+        monaco.editor.registerCommand(starProjectCommandId, (_accessor: unknown, connectionId?: unknown, project?: unknown) => {
+          if (typeof connectionId !== 'string' || typeof project !== 'string') return
+          void this.starExternalProject(connectionId, project)
+        })
+      )
+    }
     const reconcile = () => this.reconcile()
     this.bindings.push({ dispose: connections.subscribe(reconcile) }, { dispose: documents.subscribe(reconcile) })
     if (options.indexState) {
       this.bindings.push({ dispose: options.indexState.subscribe(() => this.syncIndexes()) })
       this.syncIndexes()
     }
+  }
+
+  /** One-click free `tables.get` / `routines.get` hydration for an external/unindexed table, then re-opens suggest if focused. */
+  async hydrateExternal(connectionId: string, project: string, dataset: string, name: string): Promise<boolean> {
+    if (this.disposed || !this.api.languageHydrate) return false
+    if (!isBigQueryName('project', project) || !isBigQueryName('dataset', dataset) || !(isBigQueryName('table', name) || isBigQueryName('routine', name))) return false
+    const connection = this.connections.get(connectionId)
+    if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return false
+    const key = cacheKey(connection)
+    const result = await this.api.languageHydrate({
+      connectionId,
+      targets: [{ project, dataset, name, allowExternal: true }]
+    }).catch(() => undefined)
+    if (this.disposed || !result?.ok) return false
+    const status = result.value.outcomes[0]?.status
+    if (status !== 'hydrated' && status !== 'cached') return false
+    this.clearConnectionCaches(key, false)
+    const activeEditor = this.monaco.editor?.getEditors?.().find(editor => editor.hasWidgetFocus?.() || editor.hasTextFocus?.())
+    if (activeEditor) activeEditor.trigger('varia.jit', 'editor.action.triggerSuggest', {})
+    return true
+  }
+
+  /** One-click ★ Star project action wired to PR #738's `BigQueryStarredService`. */
+  async starExternalProject(connectionId: string, project: string): Promise<boolean> {
+    if (this.disposed || !this.options.starProject) return false
+    if (!isBigQueryName('project', project)) return false
+    const connection = this.connections.get(connectionId)
+    if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return false
+    if (project === connection.server) return false
+    const key = cacheKey(connection)
+    const ok = await this.options.starProject(connectionId, project).catch(() => false)
+    if (this.disposed || !ok) return false
+    this.clearConnectionCaches(key, true)
+    return true
   }
 
   /**
@@ -210,7 +471,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       op = existing
     } else {
       if (existing) existing.cancel()
-      this.caches.get(key)?.clear()
+      this.clearConnectionCaches(key, true)
       this.failure(document.id, key, undefined)
       const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
       const scopes = extractBigQueryRefreshScopes(model.getValue(), connection.server, dataset)
@@ -245,7 +506,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
             this.refreshOps.delete(document.id)
             this.publishSnapshot()
           }
-          this.caches.get(key)?.clear()
+          this.clearConnectionCaches(key, true)
         }
       })()
       created.work = work
@@ -294,7 +555,57 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return { documentId: document.id, dialect: googleSqlDialect({ project: '' }) }
     // The tab's default dataset, as Execute sends it (a dataset id: letters, digits and underscores).
     const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
-    return { documentId: document.id, connectionId: connection.id, key: cacheKey(connection), dialect: googleSqlDialect({ project: connection.server, dataset }) }
+    return { documentId: document.id, connectionId: connection.id, key: cacheKey(connection), project: connection.server, dataset, dialect: googleSqlDialect({ project: connection.server, dataset }) }
+  }
+
+  private isJitHydrateEnabled(): boolean {
+    return this.options.jitHydrateEnabled ? this.options.jitHydrateEnabled() : true
+  }
+
+  private attemptedSet(key: string): Set<string> {
+    let set = this.hydrateAttempted.get(key)
+    if (!set) { set = new Set(); this.hydrateAttempted.set(key, set) }
+    return set
+  }
+
+  private clearConnectionCaches(key: string, resetHydrateAttempts: boolean): void {
+    this.caches.get(key)?.clear()
+    this.jumpCaches.delete(key)
+    if (resetHydrateAttempts) this.hydrateAttempted.delete(key)
+  }
+
+  private findJumpCache(key: string, prefix: string, dataset?: string): LanguageLookupAnswer | undefined {
+    const entries = this.jumpCaches.get(key)
+    if (!entries?.length) return undefined
+    const now = Date.now()
+    const low = prefix.toLowerCase()
+    for (const entry of entries) {
+      if (now - entry.at > lookupCacheLimits.ttlMs || now < entry.at) continue
+      if (entry.dataset !== dataset) continue
+      const askedLow = entry.prefix.toLowerCase()
+      if (low === askedLow) return entry.answer
+      if (!entry.answer.truncated && low.startsWith(askedLow)) {
+        return { ...entry.answer, items: entry.answer.items.filter(item => jumpMatches(item.name, prefix)), truncated: false }
+      }
+    }
+    return undefined
+  }
+
+  private keepJumpCache(key: string, request: LanguageLookupPath, answer: LanguageLookupAnswer): void {
+    const prefix = request.prefix?.trim()
+    if (!prefix) return
+    const now = Date.now()
+    const existing = (this.jumpCaches.get(key) ?? []).filter(entry => now - entry.at <= lookupCacheLimits.ttlMs && !(entry.prefix.toLowerCase() === prefix.toLowerCase() && entry.dataset === request.dataset))
+    existing.unshift({ prefix, dataset: request.dataset, answer, at: now })
+    if (existing.length > indexCompletionLimits.jumpCacheEntries) existing.length = indexCompletionLimits.jumpCacheEntries
+    this.jumpCaches.set(key, existing)
+  }
+
+  private async fetchJumpAlone(connectionId: string, key: string, documentId: string | undefined, request: LanguageLookupPath): Promise<LanguageLookupAnswer | undefined> {
+    const result = await this.ask(connectionId, key, documentId, [request], true)
+    const answer = result?.answers[0]
+    if (result?.index === 'ready' && answer && answer.state !== 'building') this.keepJumpCache(key, request, answer)
+    return answer
   }
 
   /** language.lookup for a target, through its connection's cache; a tab without a live connection has no index to ask. */
@@ -319,15 +630,26 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     }
   }
 
-  /** One language.lookup; its failure (or success) is shown on the tab that asked. */
-  private async ask(connectionId: string, key: string, documentId: string | undefined, requests: LanguageLookupPath[]) {
+  /** One language.lookup; its failure (or success) is shown on the tab that asked. Batches any pending cross-project jump into the same IPC call. */
+  private async ask(connectionId: string, key: string, documentId: string | undefined, requests: LanguageLookupPath[], isSoloJump = false) {
     if (this.disposed || this.inFlight >= indexCompletionLimits.inFlight) return undefined
+    const pending = !isSoloJump ? this.batchedJump.get(key) : undefined
+    const attachJump = !!pending && !pending.consumed && requests.length < languageLookupLimits.requests
+    const sent = attachJump ? [...requests, pending.request] : requests
+    if (attachJump && pending) pending.consumed = true
     this.inFlight++
     try {
-      const result = await this.api.languageLookup({ connectionId, requests })
+      const result = await this.api.languageLookup({ connectionId, requests: sent })
       if (this.disposed) return undefined
       this.failure(documentId, key, result.ok ? undefined : result.error, 'lookup')
-      return result.ok ? result.value : undefined
+      if (!result.ok) return undefined
+      if (attachJump && pending && result.value.answers.length === sent.length) {
+        const jumpAnswer = result.value.answers[result.value.answers.length - 1]
+        pending.answer = jumpAnswer
+        if (result.value.index === 'ready' && jumpAnswer.state !== 'building') this.keepJumpCache(key, pending.request, jumpAnswer)
+        return { index: result.value.index, answers: result.value.answers.slice(0, requests.length) }
+      }
+      return result.value
     } catch (error) {
       this.failure(documentId, key, error instanceof Error ? error.message : 'The index could not answer.', 'lookup')
       return undefined
@@ -355,7 +677,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   private reconcile(): void {
     if (this.disposed) return
     const live = new Set(this.connections.getSnapshot().filter(connection => isLiveConnection(connection) && isBigQueryConnection(connection)).map(cacheKey))
-    for (const key of [...this.caches.keys()]) if (!live.has(key)) { this.caches.delete(key); this.ensured.delete(key) }
+    for (const key of [...this.caches.keys()]) if (!live.has(key)) { this.caches.delete(key); this.jumpCaches.delete(key); this.hydrateAttempted.delete(key); this.batchedJump.delete(key); this.ensured.delete(key) }
     for (const [id, op] of [...this.refreshOps.entries()]) {
       if (!this.isCurrentTarget(id, op.key)) {
         this.refreshOps.delete(id)
@@ -398,7 +720,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       const prevSig = this.indexSignatures.get(connection.id) ?? ''
       if (sig !== prevSig) {
         if (sig) this.indexSignatures.set(connection.id, sig); else this.indexSignatures.delete(connection.id)
-        this.caches.get(cacheKey(connection))?.clear()
+        this.clearConnectionCaches(cacheKey(connection), true)
       }
       const state: 'none' | 'building' | 'ready' | undefined = entry?.requestId
         ? 'building'
@@ -451,6 +773,9 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     this.indexSignatures.clear()
     this.bindings.forEach(binding => binding.dispose())
     this.caches.clear()
+    this.jumpCaches.clear()
+    this.hydrateAttempted.clear()
+    this.batchedJump.clear()
     this.clearListeners()
   }
 }
@@ -517,13 +842,160 @@ function unquoteGoogleSqlName(value: string, quoted = false): string {
   return body.replace(/\\(.)/g, '$1')
 }
 
-/** A pipeline item as Monaco shows it: structured label, icon, exact-match boost, typed word ranges, and backtick exit on leaves. */
+/** Wraps a GoogleSQL dialect so top-level `bqProject` items render PR #738 tier & wave/memory-cap descriptions. */
+function wrapProjectTierDialect(dialect: CompletionDialect): CompletionDialect {
+  return {
+    ...dialect,
+    itemDetail(entry: LanguageLookupItem) {
+      if (entry.kind === 'bqProject') return formatBigQueryProjectDetail(entry)
+      return dialect.itemDetail(entry)
+    }
+  }
+}
+
+const hydrateKey = (item: HydrateTargetRef) => `${item.project}\u0000${item.dataset}\u0000${item.name}`
+
+/** Separates 3-part object lookup answers into auto-hydratable tracked tables (Wave-3 / memory-capped) vs unstarred external projects. */
+function classifyLookupTargets(
+  lookups: ReadonlyMap<string, { readonly path: readonly string[]; readonly answer: LanguageLookupAnswer }>,
+  billingProject?: string
+): { autoTargets: HydrateTargetRef[]; externalTargets: HydrateTargetRef[] } {
+  const autoTargets: HydrateTargetRef[] = []
+  const externalTargets: HydrateTargetRef[] = []
+  const seenAuto = new Set<string>()
+  const seenExternal = new Set<string>()
+  for (const { path, answer } of lookups.values()) {
+    if (path.length !== 3) continue
+    const [project, dataset, name] = path
+    if (!isBigQueryName('project', project) || !isBigQueryName('dataset', dataset) || !(isBigQueryName('table', name) || isBigQueryName('routine', name))) continue
+    const ref: HydrateTargetRef = { project, dataset, name }
+    const key = hydrateKey(ref)
+    if (answer.object?.detailed === false) {
+      if (!seenAuto.has(key)) { seenAuto.add(key); autoTargets.push(ref) }
+    } else if ((answer.state === 'building' || answer.state === 'partial') && !answer.object && answer.items.length === 0
+      && (!answer.skip || answer.skip === 'CHILDREN_LEFT_OUT' || answer.skip === 'TOO_LARGE')) {
+      if (!seenAuto.has(key)) { seenAuto.add(key); autoTargets.push(ref) }
+    } else if (answer.state === 'absent' && !answer.object && billingProject && project.toLowerCase() !== billingProject.toLowerCase()) {
+      if (!seenExternal.has(key)) { seenExternal.add(key); externalTargets.push(ref) }
+    }
+  }
+  return { autoTargets, externalTargets }
+}
+
+/** Chooses the target most relevant to the current caret (`s.|` matches alias `s` first). */
+function pickActionTarget(
+  read: ReturnType<typeof readGoogleSqlCompletion>,
+  dialect: CompletionDialect,
+  candidates: readonly HydrateTargetRef[]
+): HydrateTargetRef | undefined {
+  if (!candidates.length) return undefined
+  if (read.site.kind === 'member' && read.site.qualifier.length > 0) {
+    const alias = read.site.qualifier[0].toLowerCase()
+    for (const source of read.scope.sources) {
+      if (source.kind !== 'object' || source.name.toLowerCase() !== alias) continue
+      const resolved = dialect.objectPath(source.parts)
+      if (!resolved || resolved.length !== 3) continue
+      const match = candidates.find(item =>
+        item.project.toLowerCase() === resolved[0].toLowerCase()
+        && item.dataset.toLowerCase() === resolved[1].toLowerCase()
+        && item.name.toLowerCase() === resolved[2].toLowerCase())
+      if (match) return match
+    }
+  }
+  return candidates[0]
+}
+
+/** One-click completion actions for an unstarred external (or unhydrated) BigQuery table. */
+function actionSuggestions(
+  monaco: typeof Monaco,
+  connectionId: string,
+  target: HydrateTargetRef,
+  billingProject: string | undefined,
+  range: { insert: Monaco.IRange; replace: Monaco.IRange },
+  word: Pick<CompletionWord, 'typed'>,
+  afterColumns = false
+): Monaco.languages.CompletionItem[] {
+  const fullPath = `${target.project}.${target.dataset}.${target.name}`
+  const filter = word.typed || undefined
+  const sortPrefix = afterColumns ? '1:25' : '0:00'
+  const items: Monaco.languages.CompletionItem[] = [{
+    label: { label: 'Fetch schema (free)', description: `${fullPath} · 0 B billed` },
+    kind: monaco.languages.CompletionItemKind[kinds.cte],
+    insertText: '',
+    detail: `Fetch schema (free) · ${fullPath}`,
+    documentation: `Runs one free tables.get metadata call (0 B billed) for \`${fullPath}\` and caches its columns in memory.`,
+    sortText: `${sortPrefix}:0:fetch`,
+    filterText: filter ?? 'Fetch schema (free)',
+    range,
+    command: { id: hydrateTableCommandId, title: 'Fetch schema (free)', arguments: [connectionId, target.project, target.dataset, target.name] }
+  }]
+  if (!billingProject || target.project.toLowerCase() !== billingProject.toLowerCase()) {
+    items.push({
+      label: { label: `★ Star ${target.project}`, description: 'Add to Starred projects' },
+      kind: monaco.languages.CompletionItemKind[kinds.container],
+      insertText: '',
+      detail: `★ Star ${target.project}`,
+      documentation: `Stars \`${target.project}\` for this BigQuery account so Object Explorer and IntelliSense index its datasets automatically.`,
+      sortText: `${sortPrefix}:1:star`,
+      filterText: filter ?? `Star ${target.project}`,
+      range,
+      command: { id: starProjectCommandId, title: `★ Star ${target.project}`, arguments: [connectionId, target.project] }
+    })
+  }
+  return items
+}
+
+/** Cross-project fuzzy jump item: compact `dataset.table` for billing project or `` `project.dataset.table` `` cross-project. */
+function jumpSuggestion(
+  monaco: typeof Monaco,
+  hit: LanguageLookupItem,
+  index: number,
+  billingProject: string,
+  range: { insert: Monaco.IRange; replace: Monaco.IRange },
+  word: Pick<CompletionWord, 'typed' | 'quoted'>,
+  canExitBacktick: boolean
+): Monaco.languages.CompletionItem {
+  const project = hit.project!
+  const dataset = hit.dataset!
+  const isBilling = project === billingProject
+  const kindLabel = (hit.subtype && subtypeLabels[hit.subtype]) || objectLabels[hit.kind] || 'Table'
+  const completionKind: CompletionKind = hit.kind === 'bqView' || hit.kind === 'bqMaterializedView' ? 'view'
+    : hit.kind === 'bqRoutine' ? 'routine'
+    : hit.kind === 'bqModel' ? 'model'
+    : 'table'
+  const rawInsert = isBilling
+    ? (word.quoted ? `${dataset}.${hit.name}` : `${quoteGoogleSqlName(dataset)}.${quoteGoogleSqlName(hit.name)}`)
+    : (word.quoted ? `${project}.${dataset}.${hit.name}` : bigQueryPath(project, dataset, hit.name))
+  const tierBadge = hit.tier === 'starred' ? '★ Starred' : hit.recent ? 'Recent' : hit.namesOnly ? 'Names only' : 'Discovered'
+  const description = isBilling
+    ? `${dataset} · ${kindLabel}`
+    : `${project}.${dataset} · ${tierBadge} · ${kindLabel}`
+  const tierSort = isBilling ? '1' : hit.tier === 'starred' ? '2' : hit.recent ? '3' : '4'
+  const typed = word.typed
+  const exact = typed.length > 0 && hit.name.toLowerCase() === unquoteGoogleSqlName(typed, word.quoted).toLowerCase()
+  const itemRange = canExitBacktick
+    ? { insert: { ...range.insert, endColumn: range.insert.endColumn + 1 }, replace: { ...range.replace, endColumn: range.replace.endColumn + 1 } }
+    : range
+  return {
+    label: { label: hit.name, description },
+    kind: monaco.languages.CompletionItemKind[kinds[completionKind]],
+    insertText: canExitBacktick ? `${rawInsert}\`` : rawInsert,
+    detail: description,
+    documentation: hit.description,
+    sortText: `${exact ? '0' : '1'}:30${tierSort}:${String(index).padStart(3, '0')}:${hit.name.toLowerCase()}`,
+    filterText: exact ? typed : word.quoted ? hit.name.replace(/[\\`]/g, '\\$&') : hit.name,
+    range: itemRange
+  }
+}
+
+/** A pipeline item as Monaco shows it: structured label, icon, exact-match boost, PR #738 tier ordering, typed word ranges, and backtick exit on leaves. */
 function suggestion(
   monaco: typeof Monaco,
   item: CompletionItem,
   range: { insert: Monaco.IRange; replace: Monaco.IRange },
   word: Pick<CompletionWord, 'typed' | 'quoted'>,
-  canExitBacktick: boolean
+  canExitBacktick: boolean,
+  projectRanks?: ReadonlyMap<string, ProjectRankInfo>
 ): Monaco.languages.CompletionItem {
   const typed = word.typed
   const name = item.filterText ?? item.label
@@ -536,13 +1008,21 @@ function suggestion(
         replace: { ...range.replace, endColumn: range.replace.endColumn + 1 }
       }
     : range
+  let sort = item.sortText
+  if (item.kind === 'container' && projectRanks?.has(item.label)) {
+    const info = projectRanks.get(item.label)!
+    const colon = sort.indexOf(':')
+    const head = colon >= 0 ? sort.slice(0, colon + 1) : ''
+    const tail = colon >= 0 ? sort.slice(colon + 1) : sort
+    sort = `${head}${info.tierRank}:${String(info.order).padStart(4, '0')}:${tail}`
+  }
   return {
     label: description ? { label: item.label, description } : { label: item.label },
     kind: monaco.languages.CompletionItemKind[kinds[item.kind]],
     insertText: exitBacktick ? `${item.insertText}\`` : item.insertText,
     detail: item.detail,
     documentation: item.documentation,
-    sortText: `${exact ? '0' : '1'}:${item.sortText}`,
+    sortText: `${exact ? '0' : '1'}:${sort}`,
     filterText: exact ? typed : word.quoted ? name.replace(/[\\`]/g, '\\$&') : item.filterText,
     range: itemRange
   }

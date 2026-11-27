@@ -776,7 +776,11 @@ run a billed query). Dataset and routine names are validated through `BqNames` i
 facts are left out and values are clipped at 2,000 characters without splitting surrogate pairs.
 
 Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
-and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
+and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)). GoogleSQL IntelliSense
+ranks indexed projects **Billing → ★ Starred → Recently Queried → Discovered**, supports cross-project fuzzy table jump on
+`FROM` (2+ characters), auto-hydrates Wave-3-pending or memory-capped tables on demand via free `tables.get` / `routines.get`
+(`textEditor.googleSql.jitHydrate`, on by default), and offers one-click **Fetch schema (free)** and **★ Star project** on
+unstarred external projects ([Completion from the index](language-services.md#completion-from-the-index)).
 
 ## Job History
 
