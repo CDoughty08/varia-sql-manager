@@ -77,6 +77,8 @@ internal sealed partial class ObjectSearchService
         if (unchanged)
         {
             loaded.Sync = unit.Sync;
+            // The listing it was saved with (charged with the file's read), so a later check can read again only what changed.
+            loaded.Extra = load.Extra ?? default(ReadOnlyMemory<byte>);
             Holding(state.Index, children)(loaded);
             Interlocked.Increment(ref reloadUnchanged);
             ReloadOutcome?.Invoke(database, "unchanged");

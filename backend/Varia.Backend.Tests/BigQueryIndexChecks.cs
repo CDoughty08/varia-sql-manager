@@ -427,9 +427,12 @@ internal static partial class BigQueryIndexChecks
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["allProjects"] = false })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["maxProjects"] = 10 })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["scope"] = new JsonObject { ["project"] = "varia-alpha" } })).Code,
-            (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["stale"] = true })).Code
+            (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["missingOnly"] = true })).Code
         };
-        check(sqlRefused.All(value => value == "INVALID_PARAMS"), "SQL Server refuses starredProjects, allProjects, maxProjects, scope and stale: " + string.Join(",", sqlRefused));
+        check(sqlRefused.All(value => value == "INVALID_PARAMS"), "SQL Server refuses starredProjects, allProjects, maxProjects, scope and missingOnly: " + string.Join(",", sqlRefused));
+        // A check (stale, docs/object-search.md, Freshness) is SQL Server's too: it passes validation and reaches the connection.
+        var sqlCheck = (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["stale"] = true, ["database"] = "Sales" })).Code;
+        check(sqlCheck == "NOT_CONNECTED", "SQL Server takes stale, with a database to check: " + sqlCheck);
         var refreshed = await harness.Index(more => more["scope"] = new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales" });
         var bare = await harness.Index(more => { more["stale"] = true; more["definitions"] = false; });
         check(refreshed.Status.NamesOnly is null && bare.Status.NamesOnly is null && bare.Status.Definitions,

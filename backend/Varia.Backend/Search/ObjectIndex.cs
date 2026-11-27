@@ -83,6 +83,8 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public bool FailedPart { get; set; }
     /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
     public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
+    /// <summary>Loaded from the saved index rather than read from its source (the status says the index was saved, not read).</summary>
+    public bool Loaded { get; init; }
     /// <summary>What the store keeps in the read's file beside the unit (<see cref="IndexStore"/>), set by its builder before
     /// the read is held: Sync in the header, which a listing of saved units reads without the body (what the builder will
     /// compare with the source to tell how stale the file is), and Extra in the body. Both are the builder's own bytes.</summary>

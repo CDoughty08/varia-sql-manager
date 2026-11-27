@@ -154,7 +154,8 @@ try {
   expect(fake.gets).toEqual([])
   release()
   // Once the build has ended (its details pass included), nothing read any object's details.
-  await expect(objectSearchIndexLines(page).first()).not.toContainText(/Indexing|saved/, { timeout: 30000 })
+  // The line then says how fresh the index is: read from the saved index, and checked by the build's listing.
+  await expect(objectSearchIndexLines(page).first()).toHaveText(/^Index: .* · saved .+ ago · checked (just now|\d+ (s|min) ago)$/, { timeout: 30000 })
   await expect(objectSearchHits(page).filter({ hasText: 'orders' })).not.toHaveCount(0)
   expect(fake.gets).toEqual([])
   expect(failures).toEqual([])
