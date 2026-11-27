@@ -389,7 +389,7 @@ database's catalog can run:
 
 - **Fingerprint.** One row: the database's identity (its id, creation time, Service Broker GUID and collation) and the
   count, latest change and checksum of its objects, users, roles, schemas, keys and the rest of what the index names,
-  user types, DDL triggers, plan guides and the statistics the index keeps. Another database under the same name (dropped
+  user types (a type created again under its name counts as changed), DDL triggers, plan guides and the statistics the index keeps. Another database under the same name (dropped
   and created again, or restored over it) is read whole, as is a file saved with another **Index module definitions**
   or children setting, or one with no fingerprint this version reads. The fingerprint reads committed catalog rows (it waits
   on DDL still open), and a read is saved with its fingerprint only when one taken after the read is the same; otherwise

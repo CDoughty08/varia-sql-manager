@@ -172,6 +172,16 @@ internal static class SearchReloadLiveChecks
             check(outcomes.GetValueOrDefault(database) == "unverifiable" && (await Names("Midway")).Contains("table:rl.Midway"),
                 "and the next build reads it whole (" + outcomes.GetValueOrDefault(database) + ")");
 
+            // A table type dropped and created again under its name (as a deployment changes one) keeps its user_type_id, but is another type.
+            await Run("CREATE TYPE rl.tt_rows AS TABLE (" + marker + "_old int);", "create a table type");
+            await Session();
+            await Session();
+            check(outcomes.GetValueOrDefault(database) == "unchanged", "a database with a table type is held from its file (" + outcomes.GetValueOrDefault(database) + ")");
+            await Run("DROP TYPE rl.tt_rows; CREATE TYPE rl.tt_rows AS TABLE (" + marker + "_new nvarchar(20));", "create the table type again with another column");
+            await Session();
+            check(outcomes.GetValueOrDefault(database) != "unchanged" && (await Names(marker + "_new")).Count == 1 && (await Names(marker + "_old")).Count == 0,
+                "a table type created again with other columns is not held as unchanged (" + outcomes.GetValueOrDefault(database) + ")");
+
             // The database's budget running out during the check after a read: the read is held (unverified), not a timeout.
             await Run("CREATE TABLE rl.Slow (id int);", "create a table");
             var budget = service.Search.Limits.DatabaseBudget;

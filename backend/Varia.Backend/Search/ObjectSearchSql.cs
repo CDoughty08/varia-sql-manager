@@ -207,8 +207,11 @@ internal static class ObjectSearchSql
         + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(o.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(o.object_id, o.parent_object_id, o.modify_date, o.name, o.schema_id, o.type))"
         + " FROM sys.objects AS o WHERE o.type IN (" + ObjectTypes + ")) AS ob (n, m, c)"
         + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(u.k, u.s, u.n, u.d, u.f)) FROM (" + NamedObjects(r) + ") AS u (k, s, n, d, f)) AS nm (n, c)"
-        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(t.user_type_id, t.name, t.schema_id, t.is_table_type, t.is_assembly_type))"
-        + " FROM sys.types AS t WHERE t.is_user_defined = 1) AS ty (n, c)"
+        // A type dropped and created again keeps its user_type_id: a table type's object id, and an alias type's base type and
+        // size, tell the new one apart (no table type is in sys.objects' aggregate).
+        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(t.user_type_id, t.name, t.schema_id, t.is_table_type, t.is_assembly_type,"
+        + " tt.type_table_object_id, t.system_type_id, t.max_length, t.precision, t.scale))"
+        + " FROM sys.types AS t LEFT JOIN sys.table_types AS tt ON tt.user_type_id = t.user_type_id WHERE t.is_user_defined = 1) AS ty (n, c)"
         + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(tr.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped))"
         + " FROM sys.triggers AS tr WHERE tr.parent_class = 0) AS tr (n, m, c)"
         + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(g.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(g.plan_guide_id, g.name, g.modify_date)) FROM sys.plan_guides AS g) AS pg (n, m, c)"
