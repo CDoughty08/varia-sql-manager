@@ -26,6 +26,10 @@ internal sealed partial class ObjectSearchService
     /// <summary>The longest a reload's fingerprint may take before the database is read whole instead.</summary>
     internal TimeSpan FingerprintBudget { get; set; } = TimeSpan.FromSeconds(15);
 
+    /// <summary>The longest a reload's listing and selective read may take before the database is read whole instead (a third of
+    /// the database's budget when null).</summary>
+    internal TimeSpan? SelectiveBudget { get; set; }
+
     /// <summary>A reload's answer when it held the database (or found it too large): the skip to report, or null.</summary>
     private sealed record Reloaded(ObjectIndexSkip? Skip);
 
@@ -80,9 +84,12 @@ internal sealed partial class ObjectSearchService
             return Count(ref reloadWhole, database, "whole");
         }
         DatabaseReader? reader = null;
+        // The listing and selective read have a deadline of their own: past it the database is read whole, within its budget.
+        using var selective = CancellationTokenSource.CreateLinkedTokenSource(token);
+        selective.CancelAfter(SelectiveBudget ?? Limits.DatabaseBudget / 3);
         try
         {
-            var rows = await ListingAsync(connection, database, perDatabase, token);
+            var rows = await ListingAsync(connection, database, perDatabase, selective.Token);
             var plan = SqlReloadPlan.Of(listing, rows);
             if (!plan.Worth(rows.Count))
             {
@@ -99,13 +106,13 @@ internal sealed partial class ObjectSearchService
             command.CommandTimeout = 0;
             InDatabase(command, database, perDatabase, ObjectSearchSql.Batch(render, definitions, children, only: true),
                 "[" + string.Join(",", plan.Reread.Order().Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture))) + "]");
-            var merged = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, token, children), read =>
+            var merged = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, selective.Token, children), read =>
             {
                 // The fingerprint taken before the listing: whatever changed after it makes the next one differ from this.
                 read.Sync = current.ToBytes();
                 read.Extra = reader.Listing ?? default(ReadOnlyMemory<byte>);
                 Holding(state.Index, children)(read);
-            }, token);
+            }, selective.Token);
             state.Index.Abandon(loaded);
             if (merged is null) return new(new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection)."));
             Interlocked.Increment(ref reloadReread);
@@ -113,7 +120,7 @@ internal sealed partial class ObjectSearchService
             ReloadOutcome?.Invoke(database, "reread:" + plan.Reread.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + reader.Listed.ToString(System.Globalization.CultureInfo.InvariantCulture));
             return new(null);
         }
-        catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested)
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException && !token.IsCancellationRequested)
         {
             reader?.Abandon();
             state.Index.Abandon(loaded);

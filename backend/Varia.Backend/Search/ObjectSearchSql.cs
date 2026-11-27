@@ -25,8 +25,12 @@ internal static class ObjectSearchSql
     /// <summary>As <see cref="ModuleCall"/>, passing @ids (a JSON array of object ids) on to @stmt: a selective re-read (<see cref="Batch"/>'s only).</summary>
     public const string ModuleCallIds = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt, N'@ids nvarchar(max)', @ids;";
 
-    /// <summary>The object ids a selective re-read names (OPENJSON, so only in a database at compatibility level 130 or more).</summary>
-    internal const string Only = "(SELECT CONVERT(int, j.value) FROM OPENJSON(@ids) AS j)";
+    /// <summary>The object ids a selective re-read names (OPENJSON, so only in a database at compatibility level 130 or more). Typed
+    /// through WITH: beside an OR, OPENJSON's untyped value is read again for every row it filters (seconds for a few thousand ids).</summary>
+    internal const string Only = "(SELECT j.id FROM OPENJSON(@ids) WITH (id int '$') AS j)";
+
+    /// <summary>The one literal <see cref="Only"/> adds: the JSON path of each id.</summary>
+    private static readonly IReadOnlySet<string> OnlyLiterals = new HashSet<string>(StringComparer.Ordinal) { "'$'" };
     /// <summary>The table types' own object ids: a selective re-read reads every table type again, with its columns, keys and indexes.</summary>
     internal const string TableTypeIds = "(SELECT tt.type_table_object_id FROM sys.table_types AS tt)";
 
@@ -270,10 +274,10 @@ internal static class ObjectSearchSql
                     foreach (var only in new[] { false, true })
                     {
                         texts.Add(Batch(render, definitions, children, only));
-                        problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children, only), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
+                        problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children, only), render, list: false, mayCheckAccess: false, OnlyLiterals).Select(problem => "batch " + band + " " + problem));
                         var vector = render with { VectorDimensions = true };
                         texts.Add(Batch(vector, definitions, children, only));
-                        problems.AddRange(CatalogSql.Lint(Batch(vector, definitions, children, only), vector, list: false, mayCheckAccess: false).Select(problem => "vector batch " + band + " " + problem));
+                        problems.AddRange(CatalogSql.Lint(Batch(vector, definitions, children, only), vector, list: false, mayCheckAccess: false, OnlyLiterals).Select(problem => "vector batch " + band + " " + problem));
                     }
                 }
                 problems.AddRange(CatalogSql.Lint(ResourceObjects(definitions), render, list: false, mayCheckAccess: false).Select(problem => "resource " + problem));

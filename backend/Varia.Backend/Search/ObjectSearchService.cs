@@ -612,7 +612,8 @@ internal sealed partial class ObjectSearchService : IDisposable
             await host.OpenAsync(connection, budgetSource.Token);
             // Nothing held yet (the connection's first build, or a database it could not read before): what was saved of it stands
             // in only once its fingerprint says it still may, or once what changed has been read again.
-            if (held is null && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token) is { } reloaded) return reloaded.Skip;
+            // A read again without children (WithFallbackAsync) follows a reload that already answered for the database.
+            if (held is null && children && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token) is { } reloaded) return reloaded.Skip;
             // The fingerprint is taken before the batch (whatever DDL lands while it reads makes the next one differ from the saved
             // one), and only where a file would keep it; one that fails leaves the read as it was, with nothing to compare next time.
             var fingerprint = state.Index.Sink?.Scope is not null && Store.Saves ? await TryFingerprintAsync(connection, database, render, perDatabase, budgetSource.Token) : null;

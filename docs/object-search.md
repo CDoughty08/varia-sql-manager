@@ -400,8 +400,8 @@ database's catalog can run:
   what the file held. The file is then saved in place. A database is read whole instead when the objects to read again
   (the changed ones with their children) number more than 20,000, or more than 256 and more than a quarter of its objects; when its file left definitions out for memory; or when its
   compatibility level is below 130 (the selective read needs `OPENJSON`). Table types are always read again whole.
-- **Failures are values.** A fingerprint, listing or selective read that fails, is denied or takes longer than 15 seconds
-  (the fingerprint) reads the database whole as if nothing were saved; a file that does not open or does not load is
+- **Failures are values.** A fingerprint, listing or selective read that fails, is denied or takes too long (15 seconds
+  for the fingerprint, a third of the database's read budget for the listing and selective read) reads the database whole as if nothing were saved; a file that does not open or does not load is
   read whole too. Each is counted, and the build never fails for one.
 - **When.** At a connection's first build of a database, while the index holds nothing for it. A database already held
   (read or loaded this session) is not checked again until it is read again: Object Explorer's Refresh, or Rebuild
@@ -409,8 +409,8 @@ database's catalog can run:
   from the server.
 - **What the fingerprint misses.** A grant or revoke of VIEW DEFINITION or of column permissions that shows or hides a
   definition or column without changing which objects the login sees; a change to the `microsoft_database_tools_support`
-  extended property (which hides an object); a foreign key's referenced table that becomes visible to the login while the
-  key's own table stays as it was; and a change whose checksums collide (CHECKSUM_AGG and BINARY_CHECKSUM are weak
+  extended property (which hides an object); a foreign key's referenced table, or a history table's current table, that
+  becomes visible to the login while the key's own table (or the history table) stays as it was; and a change whose checksums collide (CHECKSUM_AGG and BINARY_CHECKSUM are weak
   hashes). Each is seen when the database is refreshed. Checked live on SQL Server 2025 only; the SQL is written for 2016
   and later.
 

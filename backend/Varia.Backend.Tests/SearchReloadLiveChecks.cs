@@ -107,6 +107,14 @@ internal static class SearchReloadLiveChecks
             check(outcomes.GetValueOrDefault(database) is { } stats && stats.StartsWith("reread:", StringComparison.Ordinal) && (await Names("st_" + marker)).Count == 1,
                 "a statistic created on a table is read again with it (" + outcomes.GetValueOrDefault(database) + ")");
 
+            // A listing and selective read past their deadline: the database is read whole, within its budget.
+            await Run("CREATE TABLE rl.Late (id int);", "create a table");
+            service.Search.SelectiveBudget = TimeSpan.FromMilliseconds(1);
+            try { await Session(); }
+            finally { service.Search.SelectiveBudget = null; }
+            check(outcomes.GetValueOrDefault(database) == "failed" && (await Names("Late")).Contains("table:rl.Late"),
+                "a selective read past its deadline reads the database whole (" + outcomes.GetValueOrDefault(database) + ")");
+
             // A fingerprint that fails, or takes longer than its budget: the database is read whole, as a value.
             service.Search.ReloadFingerprint = _ => "SELECT 1/0;";
             var failed = service.Search.SqlReloads.Failed;
@@ -174,6 +182,7 @@ internal static class SearchReloadLiveChecks
             service.Search.ReloadOutcome = null;
             service.Search.ReloadFingerprint = ObjectSearchSql.Fingerprint;
             service.Search.FingerprintBudget = TimeSpan.FromSeconds(15);
+            service.Search.SelectiveBudget = null;
             service.Search.Store.Configure(new("disabled", storeFolder, IndexStoreLimits.DefaultDiskMiB));
             await service.Search.Store.Idle();
             try { Directory.Delete(storeRoot, recursive: true); }
