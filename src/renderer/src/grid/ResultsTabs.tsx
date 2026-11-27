@@ -516,7 +516,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
             if (firstSet) select(firstSet.key)
           }} />
         : selected && <>
-            <EntryNoticeBars tabId={tabId} tab={tab} entry={selected} running={running} />
+            <EntryNoticeBars key={selected.key} tabId={tabId} tab={tab} entry={selected} running={running} />
             <ResultGrid key={setKey(selected.descriptor)} tabId={tabId} entry={selected} count={tab.numbered} focused budget={budget} sort={sort}
               view={group?.planSet ? 'plan' : selectedSlot?.view} group={group?.ordinal} onFocus={select} />
           </>}

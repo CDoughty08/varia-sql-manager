@@ -456,21 +456,13 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     () => tab?.multiTargets ? findSharedSqlDatabases(tab.multiTargets, connections, databaseLists) : [],
     [tab?.multiTargets, connections, databaseLists]
   )
-
-  useEffect(() => {
-    if (!sharedSqlDatabases.length) {
-      if (sharedChoice) setSharedChoice('')
-      return
-    }
-    if (!sharedChoice || !sharedSqlDatabases.includes(sharedChoice)) {
-      const existingCaseMatch = sharedChoice
-        ? sharedSqlDatabases.find(db => db.toLowerCase() === sharedChoice.toLowerCase())
-        : undefined
-      const firstEnabledSqlDb = tab?.multiTargets?.find(t => t.enabled && t.provider === 'sqlserver')?.database
-      const preferred = existingCaseMatch ?? (firstEnabledSqlDb ? sharedSqlDatabases.find(db => db.toLowerCase() === firstEnabledSqlDb.toLowerCase()) : undefined)
-      setSharedChoice(preferred ?? sharedSqlDatabases[0]!)
-    }
-  }, [sharedSqlDatabases, sharedChoice, tab?.multiTargets])
+  const firstEnabledSqlDb = tab?.multiTargets?.find(t => t.enabled && t.provider === 'sqlserver')?.database
+  const effectiveSharedChoice = sharedSqlDatabases.includes(sharedChoice)
+    ? sharedChoice
+    : ((sharedChoice ? sharedSqlDatabases.find(db => db.toLowerCase() === sharedChoice.toLowerCase()) : undefined)
+      ?? (firstEnabledSqlDb ? sharedSqlDatabases.find(db => db.toLowerCase() === firstEnabledSqlDb.toLowerCase()) : undefined)
+      ?? sharedSqlDatabases[0]
+      ?? '')
 
   // Lazy-load missing database/dataset lists when popover opens, bounded to avoid flooding the metadata lane.
   const ensureDatabaseList = useCallback((connectionIds: readonly string[]) => {
@@ -642,12 +634,12 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   }
 
   const applyDatabaseToAll = () => {
-    if (locked || !sharedChoice) return
+    if (locked || !effectiveSharedChoice) return
     const liveIds = new Set(connections.filter(isLiveConnection).map(c => c.id))
     documents.updateMultiTarget(
       tab.id,
       target => target.enabled && target.provider === 'sqlserver' && !!target.connectionId && liveIds.has(target.connectionId),
-      target => ({ ...target, database: canonicalDatabaseName(target.connectionId, sharedChoice, databaseLists) })
+      target => ({ ...target, database: canonicalDatabaseName(target.connectionId, effectiveSharedChoice, databaseLists) })
     )
   }
 
@@ -771,7 +763,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         {sharedSqlDatabases.length > 1 && <select
           className="ui-field multi-target-shared-select"
           aria-label="Shared database for all SQL Servers"
-          value={sharedChoice}
+          value={effectiveSharedChoice}
           disabled={locked}
           onChange={event => setSharedChoice(event.target.value)}>
           {sharedSqlDatabases.map(name => <option key={name} value={name}>{name}</option>)}
@@ -779,10 +771,10 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         <button
           type="button"
           className="ui-button multi-target-apply-btn"
-          disabled={locked || !sharedChoice}
-          title={`Set every enabled SQL Server target to ${sharedChoice}`}
+          disabled={locked || !effectiveSharedChoice}
+          title={`Set every enabled SQL Server target to ${effectiveSharedChoice}`}
           onClick={applyDatabaseToAll}>
-          {sharedSqlDatabases.length === 1 ? `Apply ${sharedChoice} to all` : 'Apply database to all'}
+          {sharedSqlDatabases.length === 1 ? `Apply ${effectiveSharedChoice} to all` : 'Apply database to all'}
         </button>
       </div>}
     </div>

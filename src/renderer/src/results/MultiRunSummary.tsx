@@ -135,7 +135,7 @@ function MultiRunSummary({ tabId, tab, active = false, compact = false, onSelect
   const succeededCount = multi.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length
   const rolledBackPreview = hasRolledBackPreviewRows(tab)
   const warnings = multi.combineWarnings ?? []
-  const runError = tab.error && !multi.targets.some(target => target.errorMessage) ? tab.error : undefined
+  const runError = tab.error && (tab.status === 'lost' || !multi.targets.some(target => target.errorMessage)) ? tab.error : undefined
   const discarded = tab.discard ? (tab.summary?.discardedResultSets ?? tab.multiSummary?.discardedResultSets ?? 0) : 0
 
   const setsByTarget = new Map<string, number>()

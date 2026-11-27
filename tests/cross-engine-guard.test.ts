@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act, createElement, createRef, type ReactElement } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import type { IDockviewPanelHeaderProps } from 'dockview-react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -2221,5 +2222,50 @@ describe('Round 4 Editor Surfaces regressions', () => {
     await act(async () => { primaryModel.edit(serializeCrossEngineSql('SELECT 1;', 'SELECT 2;')) })
     await act(async () => { documents.setCrossView(tab1.id, 'split') })
     expect(host.querySelector('[role="alert"]')).toBeNull()
+  })
+})
+
+describe('Round 6 Editor Surfaces regressions', () => {
+  it('R6 #1: MultiTargetPopover derives effectiveSharedChoice synchronously on first paint so button never renders "Apply  to all"', async () => {
+    const { connections, documents, databaseList, mount } = uiFixture()
+    addSqlConnection(connections, 'sql-1', 'SQL-01', { database: 'SalesDB' })
+    addSqlConnection(connections, 'sql-2', 'SQL-02', { database: 'master' })
+    vi.spyOn(databaseList, 'getSnapshot').mockReturnValue(new Map([
+      ['sql-1', [{ name: 'SalesDB', isSystem: false, isSnapshot: false }]],
+      ['sql-2', [{ name: 'SalesDB', isSystem: false, isSnapshot: false }]]
+    ]))
+    vi.spyOn(databaseList, 'reload').mockResolvedValue()
+
+    const tab = documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'sql-1', provider: 'sqlserver', database: 'SalesDB', enabled: true },
+        { connectionId: 'sql-2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+
+    const { host } = await mount(createElement(MultiTargetPopover, { tabId: tab.id }))
+    // Spy on button state right after synchronous commit (before passive useEffects run) inside act so no act warning fires.
+    let firstPaintText = ''
+    let firstPaintTitle = ''
+    let firstPaintDisabled = true
+    let btn!: HTMLButtonElement
+    await act(async () => {
+      flushSync(() => {
+        host.querySelector<HTMLButtonElement>('.multi-target-trigger')!.click()
+      })
+      btn = document.body.querySelector<HTMLButtonElement>('.multi-target-apply-btn')!
+      firstPaintText = btn.textContent ?? ''
+      firstPaintTitle = btn.title
+      firstPaintDisabled = btn.disabled
+    })
+
+    expect(firstPaintText).toBe('Apply SalesDB to all')
+    expect(firstPaintTitle).toBe('Set every enabled SQL Server target to SalesDB')
+    expect(firstPaintDisabled).toBe(false)
+
+    // Clicking Apply immediately works using effectiveSharedChoice.
+    await act(async () => { btn.click() })
+    expect(documents.get(tab.id)!.multiTargets!.map(t => t.database)).toEqual(['SalesDB', 'SalesDB'])
   })
 })

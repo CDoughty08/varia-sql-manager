@@ -22,7 +22,7 @@ import MultiRunSummary, { normalizeMultiEnvironment } from '../src/renderer/src/
 import OutputPane, { discardNotice, hasResultsView, outputViewOf } from '../src/renderer/src/results/OutputPane'
 import { PivotService, pivotable, pivotGroup } from '../src/renderer/src/results/PivotService'
 import ResultsToolbar, { resolveMoreTabIndex } from '../src/renderer/src/results/ResultsToolbar'
-import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
+import { entrySecondary, isSummaryActive, numberedName, pivotOutOfDate, ResultsService, slotNamed, summaryEntryKey, turnableKinds } from '../src/renderer/src/results/ResultsService'
 import type { RemoteViews } from '../src/renderer/src/results/remote-views'
 import type { MultiTargetIdentity } from '../src/renderer/src/results/multi-results-contract'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -2593,5 +2593,202 @@ describe('Round 5 adversarial regression checks (Domain 4: Results & CSS)', () =
       children: createElement(MultiRunSummary, { tabId: doc.id, tab: zeroTab, active: true })
     }))
     expect(host2.querySelector('[data-notice-kind="discarded"]')).toBeNull()
+  })
+})
+
+describe('Round 6 adversarial regression checks (Domain 4: Results & CSS)', () => {
+  it('R6 #5: TabResults.combining tracks in-flight rebuildCombined across EntryNoticeBars remounts/tab switches and clears on abort/guard paths', async () => {
+    const baseClient = fakeResultClient()
+    let resolveCombine!: (value: ResultsCombineResult) => void
+    const combine = vi.fn(() => new Promise<ResultsCombineResult>(resolve => { resolveCombine = resolve }))
+    const client = Object.assign(baseClient, { combine })
+    const events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
+    }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    cleanups.add(() => results.dispose())
+
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1Slot0 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2Slot0 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3Slot0 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb0 = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    const s1Slot1 = descriptor(4, { index: 4, targetKey: 'prod-east', statementSlot: 1 })
+    const s2Slot1 = descriptor(5, { index: 5, targetKey: 'prod-west', statementSlot: 1 })
+    const s3Slot1 = descriptor(6, { index: 6, targetKey: 'dev-01', statementSlot: 1 })
+    const comb1 = descriptor(11, { index: 7, kind: 'combined', statementSlot: 1 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1, 4] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2, 5] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3, 6] })
+        ],
+        [s1Slot0, s2Slot0, s3Slot0, comb0, s1Slot1, s2Slot1, s3Slot1, comb1]
+      )
+    })
+
+    const initial = results.getSnapshot().t1
+    const comb0Key = initial.sets.find(entry => entry.descriptor.resultId === 10)!.key
+    const comb1Key = initial.sets.find(entry => entry.descriptor.resultId === 11)!.key
+    const devSlot0Key = initial.sets.find(entry => entry.descriptor.resultId === 3)!.key
+    const devSlot1Key = initial.sets.find(entry => entry.descriptor.resultId === 6)!.key
+
+    // Mark both Combined statement slots stale by closing dev-01's sets.
+    expect(results.removeEntry('t1', devSlot0Key)).toBe(true)
+    expect(results.removeEntry('t1', devSlot1Key)).toBe(true)
+
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const wb = { ...f, results } as unknown as Workbench
+
+    // Start rebuilding comb0 while comb1 stays idle; focus comb0 in ResultsTabs.
+    results.focusEntry('t1', comb0Key)
+    const pendingRebuild = results.rebuildCombined('t1', comb0Key)
+    expect(results.getSnapshot().t1.combining?.has(comb0Key)).toBe(true)
+    expect(results.getSnapshot().t1.combining?.has(comb1Key)).toBe(false)
+
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: wb,
+      children: createElement(ResultsTabs, { tabId: 't1', tab: results.getSnapshot().t1 })
+    }))
+    const rebuildBtn = () => host.querySelector<HTMLButtonElement>('.multi-grid-notice-btn')!
+    expect(rebuildBtn().textContent).toContain('Rebuilding…')
+    expect(rebuildBtn().disabled).toBe(true)
+
+    // Switch to comb1 in ResultsTabs: comb1 must NOT inherit comb0's rebuilding state!
+    results.focusEntry('t1', comb1Key)
+    const hostComb1 = mount(createElement(WorkbenchProvider, {
+      workbench: wb,
+      children: createElement(ResultsTabs, { tabId: 't1', tab: results.getSnapshot().t1 })
+    }))
+    const comb1Btn = hostComb1.querySelector<HTMLButtonElement>('.multi-grid-notice-btn')!
+    expect(comb1Btn.textContent).toContain('Rebuild')
+    expect(comb1Btn.textContent).not.toContain('Rebuilding…')
+    expect(comb1Btn.disabled).toBe(false)
+
+    // Switch back to comb0 (fresh mount): rebuilding state is preserved from TabResults.combining.
+    results.focusEntry('t1', comb0Key)
+    const hostBack = mount(createElement(WorkbenchProvider, {
+      workbench: wb,
+      children: createElement(ResultsTabs, { tabId: 't1', tab: results.getSnapshot().t1 })
+    }))
+    expect(hostBack.querySelector<HTMLButtonElement>('.multi-grid-notice-btn')!.textContent).toContain('Rebuilding…')
+
+    // Hit the generation-mismatch guard path so rebuildCombined discards and exits via finally: combining must clear and publish.
+    resolveCombine({ descriptor: descriptor(99, { generation: 999, kind: 'combined', index: 3, statementSlot: 0 }) })
+    expect(await pendingRebuild).toBeUndefined()
+    expect(results.getSnapshot().t1.combining).toBeUndefined()
+  })
+
+  it('R6 #7: ResultsService.steppable is layout-aware so 1-set multi-server Stacked runs are not steppable while Tabs runs are', () => {
+    const client = fakeResultClient(), events = new EventBus()
+    const api = {
+      copyResults: vi.fn<VariaApi['copyResults']>(),
+      saveResults: vi.fn<VariaApi['saveResults']>(),
+      cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(),
+      onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {})
+    }
+    let layout: 'stacked' | 'tabs' = 'stacked'
+    const listeners = new Set<() => void>()
+    const setLayout = (next: 'stacked' | 'tabs') => { layout = next; for (const listener of listeners) listener() }
+    const results = new ResultsService({
+      client,
+      api,
+      events,
+      frame: callback => callback(),
+      layout: () => layout,
+      onLayoutChange: listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+    })
+    cleanups.add(() => results.dispose())
+
+    // Tab 1: 2-server run where only 1 server returned a result set.
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const onlySet = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [] })],
+        [onlySet]
+      )
+    })
+
+    // In Stacked layout, only 1 grid exists (Summary is a collapsible band, not a tab) -> steppable is false.
+    expect(results.steppable.getSnapshot().t1).toBeUndefined()
+    // Switching to Tabs layout makes Summary + prod-east = 2 top tabs -> steppable becomes true.
+    setLayout('tabs')
+    expect(results.steppable.getSnapshot().t1).toBe(true)
+    // Switching back to Stacked layout clears steppable again.
+    setLayout('stacked')
+    expect(results.steppable.getSnapshot().t1).toBeUndefined()
+
+    // Tab 2: 1 server returning 2 statement sets in Stacked layout -> 2 held grids -> steppable is true!
+    results.begin('t2', 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const st0 = descriptor(2, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const st1 = descriptor(3, { index: 1, targetKey: 'prod-east', statementSlot: 1 })
+    void results.finish('t2', 'q2', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [2, 3] }), multiOutcome(sqlTargets[1], { resultSetIds: [] })],
+        [st0, st1]
+      )
+    })
+    expect(results.steppable.getSnapshot().t2).toBe(true)
+  })
+
+  it('R6 #8: slotNamed returns true for multi-server target and combined table slots so narrow Stacked captions truncate cleanly', () => {
+    const plain = { view: 'table' as const, entry: { key: 'e1', number: 1, descriptor: descriptor(1), handle: {} as never }, sources: [] }
+    const target = { view: 'table' as const, entry: { key: 'e2', number: 2, descriptor: descriptor(2, { targetKey: 'prod-east' }), handle: {} as never }, sources: [] }
+    const combined = { view: 'table' as const, entry: { key: 'e3', number: 3, descriptor: descriptor(3, { kind: 'combined' }), handle: {} as never }, sources: [] }
+    expect(slotNamed(plain)).toBe(false)
+    expect(slotNamed(target)).toBe(true)
+    expect(slotNamed(combined)).toBe(true)
+  })
+
+  it('R6 #9: styles.css bounds .rt-stmt-tabs, .rt-stmt-tab and .rt-stmt-select with --varia-resultTab and ellipsis overflow', () => {
+    const rules = stylesheetRules()
+    const declsOf = (selector: string) => new Map(
+      rules.filter(rule => rule.selector === selector).flatMap(rule => rule.declarations.map(d => [d.property, d.value] as const))
+    )
+    const stmtTabs = declsOf('.rt-stmt-tabs')
+    expect(stmtTabs.get('min-width')).toBe('0')
+    expect(stmtTabs.get('overflow')).toBe('hidden')
+
+    const stmtTab = declsOf('.rt-stmt-tab')
+    expect(stmtTab.get('max-width')).toBe('var(--varia-resultTab)')
+    expect(stmtTab.get('overflow')).toBe('hidden')
+    expect(stmtTab.get('text-overflow')).toBe('ellipsis')
+
+    const stmtSelect = declsOf('.rt-stmt-select')
+    expect(stmtSelect.get('max-width')).toBe('var(--varia-resultTab)')
+    expect(stmtSelect.get('min-width')).toBe('0')
+  })
+
+  it('R6 #10: MultiRunSummary shows backend-loss tab.error even when a target already streamed an earlier SQL errorMessage', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('lost.sql', 'SELECT 1', 'master')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    void f.results.finish(doc.id, 'q1', { error: 'The SQL backend restarted while executing.' })
+
+    const baseTab = f.results.getSnapshot()[doc.id]
+    const lostWithTargetError = {
+      ...baseTab,
+      status: 'lost' as const,
+      error: 'The SQL backend restarted while executing.',
+      multi: {
+        ...baseTab.multi!,
+        targets: baseTab.multi!.targets.map((target, idx) => idx === 0 ? { ...target, errorMessage: 'Login failed' } : target)
+      }
+    }
+    const hostLost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(MultiRunSummary, { tabId: doc.id, tab: lostWithTargetError, active: true })
+    }))
+    const notice = hostLost.querySelector<HTMLElement>('.multi-notice.multi-notice-err[role="status"]')
+    expect(notice).not.toBeNull()
+    expect(notice!.textContent).toContain('The SQL backend restarted while executing.')
   })
 })

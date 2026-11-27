@@ -220,18 +220,19 @@ function Landing({ landing, root, service }: { landing: DropLanding; root: HTMLE
 
 /** The editor area's drop layer. */
 export default function ServerDropLayer({ root }: { root: HTMLElement | null }) {
-  const { serverDrop } = useWorkbench()
+  const { serverDrop, documents } = useWorkbench()
   const { drag, hover, landing } = useServiceSnapshot(serverDrop)
   useTabMarks(root, !!drag, drag ? hover : undefined)
   if (!root) return null
   const show = drag && hover && !hover.insert ? hover : undefined
+  const isMultiInsert = !!(hover?.insert && hover.tabId && documents.get(hover.tabId)?.multiMode)
   return createPortal(<>
     {show && show.place !== 'editor' && <div className="server-drop-anchor" style={{ left: Math.max(4, show.rect.left), top: show.rect.top + show.rect.height + 6 }}><DropCard hover={show} drag={drag!} mode="card" /></div>}
     {show && show.place === 'editor' && <div className="server-drop-overlay" data-refused={!show.verdict.accept || undefined} data-cross-dialect={show.dialect || undefined} style={{ left: show.rect.left, top: show.rect.top, width: show.rect.width, height: show.rect.height }}>
       <DropCard hover={show} drag={drag!} mode="plate" />
     </div>}
     {drag && hover?.insert && <div className="server-drop-anchor server-drop-insert" style={{ left: hover.rect.left + hover.rect.width / 2, top: hover.rect.top + hover.rect.height - 48 }}>
-      <div className="server-drop-card" role="status" aria-label="Server drop">Insert the name at the caret · release the key to move the query instead</div>
+      <div className="server-drop-card" role="status" aria-label="Server drop">{isMultiInsert ? 'Insert the name at the caret · release the key to add this target instead' : 'Insert the name at the caret · release the key to move the query instead'}</div>
     </div>}
     {landing && <Landing key={landing.seq} landing={landing} root={root} service={serverDrop} />}
   </>, document.body)

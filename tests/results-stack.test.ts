@@ -727,3 +727,100 @@ describe('Round 5 multi-server statement-filtered close focus', () => {
     expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(b2Key)
   })
 })
+
+describe('Round 6 multi-server statement filter focus', () => {
+  it('R6 #6: selectStmt moves focus to the first visible entry when filtering hides the currently focused entry (buttons and select)', () => {
+    const client = fakeResultClient(), events = new EventBus()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    const targets = [
+      { targetKey: 'srv-a', connectionId: 'c1', provider: 'sqlserver' as const, label: 'srv-a' },
+      { targetKey: 'srv-b', connectionId: 'c2', provider: 'sqlserver' as const, label: 'srv-b' }
+    ]
+    const rows = { rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }
+    // 2 statements (uses .rs-stmt-btn buttons)
+    const a1 = descriptor(1, { index: 0, targetKey: 'srv-a', statementSlot: 0, ...rows })
+    const a2 = descriptor(2, { index: 1, targetKey: 'srv-a', statementSlot: 1, ...rows })
+    const b1 = descriptor(3, { index: 2, targetKey: 'srv-b', statementSlot: 0, ...rows })
+    const b2 = descriptor(4, { index: 3, targetKey: 'srv-b', statementSlot: 1, ...rows })
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets } })
+    void results.finish('t1', 'q1', {
+      multiSummary: {
+        status: 'completed',
+        mode: 'fireAndForget',
+        targets: [
+          { targetKey: 'srv-a', provider: 'sqlserver', label: 'srv-a', status: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 0, elapsedMs: 10, resultSetIds: [1, 2] },
+          { targetKey: 'srv-b', provider: 'sqlserver', label: 'srv-b', status: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 0, elapsedMs: 10, resultSetIds: [3, 4] }
+        ],
+        resultSets: [a1, a2, b1, b2],
+        discardedResultSets: 0,
+        messages: [],
+        messagesTruncated: false,
+        elapsedMs: 10,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T18:30:00.0000000+00:00'
+      }
+    })
+
+    const none = {}, resultsSearch = { subscribe: () => () => {}, getSnapshot: () => none, pendingReveal: () => false }
+    const workbench = { results, resultsSearch, commands: { execute: vi.fn(async () => true) }, pivot: new PivotService(results) } as unknown as Workbench
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    const draw = (tabId: string) => {
+      act(() => {
+        root!.render(createElement(WorkbenchProvider, {
+          workbench,
+          children: createElement(ResultsStack, { tabId, tab: results.getSnapshot()[tabId] })
+        }))
+      })
+      for (let frame = 0; frame < 4; frame++) act(() => { vi.advanceTimersByTime(50) })
+    }
+    draw('t1')
+
+    const byId = new Map(results.getSnapshot().t1.sets.map(entry => [entry.descriptor.resultId, entry.key]))
+    const a1Key = byId.get(1)!, a2Key = byId.get(2)!
+    results.focusEntry('t1', a1Key)
+    draw('t1')
+    expect(results.getSnapshot().t1.focused).toBe(a1Key)
+
+    // Clicking Statement 2 button hides a1Key -> focus moves to a2Key (first visible entry in Statement 2).
+    const stmt2Btn = [...container.querySelectorAll<HTMLButtonElement>('.rs-stmt-btn')].find(btn => btn.textContent === 'Statement 2')!
+    act(() => { stmt2Btn.click() })
+    expect(results.getSnapshot().t1.focused).toBe(a2Key)
+
+    // Clicking All statements keeps a2Key focused because a2Key is visible in All statements.
+    draw('t1')
+    const allBtn = [...container.querySelectorAll<HTMLButtonElement>('.rs-stmt-btn')].find(btn => btn.textContent === 'All statements')!
+    act(() => { allBtn.click() })
+    expect(results.getSnapshot().t1.focused).toBe(a2Key)
+
+    // >5 statements uses .rs-stmt-select: changing select to Statement 4 moves focus from hidden Statement 1 to Statement 4's first entry.
+    const sixSets = Array.from({ length: 6 }, (_, slot) => descriptor(10 + slot, { index: slot, targetKey: 'srv-a', statementSlot: slot, ...rows }))
+    results.begin('t2', 'q2', undefined, { multi: { mode: 'fireAndForget', targets: targets.slice(0, 1) } })
+    void results.finish('t2', 'q2', {
+      multiSummary: {
+        status: 'completed',
+        mode: 'fireAndForget',
+        targets: [{ targetKey: 'srv-a', provider: 'sqlserver', label: 'srv-a', status: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 0, elapsedMs: 10, resultSetIds: sixSets.map(s => s.resultId) }],
+        resultSets: sixSets,
+        discardedResultSets: 0,
+        messages: [],
+        messagesTruncated: false,
+        elapsedMs: 10,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T18:30:00.0000000+00:00'
+      }
+    })
+    const t2BySlot = new Map(results.getSnapshot().t2.sets.map(entry => [entry.descriptor.statementSlot!, entry.key]))
+    results.focusEntry('t2', t2BySlot.get(0)!)
+    draw('t2')
+    const select = container.querySelector<HTMLSelectElement>('.rs-stmt-select')!
+    expect(select).not.toBeNull()
+    act(() => {
+      select.value = '3'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(results.getSnapshot().t2.focused).toBe(t2BySlot.get(3))
+  })
+})

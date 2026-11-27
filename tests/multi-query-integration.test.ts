@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import type * as Monaco from 'monaco-editor'
 import type { ConnectionInfo, ConnectionOptions, MultiQueryOptions, MultiTargetOutcome, ProviderConnectionOptions, QueryMultiResult, ResultDescriptor } from '../src/shared/contracts'
 import { defaultSettings, type SettingKey, type SettingValue } from '../src/shared/settings/catalog'
@@ -881,6 +882,109 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     ])
 
     contrib.dispose()
+    wb.dispose()
+  })
+
+  it('R6 #3 & #4 & #7: output.find is disabled while Summary is active in Tabs layout, workbench wires DocumentService.isLive and ResultsService.layout', async () => {
+    const wb = workbenchFixture()
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const sql2 = connectSql(wb, 'prod-sql-02', 'SalesDB')
+    const doc = wb.documents.openMultiQuery({
+      mode: 'same',
+      name: 'R6Find.sql',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+        { targetId: sql2.targetId, connectionId: sql2.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+    wb.documents.activate(doc.id)
+
+    const client = fakeResultClient()
+    const settingsStore = new SnapshotStore({
+      values: { ...defaultSettings, 'queryResults.grid.layout': 'tabs' as 'stacked' | 'tabs' }
+    })
+    const results = new ResultsService({
+      client,
+      api: wb.api,
+      events: wb.events,
+      documents: wb.documents,
+      frame: cb => cb(),
+      layout: () => settingsStore.getSnapshot().values['queryResults.grid.layout'],
+      onLayoutChange: listener => settingsStore.subscribe(listener)
+    })
+    const queries = new QueryService(wb.documents, wb.api, id => wb.connections.get(id), wb.events, results)
+    const resultsSearch = new ResultsSearchService({ results })
+    const focusSpy = vi.spyOn(resultsSearch, 'focus')
+    const panes = new PaneService()
+    const menuTargets = new MenuTargetService()
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const settings = {
+      getSnapshot: () => settingsStore.getSnapshot(),
+      subscribe: (l: () => void) => settingsStore.subscribe(l),
+      choose: vi.fn(async () => true),
+      toggle: vi.fn(async () => true)
+    }
+    const outContrib = outputContribution(
+      { commands, results, queries, menuTargets, documents: wb.documents, settings: settings as unknown as typeof wb.settings, resultsSearch, panes },
+      wb.api
+    )
+
+    const q1 = uuid(901)
+    const sqlDesc = descriptor(1, { targetKey: 'sql1', statementSlot: 0 })
+    results.begin(doc.id, q1, undefined, {
+      multi: {
+        mode: 'fireAndForget',
+        targets: [
+          { targetKey: 'sql1', connectionId: sql1.info.id, provider: 'sqlserver', label: 'prod-sql-01', database: 'SalesDB' },
+          { targetKey: 'sql2', connectionId: sql2.info.id, provider: 'sqlserver', label: 'prod-sql-02', database: 'SalesDB' }
+        ]
+      }
+    })
+    client.emit(q1, { type: 'resultSet.opened', descriptor: sqlDesc })
+    client.emit(q1, { type: 'resultSet.closed', descriptor: sqlDesc })
+    await results.finish(doc.id, q1, {
+      multiSummary: multiSummary('fireAndForget', [
+        multiOutcome('sql1', 'sqlserver', 'prod-sql-01', [1]),
+        multiOutcome('sql2', 'sqlserver', 'prod-sql-02', [])
+      ], [sqlDesc])
+    })
+
+    const sqlKey = results.getSnapshot()[doc.id]!.sets[0]!.key
+
+    // R6 #3: While Summary is active in Tabs layout, output.find is disabled and running it does not focus search.
+    results.focusEntry(doc.id, summaryEntryKey)
+    expect(commands.isEnabled('output.find', { tabId: doc.id })).toBe(false)
+    await commands.execute('output.find', { tabId: doc.id }, 'toolbar')
+    expect(focusSpy).not.toHaveBeenCalled()
+
+    // Focusing a real grid enables output.find and focuses resultsSearch.
+    results.focusEntry(doc.id, sqlKey)
+    expect(commands.isEnabled('output.find', { tabId: doc.id })).toBe(true)
+    await commands.execute('output.find', { tabId: doc.id }, 'toolbar')
+    expect(focusSpy).toHaveBeenCalledWith(doc.id)
+
+    // In Stacked layout, Summary is a collapsible band above grids, so output.find stays enabled even if activeSummary was true,
+    // AND R6 #7: 1-set multi-server run is steppable in Tabs (Summary + Server 1) but NOT in Stacked (only 1 grid).
+    expect(results.steppable.getSnapshot()[doc.id]).toBe(true)
+    results.focusEntry(doc.id, summaryEntryKey)
+    settingsStore['publish']({ values: { ...defaultSettings, 'queryResults.grid.layout': 'stacked' } })
+    expect(results.steppable.getSnapshot()[doc.id]).toBeUndefined()
+    expect(commands.isEnabled('output.find', { tabId: doc.id })).toBe(true)
+
+    // R6 #4: workbench.ts wires `isLive: id => connections.isLive(id)` on DocumentService and `layout` + `onLayoutChange` on ResultsService.
+    const workbenchSrc = readFileSync('src/renderer/src/core/workbench.ts', 'utf8')
+    expect(workbenchSrc).toContain('isLive: id => connections.isLive(id)')
+    expect(workbenchSrc).toContain("layout: () => settings.get('queryResults.grid.layout')")
+    expect(workbenchSrc).toContain('onLayoutChange: listener => settings.subscribe(listener)')
+
+    // Verify DocumentService.languageContext skips a disconnected first target when isLive is wired.
+    wb.connections.disconnected(sql1.info.id)
+    const model = wb.documents.getModel(doc.id)!
+    expect(wb.documents.languageContext(model, id => wb.connections.isLive(id))?.connectionId).toBe(sql2.info.id)
+
+    outContrib.dispose()
+    results.dispose()
+    queries.dispose()
     wb.dispose()
   })
 })

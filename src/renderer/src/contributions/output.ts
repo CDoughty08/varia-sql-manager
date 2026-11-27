@@ -5,7 +5,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
-import { entryOf, hasMultiSummary, summaryEntryKey, type SelectionFilter } from '../results/ResultsService'
+import { entryOf, hasMultiSummary, isSummaryActive, summaryEntryKey, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { jumpResult, pickerRequests, stackReveals, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
@@ -187,16 +187,18 @@ export function outputContribution({ commands, results, queries, menuTargets, do
   })
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
+  /** Find in Results is disabled while a multi-server run's Summary view is active in Tabs layout (no grid is shown). */
+  const canSearchTab = (tabId: string | undefined) => !!hasResultSets(tabId) && !(tabs() && isSummaryActive(results.getSnapshot()[tabId!]))
   const registrations = [
     commands.register('output.find', {
       unavailable: args => liveOf(args) ? undefined : noResults,
       // A query's result sets (no hasResultSets precondition: a live view's grid finds through its owner's filter box).
-      when: args => { const live = liveOf(args); return live ? live.canFind() : hasResultSets(searchTab(args)) },
+      when: args => { const live = liveOf(args); return live ? live.canFind() : canSearchTab(searchTab(args)) },
       run: args => {
         const live = liveOf(args)
         if (live) { live.find(); return }
         const tabId = searchTab(args)
-        if (!tabId || !results.getSnapshot()[tabId]?.sets.length) return
+        if (!tabId || !canSearchTab(tabId) || !results.getSnapshot()[tabId]?.sets.length) return
         // The box is in the Results view's toolbar.
         results.setView(tabId, 'results')
         resultsSearch.focus(tabId)

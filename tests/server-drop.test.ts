@@ -269,4 +269,48 @@ describe('ServerDropLayer DropCard preview', () => {
     // 4. Existing BigQuery entry with empty dataset ('') preserves 'none' instead of connection's 'analytics_default'.
     expect(await hoverWith({ connectionId: 'bq-1', label: 'bq-proj', server: 'bq-proj' })).toContain('Default dataset: none.')
   })
+
+  it('R6 #2: insert-modifier hint says "add this target instead" on multi-server tabs and "move the query instead" on single-server tabs', async () => {
+    const connectionsStore = new SnapshotStore([
+      { id: 'sql-1', targetId: 'target-sql-1', server: 'SQL-01', database: 'master', options: {} }
+    ])
+    const docs = new Map([
+      ['m1', { id: 'm1', name: 'Multi.sql', database: '', multiMode: 'same' as const, multiTargets: [] }],
+      ['s1', { id: 's1', name: 'Single.sql', database: 'master' }]
+    ])
+    class TestDropStore<T> extends SnapshotStore<T> {
+      set(next: T) { this.publish(next) }
+    }
+    const serverDrop = new TestDropStore<{
+      drag?: ServerDrag
+      hover?: { place: 'editor'; tabId: string; verdict: typeof verdicts.addTarget | typeof verdicts.move; insert: boolean; rect: typeof rect }
+    }>({})
+    const workbench = {
+      serverDrop,
+      documents: { get: (id: string) => docs.get(id) },
+      connections: connectionsStore,
+      gestures: { modifiers: () => '', phrase: () => '' }
+    } as unknown as Workbench
+
+    const areaRoot = document.body.appendChild(document.createElement('div'))
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); areaRoot.remove() })
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench, children: createElement(ServerDropLayer, { root: areaRoot }) }))
+    })
+
+    const drag: ServerDrag = { connectionId: 'sql-1', label: 'SQL-01', server: 'SQL-01' }
+    await act(async () => {
+      serverDrop.set({ drag, hover: { place: 'editor', tabId: 'm1', verdict: verdicts.addTarget, insert: true, rect } })
+    })
+    expect(document.body.querySelector('.server-drop-insert .server-drop-card')?.textContent)
+      .toBe('Insert the name at the caret · release the key to add this target instead')
+
+    await act(async () => {
+      serverDrop.set({ drag, hover: { place: 'editor', tabId: 's1', verdict: verdicts.move, insert: true, rect } })
+    })
+    expect(document.body.querySelector('.server-drop-insert .server-drop-card')?.textContent)
+      .toBe('Insert the name at the caret · release the key to move the query instead')
+  })
 })

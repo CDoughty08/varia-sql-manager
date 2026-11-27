@@ -119,7 +119,9 @@ export const spokenName = (entry: Named): string => {
  *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
  *  unnamed result's are laid out exactly as they were before names. */
 export const slotNamed = (slot: Pick<ResultSlot, 'view' | 'entry' | 'sources'>): boolean =>
-  slot.view === 'table' ? queryName(slot.entry) !== undefined : slot.sources.some(source => source.name !== entryNumber(source))
+  slot.view === 'table'
+    ? queryName(slot.entry) !== undefined || slot.entry.descriptor?.targetKey !== undefined || slot.entry.descriptor?.kind === 'combined'
+    : slot.sources.some(source => source.name !== entryNumber(source))
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)
@@ -372,6 +374,8 @@ export interface TabResults {
   readonly combineWarnings?: ReadonlyMap<EntryKey, readonly string[]>
   /** Built source target count per Combined entry key, populated when Combined opens/settles and updated only on `rebuildCombined`. */
   readonly combinedCounts?: ReadonlyMap<EntryKey, number>
+  /** Combined result entries currently rebuilding via `results.combine`. */
+  readonly combining?: ReadonlySet<EntryKey>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -616,6 +620,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly remote?: RemoteViews
   /** How text columns sort (queryResults.grid.sortText). */
   private readonly sortText: () => ViewSortMode
+  /** Current results grid layout (queryResults.grid.layout), for layout-aware `steppable` counts. */
+  private readonly layout?: () => 'stacked' | 'tabs'
   private readonly memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
   private readonly valueNumbers = new Map<string, number>()
@@ -690,6 +696,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
     /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
     onSortTextChange?: (listener: () => void) => () => void
+    /** Current results grid layout ('stacked' | 'tabs'), so `steppable` counts Summary only in Tabs layout. */
+    layout?: () => 'stacked' | 'tabs'
+    /** Calls the listener when settings change so `steppable` updates when the layout toggles. Returns the unsubscribe. */
+    onLayoutChange?: (listener: () => void) => () => void
   }) {
     super({})
     this.client = o.client
@@ -699,9 +709,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.retainedPlans = o.retainedPlans
     this.remote = o.remote
     this.sortText = o.sortText ?? (() => 'value')
+    this.layout = o.layout
     this.memory = o.memory
     let sortText = this.sortText()
     if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
+    let currentLayout = this.layout?.()
+    if (o.onLayoutChange) this.subscriptions.push(o.onLayoutChange(() => { const next = this.layout?.(); if (next !== currentLayout) { currentLayout = next; this.updateContext() } }))
     this.frame = o.frame ?? (callback => requestFrame(callback))
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
@@ -1457,6 +1470,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     const abort = new AbortController()
     run.combining.set(combinedKey, abort)
+    this.publishNow(tabId)
     try {
       const result = await this.client.combine(sources.map(source => source.handle), { ...old.descriptor.name ? { statementName: old.descriptor.name } : {}, signal: abort.signal })
       const current = this.runs.get(tabId)
@@ -1531,6 +1545,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const grids = this.views.get(tabId)?.grids, state = grids?.get(combinedKey)
       if (grids && state) grids.set(combinedKey, carriedState(state, moved, nextDescriptor.columns.length))
       this.settle(run, nextDescriptor)
+      if (run.combining.get(combinedKey) === abort) run.combining.delete(combinedKey)
       this.publishNow(tabId)
       this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
       return combinedKey
@@ -1541,7 +1556,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       return undefined
     } finally {
-      if (run.combining.get(combinedKey) === abort) run.combining.delete(combinedKey)
+      if (run.combining.get(combinedKey) === abort) {
+        run.combining.delete(combinedKey)
+        if (!this.disposed && this.runs.get(tabId) === run) this.publishNow(tabId)
+      }
     }
   }
 
@@ -3169,17 +3187,26 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return count + (hasCombined ? 1 : 0) + targets.size + extras
   }
 
+  /** Recomputes `context`, `resultSets` and `steppable` (e.g. after a layout change when no `onLayoutChange` subscription is wired). */
+  refreshContext(): void {
+    if (!this.disposed) this.updateContext()
+  }
+
   /** `hasResults` per tab: a set, captured plan, or multi-server summary cards, in results neither closed nor lost with the
    *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, combined, plan sets and comparisons). */
   private updateContext(): void {
     const results: Record<string, true> = {}, sets: Record<string, true> = {}, steppable: Record<string, true> = {}
+    const stacked = this.layout?.() === 'stacked'
     for (const [tabId, run] of this.runs) {
       if (run.status === 'closed' || run.status === 'lost') continue
       const grids = run.sets.some(held)
       const multiSummary = hasMultiSummary(run)
       if (grids) sets[tabId] = true
-      // The Tabs layout's top row: Summary (for multi-server), each result/combined/server group (its Pivot is under it) and each comparison.
-      const topCount = multiSummary ? this.multiTopCount(run) : run.sets.filter(entry => held(entry) && entry.descriptor.kind !== 'pivot').length
+      // In Tabs layout, Summary is a top-level tab; in Stacked layout, Summary is a band above the grids, so steppable
+      // counts held non-pivot grids without adding Summary (preventing Ctrl+PageDown from deadlocking on 1-set runs).
+      const topCount = multiSummary && !(stacked && grids)
+        ? this.multiTopCount(run)
+        : run.sets.filter(entry => held(entry) && entry.descriptor.kind !== 'pivot').length
       if (!run.bare && topCount > 1) steppable[tabId] = true
       if (grids || run.planSets.some(held) || multiSummary) results[tabId] = true
     }
@@ -3206,7 +3233,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       ...run.activeSummary && hasMultiSummary(run) ? { activeSummary: true as const } : {},
       ...run.staleCombined.size ? { staleCombined: run.staleCombined } : {},
       ...run.combineWarnings.size ? { combineWarnings: run.combineWarnings } : {},
-      ...run.combinedCounts.size ? { combinedCounts: run.combinedCounts } : {}
+      ...run.combinedCounts.size ? { combinedCounts: run.combinedCounts } : {},
+      ...run.combining.size ? { combining: new Set(run.combining.keys()) } : {}
     }
   }
 

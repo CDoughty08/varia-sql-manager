@@ -70,19 +70,15 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
 }) {
   const { results } = useWorkbench()
   const notices = entryNotices(tab, entry)
-  const [rebuilding, setRebuilding] = useState(false)
   if (notices.length === 0) return null
+  const rebuilding = !!tab.combining?.has(entry.key)
   const canRebuild = !running && !rebuilding && results.canRebuildCombined(tabId, entry.key)
-  const rebuild = async () => {
-    setRebuilding(true)
-    try { await results.rebuildCombined(tabId, entry.key) } finally { setRebuilding(false) }
-  }
   return <div className="multi-grid-notices">
     {notices.map(notice => <div key={notice.kind} className={`multi-grid-notice multi-grid-notice-${notice.tone}`} role="status" data-notice-kind={notice.kind}>
       <Icon name={notice.tone === 'warn' ? 'warning' : 'info'} />
       <span className="multi-grid-notice-text">{notice.text}</span>
       {notice.kind === 'staleCombined' && <span className="multi-grid-notice-actions">
-        <button type="button" className="multi-grid-notice-btn" disabled={!canRebuild} onClick={() => void rebuild()}>
+        <button type="button" className="multi-grid-notice-btn" disabled={!canRebuild} onClick={() => void results.rebuildCombined(tabId, entry.key)}>
           <Icon name={rebuilding ? 'loading' : 'refresh'} spin={rebuilding} /><span>{rebuilding ? 'Rebuilding…' : 'Rebuild'}</span>
         </button>
         <button type="button" className="multi-grid-notice-btn" disabled={running || rebuilding} onClick={() => results.removeEntry(tabId, entry.key)}>
@@ -615,6 +611,15 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const multiOutcome = multi ? multiOutcomeInfo(tab) : undefined
   const okCount = multi ? tab.multi!.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length : 0
 
+  const selectStmt = (next: number | 'all') => {
+    setSelectedStmt(next)
+    const nextSets = orderedMultiSets(tab, next)
+    if (nextSets.length > 0 && !nextSets.some(entry => entry.key === tab.focused)) {
+      results.focusEntry(tabId, nextSets[0].key)
+      setFocused(nextSets[0].key)
+    }
+  }
+
   const stackEl = <div ref={stackRef} className="rs-stack" onFocus={trackFocus} onBlur={trackBlur} onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
     <div className="rs-content" style={{ height: layout.total }}>{items}</div>
   </div>
@@ -635,13 +640,13 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     </div>}
     {statementSlots.length > 1 && <div className="rs-stmt-strip" role="region" aria-label="Filter stacked results by statement">
       {statementSlots.length > 5
-        ? <select className="rs-stmt-select" aria-label="Statement" value={String(effectiveStmt)} onChange={event => setSelectedStmt(event.target.value === 'all' ? 'all' : Number(event.target.value))}>
+        ? <select className="rs-stmt-select" aria-label="Statement" value={String(effectiveStmt)} onChange={event => selectStmt(event.target.value === 'all' ? 'all' : Number(event.target.value))}>
             <option value="all">All statements ({formatCount(statementSlots.length)})</option>
             {statementSlots.map(item => <option key={item.slot} value={String(item.slot)}>{item.label}</option>)}
           </select>
         : <div className="rs-stmt-buttons" role="group" aria-label="Statements">
-            <button type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === 'all'} onClick={() => setSelectedStmt('all')}>All statements</button>
-            {statementSlots.map(item => <button key={item.slot} type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === item.slot} onClick={() => setSelectedStmt(item.slot)}>{item.label}</button>)}
+            <button type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === 'all'} onClick={() => selectStmt('all')}>All statements</button>
+            {statementSlots.map(item => <button key={item.slot} type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === item.slot} onClick={() => selectStmt(item.slot)}>{item.label}</button>)}
           </div>}
     </div>}
     {stackEl}

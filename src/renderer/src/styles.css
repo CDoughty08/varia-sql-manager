@@ -4653,11 +4653,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rt-server-status[data-tone="running"] { color: var(--varia-focusBorder); }
 .rt-server-status[data-tone="muted"] { color: var(--varia-descriptionForeground); }
 .rt-stmt-count { padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-weight: 600; font-variant-numeric: tabular-nums; }
-.rt-stmt-tabs { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
-.rt-stmt-tab { height: 22px; padding: 0 var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.rt-stmt-tabs { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
+.rt-stmt-tab { height: 22px; max-width: var(--varia-resultTab); padding: 0 var(--varia-space-2); border: 1px solid transparent; border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rt-stmt-tab:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .rt-stmt-tab[aria-selected="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); font-weight: 600; transition: none; }
-.rt-stmt-select { height: 22px; font-size: var(--varia-size-xs); }
+.rt-stmt-select { height: 22px; max-width: var(--varia-resultTab); min-width: 0; font-size: var(--varia-size-xs); }
 
 /* Filtered Messages view (sibling bar outside [data-output-view="messages"] so Ctrl+A copies only log lines). */
 .messages-container { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
