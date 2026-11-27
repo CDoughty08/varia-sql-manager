@@ -22,12 +22,37 @@ export const maxMultiTargets = 32
 const metadataLoadConcurrency = 3
 const filterThreshold = 8
 
-type OpenRequestListener = (tabId: string, provider?: ProviderId) => void
+type OpenRequestListener = (tabId: string, provider?: ProviderId) => boolean
 const openRequestListeners = new Set<OpenRequestListener>()
+let pendingOpen: { readonly tabId: string; readonly provider?: ProviderId } | undefined
+let pendingOpenCancel: (() => void) | undefined
+
+const clearPendingOpen = () => {
+  pendingOpen = undefined
+  pendingOpenCancel?.()
+  pendingOpenCancel = undefined
+}
 
 /** Asks the mounted MultiTargetPopover for `tabId` (e.g. from CrossEngineEditor's "+ Add / Change" button) to open. */
 export function requestMultiTargetPopover(tabId: string, provider?: ProviderId): void {
-  for (const listener of [...openRequestListeners]) listener(tabId, provider)
+  clearPendingOpen()
+  let matched = false
+  for (const listener of [...openRequestListeners]) {
+    if (listener(tabId, provider)) matched = true
+  }
+  if (matched) return
+  pendingOpen = { tabId, provider }
+  if (typeof requestAnimationFrame === 'function') {
+    const frame = requestAnimationFrame(() => {
+      if (pendingOpen?.tabId === tabId) clearPendingOpen()
+    })
+    pendingOpenCancel = () => cancelAnimationFrame(frame)
+  } else {
+    const timer = setTimeout(() => {
+      if (pendingOpen?.tabId === tabId) clearPendingOpen()
+    }, 0)
+    pendingOpenCancel = () => clearTimeout(timer)
+  }
 }
 
 const keepFocus = (event: PointerEvent<HTMLButtonElement>) => { if (event.button === 0) event.preventDefault() }
@@ -226,6 +251,7 @@ interface PopoverRow {
   readonly key: string
   readonly provider: ProviderId
   readonly live: boolean
+  readonly detached: boolean
   readonly connection?: LiveConnection
   readonly target?: MultiDocumentTarget
   readonly targetIndex?: number
@@ -302,9 +328,15 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
 
   useEffect(() => {
     const listener: OpenRequestListener = requestedTabId => {
-      if (requestedTabId === tabId) openPopover(false)
+      if (requestedTabId !== tabId) return false
+      openPopover(false)
+      return true
     }
     openRequestListeners.add(listener)
+    if (pendingOpen?.tabId === tabId) {
+      clearPendingOpen()
+      openPopover(false)
+    }
     return () => { openRequestListeners.delete(listener) }
   }, [tabId, openPopover])
 
@@ -340,6 +372,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         key: `live:${conn.id}`,
         provider: prov,
         live: true,
+        detached: !!target?.enabled && target.connectionId !== conn.id,
         connection: conn,
         target,
         targetIndex: targetIndex >= 0 ? targetIndex : undefined,
@@ -368,6 +401,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         key: `offline:${index}:${target.targetId ?? target.lastServer ?? index}`,
         provider: target.provider,
         live: false,
+        detached: false,
         connection: offlineConn,
         target,
         targetIndex: index,
@@ -405,8 +439,11 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       return
     }
     if (!sharedChoice || !sharedSqlDatabases.includes(sharedChoice)) {
+      const existingCaseMatch = sharedChoice
+        ? sharedSqlDatabases.find(db => db.toLowerCase() === sharedChoice.toLowerCase())
+        : undefined
       const firstEnabledSqlDb = tab?.multiTargets?.find(t => t.enabled && t.provider === 'sqlserver')?.database
-      const preferred = firstEnabledSqlDb && sharedSqlDatabases.find(db => db.toLowerCase() === firstEnabledSqlDb.toLowerCase())
+      const preferred = existingCaseMatch ?? (firstEnabledSqlDb ? sharedSqlDatabases.find(db => db.toLowerCase() === firstEnabledSqlDb.toLowerCase()) : undefined)
       setSharedChoice(preferred ?? sharedSqlDatabases[0]!)
     }
   }, [sharedSqlDatabases, sharedChoice, tab?.multiTargets])
@@ -453,7 +490,9 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       const own = button.ownerDocument, view = own.defaultView ?? window, box = button.getBoundingClientRect()
       const inset = 8, gap = 4
       const width = Math.min(panel.offsetWidth || 380, view.innerWidth - inset * 2)
-      const naturalHeight = panel.scrollHeight || 320
+      const body = panel.querySelector<HTMLElement>('.multi-target-popover-body')
+      const measuredHeight = body ? (panel.offsetHeight - body.clientHeight + body.scrollHeight) : panel.scrollHeight
+      const naturalHeight = measuredHeight > 0 ? measuredHeight : 320
       const below = Math.max(120, view.innerHeight - box.bottom - gap - inset)
       const above = Math.max(120, box.top - gap - inset)
       const up = naturalHeight > below && above > below
@@ -469,13 +508,17 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       const path = event.composedPath()
       if (!path.includes(button) && !path.includes(panel)) close(false)
     }
+    const onScroll = (event: Event) => {
+      const NodeCtor = view.Node ?? Node
+      if (!(event.target instanceof NodeCtor && panel.contains(event.target))) place()
+    }
     const onCloseRequest = () => close(openedByKeyboard.current || panel.contains(own.activeElement))
     const onBlur = () => close(false)
     own.addEventListener('pointerdown', onOutside, true)
     const watcher = typeof CloseWatcher === 'function' ? new CloseWatcher() : undefined
     watcher?.addEventListener('close', onCloseRequest)
     view.addEventListener('resize', place)
-    own.addEventListener('scroll', place, true)
+    own.addEventListener('scroll', onScroll, true)
     view.addEventListener('blur', onBlur)
     const modals = watchModals(own, () => close(false))
     const adoption = windows.onDidAdopt(() => close(false))
@@ -484,7 +527,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       own.removeEventListener('pointerdown', onOutside, true)
       watcher?.destroy()
       view.removeEventListener('resize', place)
-      own.removeEventListener('scroll', place, true)
+      own.removeEventListener('scroll', onScroll, true)
       view.removeEventListener('blur', onBlur)
       modals.dispose()
       adoption.dispose()
@@ -500,29 +543,36 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       filterInput.current.focus({ preventScroll: true })
       return
     }
-    const first = popover.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
-    first?.focus({ preventScroll: true })
+    const focusableSelector = 'input:not(:disabled), select:not(:disabled), button:not(:disabled)'
+    const body = popover.current?.querySelector<HTMLElement>('.multi-target-popover-body')
+    const bodyFirst = body?.querySelector<HTMLElement>(focusableSelector)
+    const dialogFirst = popover.current?.querySelector<HTMLElement>(
+      '.multi-target-popover-foot button:not(:disabled), input:not(:disabled), select:not(:disabled), button:not(:disabled):not(.multi-target-popover-close)'
+    )
+    ;(bodyFirst ?? dialogFirst ?? popover.current)?.focus({ preventScroll: true })
   }, [open, placed, showFilter])
 
   if (!tab || !tab.multiMode || !summary) return null
 
   const currentTargets = tab.multiTargets ?? []
   const enabledCount = currentTargets.filter(target => target.enabled).length
+  const detachedTotal = rows.filter(row => row.detached).length
   const atLimit = enabledCount >= maxMultiTargets
 
   const toggleRow = (row: PopoverRow, checked: boolean) => {
     if (locked) return
     if (row.targetIndex !== undefined) {
       if (checked && !row.target?.enabled && atLimit) return
-      const targetId = row.connection ? (targetService.targetForConnection(row.connection.id) ?? row.connection.targetId) : undefined
+      const attach = checked && row.live && row.connection ? row.connection : undefined
+      const targetId = attach ? (targetService.targetForConnection(attach.id) ?? attach.targetId) : undefined
       documents.updateMultiTarget(tab.id, row.targetIndex, prev => ({
         ...prev,
         enabled: checked,
-        ...row.connection ? { connectionId: row.connection.id, ...targetId ? { targetId, attachWanted: true } : {} } : {}
+        ...attach ? { connectionId: attach.id, ...targetId ? { targetId, attachWanted: true } : {} } : {}
       }))
       return
     }
-    if (!checked || !row.connection || atLimit) return
+    if (!checked || !row.live || !row.connection || atLimit) return
     const targetId = targetService.targetForConnection(row.connection.id) ?? row.connection.targetId
     const added: MultiDocumentTarget = {
       ...targetId ? { targetId, attachWanted: true } : {},
@@ -534,12 +584,18 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     documents.setMultiTargets(tab.id, appendMultiTarget(currentTargets, added, maxMultiTargets))
   }
 
+  const clearDetachedRow = (row: PopoverRow) => {
+    if (locked || row.targetIndex === undefined) return
+    documents.updateMultiTarget(tab.id, row.targetIndex, { enabled: false })
+  }
+
   const changeRowDatabase = (row: PopoverRow, database: string) => {
     if (locked) return
     if (row.targetIndex !== undefined) {
       documents.updateMultiTarget(tab.id, row.targetIndex, { database })
-      if (row.provider === 'sqlserver' && sharedSqlDatabases.some(db => db.toLowerCase() === database.toLowerCase())) {
-        setSharedChoice(database)
+      if (row.provider === 'sqlserver') {
+        const canonical = sharedSqlDatabases.find(db => db.toLowerCase() === database.toLowerCase())
+        if (canonical) setSharedChoice(canonical)
       }
     }
   }
@@ -606,13 +662,16 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   }
 
   const renderSection = (provider: ProviderId, heading: string, sectionRows: readonly PopoverRow[]) => {
-    const activeCount = sectionRows.filter(row => row.enabled).length
+    const activeCount = sectionRows.filter(row => row.enabled || row.detached).length
+    const detachedCount = sectionRows.filter(row => row.detached).length
     const isBigQuery = provider === 'bigquery'
     return <div className="multi-target-section" key={provider} data-provider={provider}>
       <div className="multi-target-section-head">
         <Icon name={isBigQuery ? 'bigquery' : 'server'} />
         <span className="multi-target-section-title">{heading}</span>
-        <span className="multi-target-section-count">{`${activeCount} of ${sectionRows.length} selected`}</span>
+        <span className="multi-target-section-count">
+          {detachedCount > 0 ? `${activeCount} of ${sectionRows.length} selected (${detachedCount} detached)` : `${activeCount} of ${sectionRows.length} selected`}
+        </span>
       </div>
       {sectionRows.length === 0
         ? <div className="multi-target-empty">{`No connected ${isBigQuery ? 'BigQuery projects' : 'SQL Servers'} match.`}</div>
@@ -620,30 +679,47 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
           const swatch = theme.accent(row.color)
           const choices = databaseChoicesFor(row)
           const isLoading = !!(row.connection && loadingIds.has(row.connection.id))
-          const checkDisabled = locked || (!row.enabled && !row.target?.enabled && atLimit)
-          return <div key={row.key} className={row.enabled ? 'multi-target-row' : 'multi-target-row is-unchecked'} data-live={row.live || undefined}>
+          const checkDisabled = locked || (!row.enabled && !row.detached && !row.target?.enabled && atLimit)
+          const rowClass = row.enabled
+            ? 'multi-target-row'
+            : row.detached
+              ? 'multi-target-row is-detached'
+              : 'multi-target-row is-unchecked'
+          return <div key={row.key} className={rowClass} data-live={row.live || undefined} data-detached={row.detached || undefined}>
             <input
               type="checkbox"
               className="multi-target-check"
               checked={row.enabled}
               disabled={checkDisabled}
-              aria-label={`${row.enabled ? 'Disable' : 'Enable'} ${row.name}`}
+              aria-label={row.detached ? `Re-attach ${row.name}` : `${row.enabled ? 'Disable' : 'Enable'} ${row.name}`}
               onChange={event => toggleRow(row, event.target.checked)}
             />
             {swatch && <span className="multi-target-swatch" style={{ background: swatch }} aria-hidden="true" />}
             <span className="multi-target-name" title={row.host && row.host !== row.name ? `${row.name} (${row.host})` : row.name}>{row.name}</span>
             {row.environment && <EnvironmentTag environment={row.environment} place="list" />}
             {row.live
-              ? <select
-                className="ui-field multi-target-db"
-                aria-label={`${row.name} ${isBigQuery ? 'default dataset' : 'database'}`}
-                title={isLoading ? 'Loading…' : isBigQuery ? `Default dataset: ${row.database || 'none'}` : `Database: ${row.database}`}
-                value={row.database}
-                disabled={locked || !row.enabled}
-                onFocus={() => { if (row.connection) ensureDatabaseList([row.connection.id]) }}
-                onChange={event => changeRowDatabase(row, event.target.value)}>
-                {choices.map(name => <option key={name} value={name}>{name || (isBigQuery ? '<no default dataset>' : name)}</option>)}
-              </select>
+              ? row.detached
+                ? <div className="multi-target-offline">
+                  <span className="multi-target-offline-label multi-target-detached-badge">Detached</span>
+                  <button
+                    type="button"
+                    className="ui-button multi-target-reconnect multi-target-clear"
+                    disabled={locked}
+                    aria-label={`Remove ${row.name}`}
+                    onClick={() => clearDetachedRow(row)}>
+                    Remove
+                  </button>
+                </div>
+                : <select
+                  className="ui-field multi-target-db"
+                  aria-label={`${row.name} ${isBigQuery ? 'default dataset' : 'database'}`}
+                  title={isLoading ? 'Loading…' : isBigQuery ? `Default dataset: ${row.database || 'none'}` : `Database: ${row.database}`}
+                  value={row.database}
+                  disabled={locked || !row.enabled}
+                  onFocus={() => { if (row.connection) ensureDatabaseList([row.connection.id]) }}
+                  onChange={event => changeRowDatabase(row, event.target.value)}>
+                  {choices.map(name => <option key={name} value={name}>{name || (isBigQuery ? '<no default dataset>' : name)}</option>)}
+                </select>
               : <div className="multi-target-offline">
                 <span className="multi-target-offline-label">Disconnected</span>
                 <button type="button" className="ui-button multi-target-reconnect" disabled={locked} onClick={() => reconnectRow(row)}>Reconnect</button>
@@ -715,7 +791,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         onKeyDown={popoverKeyDown}>
         <div className="multi-target-popover-head">
           <strong className="multi-target-popover-title">
-            {`${isCross ? 'Cross-Engine Targets' : 'Query Targets'} (${summary.enabledCount} active)`}
+            {`${isCross ? 'Cross-Engine Targets' : 'Query Targets'} (${summary.enabledCount} active${detachedTotal > 0 ? `, ${detachedTotal} detached` : ''})`}
           </strong>
           <button type="button" className="icon-button multi-target-popover-close" aria-label="Close target picker" onClick={() => close(true)}>
             <Icon name="close" />
@@ -745,10 +821,16 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
         <div className="multi-target-popover-foot">
           <span className="multi-target-popover-hint">
             {atLimit
-              ? `Maximum ${maxMultiTargets} targets reached`
+              ? detachedTotal > 0
+                ? `Maximum ${maxMultiTargets} targets reached (${detachedTotal} detached)`
+                : `Maximum ${maxMultiTargets} targets reached`
               : isCross
-                ? 'Requires ≥1 SQL Server and ≥1 BigQuery'
-                : `${summary.connectedCount} of ${summary.enabledCount} connected`}
+                ? detachedTotal > 0
+                  ? `Requires ≥1 SQL Server and ≥1 BigQuery (${detachedTotal} detached)`
+                  : 'Requires ≥1 SQL Server and ≥1 BigQuery'
+                : detachedTotal > 0
+                  ? `${summary.connectedCount} of ${summary.enabledCount} connected (${detachedTotal} detached)`
+                  : `${summary.connectedCount} of ${summary.enabledCount} connected`}
           </span>
           <button type="button" className="ui-button primary" onClick={() => close(true)}>Done</button>
         </div>

@@ -62,7 +62,9 @@ export function toGuardMarkers(violations: readonly ReadOnlyViolation[], severit
     startLineNumber: violation.line,
     startColumn: violation.column,
     endLineNumber: violation.endLine,
-    endColumn: Math.max(violation.endColumn, violation.column + 1),
+    endColumn: violation.endLine === violation.line
+      ? Math.max(violation.endColumn, violation.column + 1)
+      : Math.max(violation.endColumn, 1),
     source: 'Cross-Engine Read-Only Guard',
     code: 'READ_ONLY_VIOLATION'
   }))
@@ -97,6 +99,8 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
   const area = useContext(AreaContext)
   const areaRef = useRef(area)
   areaRef.current = area
+  const onActivateRef = useRef(onActivate)
+  onActivateRef.current = onActivate
   const workbench = useWorkbench()
   const { documents, connections: connectionService, targets: targetService, queries, theme, monaco } = workbench
   const docSnapshot = useServiceSnapshot(documents)
@@ -153,7 +157,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
     areaRef.current?.syncStatus()
     const focusSub = created.instance.onDidFocusEditorWidget(() => {
       documents.setActivePane(tabId, 'secondary')
-      onActivate?.()
+      onActivateRef.current?.()
       areaRef.current?.syncStatus()
     })
     created.setVisible(visible)
@@ -316,7 +320,10 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
         type="button"
         className={items.length ? 'cross-engine-add-btn' : 'cross-engine-add-btn is-empty'}
         disabled={locked}
-        onClick={() => requestMultiTargetPopover(tabId, dialect)}>
+        onClick={() => {
+          onActivate?.()
+          requestMultiTargetPopover(tabId, dialect)
+        }}>
         {items.length ? '+ Add / Change' : emptyLabel}
       </button>
     </div>
