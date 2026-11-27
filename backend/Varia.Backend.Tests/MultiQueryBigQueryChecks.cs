@@ -930,6 +930,7 @@ internal static class MultiQueryBigQueryChecks
         var connId = await ConnectGoogleAsync(service, key, location: "US", dataset: "sales");
 
         var cancelCalled = 0;
+        var r6CancelSeen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var abortedSessions = new ConcurrentBag<string>();
         using var cts = new CancellationTokenSource();
         var userInsertAttempts = 0;
@@ -970,6 +971,7 @@ internal static class MultiQueryBigQueryChecks
             Interlocked.Increment(ref cancelCalled);
             // Simulate a peer failing and cancelling phase1Cts while this target is cleaning up in catch/SettleAsync!
             cts.Cancel();
+            r6CancelSeen.TrySetResult();
             return new(200, "{\"kind\":\"bigquery#jobCancelResponse\",\"job\":{\"status\":{\"state\":\"DONE\"}}}");
         });
         fake.On("GET", BaseUrl + "/jobs/[^/]+", request =>
@@ -977,6 +979,8 @@ internal static class MultiQueryBigQueryChecks
             var id = request.Uri.Segments[^1].TrimEnd('/');
             if (Volatile.Read(ref userInsertAttempts) < 2)
                 return new(404, "{\"error\":{\"code\":404,\"message\":\"Not found\",\"errors\":[{\"reason\":\"notFound\"}]}}");
+            // Ensure phase1Cts is cancelled during SettleAsync even if fire-and-forget CancelJob runs later under CPU contention.
+            cts.Cancel();
             return new(200, new JsonObject
             {
                 ["kind"] = "bigquery#job",
@@ -998,6 +1002,8 @@ internal static class MultiQueryBigQueryChecks
             IsTimedOut = () => false
         };
         var res = await runner.ExecutePhase1Async(ctx, cts.Token);
+        // CancelJob is fire-and-forget; await its HTTP delivery before checking cancelCalled or snapshotting preCancelCount.
+        await Task.WhenAny(r6CancelSeen.Task, Task.Delay(5000));
         check(res.Result.Outcome.Status == "failed" && res.Result.Outcome.Error is not null
             && Volatile.Read(ref cancelCalled) >= 1 && abortedSessions.Any(q => q.Contains("sess-r6-race", StringComparison.Ordinal)),
             $"500->403+cancel reports real failed error (not masked rolledBack) and still cancels job + aborts session ({res.Result.Outcome.Status}/{res.Result.Outcome.Error?.Code}, cancel={cancelCalled}, aborted={abortedSessions.Count})");
@@ -1493,7 +1499,7 @@ internal static class MultiQueryBigQueryChecks
                 IsTimedOut = () => false
             };
             var regRes = await regRunner.ExecutePhase1Async(regCtx, regCts.Token);
-            await Task.WhenAny(cancelSeen.Task, Task.Delay(1000));
+            await Task.WhenAny(cancelSeen.Task, Task.Delay(5000));
             check(regRes.Result.Outcome.Status == "cancelled" && cancelLocation == "asia-northeast1",
                 $"Regional auto-location cancel passes inserted location to CancelJob (status={regRes.Result.Outcome.Status}, cancelLoc={cancelLocation ?? "<null>"})");
         }

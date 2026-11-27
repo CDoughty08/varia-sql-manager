@@ -206,32 +206,35 @@ internal sealed class MultiQueryCoordinator(
                         var acquired = false;
                         try
                         {
-                            await throttle.WaitAsync(phase1Cts.Token).ConfigureAwait(false);
-                            acquired = true;
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            var unstartedStatus = running.UserCancelled
-                                ? "cancelled"
-                                : cancellation.IsCancellationRequested
-                                    ? "timedOut"
-                                    : "skipped";
-                            MultiTargetError? unstartedError = unstartedStatus switch
+                            try
                             {
-                                "cancelled" => new MultiTargetError("CANCELLED", "The query was cancelled."),
-                                "timedOut" => new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout."),
-                                _ => null
-                            };
-                            if (unstartedError is not null)
-                                messages.Add(unstartedError.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
-                            events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, unstartedStatus, 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: unstartedError?.Code, ErrorMessage: unstartedError?.Message));
-                            phase1Outcomes[index] = new MultiTargetPhase1Outcome(
-                                new MultiTargetPhase1Result(EmptyOutcome(ctx, unstartedStatus, 0, unstartedError), [], NeedsCommit: false));
-                            return;
-                        }
+                                await throttle.WaitAsync(phase1Cts.Token).ConfigureAwait(false);
+                                acquired = true;
+                                // A peer releasing its slot during cancellation can satisfy WaitAsync before the
+                                // waiter's token callback fires; treat an already-cancelled acquisition as unstarted.
+                                phase1Cts.Token.ThrowIfCancellationRequested();
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                var unstartedStatus = running.UserCancelled
+                                    ? "cancelled"
+                                    : cancellation.IsCancellationRequested
+                                        ? "timedOut"
+                                        : "skipped";
+                                MultiTargetError? unstartedError = unstartedStatus switch
+                                {
+                                    "cancelled" => new MultiTargetError("CANCELLED", "The query was cancelled."),
+                                    "timedOut" => new MultiTargetError("TIMEOUT", "The query exceeded its execution timeout."),
+                                    _ => null
+                                };
+                                if (unstartedError is not null)
+                                    messages.Add(unstartedError.Message, MessageKind.Error, targetKey: ctx.Target.TargetKey, dialect: ctx.Provider);
+                                events.TargetState(new MultiQueryTargetStateEvent(ctx.Target.TargetKey, unstartedStatus, 0, 0, 0, 0, watch.ElapsedMilliseconds, ErrorCode: unstartedError?.Code, ErrorMessage: unstartedError?.Message));
+                                phase1Outcomes[index] = new MultiTargetPhase1Outcome(
+                                    new MultiTargetPhase1Result(EmptyOutcome(ctx, unstartedStatus, 0, unstartedError), [], NeedsCommit: false));
+                                return;
+                            }
 
-                        try
-                        {
                             var outcome = await ExecuteTargetSafelyAsync(runner, ctx, phase1Cts.Token).ConfigureAwait(false);
                             phase1Outcomes[index] = outcome;
 

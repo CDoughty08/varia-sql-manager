@@ -549,7 +549,8 @@ internal static class MultiQuerySqlChecks
         {
             var observedTimeout = -1;
             var peerRolledBack = false;
-            var fakeRunner = new FakeRunner(Providers.SqlServer, (targetCtx, _) =>
+            var aReachedBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var fakeRunner = new FakeRunner(Providers.SqlServer, async (targetCtx, _) =>
             {
                 observedTimeout = targetCtx.TimeoutSeconds;
                 if (targetCtx.Target.TargetKey == "a")
@@ -558,13 +559,15 @@ internal static class MultiQuerySqlChecks
                     var handle = new FakePhase2Handle(
                         onCommit: _ => Task.FromResult(new MultiCommitResult(MultiCommitOutcome.Committed)),
                         onRollback: _ => { peerRolledBack = true; return Task.CompletedTask; });
-                    return Task.FromResult(new MultiTargetPhase1Outcome(
-                        new MultiTargetPhase1Result(new MultiTargetOutcome("a", Providers.SqlServer, "S1", "succeeded", 1, 1, 1, 2, [set.ResultId]), [set], NeedsCommit: true), handle));
+                    aReachedBarrier.TrySetResult();
+                    return new MultiTargetPhase1Outcome(
+                        new MultiTargetPhase1Result(new MultiTargetOutcome("a", Providers.SqlServer, "S1", "succeeded", 1, 1, 1, 2, [set.ResultId]), [set], NeedsCommit: true), handle);
                 }
+                await aReachedBarrier.Task;
                 var doubtSet = OpenFakeSet(service.Results, targetCtx, slot: 0);
                 var doubtErr = new MultiTargetError("SQL_ERROR", "Transaction closed mid-script without error");
-                return Task.FromResult(new MultiTargetPhase1Outcome(
-                    new MultiTargetPhase1Result(new MultiTargetOutcome("b", Providers.SqlServer, "S2", "commitInDoubt", 1, 1, 0, 2, [doubtSet.ResultId], Error: doubtErr), [doubtSet], NeedsCommit: false)));
+                return new MultiTargetPhase1Outcome(
+                    new MultiTargetPhase1Result(new MultiTargetOutcome("b", Providers.SqlServer, "S2", "commitInDoubt", 1, 1, 0, 2, [doubtSet.ResultId], Error: doubtErr), [doubtSet], NeedsCommit: false));
             });
 
             var coordinator = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = fakeRunner });
@@ -1053,21 +1056,21 @@ internal static class MultiQuerySqlChecks
             // - > 8 target throttle waiter yields skipped on peer failure in transaction mode
             var tenTargets = Enumerable.Range(1, 10).Select(idx => T($"th{idx}", idx % 2 == 0 ? c2 : c1, $"S{idx}")).ToArray();
             var thStarted = 0;
-            var thGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var thRunner = new FakeRunner(Providers.SqlServer, async (ctx, ct) =>
             {
-                if (Interlocked.Increment(ref thStarted) == 8) thGate.TrySetResult();
-                await thGate.Task.WaitAsync(ct);
-                if (ctx.Target.TargetKey == "th1")
+                var order = Interlocked.Increment(ref thStarted);
+                if (order == 8)
+                {
                     return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
-                        new MultiTargetOutcome("th1", ctx.Provider, ctx.Target.Label, "failed", 0, 1, 0, 1, [], Error: new("SQL_ERROR", "boom")), [], NeedsCommit: false));
+                        new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, "failed", 0, 1, 0, 1, [], Error: new("SQL_ERROR", "boom")), [], NeedsCommit: false));
+                }
                 await Task.Delay(Timeout.Infinite, ct);
                 throw new InvalidOperationException("unreachable");
             });
             var thCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = thRunner });
             var thRes = await thCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
                 tenTargets, 1000, 30, Sql: "SELECT 1;"), context: null);
-            check(thRes.Targets.Any(t => t.Status == "skipped"),
+            check(thRes.Targets.Count(t => t.Status == "skipped") == 2,
                 $"Transaction throttle waiter (>8 targets) transitions to skipped on peer failure (skipped={thRes.Targets.Count(t => t.Status == "skipped")})");
 
             // (i) Round 7 hardening checks:
@@ -1108,14 +1111,17 @@ internal static class MultiQuerySqlChecks
                 uniformCombined = c;
                 return new CombineOutput(c, []);
             });
-            var uniformRbRunner = new FakeRunner(Providers.SqlServer, (ctx, _) =>
+            var u1ReachedBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var uniformRbRunner = new FakeRunner(Providers.SqlServer, async (ctx, _) =>
             {
+                if (ctx.Target.TargetKey == "u2") await u1ReachedBarrier.Task;
                 var set = OpenFakeSet(service.Results, ctx, slot: 0);
                 var phase2 = new FakePhase2Handle(_ => Task.FromResult(new MultiCommitResult(MultiCommitOutcome.Committed)), _ => Task.CompletedTask);
-                return Task.FromResult(new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
+                if (ctx.Target.TargetKey == "u1") u1ReachedBarrier.TrySetResult();
+                return new MultiTargetPhase1Outcome(new MultiTargetPhase1Result(
                     new MultiTargetOutcome(ctx.Target.TargetKey, ctx.Provider, ctx.Target.Label, ctx.Target.TargetKey == "u1" ? "succeeded" : "failed", 1, 1, 1, 1, [set.ResultId],
                         Error: ctx.Target.TargetKey == "u2" ? new("SQL_ERROR", "fail") : null),
-                    [set], NeedsCommit: ctx.Target.TargetKey == "u1"), ctx.Target.TargetKey == "u1" ? phase2 : null));
+                    [set], NeedsCommit: ctx.Target.TargetKey == "u1"), ctx.Target.TargetKey == "u1" ? phase2 : null);
             });
             var uniformCoord = new MultiQueryCoordinator(service, new Dictionary<string, IMultiTargetRunner> { [Providers.SqlServer] = uniformRbRunner }, combiner: uniformCombiner);
             var uniformRes = await uniformCoord.ExecuteAsync(new QueryMultiArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "transaction",
