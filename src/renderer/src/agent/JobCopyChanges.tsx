@@ -16,6 +16,7 @@ import { stepTypeShort, type AgentStepDraft } from '../../../shared/agent/steps.
 import Icon from '../Icon'
 import PropertyField, { fieldAria } from '../kit/PropertyField'
 import Segmented from '../kit/Segmented'
+import Switch from '../kit/Switch'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
 
 interface Props {
@@ -92,9 +93,10 @@ function JobFields({ state, model, draft, editable, problems, service }: Props) 
         </span>
         {model.owners && <datalist id={`${ids.owner}-logins`}>{model.owners.map(login => <option key={login} value={login} />)}</datalist>}
       </PropertyField>
-      <PropertyField id={ids.enabled} label="Enabled" changed={draft.enabled !== source.enabled} {...enabled} labelFor={false}>
-        <label className="agent-copy-check"><input id={ids.enabled} type="checkbox" checked={draft.enabled} disabled={!editable} aria-describedby={`${ids.enabled}-note`}
-          onChange={event => service.updateDraft(state.id, { enabled: event.target.checked })} />{createFromText.enableWhenSaved}</label>
+      <PropertyField id={ids.enabled} label={createFromText.enableWhenSaved} changed={draft.enabled !== source.enabled} {...enabled}>
+        <Switch id={ids.enabled} checked={draft.enabled} disabled={!editable} changed={draft.enabled !== source.enabled}
+          states={{ on: 'Enabled', off: 'Disabled' }} {...fieldAria(ids.enabled, { ...enabled, changed: draft.enabled !== source.enabled })}
+          onChange={checked => service.updateDraft(state.id, { enabled: checked })} />
       </PropertyField>
     </div>
   </div>
