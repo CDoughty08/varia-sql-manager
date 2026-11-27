@@ -77,7 +77,7 @@ export default function BigQueryCostPrompt() {
 
 /** Keeps one SubDialog mounted across back-to-back queued prompts so focus never drops to document.body between items. */
 function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: ActiveCostPrompt; readonly onBeforeInitialFocus: () => void }) {
-  const { costPrompts, commands } = useWorkbench()
+  const { costPrompts, commands, dialogWindows } = useWorkbench()
   const [dontAskFor, setDontAskFor] = useState<{ readonly id: number; readonly checked: boolean }>({ id: active.id, checked: false })
   const dontAsk = dontAskFor.id === active.id && dontAskFor.checked
   const describedBy = useId()
@@ -91,8 +91,10 @@ function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: Activ
   }, [active.id])
 
   const settings = () => {
+    const doc = bodyRef.current?.ownerDocument ?? document
     flushSync(() => { costPrompts.answer(active.id, { run: false }) })
-    void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar')
+    const source = dialogWindows || doc.querySelector('[aria-modal="true"]') ? 'api' : 'toolbar'
+    void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, source)
   }
 
   if (active.kind === 'single') {

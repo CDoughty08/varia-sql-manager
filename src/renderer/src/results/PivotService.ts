@@ -308,7 +308,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       const label = columns[mappedColumn]?.name || pivot.sourceColumns?.[index] || `column ${index + 1}`
       if (!incompatible.includes(label)) incompatible.push(label)
     }
-    remapped.rows.forEach((mapped, at) => { if (mapped < 0 || !fitted.rows.includes(mapped)) addMissing(recipe.rows[at]) })
+    const seenRows = new Set<number>()
+    remapped.rows.forEach((mapped, at) => {
+      if (mapped < 0 || !fitted.rows.includes(mapped) || seenRows.has(mapped)) addMissing(recipe.rows[at])
+      else seenRows.add(mapped)
+    })
     if (recipe.column !== undefined && (remapped.column === undefined || remapped.column < 0 || fitted.column === undefined)) addMissing(recipe.column)
     remapped.values.forEach((mapped, at) => {
       const orig = recipe.values[at]?.column

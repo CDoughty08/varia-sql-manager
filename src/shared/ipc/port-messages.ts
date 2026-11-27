@@ -207,7 +207,8 @@ export const pivotResultSchema = z.object({
 }).strict().refine(result => result.descriptor.rowsStored === result.rowGroups, 'A pivot stores a row per row group.')
 /** A results.combine answer as the backend sends it (its descriptor without the generation, which main adds). */
 export const combineResultSchema = z.object({
-  descriptor: backendDescriptorSchema.extend({ kind: z.literal('combined') })
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('combined') }),
+  warnings: z.array(z.string().max(1024)).max(64).optional()
 }).strict()
 /** A results.distinct answer as the backend sends it: its ticks within its values. */
 export const distinctResultSchema = z.object({

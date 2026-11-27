@@ -306,24 +306,31 @@ export function MultiExecuteDialogModal({
     let estimating = 0
     let doneCount = 0
     let fakedCount = 0
+    let errorCount = 0
     let totalBytes = 0
     let thresholdWarnings = 0
     let capWarnings = 0
+    let incompleteWarnings = 0
     for (const target of request.targets) {
       const state = estimates[target.targetKey]
       if (!state || state.status === 'estimating') { estimating++; continue }
+      if (state.status === 'error') { errorCount++; continue }
       if (state.status !== 'done') continue
       if (state.result.faked) { fakedCount++; continue }
       doneCount++
       totalBytes += state.result.bytesProcessed
       if (target.maximumBytesBilled !== undefined && state.result.bytesProcessed > target.maximumBytesBilled) capWarnings++
       if (target.costPrompt !== false && target.costThresholdBytes !== undefined && state.result.bytesProcessed > target.costThresholdBytes) thresholdWarnings++
+      if (request.warnIncomplete !== false && state.result.incomplete !== undefined) incompleteWarnings++
     }
-    return { estimating, doneCount, fakedCount, totalBytes, thresholdWarnings, capWarnings }
-  }, [isBigQuery, request.targets, estimates])
+    return { estimating, doneCount, fakedCount, errorCount, totalBytes, thresholdWarnings, capWarnings, incompleteWarnings }
+  }, [isBigQuery, request.targets, request.warnIncomplete, estimates])
 
   const estimatingBigQuery = isBigQuery && (costSummary?.estimating ?? 0) > 0
-  const hasCostWarning = (costSummary?.thresholdWarnings ?? 0) > 0 || (costSummary?.capWarnings ?? 0) > 0
+  const hasCostWarning = (costSummary?.thresholdWarnings ?? 0) > 0
+    || (costSummary?.capWarnings ?? 0) > 0
+    || (costSummary?.incompleteWarnings ?? 0) > 0
+    || (costSummary?.errorCount ?? 0) > 0
 
   const submitChoice = () => {
     if (estimatingBigQuery) return
@@ -414,7 +421,7 @@ export function MultiExecuteDialogModal({
           </button>
         </div>
 
-        <div className="connection-scroll multi-exec-scroll" id={descId}>
+        <div className="connection-scroll multi-exec-scroll">
           <div className="multi-exec-targets" aria-label="Target connections">
             {visibleTargets.map(target => (
               <TargetChip key={target.targetKey} target={target} />
@@ -514,7 +521,7 @@ export function MultiExecuteDialogModal({
                 </label>
               )}
               {isBigQuery && (
-                <label className="checkbox-label">
+                <label className="checkbox-label" title={hasEmulator ? 'BigQuery emulator connections do not support dry-run estimation.' : undefined}>
                   <input
                     ref={preflightCheckboxRef}
                     type="checkbox"
@@ -573,10 +580,10 @@ export function MultiExecuteDialogModal({
         </div>
 
         <DialogFooter
-          status={<span className="sub-dialog-status">Prompted on every multi-target execute.</span>}
+          status={<span id={descId} className="sub-dialog-status">Prompted on every multi-target execute.</span>}
           trailing={
             <>
-              <button type="submit" disabled={estimatingBigQuery} className={hasProd && isMutation ? 'primary multi-exec-submit-prod' : 'primary'}>
+              <button type="submit" disabled={estimatingBigQuery} title={estimatingBigQuery ? 'Waiting for BigQuery dry-run cost estimates to finish.' : undefined} className={hasProd && isMutation ? 'primary multi-exec-submit-prod' : 'primary'}>
                 <Icon name="play" />
                 <span>{submitLabel}</span>
               </button>

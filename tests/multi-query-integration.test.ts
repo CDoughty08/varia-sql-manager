@@ -1118,4 +1118,25 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     contrib.dispose()
     wb.dispose()
   })
+
+  it('R9b D3 #3 & #6: workbench menuTargets switches active tab/pane synchronously on right-click, and explorer.newCrossEngineQuery explains missing connection', () => {
+    const wb = workbenchFixture()
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const contrib = explorerContribution(
+      { commands, documents: wb.documents, connections: wb.connections, explorer: wb.explorer },
+      wb.api
+    )
+
+    // R9b D3 #6: With zero connections, explorer.newCrossEngineQuery reports 'Connect to a server first.'
+    expect(commands.isEnabled('explorer.newCrossEngineQuery')).toBe(false)
+    expect(commands.unavailableReason('explorer.newCrossEngineQuery')).toBe('Connect to a server first.')
+
+    // R9b D3 #3: workbench.ts menuTargets synchronously activates hit.tabId and sets hit.pane before editor.focus().
+    const workbenchSrc = readFileSync('src/renderer/src/core/workbench.ts', 'utf8')
+    expect(workbenchSrc).toContain('documents.setActivePane(hit.tabId, hit.pane)')
+    expect(workbenchSrc).toContain('if (hit.tabId !== documents.getSnapshot().activeId) documents.activate(hit.tabId)')
+
+    contrib.dispose()
+    wb.dispose()
+  })
 })

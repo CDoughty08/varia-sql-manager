@@ -3078,7 +3078,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 }
                 // Main owns the combined result only once it receives the answer: one not sent goes at once.
                 if (context is not null) context.Unsent = context.Dropped = Release;
-                return new ResultsCombineResult(buffer.Describe());
+                return new ResultsCombineResult(buffer.Describe(), output.Warnings.Count > 0 ? output.Warnings : null);
             }
             catch
             {

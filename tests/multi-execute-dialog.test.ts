@@ -1339,4 +1339,92 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     await expect(prompt).resolves.toBeUndefined()
     expect(document.activeElement).toBe(trigger)
   })
+
+  it('R9b D3 #2 & #5: MultiExecuteDialog blocks stray Enter on incomplete/error BigQuery estimates, moves aria-describedby off scroll container, and tooltips disabled controls', async () => {
+    const multiService = new MultiExecutePromptService()
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); multiService.dispose() })
+
+    const resolvers: ((value: { ok: true; value: BigQueryDryRunResult }) => void)[] = []
+    const estimateBigQuery = vi.fn(() => new Promise<{ ok: true; value: BigQueryDryRunResult }>(resolve => { resolvers.push(resolve) }))
+
+    let prompt!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      root.render(createElement(MultiExecuteDialog, { service: multiService, estimateBigQuery }))
+      prompt = multiService.ask({
+        tabId: 'q-incomplete',
+        provider: 'bigquery',
+        sql: 'DECLARE x INT64 DEFAULT 1; SELECT * FROM ds.huge;',
+        targets: [
+          { ...bqTarget(1), emulator: true },
+          bqTarget(2)
+        ],
+        prices: true,
+        warnIncomplete: true
+      })
+    })
+
+    const form = document.body.querySelector<HTMLFormElement>('form.multi-execute-dialog')!
+    // R9b D3 #5: aria-describedby points to concise status text, NOT the scroll container.
+    const descId = form.getAttribute('aria-describedby')!
+    expect(descId).toBeTruthy()
+    expect(document.getElementById(descId)?.classList.contains('multi-exec-scroll')).toBe(false)
+    expect(document.getElementById(descId)?.textContent).toContain('Prompted on every multi-target execute.')
+
+    // R9b D3 #5: Disabled Pre-flight Dry Run checkbox label & pending Submit button carry explanatory titles.
+    const preflightLabel = [...form.querySelectorAll<HTMLLabelElement>('label.checkbox-label')].find(l => l.textContent?.includes('Pre-flight Dry Run'))!
+    expect(preflightLabel.title).toContain('emulator')
+    const submitBtn = form.querySelector<HTMLButtonElement>('button[type="submit"]')!
+    expect(submitBtn.disabled).toBe(true)
+    expect(submitBtn.title).toContain('Waiting for BigQuery dry-run cost estimates')
+
+    // Resolve dry runs with faked emulator + 0 B incomplete: 'script' -> submit enables, but stray Enter on radio MUST be prevented!
+    await act(async () => {
+      resolvers[0]?.({ ok: true, value: { bytesProcessed: 0, faked: true } })
+      resolvers[1]?.({ ok: true, value: { bytesProcessed: 0, incomplete: 'script' } })
+      await Promise.resolve()
+    })
+    expect(submitBtn.disabled).toBe(false)
+    const radio = form.querySelector<HTMLInputElement>('input[type="radio"]:checked')!
+    radio.focus()
+    const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => { radio.dispatchEvent(enterEvent) })
+    expect(enterEvent.defaultPrevented).toBe(true)
+
+    // Cancel cleans up cleanly.
+    const cancelBtn = [...form.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelBtn.click() })
+    await expect(prompt).resolves.toBeUndefined()
+  })
+
+  it('R9b D3 #4: Cost settings… still opens Options when a second BigQueryCostPrompt is queued behind the active one', async () => {
+    const costPrompts = new CostPromptService()
+    const optionsRun = vi.fn()
+    const commands = new CommandService({
+      modalOpen: () => !!document.querySelector('[aria-modal="true"]')
+    })
+    const reg = commands.register('preferences.options', { run: optionsRun })
+    const workbench = { costPrompts, commands, dialogWindows: true } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); reg.dispose(); costPrompts.dispose() })
+
+    let p1!: ReturnType<CostPromptService['ask']>
+    let p2!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench, children: createElement(BigQueryCostPrompt) }))
+      p1 = costPrompts.ask({ prompt: { kind: 'threshold', bytes: 20 * GiB }, connection: 'bq-1', thresholdBytes: 10 * GiB, prices: true })
+      p2 = costPrompts.ask({ prompt: { kind: 'threshold', bytes: 30 * GiB }, connection: 'bq-2', thresholdBytes: 10 * GiB, prices: true })
+    })
+
+    const settingsBtn = [...document.body.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cost settings…')!
+    await act(async () => { settingsBtn.click() })
+    await expect(p1).resolves.toEqual({ run: false })
+    expect(optionsRun).toHaveBeenCalledWith({ setting: 'queryExecution.bigQuery.costPrompt' })
+    // Dismiss queued p2 cleanly.
+    const cancelBtn = [...document.body.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelBtn.click() })
+    await expect(p2).resolves.toEqual({ run: false })
+  })
 })

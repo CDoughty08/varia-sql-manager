@@ -404,6 +404,7 @@ export function explorerContribution({ commands, documents, connections, explore
         if (args?.target && args.target.kind !== 'explorerTools') return live(node) && node.kind === 'server'
         return explorer.multiSelectedTargets().length > 0 || (live(node) && node.kind === 'server') || connections.live().length > 0
       },
+      unavailable: () => connections.live().length === 0 ? 'Connect to a server first.' : undefined,
       run: args => {
         const node = nodeOf(args)
         const multi = explorer.multiSelectedTargets()

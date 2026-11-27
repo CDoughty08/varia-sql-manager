@@ -138,6 +138,9 @@ function createHarness(options: {
     singleAskSpy,
     multiAskSpy,
     dialogAskSpy,
+    setSetting: <K extends keyof SettingsValues>(key: K, value: SettingsValues[K]) => {
+      (settingValues as unknown as Record<string, unknown>)[key] = value
+    },
     isIncompleteDisabled: () => incompleteDisabled
   }
 }
@@ -1336,5 +1339,67 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     })
     expect(await executeMultiTab(crossDoc.id, h.deps)).toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly', targetCount: 2 })
     expect(h.executeMultiCalls[1]?.request.targets?.map(t => t.environment)).toEqual(['Production', 'Production'])
+  })
+
+  it('R9b D3 #1: dispatches live maximumBytesBilled cap updated in Options while MultiExecuteDialog or BigQueryCostPrompt was open', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const b2 = bqConnection(2)
+    const h = createHarness({
+      connections: [s1, b1, b2],
+      settings: { 'queryExecution.bigQuery.maximumBytesBilled': 50 },
+      dryRuns: {
+        [b1.id]: { ok: true, value: { bytesProcessed: 25 * GiB } },
+        [b2.id]: { ok: true, value: { bytesProcessed: 25 * GiB } }
+      }
+    })
+
+    // 1. Same-Engine 2-target BigQuery: user lowers maximumBytesBilled from 50 GiB -> 5 GiB while MultiExecuteDialog is open.
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      h.setSetting('queryExecution.bigQuery.maximumBytesBilled', 5)
+      return { mode: 'fireAndForget', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    const sameTwo = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT * FROM analytics.events;',
+      targets: [
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' },
+        { targetId: b2.targetId, connectionId: b2.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    expect(await executeMultiTab(sameTwo.id, h.deps)).toMatchObject({ status: 'executed', targetCount: 2 })
+    expect(h.executeMultiCalls[0]?.request.targets?.map(t => t.maximumBytesBilled)).toEqual([5 * GiB, 5 * GiB])
+
+    // 2. Same-Engine 1-target BigQuery: user changes maximumBytesBilled from 5 GiB -> 2 GiB while BigQueryCostPrompt is open.
+    h.singleAskSpy.mockImplementationOnce(async () => {
+      h.setSetting('queryExecution.bigQuery.maximumBytesBilled', 2)
+      return { run: true }
+    })
+    const sameOne = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT * FROM analytics.events;',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    expect(await executeMultiTab(sameOne.id, h.deps)).toMatchObject({ status: 'executed', targetCount: 1, skippedDialog: true })
+    expect(h.executeMultiCalls[1]?.request.targets?.map(t => t.maximumBytesBilled)).toEqual([2 * GiB])
+
+    // 3. Cross-Engine: user updates cap to 1 GiB while multi-project BigQueryCostPrompt is open.
+    h.multiAskSpy.mockImplementationOnce(async () => {
+      h.setSetting('queryExecution.bigQuery.maximumBytesBilled', 1)
+      return { run: true }
+    })
+    const crossTab = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT * FROM analytics.events;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    expect(await executeMultiTab(crossTab.id, h.deps)).toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly', targetCount: 2 })
+    expect(h.executeMultiCalls[2]?.request.targets?.find(t => t.connectionId === b1.id)?.maximumBytesBilled).toBe(1 * GiB)
   })
 })

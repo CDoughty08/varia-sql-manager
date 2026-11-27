@@ -3474,4 +3474,210 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
     const eastTabAfter = host.querySelector<HTMLElement>('.rt-tab[data-target-key="prod-east"]')!
     expect(eastTabAfter).toBe(eastTabBefore)
   })
+
+  it('R10 D4 #1: Pivots and Comparisons derived from rolledBackPreview results inherit rolledBackPreview', () => {
+    const { results } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, rolledBackPreview: true })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, rolledBackPreview: true })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { status: 'rolledBack', resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { status: 'rolledBack', resultSetIds: [2] })
+        ],
+        [s1, s2],
+        { mode: 'transaction', status: 'rolledBack' }
+      )
+    })
+
+    // Pivot derived from a rolled-back server table inherits rolledBackPreview even when backend descriptor omits it.
+    const pivotKey = results.addSet('t1', descriptor(100, { kind: 'pivot', index: 2 }), 'Pivot of East', ['1:1'])!
+    const pivotEntry = results.getSnapshot().t1.sets.find(entry => entry.key === pivotKey)!
+    expect(pivotEntry.descriptor.rolledBackPreview).toBe(true)
+    expect(entryNotices(results.getSnapshot().t1, pivotEntry).some(n => n.kind === 'rolledBack')).toBe(true)
+
+    // Comparison derived from rolled-back server tables inherits rolledBackPreview on both addSet and replaceComparison.
+    const diffKey = results.addSet('t1', descriptor(101, { kind: 'diff', index: 3 }), 'East vs West', ['1:1', '1:2'])!
+    expect(results.getSnapshot().t1.sets.find(entry => entry.key === diffKey)!.descriptor.rolledBackPreview).toBe(true)
+    expect(results.replaceComparison('t1', diffKey, descriptor(102, { kind: 'diff', index: 3 }), 'West vs East', ['1:2', '1:1'], { moved: new Map() })).toBe(diffKey)
+    expect(results.getSnapshot().t1.sets.find(entry => entry.key === diffKey)!.descriptor.rolledBackPreview).toBe(true)
+  })
+
+  it('R10 D4 #2 & #4: ResultsTabs sets aria-controls/aria-labelledby on statement sub-tabs and rescues focus from stmt select on one -> none fold', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    let mockHeight = 320
+    const resizeCallbacks = new Set<() => void>()
+    const origResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private readonly cb: () => void
+      constructor(cb: ResizeObserverCallback) { this.cb = () => cb([], this as unknown as ResizeObserver) }
+      observe() { resizeCallbacks.add(this.cb) }
+      unobserve() { resizeCallbacks.delete(this.cb) }
+      disconnect() { resizeCallbacks.delete(this.cb) }
+    } as unknown as typeof ResizeObserver
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => mockHeight })
+    cleanups.add(() => {
+      globalThis.ResizeObserver = origResizeObserver
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    })
+
+    const doc = f.documents.create('r10-stmt-a11y.sql', 'SELECT 1; SELECT 2;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const e0 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, name: 'First' })
+    const e1 = descriptor(2, { index: 1, targetKey: 'prod-east', statementSlot: 1, name: 'Second' })
+    const w0 = descriptor(3, { index: 2, targetKey: 'prod-west', statementSlot: 0, name: 'First' })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1, 2] }), multiOutcome(sqlTargets[1], { resultSetIds: [3] })],
+        [e0, e1, w0]
+      )
+    })
+    const e1Key = f.results.getSnapshot()[doc.id].sets.find(entry => entry.descriptor.resultId === 2)!.key
+    f.results.focusEntry(doc.id, e1Key)
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const render = () => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    render()
+
+    // R10 D4 #4: Active statement tab controls the panel and panel aria-labelledby includes the active statement tab id.
+    const activeStmtTab = host.querySelector<HTMLButtonElement>('.rt-stmt-tab[aria-selected="true"]')!
+    const panel = host.querySelector<HTMLElement>('.rt-panel')!
+    expect(activeStmtTab.getAttribute('aria-controls')).toBe(panel.id)
+    expect(panel.getAttribute('aria-labelledby')).toContain(activeStmtTab.id)
+
+    // R10 D4 #2: Shrink to fold='one' (renders <select class="rt-stmt-select">), focus it, then shrink to fold='none':
+    // focus must move into the visible grid, never drop to document.body.
+    mockHeight = g.headerHeight + 2 * g.rowHeight + scrollbarSize() + g.stackBorder + g.resultTabsHeight + 2
+    act(() => { for (const cb of resizeCallbacks) cb() })
+    const selectEl = host.querySelector<HTMLSelectElement>('select.rt-stmt-select')!
+    expect(selectEl).not.toBeNull()
+    act(() => { selectEl.focus() })
+    expect(document.activeElement).toBe(selectEl)
+
+    mockHeight = 90
+    act(() => { for (const cb of resizeCallbacks) cb() })
+    expect(host.querySelector('.rt-root')?.getAttribute('data-fold')).toBe('none')
+    expect(document.activeElement).toBe(host.querySelector('.rt-panel [data-result-grid]'))
+  })
+
+  it('R10 D4 #3: run-level skipped-statement combineWarnings survive closing or rebuilding another statement Combined view', async () => {
+    const { results, combine } = serviceFixture()
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'transaction', targets: sqlTargets.slice(0, 2) } })
+    const s2a = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 1 })
+    const s2b = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 1 })
+    const c2 = descriptor(10, { index: 2, kind: 'combined', statementSlot: 1 })
+    const skipWarning = 'Combined view for statement 1 was skipped because targets had mixed transaction outcomes.'
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s2a, s2b, c2],
+        { combineWarnings: [skipWarning, 'Column Amount widened.'] }
+      )
+    })
+    const c2Key = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    // Run-level skip warning is shown in Summary, while per-entry notice on c2 gets the per-entry warning.
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toEqual([skipWarning, 'Column Amount widened.'])
+    expect(results.getSnapshot().t1.combineWarnings?.get(c2Key)).toEqual(['Column Amount widened.'])
+
+    // Rebuilding c2 with a new schema-drift warning keeps the run-level skipWarning in Summary!
+    combine.mockResolvedValueOnce({
+      descriptor: descriptor(510, { kind: 'combined', index: 2, statementSlot: 1 }),
+      warnings: ['Column Total widened.']
+    })
+    expect(await results.rebuildCombined('t1', c2Key)).toBe(c2Key)
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toEqual([skipWarning, 'Column Total widened.'])
+
+    // Closing c2 completely still keeps the run-level skipWarning in Summary!
+    expect(results.removeEntry('t1', c2Key)).toBe(true)
+    expect(results.getSnapshot().t1.multi?.combineWarnings).toEqual([skipWarning])
+  })
+
+  it('R10 D4 #5, #6, #7, #8: PivotService catches duplicate-name row collapse, Close notice button has tooltip, and CSS overflow/forced-colors rules hold', async () => {
+    // R10 D4 #5: duplicate-name row column collapsing to a single column reports missing column error.
+    const { results, client, combine } = serviceFixture()
+    const pivot = new PivotService(results)
+    cleanups.add(() => pivot.dispose())
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const origCols: ResultColumn[] = [
+      { name: '_server', dataType: 'nvarchar', wire: 'text', nullable: false },
+      { name: 'id', dataType: 'int', wire: 'text', nullable: false },
+      { name: 'y', dataType: 'int', wire: 'text', nullable: false },
+      { name: 'id', dataType: 'int', wire: 'text', nullable: false }
+    ]
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0, columns: origCols })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0, columns: origCols })
+    const comb = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0, columns: origCols })
+    void results.finish('t1', 'q1', {
+      multiSummary: multiSummaryOf(
+        [multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })],
+        [s1, s2, comb]
+      )
+    })
+    const combKey = results.getSnapshot().t1.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    pivot.open('t1', combKey)
+    pivot.setDraft('t1', { rows: [1, 3], values: [{ aggregate: 'count' }] })
+    await pivot.run('t1')
+    const shrunkCols: ResultColumn[] = [
+      { name: '_server', dataType: 'nvarchar', wire: 'text', nullable: false },
+      { name: 'z', dataType: 'int', wire: 'text', nullable: false },
+      { name: 'a', dataType: 'int', wire: 'text', nullable: false },
+      { name: 'id', dataType: 'int', wire: 'text', nullable: false }
+    ]
+    combine.mockResolvedValueOnce({ descriptor: descriptor(20, { kind: 'combined', index: 2, statementSlot: 0, columns: shrunkCols }) })
+    expect(await results.rebuildCombined('t1', combKey)).toBe(combKey)
+    await pivot.update('t1', combKey)
+    expect((client.handle(20) as FakeHandle).pivot).not.toHaveBeenCalled()
+    expect(pivot.getSnapshot().tabs.t1.error).toContain('id')
+
+    // R10 D4 #6: EntryNoticeBars Close button carries descriptive tooltip in normal & disabled states.
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r10-close-tip.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const a1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const a2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const ac = descriptor(10, { index: 2, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf([multiOutcome(sqlTargets[0], { resultSetIds: [1] }), multiOutcome(sqlTargets[1], { resultSetIds: [2] })], [a1, a2, ac])
+    })
+    const wKey = f.results.getSnapshot()[doc.id].sets.find(entry => entry.descriptor.targetKey === 'prod-west')!.key
+    f.results.removeEntry(doc.id, wKey)
+    const staleTab = f.results.getSnapshot()[doc.id]
+    const staleComb = staleTab.sets.find(entry => entry.descriptor.kind === 'combined')!
+    const host = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(EntryNoticeBars, { tabId: doc.id, tab: staleTab, entry: staleComb, running: true })
+    }))
+    const closeBtn = [...host.querySelectorAll<HTMLButtonElement>('.multi-grid-notice-btn')].find(btn => btn.textContent?.includes('Close'))!
+    expect(closeBtn.disabled).toBe(true)
+    expect(closeBtn.title).toBe('Unavailable while the query runs.')
+
+    // R10 D4 #7 & #8: CSS overflow bounds & forced-colors Highlight/HighlightText for pressed controls.
+    const rules = stylesheetRules()
+    expect(rules.find(r => r.selector === '.rs-stmt-btn')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'max-width', value: 'var(--varia-resultTab)' },
+      { property: 'text-overflow', value: 'ellipsis' }
+    ]))
+    expect(rules.find(r => r.selector === '.messages-filter-pill > span:first-child')?.declarations).toEqual(expect.arrayContaining([
+      { property: 'overflow', value: 'hidden' },
+      { property: 'text-overflow', value: 'ellipsis' }
+    ]))
+    const forcedPressed = rules.find(r => r.at.includes('@media (forced-colors: active)') && r.selector.includes('.cross-engine-stack-btn[aria-pressed="true"]'))
+    expect(forcedPressed?.declarations).toEqual(expect.arrayContaining([
+      { property: 'forced-color-adjust', value: 'none' },
+      { property: 'background', value: 'Highlight' },
+      { property: 'color', value: 'HighlightText' }
+    ]))
+  })
 })

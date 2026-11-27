@@ -872,9 +872,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.recordCombinedCounts(run)
       if (multiSummary.combineWarnings?.length) {
         const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+        const runLevel = multiSummary.combineWarnings.filter(warning => warning.startsWith('Combined view '))
+        const perEntry = multiSummary.combineWarnings.filter(warning => !warning.startsWith('Combined view '))
         if (combined.length > 0) {
-          run.combineWarnings = new Map(combined.map(entry => [entry.key, [...multiSummary.combineWarnings!]]))
-          run.baseCombineWarnings = []
+          run.combineWarnings = new Map(combined.map(entry => [entry.key, [...perEntry]]))
+          run.baseCombineWarnings = [...runLevel]
         } else {
           run.baseCombineWarnings = [...multiSummary.combineWarnings]
         }
@@ -1530,10 +1532,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         nextStale.delete(combinedKey)
         run.staleCombined = nextStale
       }
-      const warnings = (result as { readonly warnings?: readonly string[] }).warnings
       if (run.multi) {
         const nextWarnings = new Map(run.combineWarnings)
-        nextWarnings.set(combinedKey, Array.isArray(warnings) ? [...warnings] : [])
+        nextWarnings.set(combinedKey, Array.isArray(result.warnings) ? [...result.warnings] : [])
         run.combineWarnings = nextWarnings
         this.syncCombineWarnings(run)
       }
@@ -1630,9 +1631,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (!list) return
       for (const item of list) if (!merged.includes(item)) merged.push(item)
     }
+    add(run.baseCombineWarnings)
     const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
-    if (combined.length === 0) add(run.baseCombineWarnings)
-    else for (const entry of combined) add(run.combineWarnings.get(entry.key) ?? run.baseCombineWarnings)
+    for (const entry of combined) add(run.combineWarnings.get(entry.key))
     if (merged.length > 0) run.multi = { ...run.multi, combineWarnings: merged }
     else if (run.multi.combineWarnings !== undefined) {
       const { combineWarnings: _dropped, ...rest } = run.multi
@@ -2514,7 +2515,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
     if (!run || run.status === 'running' || run.status === 'closed' || sources.some(source => !run.setKeys.has(source))) return refuse()
     const from = sources.map(source => run.sets.find(entry => setKey(entry.descriptor) === source)!)
-    const view: ViewKind = descriptor.kind === 'pivot' ? 'pivot' : 'comparison'
+    const rolledBack = descriptor.rolledBackPreview || from.some(source => source.descriptor.rolledBackPreview || source.handle.getSnapshot().rolledBackPreview)
+    const effectiveDescriptor: ResultDescriptor = rolledBack && !descriptor.rolledBackPreview ? { ...descriptor, rolledBackPreview: true } : descriptor
+    const view: ViewKind = effectiveDescriptor.kind === 'pivot' ? 'pivot' : 'comparison'
     const origin = from.length ? run.slots.get(from[0].key) : undefined
     // A bare run (Peek) shows its rows alone: no Pivot and no comparison.
     if (run.bare) return refuse()
@@ -2525,20 +2528,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (view === 'pivot') {
       if (group === undefined || origin?.view !== 'table' || (from[0].descriptor.kind !== 'rows' && from[0].descriptor.kind !== 'combined')) return refuse()
       const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })
-      if (replaced) return this.replaceSet(tabId, run, replaced, descriptor, label, refs, o.pivot)
+      if (replaced) return this.replaceSet(tabId, run, replaced, effectiveDescriptor, label, refs, o.pivot)
     }
     if (run.sets.length >= resultLimits.sets) return refuse()
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     // Numbered once, for its life: an entry that goes before it does not renumber it, nor give its number to the next.
-    const entry: ResultSetEntry = { key: this.mint(), number: ++run.numbered, descriptor, handle: this.client.open(descriptor), label }
+    const entry: ResultSetEntry = { key: this.mint(), number: ++run.numbered, descriptor: effectiveDescriptor, handle: this.client.open(effectiveDescriptor), label }
     // A group's Pivot stands directly under its Table; a comparison goes last, after the groups.
     const at = group === undefined ? run.sets.length : run.sets.findIndex(item => item.ordinal === group) + 1
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
     run.slots.set(entry.key, { view, ...group === undefined ? {} : { group }, revision: 1, sources: refs, ...o.pivot ? { pivot: o.pivot } : {}, ...view === 'comparison' ? { made: ++run.compared } : {} })
     run.shape = undefined
-    this.settleDerived(run, key, descriptor)
+    this.settleDerived(run, key, effectiveDescriptor)
     run.emptied = false
     run.view = 'results'
     this.schedule(tabId)
@@ -2661,11 +2664,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
     if (!run || !old || run.status === 'running' || run.status === 'closed' || run.setKeys.has(setKey(descriptor)) || run.slots.get(key)?.view !== 'comparison'
       || sources.length !== 2 || sources.some(source => !run.setKeys.has(source))) return refuse()
-    const refs = sources.map((source, at): SourceRef => {
-      const from = run.sets.find(entry => setKey(entry.descriptor) === source)!
-      return { key: from.key, set: source, number: from.number, name: o.names?.[at] ?? distinctName(from, run.sets), ...from.ordinal === undefined ? {} : { ordinal: from.ordinal } }
-    })
-    return this.replaceSet(tabId, run, old, descriptor, label, refs, undefined, o.moved)
+    const fromEntries = sources.map(source => run.sets.find(entry => setKey(entry.descriptor) === source)!)
+    const rolledBack = descriptor.rolledBackPreview || fromEntries.some(from => from.descriptor.rolledBackPreview || from.handle.getSnapshot().rolledBackPreview)
+    const effectiveDescriptor: ResultDescriptor = rolledBack && !descriptor.rolledBackPreview ? { ...descriptor, rolledBackPreview: true } : descriptor
+    const refs = fromEntries.map((from, at): SourceRef => ({
+      key: from.key, set: sources[at], number: from.number, name: o.names?.[at] ?? distinctName(from, run.sets), ...from.ordinal === undefined ? {} : { ordinal: from.ordinal }
+    }))
+    return this.replaceSet(tabId, run, old, effectiveDescriptor, label, refs, undefined, o.moved)
   }
 
   /** A derived set has all its rows when it is added: the stack sizes it to them, and its grid always shows a strip (what

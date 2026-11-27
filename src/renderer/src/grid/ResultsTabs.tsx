@@ -195,7 +195,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const effectiveFold = summaryActive ? undefined : fold
   const foldRef = useRef(effectiveFold)
   foldRef.current = effectiveFold
-  const collapseStatements = effectiveFold === 'one' || statementGroups.length > 3
+  const collapseStatements = effectiveFold === 'one' || effectiveFold === 'none' || statementGroups.length > 3
 
   // Closing a view: when the focus was in what closes (or nowhere), it goes to the tab selected next, in the row the closed
   // tab was in, once that tab is drawn; with nothing left, to the Results tab. Only once, in the first layout without it.
@@ -258,6 +258,13 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   useLayoutEffect(() => {
     const root = rootRef.current, doc = root?.ownerDocument, active = doc?.activeElement
     const lost = !active || active === doc?.body
+    if (foldRef.current === 'none') {
+      if (lost && tabRow.current) {
+        tabRow.current = undefined
+        root?.querySelector<HTMLElement>('.rt-panel [data-result-grid], .rt-panel [data-multi-summary]')?.focus({ preventScroll: true })
+      }
+      return
+    }
     const row = active?.matches('[role="tab"][aria-selected="false"]') && root?.contains(active) ? active.closest('[data-tab-row]')?.getAttribute('data-tab-row') : lost ? tabRow.current : undefined
     const target = row === 'view'
       ? root?.querySelector<HTMLElement>('[data-tab-row="view"] [role="tab"][aria-selected="true"]')
@@ -369,8 +376,12 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   }, [!hasActiveView, summaryActive, showViewRow, noticeHeight])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
-    if (effectiveFold !== 'none' || !root || !active || ![...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))) return
-    root.querySelector<HTMLElement>('.rt-panel [data-result-grid]')?.focus({ preventScroll: true })
+    if (effectiveFold !== 'none' || !root) return
+    const lostFromTabRow = (!active || active === root.ownerDocument.body) && tabRow.current !== undefined
+    const inHiddenRow = !!active && [...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))
+    if (!lostFromTabRow && !inHiddenRow) return
+    tabRow.current = undefined
+    root.querySelector<HTMLElement>('.rt-panel [data-result-grid], .rt-panel [data-multi-summary]')?.focus({ preventScroll: true })
   }, [effectiveFold])
 
   const [picking, setPicking] = useState(false)
@@ -441,7 +452,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     ? tabIdOf(summaryEntryKey, 'result')
     : group && showViewRow && (views.length > 1 || statementGroups.length <= 1)
       ? tabIdOf(selected!.key, 'view')
-      : tabIdOf(items[at]?.key ?? selected!.key, 'result')
+      : group && showViewRow && statementGroups.length > 1 && !collapseStatements
+        ? `${tabIdOf(items[at]?.key ?? selected!.key, 'result')} ${tabIdOf(group.table.key, 'stmt')}`
+        : tabIdOf(items[at]?.key ?? selected!.key, 'result')
   const cached = tab.summary?.job?.cacheHit === true || targetOfEntry(tab, selected)?.job?.cacheHit === true
   const budget = tab.summary?.budget ?? tab.multiSummary?.budget
 
@@ -500,7 +513,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
             {statementGroups.map((stmtGroup, index) => {
               const on = stmtGroup === group
               return <button key={stmtGroup.table.key} type="button" role="tab" className="rt-stmt-tab" id={tabIdOf(stmtGroup.table.key, 'stmt')}
-                data-tab-entry={stmtGroup.table.key} data-selected={on || undefined} aria-selected={on} tabIndex={on ? 0 : -1}
+                data-tab-entry={stmtGroup.table.key} data-selected={on || undefined} aria-selected={on} tabIndex={on ? 0 : -1} {...on ? { 'aria-controls': id + 'panel' } : {}}
                 onClick={() => select(groupView(stmtGroup))}>{statementLabel(stmtGroup, index)}</button>
             })}
           </div>)}

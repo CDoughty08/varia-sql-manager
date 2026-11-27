@@ -513,7 +513,7 @@ export const commandCatalog = {
   },
   'explorer.newCrossEngineQuery': {
     title: 'New Cross-Engine SELECT…', category: 'Object Explorer', icon: 'split-horizontal', keywords: ['cross', 'engine', 'sqlserver', 'bigquery', 'select', 'query'],
-    precondition: '!documentBusy', unavailableHint: 'Wait for the open document task to finish.', providers: both,
+    precondition: 'hasConnection && !documentBusy', unavailableHint: 'Connect to a server first.', providers: both,
     menus: [{ menu: 'explorer.context', group: '1_query', order: 12, mnemonic: 'n', when: "explorerNode == 'server' && !explorerServerLost" }]
   },
   'explorer.refreshSelected': {

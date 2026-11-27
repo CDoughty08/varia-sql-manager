@@ -108,6 +108,7 @@ export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry
           <Icon name={rebuilding ? 'loading' : 'refresh'} spin={rebuilding} /><span>{rebuilding ? 'Rebuilding…' : 'Rebuild'}</span>
         </button>
         <button type="button" className="multi-grid-notice-btn" disabled={running || rebuilding}
+          title={running ? 'Unavailable while the query runs.' : rebuilding ? 'Wait until Combined finishes rebuilding.' : 'Close this Combined view'}
           onClick={event => onClose ? onClose(entry.key, event) : results.removeEntry(tabId, entry.key)}>
           <Icon name="close" /><span>Close</span>
         </button>

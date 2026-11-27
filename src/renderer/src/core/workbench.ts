@@ -765,7 +765,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     const hit = element ? documents.editorContaining(element) : undefined
     const editor = hit?.editor ?? documents.boundEditor
     const tabId = hit?.tabId ?? documents.getSnapshot().activeId
-    return editor && tabId ? { container: editor.getContainerDomNode(), tabId, focus: () => editor.focus() } : undefined
+    return editor && tabId ? {
+      container: editor.getContainerDomNode(),
+      tabId,
+      focus: () => {
+        if (hit) {
+          if (hit.tabId !== documents.getSnapshot().activeId) documents.activate(hit.tabId)
+          documents.setActivePane(hit.tabId, hit.pane)
+        }
+        editor.focus()
+      }
+    } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, settings: () => settings.getSnapshot().values, focus, modalOpen,
