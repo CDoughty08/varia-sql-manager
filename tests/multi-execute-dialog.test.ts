@@ -9,8 +9,10 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import MultiExecuteDialog, {
   MultiExecuteDialogModal,
-  multiExecuteSubmitLabel
+  multiExecuteSubmitLabel,
+  transactionDisableReason
 } from '../src/renderer/src/dialogs/MultiExecuteDialog'
+import { classifyStatements } from '../src/shared/multi-query'
 import { CostPromptService, multiCostPromptText } from '../src/renderer/src/services/bigquery-cost-prompt'
 import {
   MultiExecutePromptService,
@@ -590,6 +592,78 @@ describe('MultiExecuteDialog', () => {
     })
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
+
+  it('R3 Finding 7: MultiExecuteDialog preserves original returnFocus across back-to-back queued modals and restores it when queue empties or unmounts', async () => {
+    const trigger = document.body.appendChild(document.createElement('button'))
+    trigger.textContent = 'Run Trigger'
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+    let triggerFocusCount = 0
+    trigger.addEventListener('focus', () => { triggerFocusCount++ })
+
+    const service = new MultiExecutePromptService()
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(MultiExecuteDialog, { service }))
+    })
+    const cleanup = () => { act(() => root.unmount()); host.remove(); service.dispose() }
+    cleanups.push(cleanup)
+
+    let first!: Promise<MultiExecuteChoice | undefined>
+    let second!: Promise<MultiExecuteChoice | undefined>
+    await act(async () => {
+      first = service.ask({ tabId: 'q1', provider: 'sqlserver', sql: 'SELECT 1', targets: [sqlTarget(1), sqlTarget(2)], prices: true })
+      second = service.ask({ tabId: 'q2', provider: 'sqlserver', sql: 'DELETE FROM dbo.T', targets: [sqlTarget(1), sqlTarget(2)], prices: true })
+    })
+
+    // Confirm first modal -> transitions directly to second modal WITHOUT returning focus to trigger in between.
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+    })
+    await expect(first).resolves.toMatchObject({ mode: 'fireAndForget' })
+    expect(triggerFocusCount).toBe(0)
+    expect(document.activeElement).toBe(document.body.querySelector('input[type="radio"][value="transaction"]'))
+
+    // Cancel second modal -> queue becomes empty -> focus returns to trigger (never dropped to document.body).
+    await act(async () => {
+      const cancelBtn = [...document.body.querySelectorAll('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+      cancelBtn.click()
+    })
+    await expect(second).resolves.toBeUndefined()
+    expect(document.activeElement).toBe(trigger)
+    expect(triggerFocusCount).toBe(1)
+
+    // Back-to-back modals followed by wrapper unmount also restores focus to trigger.
+    triggerFocusCount = 0
+    await act(async () => {
+      void service.ask({ tabId: 'q3', provider: 'sqlserver', sql: 'SELECT 1', targets: [sqlTarget(1), sqlTarget(2)], prices: true })
+      void service.ask({ tabId: 'q4', provider: 'sqlserver', sql: 'SELECT 2', targets: [sqlTarget(1), sqlTarget(2)], prices: true })
+    })
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('button[type="submit"]')!.click()
+    })
+    expect(triggerFocusCount).toBe(0)
+    await act(async () => { root.unmount() })
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('R3 Finding 8: transactionDisableReason and MultiExecuteDialogModal offset blocker line numbers by selection startLine', async () => {
+    const tsqlClass = classifyStatements('SELECT 1;\nBACKUP DATABASE Sales TO DISK = \'NUL\';', 'sqlserver')
+    expect(transactionDisableReason('sqlserver', tsqlClass, false)).toContain('Line 2: BACKUP')
+    expect(transactionDisableReason('sqlserver', tsqlClass, false, 10)).toContain('Line 11: BACKUP')
+    expect(transactionDisableReason('sqlserver', tsqlClass, false, 1)).toContain('Line 2: BACKUP')
+
+    const { form } = await mountDialog({
+      tabId: 'tab-offset',
+      provider: 'sqlserver',
+      sql: 'SELECT 1;\nBACKUP DATABASE Sales TO DISK = \'NUL\';',
+      startLine: 15,
+      targets: [sqlTarget(1), sqlTarget(2)],
+      prices: true
+    })
+    expect(form().querySelector('.multi-exec-banner')?.textContent).toContain('Line 16: BACKUP')
+  })
 })
 
 describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
@@ -675,5 +749,62 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     await act(async () => { settingsBtn.click() })
     await expect(queuedSingle).resolves.toEqual({ run: false })
     expect(execute).toHaveBeenCalledWith('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar')
+  })
+
+  it('R3 Finding 7: BigQueryCostPrompt preserves returnFocus across back-to-back queued prompts, resets dontAsk, focuses Cancel, and restores focus when empty', async () => {
+    const trigger = document.body.appendChild(document.createElement('button'))
+    trigger.textContent = 'Execute Button'
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+    let triggerFocusCount = 0
+    trigger.addEventListener('focus', () => { triggerFocusCount++ })
+
+    const costPrompts = new CostPromptService()
+    const workbench = { costPrompts, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench, children: createElement(BigQueryCostPrompt) }))
+    })
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose() })
+
+    let p1!: ReturnType<CostPromptService['askMulti']>
+    let p2!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      p1 = costPrompts.askMulti({
+        kind: 'multi',
+        prices: true,
+        totalBytes: 20 * GiB,
+        projects: [{ connectionId: 'c1', label: 'proj-1', prompt: { kind: 'threshold', bytes: 20 * GiB }, thresholdBytes: 10 * GiB }]
+      })
+      p2 = costPrompts.ask({
+        prompt: { kind: 'threshold', bytes: 15 * GiB },
+        connection: 'proj-2',
+        thresholdBytes: 10 * GiB,
+        prices: true
+      })
+    })
+
+    // Check dontAsk and click Run on prompt #1 -> advances immediately to prompt #2.
+    const checkbox1 = document.body.querySelector<HTMLInputElement>('form.bigquery-cost-prompt input[type="checkbox"]')!
+    await act(async () => { checkbox1.click() })
+    expect(checkbox1.checked).toBe(true)
+    const runBtn1 = document.body.querySelector<HTMLButtonElement>('form.bigquery-cost-prompt button[type="submit"]')!
+    runBtn1.focus()
+    await act(async () => { runBtn1.click() })
+    await expect(p1).resolves.toEqual({ run: true, dontAskAgain: true })
+
+    // Trigger was NOT focused during transition; prompt #2 has unchecked checkbox and Cancel focused!
+    expect(triggerFocusCount).toBe(0)
+    const dialog2 = document.body.querySelector<HTMLFormElement>('form.bigquery-cost-prompt')!
+    expect(dialog2.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false)
+    const cancelBtn2 = [...dialog2.querySelectorAll('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    expect(document.activeElement).toBe(cancelBtn2)
+
+    // Cancel prompt #2 -> queue empties -> focus returns cleanly to trigger (NOT document.body)!
+    await act(async () => { cancelBtn2.click() })
+    await expect(p2).resolves.toEqual({ run: false })
+    expect(document.activeElement).toBe(trigger)
+    expect(triggerFocusCount).toBeGreaterThanOrEqual(1)
   })
 })

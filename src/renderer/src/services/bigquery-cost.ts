@@ -11,6 +11,7 @@ import { isQueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { ConnectionService, LiveConnection } from './connections'
 import { isBigQueryConnection } from './connection-availability'
+import { disableIncompleteWarning, isIncompleteWarningEnabled } from './bigquery-cost-prompt'
 
 export const dryRunMarkerOwner = 'varia.googlesql.dryRun'
 /** The editing pause before a diagnostics dry run (docs/bigquery.md, Cost). */
@@ -200,8 +201,6 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   private readonly entries = new Map<string, Entry>()
   private readonly subscriptions: (() => void)[] = []
   private disposed = false
-  /** "Don't warn me about incomplete estimates again" while its setting is being written. */
-  private incompleteOff = false
   constructor(private readonly deps: BigQueryCostDeps) {
     super(new Map())
     const reconcile = () => this.reconcile()
@@ -434,6 +433,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       const connection = this.deps.connections.get(mappedId)
       return connection && isBigQueryConnection(connection) ? connection : undefined
     }
+    // On multi-target tabs with per-result ownership wired, an absent mapping means the result is closed/unowned — never fall back to the first target.
+    if (this.deps.documents.get(tabId)?.multiMode && this.deps.connectionForResult) return undefined
     return this.connection(tabId)
   }
 
@@ -470,7 +471,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     // again), so the incomplete-estimate warning it was hiding still asks.
     const current = () => costPrompt(estimate, {
       askAboveThreshold: settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection), thresholdBytes: threshold(),
-      warnIncomplete: settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !this.incompleteOff && !entry?.warnedIncomplete
+      warnIncomplete: isIncompleteWarningEnabled(settings) && !entry?.warnedIncomplete
     })
     // Each turn ends in an answer or a prompt found moot by another tab's answer or a settings change, which only the user
     // makes; the bound is a guard, not a limit anyone reaches.
@@ -485,8 +486,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       given => {
         if (signal?.aborted || !given.dontAskAgain) return
         if (kind === 'threshold') { applied = this.deps.optOut.dontAsk(connection); return }
-        this.incompleteOff = true
-        applied = this.deps.settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false).finally(() => { this.incompleteOff = false })
+        applied = disableIncompleteWarning(settings, () => this.deps.settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false))
       })
       await applied?.catch(() => {})
       if (signal?.aborted) return false

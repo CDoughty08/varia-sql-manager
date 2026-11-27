@@ -1013,4 +1013,221 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     costPrompts.dispose()
     multiExecutePrompts.dispose()
   })
+
+  it('R3 Finding 4: validates targets and SQL immediately after refreshBigQueryOptOut and after dry-runs before opening prompts', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const b2 = bqConnection(2)
+    const liveIds = new Set([s1.id, b1.id, b2.id])
+    const h = createHarness({
+      connections: [s1, b1, b2],
+      dryRuns: {
+        [b1.id]: { ok: true, value: { bytesProcessed: 20 * GiB } },
+        [b2.id]: { ok: true, value: { bytesProcessed: 20 * GiB } }
+      }
+    })
+    let onRefresh: (() => void) | undefined
+    let onDryRun: (() => void) | undefined
+    const deps: MultiExecuteDeps = {
+      ...h.deps,
+      connections: { get: id => h.deps.connections.get(id), isLive: id => liveIds.has(id) },
+      optOut: {
+        ...h.deps.optOut,
+        refresh: async conn => {
+          await h.deps.optOut.refresh(conn)
+          const cb = onRefresh
+          onRefresh = undefined
+          cb?.()
+        }
+      },
+      api: {
+        bigQueryDryRun: vi.fn<VariaApi['bigQueryDryRun']>(async req => {
+          const res = await h.deps.api.bigQueryDryRun(req)
+          const cb = onDryRun
+          onDryRun = undefined
+          cb?.()
+          return res
+        })
+      }
+    }
+
+    // 1. Same-engine BigQuery: target drops during refreshBigQueryOptOut (2 -> 1) must refuse with targetsChanged instead of silently bypassing MultiExecuteDialog!
+    const sameTwo = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' },
+        { targetId: b2.targetId, connectionId: b2.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    onRefresh = () => { liveIds.delete(b2.id) }
+    expect(await executeMultiTab(sameTwo.id, deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.dialogAskSpy).not.toHaveBeenCalled()
+    expect(h.singleAskSpy).not.toHaveBeenCalled()
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // 2. Same-engine BigQuery: new target attached during refreshBigQueryOptOut (1 -> 2) must refuse with targetsChanged (never enter unrefreshed)!
+    liveIds.add(b2.id)
+    const sameOne = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    onRefresh = () => {
+      h.docs.documents.setMultiTargets(sameOne.id, [
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' },
+        { targetId: b2.targetId, connectionId: b2.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ])
+    }
+    expect(await executeMultiTab(sameOne.id, deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.dialogAskSpy).not.toHaveBeenCalled()
+    expect(h.singleAskSpy).not.toHaveBeenCalled()
+
+    // 3. Same-engine 1-target BigQuery: SQL changes during dryRunTarget -> refuses BEFORE opening BigQueryCostPrompt!
+    h.docs.documents.setMultiTargets(sameOne.id, [
+      { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+    ])
+    onDryRun = () => { h.docs.model(sameOne.id).edit('SELECT 999;') }
+    expect(await executeMultiTab(sameOne.id, deps)).toEqual({ status: 'refused', reason: 'sqlChanged' })
+    expect(h.singleAskSpy).not.toHaveBeenCalled()
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // 4. Cross-Engine: target added during refreshBigQueryOptOut -> refuses BEFORE dry runs!
+    const crossDoc = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    const dryRunsBefore = h.dryRunCalls.length
+    onRefresh = () => {
+      h.docs.documents.setMultiTargets(crossDoc.id, [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' },
+        { targetId: b2.targetId, connectionId: b2.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ])
+    }
+    expect(await executeMultiTab(crossDoc.id, deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.dryRunCalls.length).toBe(dryRunsBefore)
+    expect(h.multiAskSpy).not.toHaveBeenCalled()
+
+    // 5. Cross-Engine: target changes during runBoundedPool dry runs -> refuses BEFORE opening askMulti!
+    h.docs.documents.setMultiTargets(crossDoc.id, [
+      { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+      { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+    ])
+    onDryRun = () => { liveIds.delete(s1.id) }
+    expect(await executeMultiTab(crossDoc.id, deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.multiAskSpy).not.toHaveBeenCalled()
+    expect(h.executeMultiCalls).toHaveLength(0)
+  })
+
+  it('R3 Finding 6: executeCrossEngine askMulti stillAsks recomputes buildFlagged so threshold changes moot or rebuild queued prompts', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const b2 = bqConnection(2)
+    const docs = documentFixture()
+    const conns = new Map<string, LiveConnection>([[s1.id, s1], [b1.id, b1], [b2.id, b2]])
+    let settingValues: SettingsValues = { ...defaultSettings, 'queryExecution.bigQuery.costThreshold': 10 }
+    const costPrompts = new CostPromptService()
+    const multiExecutePrompts = new MultiExecutePromptService()
+    const executeMulti = vi.fn(async () => {})
+    const deps: MultiExecuteDeps = {
+      documents: docs.documents,
+      connections: { get: id => conns.get(id), isLive: id => conns.has(id) },
+      queries: { isRunning: () => false, executeMulti, refuseReadOnly: vi.fn() },
+      settings: { get: <K extends SettingKey>(key: K) => settingValues[key] },
+      api: {
+        bigQueryDryRun: vi.fn(async req => {
+          const cid = 'connectionId' in req ? req.connectionId : ''
+          return { ok: true as const, value: { bytesProcessed: cid === b1.id ? 15 * GiB : 8 * GiB } }
+        })
+      },
+      optOut: { asks: () => true, refresh: async () => {}, dontAsk: async () => {}, threshold: () => undefined },
+      costPrompts,
+      multiExecutePrompts,
+      notify: vi.fn()
+    }
+
+    const crossDoc = docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' },
+        { targetId: b2.targetId, connectionId: b2.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+
+    // Case 1: Raising global costThreshold from 10 GiB -> 20 GiB while queued moots the multi-project prompt completely!
+    const blocker1 = costPrompts.ask({ prompt: { kind: 'threshold', bytes: 30 * GiB }, connection: 'other', thresholdBytes: 10 * GiB, prices: true })
+    const run1 = executeMultiTab(crossDoc.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    const blockerPrompt1 = costPrompts.getSnapshot().pending!
+    settingValues = { ...settingValues, 'queryExecution.bigQuery.costThreshold': 20 }
+    costPrompts.answer(blockerPrompt1.id, { run: true })
+    await blocker1
+    expect(costPrompts.getSnapshot().pendingMulti).toBeUndefined()
+    await expect(run1).resolves.toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly' })
+
+    // Case 2: Lowering global costThreshold from 10 GiB -> 5 GiB while queued moots the stale [b1 @ 10 GiB] prompt and rebuilds [b1, b2 @ 5 GiB]!
+    settingValues = { ...settingValues, 'queryExecution.bigQuery.costThreshold': 10 }
+    const blocker2 = costPrompts.ask({ prompt: { kind: 'threshold', bytes: 30 * GiB }, connection: 'other', thresholdBytes: 10 * GiB, prices: true })
+    const run2 = executeMultiTab(crossDoc.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    const blockerPrompt2 = costPrompts.getSnapshot().pending!
+    settingValues = { ...settingValues, 'queryExecution.bigQuery.costThreshold': 5 }
+    costPrompts.answer(blockerPrompt2.id, { run: true })
+    await blocker2
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    const rebuilt = costPrompts.getSnapshot().pendingMulti!
+    expect(rebuilt).toBeDefined()
+    expect(rebuilt.request.projects.map(p => p.connectionId)).toEqual([b1.id, b2.id])
+    expect(rebuilt.request.projects.every(p => p.thresholdBytes === 5 * GiB)).toBe(true)
+    costPrompts.answer(rebuilt.id, { run: true })
+    await expect(run2).resolves.toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly' })
+
+    costPrompts.dispose()
+    multiExecutePrompts.dispose()
+  })
+
+  it('R3 Finding 8: executeSameEngine forwards selection startLine (> 1) to MultiExecuteDialogRequest', async () => {
+    const s1 = sqlConnection(1)
+    const s2 = sqlConnection(2)
+    const h = createHarness({ connections: [s1, s2] })
+    const doc = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'sqlserver',
+      sql: 'SELECT 1;\nSELECT 2;\nSELECT 3;\nBACKUP DATABASE Sales TO DISK = \'NUL\';',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: s2.targetId, connectionId: s2.id, database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+
+    const selectionDeps: MultiExecuteDeps = {
+      ...h.deps,
+      documents: {
+        get: id => h.docs.documents.get(id),
+        getSnapshot: () => h.docs.documents.getSnapshot(),
+        getCrossEngineScripts: id => h.docs.documents.getCrossEngineScripts(id),
+        revision: id => h.docs.documents.revision(id),
+        getExecuteText: () => ({ sql: 'BACKUP DATABASE Sales TO DISK = \'NUL\';', startLine: 4, startColumn: 1 })
+      }
+    }
+    const outcome = await executeMultiTab(doc.id, selectionDeps)
+    expect(outcome).toEqual({ status: 'executed', mode: 'transaction', targetCount: 2 })
+    expect(h.dialogRequests[0]?.startLine).toBe(4)
+
+    // When startLine === 1, startLine is omitted.
+    await executeMultiTab(doc.id, h.deps)
+    expect(h.dialogRequests[1]?.startLine).toBeUndefined()
+  })
 })

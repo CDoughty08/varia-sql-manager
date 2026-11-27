@@ -1,9 +1,14 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { focusToReturn, returnFocusTo } from './core/focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import SubDialog from './dialogs/SubDialog'
 import EnvironmentTag from './EnvironmentTag'
 import type { CostPromptRequest } from './services/bigquery-cost'
 import { costPromptText, multiCostPromptText, type MultiProjectCostPromptRequest } from './services/bigquery-cost-prompt'
+
+type ActiveCostPrompt =
+  | { readonly kind: 'single'; readonly id: number; readonly request: CostPromptRequest }
+  | { readonly kind: 'multi'; readonly id: number; readonly request: MultiProjectCostPromptRequest }
 
 /**
  * Execute's cost prompt for a BigQuery query (docs/bigquery.md, Cost): above the threshold, or when the estimate may be
@@ -13,38 +18,69 @@ import { costPromptText, multiCostPromptText, type MultiProjectCostPromptRequest
 export default function BigQueryCostPrompt() {
   const { costPrompts } = useWorkbench()
   const { pending, pendingMulti } = useServiceSnapshot(costPrompts)
-  if (pending) return <Prompt key={pending.id} id={pending.id} request={pending.request} />
-  if (pendingMulti) return <MultiPrompt key={pendingMulti.id} id={pendingMulti.id} request={pendingMulti.request} />
-  return null
+  const active: ActiveCostPrompt | undefined = pending
+    ? { kind: 'single', id: pending.id, request: pending.request }
+    : pendingMulti
+      ? { kind: 'multi', id: pendingMulti.id, request: pendingMulti.request }
+      : undefined
+  const isOpen = !!active
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  if (isOpen && !wasOpen.current) {
+    returnFocus.current = focusToReturn()
+  } else if (!isOpen) {
+    returnFocus.current = null
+  }
+  wasOpen.current = isOpen
+
+  useEffect(() => {
+    if (!isOpen) return
+    const target = returnFocus.current
+    return () => returnFocusTo(target)
+  }, [isOpen])
+
+  if (!active) return null
+  return <ActivePrompt active={active} />
 }
 
-function Prompt({ id, request }: { id: number; request: CostPromptRequest }) {
+/** Keeps one SubDialog mounted across back-to-back queued prompts so focus never drops to document.body between items. */
+function ActivePrompt({ active }: { readonly active: ActiveCostPrompt }) {
   const { costPrompts, commands } = useWorkbench()
-  const [dontAsk, setDontAsk] = useState(false)
+  const [dontAskFor, setDontAskFor] = useState<{ readonly id: number; readonly checked: boolean }>({ id: active.id, checked: false })
+  const dontAsk = dontAskFor.id === active.id && dontAskFor.checked
   const describedBy = useId()
-  const text = costPromptText(request)
-  const settings = () => { costPrompts.answer(id, { run: false }); void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar') }
-  return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt"
-    onOk={() => costPrompts.answer(id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(id, { run: false })}
-    status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
-    <div id={describedBy}>
-      <p className="bigquery-cost-sentence">{text.sentence}</p>
-      <p className="field-note">{text.note}</p>
-    </div>
-    <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAsk(event.target.checked)} /> {text.optOut}</label>
-  </SubDialog>
-}
+  const bodyRef = useRef<HTMLDivElement>(null)
 
-function MultiPrompt({ id, request }: { id: number; request: MultiProjectCostPromptRequest }) {
-  const { costPrompts, commands } = useWorkbench()
-  const [dontAsk, setDontAsk] = useState(false)
-  const describedBy = useId()
-  const text = multiCostPromptText(request)
-  const settings = () => { costPrompts.answer(id, { run: false }); void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar') }
+  // Move focus back to Cancel whenever a queued prompt advances to a new id.
+  useEffect(() => {
+    const form = bodyRef.current?.closest('form')
+    const buttons = form ? [...form.querySelectorAll<HTMLButtonElement>('.dialog-footer button[type="button"]')] : []
+    buttons.at(-1)?.focus()
+  }, [active.id])
+
+  const settings = () => {
+    costPrompts.answer(active.id, { run: false })
+    void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar')
+  }
+
+  if (active.kind === 'single') {
+    const text = costPromptText(active.request)
+    return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt"
+      onOk={() => costPrompts.answer(active.id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(active.id, { run: false })}
+      status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
+      <div id={describedBy} ref={bodyRef}>
+        <p className="bigquery-cost-sentence">{text.sentence}</p>
+        <p className="field-note">{text.note}</p>
+      </div>
+      <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAskFor({ id: active.id, checked: event.target.checked })} /> {text.optOut}</label>
+    </SubDialog>
+  }
+
+  const text = multiCostPromptText(active.request)
   return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt bigquery-cost-prompt-multi"
-    onOk={() => costPrompts.answer(id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(id, { run: false })}
+    onOk={() => costPrompts.answer(active.id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(active.id, { run: false })}
     status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
-    <div id={describedBy}>
+    <div id={describedBy} ref={bodyRef}>
       <p className="bigquery-cost-sentence">{text.sentence}</p>
       <ul className="bigquery-cost-project-list" aria-label="BigQuery project cost breakdown">
         {text.rows.map(row => <li key={row.connectionId} className="bigquery-cost-project-row">
@@ -63,6 +99,6 @@ function MultiPrompt({ id, request }: { id: number; request: MultiProjectCostPro
       <p className="bigquery-cost-total">{text.totalText}</p>
       <p className="field-note">{text.note}</p>
     </div>
-    <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAsk(event.target.checked)} /> {text.optOut}</label>
+    <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAskFor({ id: active.id, checked: event.target.checked })} /> {text.optOut}</label>
   </SubDialog>
 }

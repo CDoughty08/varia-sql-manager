@@ -1,7 +1,34 @@
 import { formatBytes, formatDollars } from '../../../shared/bigquery/cost'
 import { incompleteText, pricedBytes, type CostPrompt } from '../../../shared/bigquery/dry-run'
+import type { SettingKey, SettingValue } from '../../../shared/settings/catalog'
 import { SnapshotStore } from '../core/store'
 import type { CostPromptAnswer, CostPromptRequest } from './bigquery-cost'
+
+type IncompleteWarningSettings = { get<K extends SettingKey>(key: K): SettingValue<K> }
+
+const pendingIncompleteOff = new WeakMap<object, number>()
+
+/** Whether BigQuery incomplete-estimate warnings are currently enabled, accounting for any in-flight opt-out write on `settings`. */
+export function isIncompleteWarningEnabled(settings: IncompleteWarningSettings): boolean {
+  return settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !(pendingIncompleteOff.get(settings) ?? 0)
+}
+
+/** Synchronously suppresses incomplete-estimate warnings for `settings` while `persist()` writes the setting, so queued prompts see the opt-out immediately. */
+export function disableIncompleteWarning(settings: object, persist: () => Promise<unknown>): Promise<unknown> {
+  const next = (pendingIncompleteOff.get(settings) ?? 0) + 1
+  pendingIncompleteOff.set(settings, next)
+  let run: Promise<unknown>
+  try {
+    run = Promise.resolve(persist())
+  } catch (error) {
+    run = Promise.reject(error)
+  }
+  return run.finally(() => {
+    const current = (pendingIncompleteOff.get(settings) ?? 1) - 1
+    if (current <= 0) pendingIncompleteOff.delete(settings)
+    else pendingIncompleteOff.set(settings, current)
+  })
+}
 
 /** One BigQuery target flagged in a multi-project (Cross-Engine) cost prompt. */
 export interface MultiProjectCostEntry {

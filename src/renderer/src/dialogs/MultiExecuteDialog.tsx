@@ -36,6 +36,8 @@ export interface MultiExecuteDialogModalProps {
   readonly onCancel: () => void
   /** Injected dry-run estimator for testing; defaults to `window.varia.bigQueryDryRun`. */
   readonly estimateBigQuery?: BigQueryDryRunEstimator
+  /** When false, suppresses per-instance focus capture/return (managed by an outer modal queue wrapper). */
+  readonly manageReturnFocus?: boolean
 }
 
 type TargetEstimateState =
@@ -63,10 +65,12 @@ export function multiExecuteSubmitLabel(
 export function transactionDisableReason(
   provider: ProviderId,
   classification: StatementClassification,
-  hasEmulator: boolean
+  hasEmulator: boolean,
+  startLine?: number
 ): string | undefined {
   const blocker = classification.firstBlockingStatement
-  const location = blocker ? `Line ${blocker.line}: ${blocker.keyword}` : undefined
+  const line = blocker ? blocker.line + Math.max(0, (startLine ?? 1) - 1) : undefined
+  const location = blocker && line !== undefined ? `Line ${line}: ${blocker.keyword}` : undefined
   if (provider === 'sqlserver') {
     if (!classification.hasNonTransactionalTSql) return undefined
     return location
@@ -97,12 +101,29 @@ const defaultEstimator: BigQueryDryRunEstimator = request => window.varia.bigQue
  */
 export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiExecuteDialogProps) {
   const { pending } = useSyncExternalStore(service.subscribe, service.getSnapshot, service.getSnapshot)
+  const isOpen = !!pending
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  if (isOpen && !wasOpen.current) {
+    returnFocus.current = focusToReturn()
+  } else if (!isOpen) {
+    returnFocus.current = null
+  }
+  wasOpen.current = isOpen
+
+  useEffect(() => {
+    if (!isOpen) return
+    const target = returnFocus.current
+    return () => returnFocusTo(target)
+  }, [isOpen])
+
   if (!pending) return null
   return (
     <MultiExecuteDialogModal
       key={pending.id}
       request={pending.request}
       estimateBigQuery={estimateBigQuery}
+      manageReturnFocus={false}
       onConfirm={choice => service.answer(pending.id, choice)}
       onCancel={() => service.cancel(pending.id)}
     />
@@ -121,7 +142,8 @@ export function MultiExecuteDialogModal({
   request,
   onConfirm,
   onCancel,
-  estimateBigQuery = defaultEstimator
+  estimateBigQuery = defaultEstimator,
+  manageReturnFocus = true
 }: MultiExecuteDialogModalProps) {
   const { ownerDocument } = useDialogWindow()
   const titleId = useId()
@@ -130,7 +152,7 @@ export function MultiExecuteDialogModal({
   const txRadioRef = useRef<HTMLInputElement>(null)
   const fafRadioRef = useRef<HTMLInputElement>(null)
   const preflightCheckboxRef = useRef<HTMLInputElement>(null)
-  const returnFocus = useRef(focusToReturn())
+  const returnFocus = useRef(manageReturnFocus ? focusToReturn() : null)
 
   const isBigQuery = request.provider === 'bigquery'
   const classification = useMemo(
@@ -164,8 +186,8 @@ export function MultiExecuteDialogModal({
   }, [isBigQuery, request.targets, estimates])
 
   const txBlockReason = useMemo(
-    () => transactionDisableReason(request.provider, classification, hasEmulator),
-    [request.provider, classification, hasEmulator]
+    () => transactionDisableReason(request.provider, classification, hasEmulator, request.startLine),
+    [request.provider, classification, hasEmulator, request.startLine]
   )
   const txDisabled = txBlockReason !== undefined
 
@@ -193,10 +215,11 @@ export function MultiExecuteDialogModal({
     }
   }, [txDisabled, hasEmulator, ownerDocument])
 
-  // Initial focus lands on the active radio input (never on Execute); focus returns on unmount.
+  // Initial focus lands on the active radio input (never on Execute); focus returns on unmount when managed locally.
   useEffect(() => {
     const initialRadio = mode === 'transaction' && !txDisabled ? txRadioRef.current : fafRadioRef.current
     initialRadio?.focus()
+    if (!manageReturnFocus) return
     const previous = returnFocus.current
     return () => returnFocusTo(previous)
     // Intentionally run once on dialog mount so initial focus is placed without stealing focus on later state updates.
