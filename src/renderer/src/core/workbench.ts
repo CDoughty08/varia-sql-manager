@@ -389,9 +389,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const loadBigQueryStarred = (connectionId: string, principal: string) => {
     void bigQueryStarred.load(connectionId, principal).then(() => { if (!disposed) onBigQueryStarredLoaded?.() }, onUnexpectedError)
   }
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred }), databaseList = new DatabaseListService(api, connections, events)
-  const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
+  const explorer = new ExplorerService({
+    api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred,
+    onMultiSelectNotice: message => { notifications.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message }) }
+  }), databaseList = new DatabaseListService(api, connections, events)
+  const backend = new BackendStateService(api, connections)
   const updates = new UpdateService(api)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server, target: id => targets.targetForConnection(id),

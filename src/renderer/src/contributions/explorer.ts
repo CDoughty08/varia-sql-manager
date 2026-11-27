@@ -367,8 +367,8 @@ export function explorerContribution({ commands, documents, connections, explore
       run: args => {
         const node = nodeOf(args)
         if (!live(node) || node.kind !== 'server') return
-        const outcome = explorer.toggleMultiSelect(node.id)
-        if (outcome.notice) notifications?.notify({ severity: 'info', message: outcome.notice })
+        const outcome = explorer.toggleMultiSelect(node.id, { silentNotice: !!notifications })
+        if (outcome.notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: outcome.notice })
       }
     }),
     commands.register('explorer.newMultiServerQuery', {
@@ -473,19 +473,31 @@ export function explorerContribution({ commands, documents, connections, explore
         const targetIds = selected.map(target => target.targetId).filter((id): id is string => !!id)
         if (!targetIds.length) return
         const outcomes = await disconnectCoordinator.disconnectMany(targetIds)
+        let firstError: string | undefined
+        let firstWarning: string | undefined
         for (const outcome of outcomes.values()) {
-          if ('error' in outcome && outcome.error) { commands.reportWarning(outcome.error); break }
-          if ('warning' in outcome && outcome.warning) { commands.reportWarning(outcome.warning); break }
+          if ('error' in outcome && outcome.error) { firstError = outcome.error; break }
+          if (!firstWarning && 'warning' in outcome && outcome.warning) firstWarning = outcome.warning
         }
+        if (firstError) commands.reportError(firstError)
+        else if (firstWarning) commands.reportWarning(firstWarning)
       }
     }),
     commands.register('explorer.selectAllSqlServers', {
       when: () => explorer.rootIds.filter(id => explorer.serverProvider(id) === 'sqlserver' && !explorer.node(id)?.lost && connections.isLive(explorer.node(id)?.connectionId ?? '')).length >= 2,
-      run: () => { explorer.selectAllServersByProvider('sqlserver') }
+      run: () => {
+        explorer.selectAllServersByProvider('sqlserver', { silentNotice: !!notifications })
+        const notice = explorer.getSnapshot().multiSelectNotice
+        if (notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: notice })
+      }
     }),
     commands.register('explorer.selectAllBigQueryProjects', {
       when: () => explorer.rootIds.filter(id => explorer.serverProvider(id) === 'bigquery' && !explorer.node(id)?.lost && connections.isLive(explorer.node(id)?.connectionId ?? '')).length >= 2,
-      run: () => { explorer.selectAllServersByProvider('bigquery') }
+      run: () => {
+        explorer.selectAllServersByProvider('bigquery', { silentNotice: !!notifications })
+        const notice = explorer.getSnapshot().multiSelectNotice
+        if (notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: notice })
+      }
     })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }

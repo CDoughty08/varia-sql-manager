@@ -812,4 +812,205 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     costPrompts.dispose()
     multiExecutePrompts.dispose()
   })
+
+  it('R2 Finding 9: rejects before dispatch if SQL revision changes, a target is added, or a target database/dataset changes while dialog or prompt is open', async () => {
+    const s1 = sqlConnection(1)
+    const s2 = sqlConnection(2)
+    const s3 = sqlConnection(3)
+    const b1 = bqConnection(1)
+    const h = createHarness({ connections: [s1, s2, s3, b1], dryRuns: { [b1.id]: { ok: true, value: { bytesProcessed: 15 * GiB } } } })
+
+    const sameDoc = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'sqlserver',
+      sql: 'SELECT 1;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: s2.targetId, connectionId: s2.id, database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+
+    // 1. SQL edited while MultiExecuteDialog is open -> refused with sqlChanged & warning.
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      h.docs.model(sameDoc.id).edit('DROP TABLE dbo.Orders;')
+      return { mode: 'transaction', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    expect(await executeMultiTab(sameDoc.id, h.deps)).toEqual({ status: 'refused', reason: 'sqlChanged' })
+    expect(h.notifications.at(-1)?.severity).toBe('warning')
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // 2. A 3rd target is enabled while dialog is open -> refused with targetsChanged.
+    h.docs.model(sameDoc.id).edit('SELECT 1;')
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      h.docs.documents.setMultiTargets(sameDoc.id, [
+        ...h.docs.documents.get(sameDoc.id)!.multiTargets!,
+        { targetId: s3.targetId, connectionId: s3.id, database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ])
+      return { mode: 'transaction', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    expect(await executeMultiTab(sameDoc.id, h.deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // 3. Target database changed while dialog is open -> refused with targetsChanged.
+    h.docs.documents.setMultiTargets(sameDoc.id, [
+      { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+      { targetId: s2.targetId, connectionId: s2.id, database: 'Sales', enabled: true, provider: 'sqlserver' }
+    ])
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      h.docs.documents.updateMultiTarget(sameDoc.id, 1, { database: 'ProdArchive' })
+      return { mode: 'transaction', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    expect(await executeMultiTab(sameDoc.id, h.deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // 4. Cross-Engine: SQL edited OR BigQuery dataset changed while cost prompt is open -> refused with zero IPC.
+    const crossDoc = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    h.multiAskSpy.mockImplementationOnce(async () => {
+      h.docs.documents.updateMultiTarget(crossDoc.id, 1, { database: 'other_dataset' })
+      return { run: true }
+    })
+    expect(await executeMultiTab(crossDoc.id, h.deps)).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    h.multiAskSpy.mockImplementationOnce(async () => {
+      h.docs.model(crossDoc.id).edit('DELETE FROM dbo.Orders;')
+      return { run: true }
+    })
+    expect(await executeMultiTab(crossDoc.id, h.deps)).toEqual({ status: 'refused', reason: 'sqlChanged' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+  })
+
+  it('R2 Finding 12: tracks synchronous incompleteOff across queued prompts, re-evaluates moot 1-target prompts, and rebuilds partially-opted-out Cross-Engine prompts', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const b2 = bqConnection(2)
+    const docs = documentFixture()
+    const conns = new Map<string, LiveConnection>([[s1.id, s1], [b1.id, b1], [b2.id, b2]])
+    const declined = new Set<string>()
+    let settingValues: SettingsValues = { ...defaultSettings }
+    const costPrompts = new CostPromptService()
+    const multiExecutePrompts = new MultiExecutePromptService()
+    const executeMulti = vi.fn(async () => {})
+    let releaseIncompleteSave!: () => void
+    const incompleteSaveGate = new Promise<void>(resolve => { releaseIncompleteSave = resolve })
+    const dryRuns = new Map<string, BigQueryDryRunResult>()
+
+    const deps: MultiExecuteDeps = {
+      documents: docs.documents,
+      connections: { get: id => conns.get(id), isLive: id => conns.has(id) },
+      queries: { isRunning: () => false, executeMulti, refuseReadOnly: vi.fn() },
+      settings: { get: <K extends SettingKey>(key: K) => settingValues[key] },
+      api: { bigQueryDryRun: vi.fn(async req => ({ ok: true as const, value: dryRuns.get('connectionId' in req ? req.connectionId : '') ?? { bytesProcessed: 0 } })) },
+      optOut: {
+        asks: conn => !declined.has(conn.id),
+        refresh: async () => {},
+        dontAsk: async conn => { declined.add(conn.id) },
+        threshold: () => undefined
+      },
+      costPrompts,
+      multiExecutePrompts,
+      notify: vi.fn(),
+      disableIncompleteWarning: async () => {
+        await incompleteSaveGate
+        settingValues = { ...settingValues, 'queryExecution.bigQuery.incompleteEstimateWarning': false }
+      }
+    }
+
+    // 1. Synchronous incompleteOff: two queued tabs with incomplete estimates; first checks dontAskAgain while async save is still pending -> second is mooted synchronously!
+    dryRuns.set(b1.id, { bytesProcessed: 0, incomplete: 'zeroBytes' })
+    const inc1 = docs.documents.openMultiQuery({
+      mode: 'same', provider: 'bigquery', sql: 'SELECT 1',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    const inc2 = docs.documents.openMultiQuery({
+      mode: 'same', provider: 'bigquery', sql: 'SELECT 2',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    const r1 = executeMultiTab(inc1.id, deps)
+    const r2 = executeMultiTab(inc2.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    const p1 = costPrompts.getSnapshot().pending!
+    expect(p1.request.prompt.kind).toBe('incomplete')
+    costPrompts.answer(p1.id, { run: true, dontAskAgain: true })
+    // Even BEFORE incompleteSaveGate resolves, second prompt is mooted and never shown!
+    expect(costPrompts.getSnapshot().pending).toBeUndefined()
+    releaseIncompleteSave()
+    await expect(r1).resolves.toMatchObject({ status: 'executed' })
+    await expect(r2).resolves.toMatchObject({ status: 'executed' })
+
+    // 2. 1-target re-evaluation on moot: estimate triggers BOTH threshold + incomplete.
+    // Earlier prompt opts out threshold for b1 -> queued prompt becomes moot and re-evaluates to show the hidden incomplete warning!
+    settingValues = { ...defaultSettings }
+    declined.clear()
+    dryRuns.set(b1.id, { bytesProcessed: 20 * GiB, incomplete: 'lowerBound' })
+    const both1 = docs.documents.openMultiQuery({
+      mode: 'same', provider: 'bigquery', sql: 'SELECT 10',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    const both2 = docs.documents.openMultiQuery({
+      mode: 'same', provider: 'bigquery', sql: 'SELECT 20',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    const rb1 = executeMultiTab(both1.id, deps)
+    const rb2 = executeMultiTab(both2.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    const pb1 = costPrompts.getSnapshot().pending!
+    expect(pb1.request.prompt.kind).toBe('threshold')
+    costPrompts.answer(pb1.id, { run: true, dontAskAgain: true })
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    // Second tab's threshold prompt was mooted, then re-evaluated to its incomplete estimate prompt!
+    const pb2 = costPrompts.getSnapshot().pending
+    expect(pb2).toBeDefined()
+    expect(pb2!.request.prompt.kind).toBe('incomplete')
+    costPrompts.answer(pb2!.id, { run: true })
+    await expect(rb1).resolves.toMatchObject({ status: 'executed' })
+    await expect(rb2).resolves.toMatchObject({ status: 'executed' })
+
+    // 3. Cross-Engine askMulti stillAsks uses flagged.every(...): opting out b1 in an earlier prompt moots queued {b1, b2} prompt and rebuilds it with ONLY b2!
+    declined.clear()
+    dryRuns.set(b1.id, { bytesProcessed: 20 * GiB })
+    dryRuns.set(b2.id, { bytesProcessed: 25 * GiB })
+    const singleB1 = docs.documents.openMultiQuery({
+      mode: 'same', provider: 'bigquery', sql: 'SELECT 1',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    const crossBoth = docs.documents.openMultiQuery({
+      mode: 'cross', sql: 'SELECT 1', bigQuerySql: 'SELECT 2',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' },
+        { targetId: b2.targetId, connectionId: b2.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    const rs = executeMultiTab(singleB1.id, deps)
+    const rc = executeMultiTab(crossBoth.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    const pSingle = costPrompts.getSnapshot().pending!
+    expect(pSingle.request.connection).toBe(b1.server)
+    costPrompts.answer(pSingle.id, { run: true, dontAskAgain: true })
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    // Rebuilt multi-project prompt must contain ONLY b2 (never the already-opted-out b1)!
+    const rebuilt = costPrompts.getSnapshot().pendingMulti
+    expect(rebuilt).toBeDefined()
+    expect(rebuilt!.request.projects.map(p => p.connectionId)).toEqual([b2.id])
+    costPrompts.answer(rebuilt!.id, { run: true })
+    await expect(rs).resolves.toMatchObject({ status: 'executed' })
+    await expect(rc).resolves.toMatchObject({ status: 'executed' })
+
+    costPrompts.dispose()
+    multiExecutePrompts.dispose()
+  })
 })

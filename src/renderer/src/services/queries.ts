@@ -25,6 +25,8 @@ export interface RunningQuery {
   readonly connectionIds?: readonly string[]
   readonly multi?: true
   readonly mode?: MultiQueryMode
+  /** Pre-dispatch gate (multi-target dry-runs or prompts): nothing sent to the backend yet; Cancel stops locally. */
+  readonly gated?: true
   readonly startedAt: number
   readonly kind?: 'estimate' | 'attach' | 'preview'
   readonly estimateMode?: EstimatedPlanMode
@@ -115,7 +117,14 @@ const terminalMultiPhases: ReadonlySet<string> = new Set<string>(multiQueryTarge
 const multiControlChars = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu
 const maxMultiTargets = 32
 const cleanMultiLabel = (value: string | undefined): string => (value ?? '').replace(multiControlChars, '').trim().slice(0, 128).trim() || 'Server'
-const cleanSqlServerDatabase = (value: string | undefined, fallback?: string): string => value?.trim().slice(0, 128) || fallback?.trim().slice(0, 128) || 'master'
+const cleanSqlServerDatabase = (value: string | undefined, fallback?: string): string => {
+  const pick = (candidate: string | undefined) => {
+    if (!candidate) return undefined
+    const sliced = candidate.slice(0, 128)
+    return sliced.trim().length > 0 ? sliced : undefined
+  }
+  return pick(value) ?? pick(fallback) ?? 'master'
+}
 
 const backendGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['BACKEND_LOST', 'CONNECTION_LOST', 'NOT_CONNECTED'])
 // A re-attach's failures that say nothing about its job: it is kept and tried again on the next connection.
@@ -208,6 +217,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     this.subscription = events.subscribe(event => {
       if (event.type === 'session.ended') this.sessionEnded(event.tabId)
       if (event.type === 'documents.closed') {
+        const gated = this.gated.get(event.tabId)
+        if (gated) this.stopGated(event.tabId, gated.queryId)
         // No tab will re-attach to a closed tab's jobs: their records go (a quit keeps them, since it closes no tab).
         const key = this.jobKeys.get(event.tabId)
         this.jobKeys.delete(event.tabId)
@@ -242,9 +253,53 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     return !this.disposed && response.value === 'proceed'
   }
   setCostGate(gate: CostGate): void { this.costGate = gate }
-  /** Stops a run still waiting on its estimate or cost prompt (nothing was sent): the tab is as it was. */
-  /** Whether the tab's run is still in its estimate or cost prompt (nothing sent yet). */
-  private isGated(tabId: string): boolean { const running = this.getSnapshot()[tabId]?.running; return !!running && this.gated.get(tabId)?.queryId === running.queryId }
+  /** Whether the tab's run is still in its pre-dispatch estimate or prompt gate (nothing sent yet). */
+  isGated(tabId: string): boolean { const running = this.getSnapshot()[tabId]?.running; return !!running && this.gated.get(tabId)?.queryId === running.queryId }
+  /** Reserves a multi-target tab in a reactive pre-dispatch `running` state (without bumping `executionVersions`) while
+   *  async dry-runs or prompts run, so `queryRunning` turns on, Execute morphs to Cancel, and Cancel/close/dispose abort it. */
+  beginMultiGate(tabId: string): AbortSignal | undefined {
+    if (this.disposed || this.documents.getSnapshot().busy || this.isRunning(tabId)) return undefined
+    const document = this.documents.get(tabId)
+    if (!document || !isQueryDocument(document) || !document.multiMode) return undefined
+    const queryId = crypto.randomUUID()
+    const stop = new AbortController()
+    const before = this.getSnapshot()[tabId]
+    const connectionIds = [...new Set(
+      (document.multiTargets ?? [])
+        .filter(target => target.enabled && !!target.connectionId && isLiveConnection(this.getConnection(target.connectionId)))
+        .map(target => target.connectionId!)
+    )]
+    this.gated.set(tabId, { queryId, stop, before })
+    this.update(tabId, {
+      running: {
+        queryId,
+        connectionId: connectionIds[0] ?? '',
+        ...connectionIds.length ? { connectionIds } : {},
+        multi: true,
+        gated: true,
+        startedAt: this.now()
+      }
+    })
+    return stop.signal
+  }
+  /** Releases an active pre-dispatch gate; when `restore` is true (default), aborts its signal and restores the prior state. */
+  endMultiGate(tabId: string, restore = true, signal?: AbortSignal): void {
+    const gated = this.gated.get(tabId)
+    if (!gated || (signal && gated.stop.signal !== signal)) return
+    if (restore) {
+      this.stopGated(tabId, gated.queryId)
+      return
+    }
+    this.gated.delete(tabId)
+    const current = this.getSnapshot()[tabId]
+    if (current?.running?.queryId === gated.queryId) {
+      const { running: _running, ...rest } = current
+      const next = { ...this.getSnapshot() }
+      if (Object.keys(rest).length) next[tabId] = rest
+      else delete next[tabId]
+      this.publish(next)
+    }
+  }
   private stopGated(tabId: string, queryId: string): boolean {
     const gated = this.gated.get(tabId)
     if (gated?.queryId !== queryId) return false
@@ -252,11 +307,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     gated.stop.abort()
     const current = this.getSnapshot()[tabId]
     if (current?.running?.queryId === queryId) {
-      // As it was, but with the session as it is now: one that ended while the run waited stays ended.
-      const restored = gated.before ? { ...gated.before, session: current.session } : current.session ? { session: current.session } : undefined
       const next = { ...this.getSnapshot() }
-      if (restored) next[tabId] = restored
-      else delete next[tabId]
+      if (!this.documents.get(tabId)) {
+        delete next[tabId]
+      } else {
+        // As it was, but with the session as it is now: one that ended while the run waited stays ended.
+        const restored = gated.before ? { ...gated.before, session: current.session } : current.session ? { session: current.session } : undefined
+        if (restored) next[tabId] = restored
+        else delete next[tabId]
+      }
       this.publish(next)
     }
     return true
@@ -614,7 +673,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /** Refuses a Cross-Engine execution locally (zero IPC), logging clickable READ_ONLY_VIOLATION lines and focusing the first violation. */
   refuseReadOnly(tabId: string, violations: readonly ReadOnlyRefusalItem[]): void {
-    if (this.disposed || !violations.length || !this.documents.get(tabId) || this.isRunning(tabId) || this.documents.getSnapshot().busy) return
+    if (this.disposed || !violations.length || !this.documents.get(tabId) || (this.isRunning(tabId) && !this.isGated(tabId)) || this.documents.getSnapshot().busy) return
+    if (this.isGated(tabId)) this.gated.delete(tabId)
     const queryId = crypto.randomUUID()
     const revision = this.documents.revision(tabId)
     this.sources.set(tabId, { queryId, revision })
@@ -626,13 +686,14 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }))
     this.results.begin(tabId, queryId)
     void this.results.finish(tabId, queryId, { error: messages[0]!.text, code: 'READ_ONLY_VIOLATION', messages })
+    this.update(tabId, { error: messages[0]!.text })
     const first = violations[0]!
     this.documents.revealLine(tabId, first.line, revision, first.dialect)
     this.events.emit({ type: 'query.outputSelected', tabId, view: 'messages' })
   }
   /** Runs a multi-server or cross-engine query via `window.varia.executeMulti` with a fresh ephemeral `jobKey` (never persisted). */
   executeMulti(tabId: string, request: MultiExecuteRequest): Promise<void> {
-    if (this.disposed || this.documents.getSnapshot().busy || this.isRunning(tabId)) return Promise.resolve()
+    if (this.disposed || this.documents.getSnapshot().busy || (this.isRunning(tabId) && !this.isGated(tabId))) return Promise.resolve()
     const document = this.documents.get(tabId)
     if (!document || !isQueryDocument(document) || !document.multiMode) return Promise.resolve()
     const run = this.runMulti(tabId, request)
@@ -649,11 +710,16 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const identities: MultiTargetIdentity[] = []
     let hasSqlServer = false, hasBigQuery = false
     let maxCommandTimeout: number | undefined
+    const mergeTimeout = (connection: QueryConnection) => {
+      const timeout = connection.options?.advanced?.commandTimeout ?? settings['queryExecution.executionTimeout']
+      maxCommandTimeout = maxCommandTimeout === 0 || timeout === 0 ? 0 : Math.max(maxCommandTimeout ?? 0, timeout)
+    }
     const reportLocalError = async (message: string, code?: ErrorCode): Promise<void> => {
       const errorQueryId = crypto.randomUUID()
       this.results.begin(tabId, errorQueryId)
       await this.results.finish(tabId, errorQueryId, { error: message, ...code ? { code } : {} })
       if (this.disposed || !this.documents.get(tabId)) return
+      this.gated.delete(tabId)
       this.update(tabId, { error: message })
       this.events.emit({ type: 'query.outputSelected', tabId, view: 'messages' })
     }
@@ -666,8 +732,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         }
         const provider: ProviderId = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
         if (provider === 'bigquery') hasBigQuery = true; else hasSqlServer = true
-        const timeout = connection.options?.advanced?.commandTimeout
-        if (timeout !== undefined) maxCommandTimeout = maxCommandTimeout === undefined ? timeout : Math.max(maxCommandTimeout, timeout)
+        mergeTimeout(connection)
         const label = cleanMultiLabel(target.label)
         const database = provider === 'sqlserver' && target.database !== undefined ? cleanSqlServerDatabase(target.database) : undefined
         resolvedTargets.push({ ...target, label, ...database !== undefined ? { database } : {} })
@@ -689,8 +754,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         seenConnections.add(connection.id)
         const provider: ProviderId = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
         if (provider === 'bigquery') hasBigQuery = true; else hasSqlServer = true
-        const timeout = connection.options?.advanced?.commandTimeout
-        if (timeout !== undefined) maxCommandTimeout = maxCommandTimeout === undefined ? timeout : Math.max(maxCommandTimeout, timeout)
+        mergeTimeout(connection)
         let targetKey = target.targetId ?? connection.id
         if (seenKeys.has(targetKey)) targetKey = connection.id
         seenKeys.add(targetKey)
@@ -748,6 +812,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     }
 
     const queryId = crypto.randomUUID()
+    // Consume any active pre-dispatch gate right as the real execution commits.
+    this.gated.delete(tabId)
     // Bump executionVersion once the run commits to starting (stays constant across cancel and completion).
     this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
     // Fresh ephemeral jobKey per execution — never persisted on QueryDocument or stored in this.jobKeys.
@@ -791,11 +857,6 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
           if (current?.running?.queryId !== queryId) return
           const updated = applyTargetStateEvent(current.multiTargets ?? initialTargets, event)
           this.update(tabId, { ...current, multiTargets: updated })
-          this.results.updateMultiTargetState?.(tabId, queryId, event)
-        },
-        onResultMeta: event => {
-          if (this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
-          this.results.updateResultMeta?.(tabId, queryId, event)
         }
       })
       this.events.emit({ type: 'query.started', tabId, queryId })

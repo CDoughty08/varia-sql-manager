@@ -153,12 +153,26 @@ export async function runBoundedPool<T, R>(
 }
 
 const dryRunConcurrency = 4
+const pendingIncompleteOff = new WeakMap<object, number>()
+const isIncompleteWarningEnabled = (settings: MultiExecuteDeps['settings']): boolean =>
+  settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !(pendingIncompleteOff.get(settings) ?? 0)
+const disableIncompleteWarningSync = (deps: Pick<MultiExecuteDeps, 'settings' | 'disableIncompleteWarning'>): Promise<unknown> | undefined => {
+  if (!deps.disableIncompleteWarning) return undefined
+  const next = (pendingIncompleteOff.get(deps.settings) ?? 0) + 1
+  pendingIncompleteOff.set(deps.settings, next)
+  return Promise.resolve(deps.disableIncompleteWarning()).finally(() => {
+    const current = (pendingIncompleteOff.get(deps.settings) ?? 1) - 1
+    if (current <= 0) pendingIncompleteOff.delete(deps.settings)
+    else pendingIncompleteOff.set(deps.settings, current)
+  })
+}
 
 export interface MultiExecuteDeps {
-  readonly documents: Pick<DocumentService, 'get' | 'getExecuteText' | 'getCrossEngineScripts' | 'getSnapshot'>
+  readonly documents: Pick<DocumentService, 'get' | 'getExecuteText' | 'getCrossEngineScripts' | 'getSnapshot'> & Partial<Pick<DocumentService, 'revision'>>
   readonly connections: Pick<ConnectionService, 'get' | 'isLive'>
   readonly queries: {
     isRunning(id: string): boolean
+    isGated?(id: string): boolean
     executeMulti(tabId: string, request: MultiExecuteRequest & { readonly stopOnError?: boolean }): Promise<void>
     refuseReadOnly(tabId: string, violations: readonly ReadOnlyRefusalItem[]): void
   }
@@ -175,7 +189,7 @@ export interface MultiExecuteDeps {
 export type MultiExecuteOutcome =
   | { readonly status: 'executed'; readonly mode: MultiQueryMode; readonly targetCount: number; readonly skippedDialog?: true }
   | { readonly status: 'cancelled' }
-  | { readonly status: 'refused'; readonly reason: 'notMultiTab' | 'busy' | 'noTargets' | 'missingCrossEngineTarget' | 'malformedCrossFile' | 'emptySql' | 'readOnlyViolation' | 'targetsChanged' }
+  | { readonly status: 'refused'; readonly reason: 'notMultiTab' | 'busy' | 'noTargets' | 'missingCrossEngineTarget' | 'malformedCrossFile' | 'emptySql' | 'readOnlyViolation' | 'targetsChanged' | 'sqlChanged' }
 
 interface ResolvedTarget {
   readonly connection: LiveConnection
@@ -289,28 +303,42 @@ async function dryRunTarget(
  *     or has an incomplete estimate warning, opens one aggregated multi-project `BigQueryCostPrompt`.
  *   - Dispatches `queries.executeMulti` with `mode: 'crossEngineReadOnly'`.
  */
-/** Re-verifies abort state, busy/running state, unchanged multiMode, and that every planned target is still live and enabled before dispatch. */
+/** Re-verifies abort state, busy/running state, unchanged multiMode, unchanged SQL revision, and exact live enabled target set before dispatch. */
 function validateBeforeDispatch(
   tabId: string,
   expectedMode: 'same' | 'cross',
   targets: readonly ResolvedTarget[],
-  deps: Pick<MultiExecuteDeps, 'documents' | 'connections' | 'queries' | 'notify'>,
-  signal?: AbortSignal
+  deps: Pick<MultiExecuteDeps, 'documents' | 'connections' | 'queries' | 'settings' | 'optOut' | 'notify'>,
+  options: { readonly signal?: AbortSignal; readonly expectedProvider?: ProviderId; readonly capturedRevision?: number } = {}
 ): MultiExecuteOutcome | undefined {
-  if (signal?.aborted) return { status: 'cancelled' }
+  if (options.signal?.aborted) return { status: 'cancelled' }
   const current = deps.documents.get(tabId)
   if (!current || !isQueryDocument(current) || current.multiMode !== expectedMode) return { status: 'cancelled' }
-  if (deps.documents.getSnapshot().busy || deps.queries.isRunning(tabId)) return { status: 'refused', reason: 'busy' }
-  const enabledConnections = new Set(
-    (current.multiTargets ?? [])
-      .filter(target => target.enabled && !!target.connectionId)
-      .map(target => target.connectionId!)
-  )
-  const dropped = targets.filter(target => !deps.connections.isLive(target.connection.id) || !enabledConnections.has(target.connection.id))
+  const runningNonGated = deps.queries.isRunning(tabId) && !deps.queries.isGated?.(tabId)
+  if (deps.documents.getSnapshot().busy || runningNonGated) return { status: 'refused', reason: 'busy' }
+  if (options.capturedRevision !== undefined && deps.documents.revision?.(tabId) !== options.capturedRevision) {
+    deps.notify('Execution cancelled because the query text changed before dispatch. Review the query and try again.', 'warning')
+    return { status: 'refused', reason: 'sqlChanged' }
+  }
+  const allLive = resolveLiveTargets(tabId, deps)
+  const currentResolved = expectedMode === 'cross'
+    ? [...allLive.filter(target => target.item.provider === 'sqlserver'), ...allLive.filter(target => target.item.provider === 'bigquery')]
+    : allLive.filter(target => !options.expectedProvider || target.item.provider === options.expectedProvider)
+  const dropped = targets.filter(planned => !currentResolved.some(live => live.connection.id === planned.connection.id))
   if (dropped.length) {
     const names = dropped.slice(0, 3).map(target => target.item.label).join(', ')
     const suffix = dropped.length > 3 ? ` and ${dropped.length - 3} more` : ''
     deps.notify(`Execution cancelled because target state changed (${names}${suffix} disconnected or disabled). Review the selected targets and try again.`, 'warning')
+    return { status: 'refused', reason: 'targetsChanged' }
+  }
+  const unchanged = currentResolved.length === targets.length && currentResolved.every((live, index) => {
+    const planned = targets[index]!
+    return live.connection.id === planned.connection.id
+      && live.item.database === planned.item.database
+      && live.item.dataset === planned.item.dataset
+  })
+  if (!unchanged) {
+    deps.notify('Execution cancelled because the selected targets, databases, or datasets changed before dispatch. Review the selected targets and try again.', 'warning')
     return { status: 'refused', reason: 'targetsChanged' }
   }
   return undefined
@@ -320,7 +348,8 @@ export async function executeMultiTab(tabId: string, deps: MultiExecuteDeps, sig
   if (signal?.aborted) return { status: 'cancelled' }
   const document = deps.documents.get(tabId)
   if (!document || !isQueryDocument(document) || !document.multiMode) return { status: 'refused', reason: 'notMultiTab' }
-  if (deps.documents.getSnapshot().busy || deps.queries.isRunning(tabId)) return { status: 'refused', reason: 'busy' }
+  const runningNonGated = deps.queries.isRunning(tabId) && !deps.queries.isGated?.(tabId)
+  if (deps.documents.getSnapshot().busy || runningNonGated) return { status: 'refused', reason: 'busy' }
 
   if (document.multiMode === 'cross') return executeCrossEngine(tabId, deps, signal)
   return executeSameEngine(tabId, deps, signal)
@@ -341,6 +370,7 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
     return { status: 'refused', reason: 'noTargets' }
   }
 
+  const capturedRevision = deps.documents.revision?.(tabId)
   const { sql, startLine, startColumn } = deps.documents.getExecuteText(tabId)
   if (!sql.trim()) {
     deps.notify('There is no SQL to execute.', 'warning')
@@ -354,6 +384,10 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
   }
   const refreshedDoc = deps.documents.get(tabId)
   if (!refreshedDoc || !isQueryDocument(refreshedDoc) || refreshedDoc.multiMode !== 'same') return { status: 'cancelled' }
+  if (capturedRevision !== undefined && deps.documents.revision?.(tabId) !== capturedRevision) {
+    deps.notify('Execution cancelled because the query text changed before dispatch. Review the query and try again.', 'warning')
+    return { status: 'refused', reason: 'sqlChanged' }
+  }
   const targets = resolveLiveTargets(tabId, deps).filter(target => target.item.provider === provider)
   if (!targets.length) {
     deps.notify('No connected targets remain enabled for execution.', 'warning')
@@ -361,7 +395,7 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
   }
 
   const prices = deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes'
-  const warnIncomplete = deps.settings.get('queryExecution.bigQuery.incompleteEstimateWarning')
+  const warnIncomplete = isIncompleteWarningEnabled(deps.settings)
 
   // Single-enabled-target shortcut (§1.3): skip MultiExecuteDialog; still apply BigQuery cost prompt if applicable.
   if (targets.length === 1) {
@@ -370,35 +404,40 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
       const estimate = await dryRunTarget(deps.api, only, sql)
       if (signal?.aborted) return { status: 'cancelled' }
       if (estimate) {
-        const prompt = costPrompt(estimate, {
-          askAboveThreshold: only.item.costPrompt !== false,
-          thresholdBytes: only.item.costThresholdBytes ?? 0,
-          warnIncomplete
+        const thresholdBytes = () => gibibytes(deps.optOut.threshold(only.connection) ?? deps.settings.get('queryExecution.bigQuery.costThreshold')) ?? 0
+        const currentPrompt = () => costPrompt(estimate, {
+          askAboveThreshold: deps.settings.get('queryExecution.bigQuery.costPrompt') && deps.optOut.asks(only.connection),
+          thresholdBytes: thresholdBytes(),
+          warnIncomplete: isIncompleteWarningEnabled(deps.settings)
         })
-        if (prompt) {
+        for (let prompt = currentPrompt(), turns = 0; prompt && turns < 16; turns++) {
+          const kind = prompt.kind
+          const threshold = thresholdBytes()
+          const ownThreshold = deps.optOut.threshold(only.connection) !== undefined
           let applied: Promise<unknown> | undefined
           const answer = await deps.costPrompts.ask({
             prompt,
             connection: only.item.label,
-            thresholdBytes: only.item.costThresholdBytes ?? 0,
-            ...only.item.ownCostThreshold ? { ownThreshold: true as const } : {},
+            thresholdBytes: threshold,
+            ...ownThreshold ? { ownThreshold: true as const } : {},
             prices,
             ...only.item.maximumBytesBilled !== undefined ? { cap: only.item.maximumBytesBilled } : {}
-          }, signal, () => prompt.kind === 'threshold'
-            ? deps.settings.get('queryExecution.bigQuery.costPrompt') && deps.optOut.asks(only.connection)
-            : deps.settings.get('queryExecution.bigQuery.incompleteEstimateWarning'),
+          }, signal, () => currentPrompt()?.kind === kind,
           given => {
             if (signal?.aborted || !given.dontAskAgain) return
-            if (prompt.kind === 'threshold') applied = deps.optOut.dontAsk(only.connection)
-            else applied = deps.disableIncompleteWarning?.()
+            if (kind === 'threshold') applied = deps.optOut.dontAsk(only.connection)
+            else applied = disableIncompleteWarningSync(deps)
           })
           await applied?.catch(() => {})
-          if (signal?.aborted || !answer.run) return { status: 'cancelled' }
+          if (signal?.aborted) return { status: 'cancelled' }
+          if (answer.moot) { prompt = currentPrompt(); continue }
+          if (!answer.run) return { status: 'cancelled' }
+          break
         }
       }
     }
 
-    const blocked = validateBeforeDispatch(tabId, 'same', [only], deps, signal)
+    const blocked = validateBeforeDispatch(tabId, 'same', [only], deps, { signal, expectedProvider: provider, capturedRevision })
     if (blocked) return blocked
     await deps.queries.executeMulti(tabId, {
       mode: 'fireAndForget',
@@ -422,7 +461,7 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
     warnIncomplete
   }, signal)
   if (!choice || signal?.aborted) return { status: 'cancelled' }
-  const blocked = validateBeforeDispatch(tabId, 'same', targets, deps, signal)
+  const blocked = validateBeforeDispatch(tabId, 'same', targets, deps, { signal, expectedProvider: provider, capturedRevision })
   if (blocked) return blocked
 
   await deps.queries.executeMulti(tabId, {
@@ -454,6 +493,7 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
     return { status: 'refused', reason: 'missingCrossEngineTarget' }
   }
 
+  const capturedRevision = deps.documents.revision?.(tabId)
   const parsed = deps.documents.getCrossEngineScripts(tabId)
   if (!parsed.ok) {
     deps.notify(parsed.reason, 'warning')
@@ -500,6 +540,10 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
 
   const refreshedDoc = deps.documents.get(tabId)
   if (!refreshedDoc || !isQueryDocument(refreshedDoc) || refreshedDoc.multiMode !== 'cross') return { status: 'cancelled' }
+  if (capturedRevision !== undefined && deps.documents.revision?.(tabId) !== capturedRevision) {
+    deps.notify('Execution cancelled because the query text changed before dispatch. Review the query and try again.', 'warning')
+    return { status: 'refused', reason: 'sqlChanged' }
+  }
 
   const refreshedTargets = resolveLiveTargets(tabId, deps)
   const sqlTargets = refreshedTargets.filter(target => target.item.provider === 'sqlserver')
@@ -510,64 +554,75 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
   }
 
   const prices = deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes'
-  const warnIncomplete = deps.settings.get('queryExecution.bigQuery.incompleteEstimateWarning')
 
   const estimates = await runBoundedPool(bqTargets, dryRunConcurrency, target => dryRunTarget(deps.api, target, parsed.bigquery), signal)
   if (signal?.aborted) return { status: 'cancelled' }
 
-  const flagged: { readonly target: ResolvedTarget; readonly entry: MultiProjectCostEntry }[] = []
-  for (let index = 0; index < bqTargets.length; index++) {
-    const target = bqTargets[index]!
-    const estimate = estimates[index]
-    if (!estimate) continue
-    const prompt = costPrompt(estimate, {
-      askAboveThreshold: target.item.costPrompt !== false,
-      thresholdBytes: target.item.costThresholdBytes ?? 0,
-      warnIncomplete
-    })
-    if (!prompt) continue
-    flagged.push({
-      target,
-      entry: {
-        connectionId: target.connection.id,
-        label: target.item.label,
-        ...target.item.dataset ? { dataset: target.item.dataset } : {},
-        ...target.item.environment ? { environment: target.item.environment } : {},
-        prompt,
-        thresholdBytes: target.item.costThresholdBytes ?? 0,
-        ...target.item.ownCostThreshold ? { ownThreshold: true as const } : {},
-        ...target.item.maximumBytesBilled !== undefined ? { cap: target.item.maximumBytesBilled } : {}
-      }
-    })
+  const buildFlagged = () => {
+    const warnIncompleteNow = isIncompleteWarningEnabled(deps.settings)
+    const globalCostPrompt = deps.settings.get('queryExecution.bigQuery.costPrompt')
+    const globalThresholdGiB = deps.settings.get('queryExecution.bigQuery.costThreshold')
+    const list: { readonly target: ResolvedTarget; readonly entry: MultiProjectCostEntry }[] = []
+    for (let index = 0; index < bqTargets.length; index++) {
+      const target = bqTargets[index]!
+      const estimate = estimates[index]
+      if (!estimate) continue
+      const ownThresholdGiB = deps.optOut.threshold(target.connection)
+      const thresholdBytes = gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0
+      const prompt = costPrompt(estimate, {
+        askAboveThreshold: globalCostPrompt && deps.optOut.asks(target.connection),
+        thresholdBytes,
+        warnIncomplete: warnIncompleteNow
+      })
+      if (!prompt) continue
+      list.push({
+        target,
+        entry: {
+          connectionId: target.connection.id,
+          label: target.item.label,
+          ...target.item.dataset ? { dataset: target.item.dataset } : {},
+          ...target.item.environment ? { environment: target.item.environment } : {},
+          prompt,
+          thresholdBytes,
+          ...ownThresholdGiB !== undefined ? { ownThreshold: true as const } : {},
+          ...target.item.maximumBytesBilled !== undefined ? { cap: target.item.maximumBytesBilled } : {}
+        }
+      })
+    }
+    return list
   }
 
-  if (flagged.length) {
-    const totalBytes = flagged.reduce((sum, item) => sum + item.entry.prompt.bytes, 0)
+  for (let flagged = buildFlagged(), turns = 0; flagged.length > 0 && turns < 16; turns++) {
+    const snapshotFlagged = flagged
+    const totalBytes = snapshotFlagged.reduce((sum, item) => sum + item.entry.prompt.bytes, 0)
     let applied: Promise<unknown> | undefined
     const answer = await deps.costPrompts.askMulti({
       kind: 'multi',
-      projects: flagged.map(item => item.entry),
+      projects: snapshotFlagged.map(item => item.entry),
       prices,
       totalBytes,
       totalProjectCount: bqTargets.length
-    }, signal, () => flagged.some(item => item.entry.prompt.kind === 'threshold'
+    }, signal, () => snapshotFlagged.every(item => item.entry.prompt.kind === 'threshold'
       ? deps.settings.get('queryExecution.bigQuery.costPrompt') && deps.optOut.asks(item.target.connection)
-      : deps.settings.get('queryExecution.bigQuery.incompleteEstimateWarning')),
+      : isIncompleteWarningEnabled(deps.settings)),
     given => {
       if (signal?.aborted || !given.dontAskAgain) return
-      const thresholdTargets = flagged.filter(item => item.entry.prompt.kind === 'threshold')
+      const thresholdTargets = snapshotFlagged.filter(item => item.entry.prompt.kind === 'threshold')
       if (thresholdTargets.length) {
         applied = Promise.all(thresholdTargets.map(item => deps.optOut.dontAsk(item.target.connection)))
       } else {
-        applied = deps.disableIncompleteWarning?.()
+        applied = disableIncompleteWarningSync(deps)
       }
     })
     await applied?.catch(() => {})
-    if (signal?.aborted || !answer.run) return { status: 'cancelled' }
+    if (signal?.aborted) return { status: 'cancelled' }
+    if (answer.moot) { flagged = buildFlagged(); continue }
+    if (!answer.run) return { status: 'cancelled' }
+    break
   }
 
   const plannedTargets = [...sqlTargets, ...bqTargets]
-  const blocked = validateBeforeDispatch(tabId, 'cross', plannedTargets, deps, signal)
+  const blocked = validateBeforeDispatch(tabId, 'cross', plannedTargets, deps, { signal, capturedRevision })
   if (blocked) return blocked
   const combinedTargets = plannedTargets.map(target => target.queryTarget)
   await deps.queries.executeMulti(tabId, {

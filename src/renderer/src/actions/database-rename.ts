@@ -38,16 +38,21 @@ const serverKey = (server: string) => server.trim().toLowerCase()
 export function databaseRenameHooks(options: DatabaseRenameHookOptions): DatabaseRenameHooks {
   /** The connections to the connection's server, lost ones included: a Reconnect moves their windows to a new connection. */
   const sameServer = (connectionId: string, named: readonly string[]): ReadonlySet<string> => {
-    const connections = options.connections.getSnapshot(), server = connections.find(connection => connection.id === connectionId)?.server
-    const spelled = server === undefined ? [connectionId] : connections.filter(connection => serverKey(connection.server) === serverKey(server)).map(connection => connection.id)
-    return new Set([...spelled, ...named])
+    const connections = options.connections.getSnapshot()
+    const origin = connections.find(connection => connection.id === connectionId)
+    const server = origin?.providerId === 'bigquery' ? undefined : origin?.server
+    const spelled = server === undefined
+      ? [connectionId]
+      : connections.filter(connection => connection.providerId !== 'bigquery' && serverKey(connection.server) === serverKey(server)).map(connection => connection.id)
+    const bigQueryIds = new Set(connections.filter(connection => connection.providerId === 'bigquery').map(connection => connection.id))
+    return new Set([...spelled, ...named.filter(id => !bigQueryIds.has(id))])
   }
   const queriesIn = (connectionId: string, database: string, named: readonly string[]) => {
     const ids = sameServer(connectionId, named)
     return options.documents.getSnapshot().documents.filter(document => {
       if (!isQueryDocument(document)) return false
       if (document.multiMode) {
-        return (document.multiTargets ?? []).some(target => target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database)
+        return (document.multiTargets ?? []).some(target => target.provider === 'sqlserver' && target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database)
       }
       return document.connectionId !== undefined && ids.has(document.connectionId) && document.database === database
     })
@@ -61,7 +66,7 @@ export function databaseRenameHooks(options: DatabaseRenameHookOptions): Databas
         if (document.multiMode) {
           const runningIds = state?.running?.connectionIds
           return !!runningIds && (document.multiTargets ?? []).some(target =>
-            target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database && runningIds.includes(target.connectionId))
+            target.provider === 'sqlserver' && target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database && runningIds.includes(target.connectionId))
         }
         // A single-server window with no session (never run, closed or lost) is no one's connection to close.
         return !!(state?.session || state?.running)
@@ -79,7 +84,7 @@ export function databaseRenameHooks(options: DatabaseRenameHookOptions): Databas
         if (document.multiMode) {
           options.documents.updateMultiTarget?.(
             document.id,
-            target => target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database,
+            target => target.provider === 'sqlserver' && target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database,
             { database: newName }
           )
         } else {
