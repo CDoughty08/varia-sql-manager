@@ -5,6 +5,8 @@ import { createRoot } from 'react-dom/client'
 import type { ApiResult } from '../src/shared/contracts'
 import type { BigQueryDryRunResult } from '../src/shared/bigquery/dry-run'
 import BigQueryCostPrompt from '../src/renderer/src/BigQueryCostPrompt'
+import { CommandService } from '../src/renderer/src/core/commands'
+import { modalOpen } from '../src/renderer/src/core/modal'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import MultiExecuteDialog, {
@@ -664,6 +666,63 @@ describe('MultiExecuteDialog', () => {
     })
     expect(form().querySelector('.multi-exec-banner')?.textContent).toContain('Line 16: BACKUP')
   })
+
+  it('R4 D3 #2: tracks fakedCount separately from doneCount and renders "Emulator (estimates unavailable)" when only emulator dry runs succeed', async () => {
+    // 1. All targets return faked: true -> summary shows 'Emulator (estimates unavailable)', NOT 'Total: 0 B'.
+    const allFaked = await mountDialog({
+      tabId: 'tab-faked-all',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: true
+    }, { estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async () => ({ ok: true, value: { bytesProcessed: 0, faked: true } })) })
+    await flush()
+    expect(allFaked.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Emulator (estimates unavailable)')
+    allFaked.unmount()
+
+    // 2. 1 faked + 1 error -> still 0 real estimates and fakedCount > 0 -> 'Emulator (estimates unavailable)'.
+    const fakedAndError = await mountDialog({
+      tabId: 'tab-faked-err',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: true
+    }, {
+      estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async req => req.connectionId === bqTarget(1).connectionId
+        ? { ok: true, value: { bytesProcessed: 0, faked: true } }
+        : { ok: false, error: 'Dry run failed' })
+    })
+    await flush()
+    expect(fakedAndError.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Emulator (estimates unavailable)')
+    fakedAndError.unmount()
+
+    // 3. All errors (doneCount === 0, fakedCount === 0) -> 'Estimates unavailable'.
+    const allError = await mountDialog({
+      tabId: 'tab-err-all',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: true
+    }, { estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async () => ({ ok: false, error: 'Dry run failed' })) })
+    await flush()
+    expect(allError.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Estimates unavailable')
+    allError.unmount()
+
+    // 4. 1 faked + 1 real estimate -> doneCount === 1 -> shows Total for the real estimate.
+    const mixedReal = await mountDialog({
+      tabId: 'tab-faked-real',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: [bqTarget(1), bqTarget(2)],
+      prices: false
+    }, {
+      estimateBigQuery: vi.fn<BigQueryDryRunEstimator>(async req => req.connectionId === bqTarget(1).connectionId
+        ? { ok: true, value: { bytesProcessed: 0, faked: true } }
+        : { ok: true, value: { bytesProcessed: 2 * GiB } })
+    })
+    await flush()
+    expect(mixedReal.form().querySelector('.multi-exec-cost-summary')?.textContent).toBe('Total: 2.00 GiB')
+  })
 })
 
 describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
@@ -806,5 +865,58 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     await expect(p2).resolves.toEqual({ run: false })
     expect(document.activeElement).toBe(trigger)
     expect(triggerFocusCount).toBeGreaterThanOrEqual(1)
+  })
+
+  it('R4 D3 #1: Cost settings… synchronously unmounts the modal via flushSync before CommandService.execute checks modalOpen()', async () => {
+    const costPrompts = new CostPromptService()
+    const commands = new CommandService({ modalOpen })
+    let modalOpenDuringHandler: boolean | undefined
+    const optionsRun = vi.fn(() => { modalOpenDuringHandler = modalOpen() })
+    commands.register('preferences.options', { run: optionsRun })
+    const workbench = { costPrompts, commands } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench, children: createElement(BigQueryCostPrompt) }))
+    })
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose(); commands.dispose() })
+
+    // 1. Single-project prompt.
+    let single!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      single = costPrompts.ask({
+        prompt: { kind: 'threshold', bytes: 15 * GiB },
+        connection: 'solo-analytics',
+        thresholdBytes: 10 * GiB,
+        prices: true
+      })
+    })
+    expect(modalOpen()).toBe(true)
+    const singleSettingsBtn = [...document.body.querySelectorAll('button')].find(btn => btn.textContent?.trim() === 'Cost settings…')!
+    await act(async () => { singleSettingsBtn.click() })
+    await expect(single).resolves.toEqual({ run: false })
+    expect(optionsRun).toHaveBeenCalledTimes(1)
+    expect(optionsRun).toHaveBeenCalledWith({ setting: 'queryExecution.bigQuery.costPrompt' })
+    expect(modalOpenDuringHandler).toBe(false)
+
+    // 2. Multi-project prompt.
+    optionsRun.mockClear()
+    modalOpenDuringHandler = undefined
+    let multi!: ReturnType<CostPromptService['askMulti']>
+    await act(async () => {
+      multi = costPrompts.askMulti({
+        kind: 'multi',
+        prices: true,
+        totalBytes: 25 * GiB,
+        projects: [{ connectionId: 'c1', label: 'prod-analytics', prompt: { kind: 'threshold', bytes: 25 * GiB }, thresholdBytes: 10 * GiB }]
+      })
+    })
+    expect(modalOpen()).toBe(true)
+    const multiSettingsBtn = [...document.body.querySelectorAll('button')].find(btn => btn.textContent?.trim() === 'Cost settings…')!
+    await act(async () => { multiSettingsBtn.click() })
+    await expect(multi).resolves.toEqual({ run: false })
+    expect(optionsRun).toHaveBeenCalledTimes(1)
+    expect(optionsRun).toHaveBeenCalledWith({ setting: 'queryExecution.bigQuery.costPrompt' })
+    expect(modalOpenDuringHandler).toBe(false)
   })
 })

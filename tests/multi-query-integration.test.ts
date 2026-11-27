@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type * as Monaco from 'monaco-editor'
 import type { ConnectionInfo, ConnectionOptions, MultiQueryOptions, MultiTargetOutcome, ProviderConnectionOptions, QueryMultiResult, ResultDescriptor } from '../src/shared/contracts'
 import { defaultSettings, type SettingKey, type SettingValue } from '../src/shared/settings/catalog'
+import { connectionAccent } from '../src/shared/theme/connection-colors'
+import { resolveTheme } from '../src/shared/theme/resolve'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import { CommandService } from '../src/renderer/src/core/commands'
 import { NotificationService } from '../src/renderer/src/core/notifications'
@@ -651,7 +653,9 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     )
     expect(prodMulti).toEqual({ accentColor: '#d97706', environment: 'Production', environmentAbout: '1 Production target' })
 
-    // PROD without explicit color falls back to 'red'.
+    const darkTheme = resolveTheme([], 'dark').theme
+
+    // PROD without explicit color falls back to stored red preset hex ('#e66b73') so connectionAccent resolves it.
     wb.connections.setDetails(prodSql.info.id, { environment: 'Production', autoReconnect: 'inherit' })
     const prodDefaultRed = statusBarAppearance(
       {
@@ -665,9 +669,10 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
       wb.connections.getSnapshot(),
       wb.targets.getSnapshot()
     )
-    expect(prodDefaultRed).toEqual({ accentColor: 'red', environment: 'Production', environmentAbout: '1 Production target' })
+    expect(prodDefaultRed).toEqual({ accentColor: '#e66b73', environment: 'Production', environmentAbout: '1 Production target' })
+    expect(connectionAccent(prodDefaultRed.accentColor, darkTheme)).toBe('var(--varia-connection-red)')
 
-    // Cross-Engine without enabled PROD target gets 'purple' and no environment tag (disabled PROD is ignored).
+    // Cross-Engine without enabled PROD target gets stored purple preset hex ('#ad8bd8') and no environment tag (disabled PROD is ignored).
     const crossNoProd = statusBarAppearance(
       {
         multiMode: 'cross',
@@ -681,7 +686,8 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
       wb.connections.getSnapshot(),
       wb.targets.getSnapshot()
     )
-    expect(crossNoProd).toEqual({ accentColor: 'purple', environment: undefined, environmentAbout: undefined })
+    expect(crossNoProd).toEqual({ accentColor: '#ad8bd8', environment: undefined, environmentAbout: undefined })
+    expect(connectionAccent(crossNoProd.accentColor, darkTheme)).toBe('var(--varia-connection-purple)')
 
     // Same-Engine without PROD falls back to first colored enabled target.
     const sameColored = statusBarAppearance(
@@ -834,6 +840,45 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     await commands.execute('explorer.disconnectSelected', undefined, 'menu')
     expect(reportError).not.toHaveBeenCalled()
     expect(reportWarning).toHaveBeenCalledWith('A session note warning.')
+
+    contrib.dispose()
+    wb.dispose()
+  })
+
+  it('R4 D3 #2: explorer.newMultiServerQuery caps > 32 selected targets to 32 and emits an info notification', async () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    wb.api.explorerChildren.mockImplementation(async () => ({ ok: true as const, value: { nodes: [], elapsedMs: 1, total: 0 } }))
+    connectSql(wb, 'sql-seed-01', 'SalesDB')
+    connectSql(wb, 'sql-seed-02', 'SalesDB')
+    wb.explorer.settle()
+    wb.explorer.selectAllServersByProvider('sqlserver')
+
+    const fakeTargets = Array.from({ length: 35 }, (_, i) => ({
+      rowId: i + 1,
+      targetId: uuid(1000 + i),
+      connectionId: uuid(2000 + i),
+      database: 'SalesDB',
+      provider: 'sqlserver' as const,
+      label: `sql-over-${String(i + 1).padStart(2, '0')}`
+    }))
+    vi.spyOn(wb.explorer, 'multiSelectedTargets').mockReturnValue(fakeTargets)
+
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const notifications = new NotificationService()
+    const contrib = explorerContribution(
+      { commands, documents: wb.documents, connections: wb.connections, explorer: wb.explorer, notifications },
+      wb.api
+    )
+
+    await commands.execute('explorer.newMultiServerQuery', undefined, 'menu')
+    const opened = wb.documents.active!
+    expect(opened.multiMode).toBe('same')
+    expect(opened.multiTargets).toHaveLength(32)
+    expect(opened.multiTargets!.map(t => t.connectionId)).toEqual(fakeTargets.slice(0, 32).map(t => t.connectionId))
+    expect(notifications.getSnapshot().visible).toEqual([
+      expect.objectContaining({ severity: 'info', message: expect.stringContaining('32') })
+    ])
 
     contrib.dispose()
     wb.dispose()

@@ -299,4 +299,47 @@ describe('BigQueryCostService: multi-server and Cross-Engine live diagnostics (F
     costService.dispose()
     costPrompts.dispose()
   })
+
+  it('R4 D1 #1: status() returns undefined in Cross-Engine Split when primary T-SQL pane is focused, shows BigQuery status on secondary pane, and preserves status in File mode', async () => {
+    const sql1: LiveConnection = { id: sqlUuid(1), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver', options: { provider: 'sqlserver', server: 'sql-1', database: 'Sales', authentication: 'sql', trustServerCertificate: true } } as LiveConnection
+    const bq1: LiveConnection = { id: bqUuid(1), server: 'proj-1', database: 'analytics', serverVersion: '', generation: 1, providerId: 'bigquery', options: { provider: 'bigquery', project: 'proj-1', authentication: 'gcloud' } } as LiveConnection
+    const h = createCostHarness([sql1, bq1], async () => ({ ok: true, value: { bytesProcessed: 1024 } }))
+
+    const doc = h.f.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2',
+      targets: [
+        { targetId: sqlUuid(10), connectionId: sql1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: bqUuid(10), connectionId: bq1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+
+    // Produce a BigQuery dry-run estimate on the secondary GoogleSQL model.
+    const secModel = h.f.documents.getSecondaryModel(doc.id) as unknown as TestModel
+    secModel.edit('SELECT 42 FROM analytics.events')
+    await h.runTimers()
+    expect(h.service.getSnapshot().get(doc.id)).toEqual({ phase: 'estimate', bytes: 1024 })
+
+    // Primary T-SQL pane focused (default or explicit): BigQuery status must NOT shadow T-SQL diagnostics.
+    expect(h.service.status(doc.id)).toBeUndefined()
+    h.f.documents.setActivePane(doc.id, 'primary')
+    expect(h.service.status(doc.id)).toBeUndefined()
+
+    // Secondary GoogleSQL pane focused: BigQuery status is returned.
+    h.f.documents.setActivePane(doc.id, 'secondary')
+    expect(h.service.status(doc.id)).toMatchObject({ label: 'BigQuery: no issues' })
+
+    // Returning to primary hides BigQuery status again.
+    h.f.documents.setActivePane(doc.id, 'primary')
+    expect(h.service.status(doc.id)).toBeUndefined()
+
+    // Cross-Engine File mode preserves BigQuery dry-run status regardless of activePane.
+    expect(h.f.documents.setCrossView(doc.id, 'file')).toEqual({ ok: true })
+    h.f.model(doc.id).edit(serializeCrossEngineSql('SELECT 1', 'SELECT 99 FROM analytics.events'))
+    await h.runTimers()
+    expect(h.service.status(doc.id)).toMatchObject({ label: 'BigQuery: no issues' })
+
+    h.service.dispose()
+  })
 })

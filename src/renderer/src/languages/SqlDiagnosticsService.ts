@@ -2,7 +2,7 @@ import type * as Monaco from 'monaco-editor'
 import { languageLimits, type LanguageDiagnostic } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import { isQueryDocument } from '../documents'
+import { documentProvider, isQueryDocument } from '../documents'
 import { isWelcomeQuery, mayBeWelcomeQuery, type DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
@@ -194,6 +194,7 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     this.publish({ documents })
   }
   status(id: string): { label: string; detail: string } | undefined {
+    if (documentProvider(this.documents.get(id)) === 'bigquery') return
     const value = this.getSnapshot().documents.get(id)
     if (!value) return
     if (value.phase === 'paused') return { label: 'SQL analysis paused', detail: value.detail ?? '' }

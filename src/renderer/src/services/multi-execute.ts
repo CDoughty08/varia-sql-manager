@@ -155,6 +155,7 @@ export async function runBoundedPool<T, R>(
 }
 
 const dryRunConcurrency = 4
+const maxMultiTargets = 32
 
 export interface MultiExecuteDeps {
   readonly documents: Pick<DocumentService, 'get' | 'getExecuteText' | 'getCrossEngineScripts' | 'getSnapshot'> & Partial<Pick<DocumentService, 'revision'>>
@@ -178,7 +179,7 @@ export interface MultiExecuteDeps {
 export type MultiExecuteOutcome =
   | { readonly status: 'executed'; readonly mode: MultiQueryMode; readonly targetCount: number; readonly skippedDialog?: true }
   | { readonly status: 'cancelled' }
-  | { readonly status: 'refused'; readonly reason: 'notMultiTab' | 'busy' | 'noTargets' | 'missingCrossEngineTarget' | 'malformedCrossFile' | 'emptySql' | 'readOnlyViolation' | 'targetsChanged' | 'sqlChanged' }
+  | { readonly status: 'refused'; readonly reason: 'notMultiTab' | 'busy' | 'noTargets' | 'tooManyTargets' | 'missingCrossEngineTarget' | 'malformedCrossFile' | 'emptySql' | 'readOnlyViolation' | 'targetsChanged' | 'sqlChanged' }
 
 interface ResolvedTarget {
   readonly connection: LiveConnection
@@ -358,6 +359,10 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
     deps.notify(`No connected ${noun} targets are enabled. Connect or enable at least one target before executing.`, 'warning')
     return { status: 'refused', reason: 'noTargets' }
   }
+  if (engineTargets.length > maxMultiTargets) {
+    deps.notify(`Multi-Server queries support at most ${maxMultiTargets} enabled targets (${engineTargets.length} enabled). Disable extra targets before executing.`, 'warning')
+    return { status: 'refused', reason: 'tooManyTargets' }
+  }
 
   const capturedRevision = deps.documents.revision?.(tabId)
   const { sql, startLine, startColumn } = deps.documents.getExecuteText(tabId)
@@ -395,7 +400,8 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
           thresholdBytes: thresholdBytes(),
           warnIncomplete: isIncompleteWarningEnabled(deps.settings)
         })
-        for (let prompt = currentPrompt(), turns = 0; prompt && turns < 16; turns++) {
+        let prompt = currentPrompt()
+        for (let turns = 0; prompt && turns < 16; turns++) {
           const kind = prompt.kind
           const threshold = thresholdBytes()
           const ownThreshold = deps.optOut.threshold(only.connection) !== undefined
@@ -417,8 +423,10 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
           if (signal?.aborted) return { status: 'cancelled' }
           if (answer.moot) { prompt = currentPrompt(); continue }
           if (!answer.run) return { status: 'cancelled' }
+          prompt = undefined
           break
         }
+        if (prompt) return { status: 'cancelled' }
       }
     }
 
@@ -477,6 +485,11 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
         : 'Cross-Engine SELECT requires at least one enabled, connected BigQuery target.'
     deps.notify(message, 'warning')
     return { status: 'refused', reason: 'missingCrossEngineTarget' }
+  }
+  const totalCrossTargets = initialSqlTargets.length + initialBqTargets.length
+  if (totalCrossTargets > maxMultiTargets) {
+    deps.notify(`Cross-Engine queries support at most ${maxMultiTargets} enabled targets (${totalCrossTargets} enabled). Disable extra targets before executing.`, 'warning')
+    return { status: 'refused', reason: 'tooManyTargets' }
   }
 
   const capturedRevision = deps.documents.revision?.(tabId)
@@ -574,7 +587,8 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
     return list
   }
 
-  for (let flagged = buildFlagged(), turns = 0; flagged.length > 0 && turns < 16; turns++) {
+  let flagged = buildFlagged()
+  for (let turns = 0; flagged.length > 0 && turns < 16; turns++) {
     const snapshotFlagged = flagged
     const totalBytes = snapshotFlagged.reduce((sum, item) => sum + item.entry.prompt.bytes, 0)
     let applied: Promise<unknown> | undefined
@@ -606,8 +620,10 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
     if (signal?.aborted) return { status: 'cancelled' }
     if (answer.moot) { flagged = buildFlagged(); continue }
     if (!answer.run) return { status: 'cancelled' }
+    flagged = []
     break
   }
+  if (flagged.length > 0) return { status: 'cancelled' }
 
   const blocked = validateBeforeDispatch(tabId, 'cross', plannedTargets, deps, { signal, capturedRevision })
   if (blocked) return blocked

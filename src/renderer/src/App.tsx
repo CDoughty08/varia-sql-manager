@@ -54,6 +54,10 @@ import PeekCard from './explorer/PeekCard'
 import MenuLayer from './menus/MenuLayer'
 import Toasts from './kit/Toasts'
 import { connectionDefaults } from '../../shared/connections'
+import { connectionPresets } from '../../shared/theme/connection-colors'
+
+const redPresetColor = connectionPresets.find(preset => preset.name === 'red')!.stored
+const purplePresetColor = connectionPresets.find(preset => preset.name === 'purple')!.stored
 
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
 function errorText(error: unknown): string { return error instanceof Error ? error.message : 'The operation failed.' }
@@ -92,9 +96,9 @@ export function statusBarAppearance(
   const prodTargets = multiEnabled.filter(item => environmentPreset(item.environment) === 'Production')
   const prodTarget = prodTargets[0]
   const accentColor = prodTarget
-    ? (prodTarget.color ?? 'red')
+    ? (prodTarget.color ?? redPresetColor)
     : tab.multiMode === 'cross'
-      ? 'purple'
+      ? purplePresetColor
       : multiEnabled.find(item => item.color)?.color
   return {
     accentColor,

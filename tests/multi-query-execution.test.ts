@@ -1230,4 +1230,79 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     await executeMultiTab(doc.id, h.deps)
     expect(h.dialogRequests[1]?.startLine).toBeUndefined()
   })
+
+  it('R4 D3 #2: refuses upfront with tooManyTargets (> 32 enabled live targets) before opt-out refresh, dry runs, or modals in both Same-Engine and Cross-Engine', async () => {
+    const bqs = Array.from({ length: 33 }, (_, i) => bqConnection(i + 1))
+    const sqls = Array.from({ length: 20 }, (_, i) => sqlConnection(i + 1))
+    const h = createHarness({ connections: [...sqls, ...bqs] })
+
+    // 1. Same-Engine BigQuery with 33 enabled live targets: refused before refreshBigQueryOptOut, dryRun, or MultiExecuteDialog.
+    const sameOver = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT 1;',
+      targets: bqs.map(c => ({ targetId: c.targetId, connectionId: c.id, database: 'analytics', enabled: true, provider: 'bigquery' as const }))
+    })
+    expect(await executeMultiTab(sameOver.id, h.deps)).toEqual({ status: 'refused', reason: 'tooManyTargets' })
+    expect(h.notifications.at(-1)?.severity).toBe('warning')
+    expect(h.notifications.at(-1)?.message).toContain('32')
+    expect(h.refreshCalls).toHaveLength(0)
+    expect(h.dryRunCalls).toHaveLength(0)
+    expect(h.dialogAskSpy).not.toHaveBeenCalled()
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // 2. Cross-Engine with 20 SQL Server + 13 BigQuery (= 33 enabled live targets): refused upfront before refresh/dryRun/costPrompt.
+    const crossOver = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: [
+        ...sqls.map(c => ({ targetId: c.targetId, connectionId: c.id, database: 'Sales', enabled: true, provider: 'sqlserver' as const })),
+        ...bqs.slice(0, 13).map(c => ({ targetId: c.targetId, connectionId: c.id, database: 'analytics', enabled: true, provider: 'bigquery' as const }))
+      ]
+    })
+    expect(await executeMultiTab(crossOver.id, h.deps)).toEqual({ status: 'refused', reason: 'tooManyTargets' })
+    expect(h.notifications.at(-1)?.severity).toBe('warning')
+    expect(h.notifications.at(-1)?.message).toContain('32')
+    expect(h.refreshCalls).toHaveLength(0)
+    expect(h.dryRunCalls).toHaveLength(0)
+    expect(h.multiAskSpy).not.toHaveBeenCalled()
+    expect(h.executeMultiCalls).toHaveLength(0)
+  })
+
+  it('R4 D3 #1: fails closed ({ status: "cancelled" }) when the 16-turn BigQuery cost-prompt moot loop exhausts turns in 1-target Same-Engine and Cross-Engine', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const h = createHarness({
+      connections: [s1, b1],
+      dryRuns: { [b1.id]: { ok: true, value: { bytesProcessed: 25 * GiB } } }
+    })
+
+    // Always answer moot while threshold remains exceeded -> loop hits 16 turns and MUST fail closed!
+    h.singleAskSpy.mockImplementation(async () => ({ run: false, moot: true }))
+    h.multiAskSpy.mockImplementation(async () => ({ run: false, moot: true }))
+
+    const sameSingle = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT * FROM analytics.events;',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    expect(await executeMultiTab(sameSingle.id, h.deps)).toEqual({ status: 'cancelled' })
+    expect(h.singleAskSpy).toHaveBeenCalledTimes(16)
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    const crossTab = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT * FROM analytics.events;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    expect(await executeMultiTab(crossTab.id, h.deps)).toEqual({ status: 'cancelled' })
+    expect(h.multiAskSpy).toHaveBeenCalledTimes(16)
+    expect(h.executeMultiCalls).toHaveLength(0)
+  })
 })

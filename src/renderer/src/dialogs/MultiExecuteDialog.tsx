@@ -261,6 +261,7 @@ export function MultiExecuteDialogModal({
     if (!isBigQuery) return undefined
     let estimating = 0
     let doneCount = 0
+    let fakedCount = 0
     let totalBytes = 0
     let thresholdWarnings = 0
     let capWarnings = 0
@@ -268,13 +269,13 @@ export function MultiExecuteDialogModal({
       const state = estimates[target.targetKey]
       if (!state || state.status === 'estimating') { estimating++; continue }
       if (state.status !== 'done') continue
+      if (state.result.faked) { fakedCount++; continue }
       doneCount++
-      if (state.result.faked) continue
       totalBytes += state.result.bytesProcessed
       if (target.maximumBytesBilled !== undefined && state.result.bytesProcessed > target.maximumBytesBilled) capWarnings++
       if (target.costPrompt !== false && target.costThresholdBytes !== undefined && state.result.bytesProcessed > target.costThresholdBytes) thresholdWarnings++
     }
-    return { estimating, doneCount, totalBytes, thresholdWarnings, capWarnings }
+    return { estimating, doneCount, fakedCount, totalBytes, thresholdWarnings, capWarnings }
   }, [isBigQuery, request.targets, estimates])
 
   const estimatingBigQuery = isBigQuery && (costSummary?.estimating ?? 0) > 0
@@ -502,7 +503,9 @@ export function MultiExecuteDialogModal({
                       ? request.prices
                         ? `Total: ${formatBytes(costSummary.totalBytes)} (about ${formatDollars(costSummary.totalBytes)} on demand)`
                         : `Total: ${formatBytes(costSummary.totalBytes)}`
-                      : 'Estimates unavailable'}
+                      : costSummary.fakedCount > 0
+                        ? 'Emulator (estimates unavailable)'
+                        : 'Estimates unavailable'}
                 </span>
               </div>
 

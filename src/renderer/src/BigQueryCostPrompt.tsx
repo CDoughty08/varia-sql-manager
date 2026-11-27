@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { focusToReturn, returnFocusTo } from './core/focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import SubDialog from './dialogs/SubDialog'
@@ -59,7 +60,7 @@ function ActivePrompt({ active }: { readonly active: ActiveCostPrompt }) {
   }, [active.id])
 
   const settings = () => {
-    costPrompts.answer(active.id, { run: false })
+    flushSync(() => { costPrompts.answer(active.id, { run: false }) })
     void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar')
   }
 
