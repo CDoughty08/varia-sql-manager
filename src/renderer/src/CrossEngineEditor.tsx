@@ -247,9 +247,23 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
     setSwitchError(undefined)
   }
 
-  const removeTarget = (targetIndex: number) => {
+  const removeTarget = (targetIndex: number, button?: HTMLButtonElement | null) => {
     if (locked) return
+    const chips = button?.closest<HTMLElement>('.cross-engine-chips') ?? null
+    const buttonsBefore = chips ? [...chips.querySelectorAll<HTMLButtonElement>('.cross-engine-chip-remove')] : []
+    const removedPos = button ? buttonsBefore.indexOf(button) : -1
     documents.setMultiTargets(tabId, (tab.multiTargets ?? []).filter((_, index) => index !== targetIndex))
+    if (!chips) return
+    const restoreFocus = () => {
+      if (!chips.isConnected) return
+      const remaining = [...chips.querySelectorAll<HTMLButtonElement>('.cross-engine-chip-remove:not(:disabled)')]
+      const next = remaining.length > 0
+        ? remaining[Math.max(0, Math.min(removedPos >= 0 ? removedPos : 0, remaining.length - 1))]
+        : chips.querySelector<HTMLButtonElement>('.cross-engine-add-btn:not(:disabled)') ?? chips.querySelector<HTMLButtonElement>('.cross-engine-add-btn')
+      next?.focus({ preventScroll: true })
+    }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restoreFocus)
+    else restoreFocus()
   }
 
   const jumpToNextBlocked = (scope: 'sqlserver' | 'bigquery' | 'file', violations: readonly CrossEngineViolation[]) => {
@@ -311,7 +325,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
           <span className="cross-engine-chip-name">{item.name}</span>
           <span className="cross-engine-chip-db">{`· ${dbText}`}</span>
           {!item.live && <span className="cross-engine-chip-offline">Disconnected</span>}
-          {targetIndex >= 0 && <button type="button" className="cross-engine-chip-remove" aria-label={`Remove ${item.name}`} disabled={locked} onClick={() => removeTarget(targetIndex)}>
+          {targetIndex >= 0 && <button type="button" className="cross-engine-chip-remove" aria-label={`Remove ${item.name}`} disabled={locked} onClick={event => removeTarget(targetIndex, event.currentTarget)}>
             <Icon name="close" />
           </button>}
         </span>
@@ -371,7 +385,7 @@ export default function CrossEngineEditor({ tabId, visible, primarySlotRef, onAc
         aria-pressed={stacked}
         title={stacked ? 'Switch to side-by-side panes' : 'Stack Transact-SQL above GoogleSQL'}
         onClick={() => setManualStacked(!stacked)}>
-        <Icon name="layout" /><span>{stacked ? 'Side by side' : 'Stack vertically'}</span>
+        <Icon name="layout" /><span>Stack vertically</span>
       </button>}
       <span className="cross-engine-bar-counts" aria-hidden="true">
         {`${enabledSql.length} SQL · ${enabledBq.length} BigQuery`}

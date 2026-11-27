@@ -779,4 +779,46 @@ describe('editor group tab shelves', () => {
     expect(view.wheel(18, 40).defaultPrevented).toBe(false)
     expect(view.changed).toHaveBeenCalledTimes(updates)
   })
+
+  it('re-emits shelf state when a hidden tab changes multiMode, enabled target count, or file path', () => {
+    const view = fixture(0, 6)
+    view.resize(570, 864)
+    view.layout.setRows(false, 2)
+    expect(view.shelf(false).hidden.map(tab => tab.id)).toEqual(['q4', 'q5', 'q6'])
+
+    const updateHidden = (patch: Partial<QueryTab>) => {
+      const next = view.documents.getSnapshot().map(tab => tab.id === 'q6' ? { ...tab, ...patch } : tab)
+      view.documents.set(next)
+      flushFrames()
+    }
+
+    let calls = view.changed.mock.calls.length
+    // Change to same-engine multi-server with 2 enabled targets.
+    updateHidden({
+      multiMode: 'same',
+      multiTargets: [
+        { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 's2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+
+    // Toggle a target off (enabled count 2 -> 1).
+    updateHidden({
+      multiTargets: [
+        { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 's2', provider: 'sqlserver', database: 'master', enabled: false }
+      ]
+    })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+
+    // Switch multiMode same -> cross.
+    updateHidden({ multiMode: 'cross' })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+
+    // Update file path on hidden tab.
+    updateHidden({ file: { id: 'f1', name: 'audit.sql', path: 'C:/queries/audit.sql', encoding: 'utf8', readOnly: false } })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+    expect(view.shelf(false).hidden.find(tab => tab.id === 'q6')?.file?.path).toBe('C:/queries/audit.sql')
+  })
 })

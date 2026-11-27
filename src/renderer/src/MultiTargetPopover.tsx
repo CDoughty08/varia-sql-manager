@@ -43,10 +43,19 @@ export function requestMultiTargetPopover(tabId: string, provider?: ProviderId):
   if (matched) return
   pendingOpen = { tabId, provider }
   if (typeof requestAnimationFrame === 'function') {
-    const frame = requestAnimationFrame(() => {
-      if (pendingOpen?.tabId === tabId) clearPendingOpen()
+    let cancelled = false
+    let innerFrame: number | undefined
+    const outerFrame = requestAnimationFrame(() => {
+      if (cancelled) return
+      innerFrame = requestAnimationFrame(() => {
+        if (!cancelled && pendingOpen?.tabId === tabId) clearPendingOpen()
+      })
     })
-    pendingOpenCancel = () => cancelAnimationFrame(frame)
+    pendingOpenCancel = () => {
+      cancelled = true
+      cancelAnimationFrame(outerFrame)
+      if (innerFrame !== undefined) cancelAnimationFrame(innerFrame)
+    }
   } else {
     const timer = setTimeout(() => {
       if (pendingOpen?.tabId === tabId) clearPendingOpen()
@@ -313,7 +322,10 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     focusOnOpen.current = false
   }, [])
 
-  useEffect(() => {
+  const prevTabId = useRef(tabId)
+  useLayoutEffect(() => {
+    if (prevTabId.current === tabId) return
+    prevTabId.current = tabId
     close(false)
     setSharedChoice('')
   }, [tabId, close])
@@ -326,7 +338,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     setOpen(true)
   }, [menus, onActivate])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const listener: OpenRequestListener = requestedTabId => {
       if (requestedTabId !== tabId) return false
       openPopover(false)
@@ -417,7 +429,16 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   }, [tab, connections, rememberedTargets, isCross, tabProvider])
 
   const showFilter = rows.length > filterThreshold
-  const normalizedFilter = filter.trim().toLowerCase()
+  const normalizedFilter = showFilter ? filter.trim().toLowerCase() : ''
+  useEffect(() => {
+    if (!showFilter && filter) setFilter('')
+    if (open && !showFilter) {
+      const own = popover.current?.ownerDocument
+      if (own && (!own.activeElement || own.activeElement === own.body)) {
+        popover.current?.focus({ preventScroll: true })
+      }
+    }
+  }, [showFilter, filter, open])
   const filteredRows = useMemo(() => {
     if (!normalizedFilter) return rows
     return rows.filter(row =>
@@ -493,13 +514,13 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       const body = panel.querySelector<HTMLElement>('.multi-target-popover-body')
       const measuredHeight = body ? (panel.offsetHeight - body.clientHeight + body.scrollHeight) : panel.scrollHeight
       const naturalHeight = measuredHeight > 0 ? measuredHeight : 320
-      const below = Math.max(120, view.innerHeight - box.bottom - gap - inset)
-      const above = Math.max(120, box.top - gap - inset)
-      const up = naturalHeight > below && above > below
-      const maxHeight = Math.min(460, up ? above : below)
+      const rawBelow = Math.max(0, view.innerHeight - box.bottom - gap - inset)
+      const rawAbove = Math.max(0, box.top - gap - inset)
+      const up = naturalHeight > rawBelow && rawAbove > rawBelow
+      const maxHeight = Math.min(460, Math.max(80, Math.min(view.innerHeight - inset * 2, (up ? rawAbove : rawBelow) || view.innerHeight - inset * 2)))
       const placedHeight = Math.min(naturalHeight, maxHeight)
       const left = Math.max(inset, Math.min(box.right - width, view.innerWidth - width - inset))
-      const top = up ? Math.max(inset, box.top - gap - placedHeight) : box.bottom + gap
+      const top = Math.max(inset, Math.min(up ? box.top - gap - placedHeight : box.bottom + gap, view.innerHeight - placedHeight - inset))
       setCoords(current => current && current.top === top && current.left === left && current.maxHeight === maxHeight ? current : { top, left, maxHeight })
     }
     place()
@@ -586,7 +607,17 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
 
   const clearDetachedRow = (row: PopoverRow) => {
     if (locked || row.targetIndex === undefined) return
+    const key = row.key
     documents.updateMultiTarget(tab.id, row.targetIndex, { enabled: false })
+    const moveFocus = () => {
+      const panel = popover.current
+      if (!panel || !panel.isConnected) return
+      const targetRow = [...panel.querySelectorAll<HTMLElement>('.multi-target-row[data-row-key]')].find(el => el.dataset.rowKey === key)
+      const check = targetRow?.querySelector<HTMLElement>('.multi-target-check:not(:disabled)')
+      ;(check ?? panel).focus({ preventScroll: true })
+    }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(moveFocus)
+    else moveFocus()
   }
 
   const changeRowDatabase = (row: PopoverRow, database: string) => {
@@ -685,7 +716,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
             : row.detached
               ? 'multi-target-row is-detached'
               : 'multi-target-row is-unchecked'
-          return <div key={row.key} className={rowClass} data-live={row.live || undefined} data-detached={row.detached || undefined}>
+          return <div key={row.key} className={rowClass} data-row-key={row.key} data-live={row.live || undefined} data-detached={row.detached || undefined}>
             <input
               type="checkbox"
               className="multi-target-check"

@@ -120,7 +120,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   }
 
   const quietReady = !bar && compact && model.tone === 'ready'
-  const visibleSegments = !bar && !quietReady && isMulti
+  const visibleSegments = !quietReady && isMulti
     ? model.segments.filter(segment => !(segment.key === 'server' && segment.text === model.text))
     : model.segments
   const showBarEnvironment = bar && (isMulti ? multiProdCount > 0 : !!environmentTag(presentation.environment))

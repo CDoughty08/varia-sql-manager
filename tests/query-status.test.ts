@@ -240,6 +240,44 @@ describe('the query status facts\' environment tag', () => {
     expect(model.text).toBe('2 SQL Servers + 0 BigQuery · Select a BigQuery project')
     expect(model.text).not.toContain('2 of 2 connected')
   })
+
+  it('R3 Finding 7: deduplicates identical multi.label in variant="bar" when idle while keeping the Targets segment during execution or settled outcomes', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    fixture.connections.add(
+      { id: 'c1', server: 'sql01', displayName: 'SQL One', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql01', displayName: 'SQL One', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    fixture.connections.add(
+      { id: 'c2', server: 'sql02', displayName: 'SQL Two', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql02', displayName: 'SQL Two', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    const tab = fixture.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'c1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'c2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+
+    // Idle bar: model.text already shows "2 SQL Servers · Ready" -> omit duplicate query-status-server segment.
+    const idleWorkbench = { ...fixture, theme } as unknown as Workbench
+    const idleHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: idleWorkbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
+    const idleVisibleText = idleHtml.replace(/<[^>]+>/g, '')
+    expect(idleVisibleText.split('2 SQL Servers · Ready').length - 1).toBe(1)
+    expect(idleHtml).not.toContain('query-status-server')
+
+    // Settled outcome bar: model.text differs ("Query executed successfully.") -> keep query-status-server segment.
+    const queries = new SnapshotStore({
+      [tab.id]: { multiSummary: { queryId: 'q1', mode: 'same' as const, status: 'completed' as const, elapsedMs: 12, targets: [] } }
+    })
+    const settledWorkbench = { ...fixture, queries, theme } as unknown as Workbench
+    const settledHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: settledWorkbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
+    expect(settledHtml).toContain('Query executed successfully.')
+    expect(settledHtml).toContain('query-status-server')
+    expect(settledHtml).toContain('2 SQL Servers · Ready')
+  })
 })
 
 describe('grouped calm status bar and condensed SQL status chip', () => {
