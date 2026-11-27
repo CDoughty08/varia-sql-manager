@@ -75,7 +75,7 @@ export interface PivotFollowHost {
 /** A build in flight: its run, the Table it reads, its group, the Pivot it replaces (none for a group's first), whether it
  *  still waits for a place, and whether the user cancelled it. */
 interface Build {
-  readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly ordinal: number; readonly replaces?: EntryKey
+  readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly sourceSet: string; readonly ordinal: number; readonly replaces?: EntryKey
   /** Update started it (the Pivot's own recipe, not the builder's draft): what it says goes to the toolbar too, since the
    *  builder may be closed or on another group. */
   readonly update: boolean
@@ -303,15 +303,25 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       const label = pivot.sourceColumns?.[index] || `column ${index + 1}`
       if (!missing.includes(label)) missing.push(label)
     }
+    const incompatible: string[] = []
+    const addIncompatible = (index: number, mappedColumn: number) => {
+      const label = columns[mappedColumn]?.name || pivot.sourceColumns?.[index] || `column ${index + 1}`
+      if (!incompatible.includes(label)) incompatible.push(label)
+    }
     remapped.rows.forEach((mapped, at) => { if (mapped < 0 || !fitted.rows.includes(mapped)) addMissing(recipe.rows[at]) })
     if (recipe.column !== undefined && (remapped.column === undefined || remapped.column < 0 || fitted.column === undefined)) addMissing(recipe.column)
     remapped.values.forEach((mapped, at) => {
       const orig = recipe.values[at]?.column
       if (orig !== undefined && (mapped.column === undefined || mapped.column < 0 || fitted.values[at]?.column !== mapped.column)) addMissing(orig)
+      else if (orig !== undefined && mapped.column !== undefined && fitted.values[at]?.aggregate !== mapped.aggregate) addIncompatible(orig, mapped.column)
     })
     if (missing.length > 0) {
       const names = missing.join(', ')
       return { error: `Cannot update ${groupPivotName(group)}: ${missing.length === 1 ? `column ${names} is` : `columns ${names} are`} no longer in ${entryName(group.table.entry)}. Edit the pivot to choose new columns.` }
+    }
+    if (incompatible.length > 0) {
+      const names = incompatible.join(', ')
+      return { error: `Cannot update ${groupPivotName(group)}: ${incompatible.length === 1 ? `column ${names} is` : `columns ${names} are`} no longer numeric in ${entryName(group.table.entry)}. Edit the pivot to choose new aggregates.` }
     }
     return { spec: draftSpec(fitted) }
   }
@@ -357,7 +367,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const item: Build = {
       // An automatic build is named by the source set and filters of the view it reads (the results' own state, which may be a frame
       // ahead of the snapshot that started it), so it is superseded only by a source replacement or filters it does not read.
-      abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, ...auto ? { auto: { sourceSet, filters: reads } } : {},
+      abort, queryId: tab.queryId, source: entry.key, sourceSet, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, ...auto ? { auto: { sourceSet, filters: reads } } : {},
       queued: undefined, cancelled: false
     }
     builds.set(group.ordinal, item)
@@ -576,9 +586,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     for (const [tabId, builds] of this.running) {
       const run = snapshot[tabId]
       for (const build of builds.values()) {
-        // The Pivot a build would replace was closed: it would come back as a slot the user closed, so it is given up.
+        // The Pivot a build would replace was closed, or its Table was replaced in place: give it up.
         const group = run?.queryId === build.queryId ? run.groups.find(item => item.table.key === build.source) : undefined
-        if (!group || (build.replaces !== undefined && group.pivot?.key !== build.replaces)) build.abort.abort()
+        if (!group || setKey(group.table.entry.descriptor) !== build.sourceSet || (build.replaces !== undefined && group.pivot?.key !== build.replaces)) build.abort.abort()
       }
     }
     const current = this.getSnapshot()

@@ -190,8 +190,9 @@ export function comparableTable(tab: TabResults | undefined, entry: ResultSetEnt
  *  swapping sides produces a symmetric diff regardless of engine collation rules. */
 export function isCrossEnginePair(tab: TabResults | undefined, a: ResultSetEntry | undefined, b: ResultSetEntry | undefined): boolean {
   if (!tab?.multi || !a || !b) return false
-  const providerA = targetOfEntry(tab, a)?.provider
-  const providerB = targetOfEntry(tab, b)?.provider
+  const providerOf = (entry: ResultSetEntry) => targetOfEntry(tab, entry)?.provider ?? (entry.sample ? 'bigquery' : undefined)
+  const providerA = providerOf(a)
+  const providerB = providerOf(b)
   if (providerA && providerB) return providerA !== providerB
   return tab.multi.mode === 'crossEngineReadOnly'
 }
