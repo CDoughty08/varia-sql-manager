@@ -6,7 +6,7 @@ import { escapeMarkdown, hoverFromIndex } from '../src/shared/completion/hover'
 import { LookupCache, lookupCacheLimits } from '../src/shared/completion/lookup-cache'
 import type { CompletionItem, CompletionSite, IndexLookup, ScopeSource } from '../src/shared/completion/model'
 import { googleSqlDialect, quoteGoogleSqlName } from '../src/shared/googlesql/dialect'
-import { readGoogleSqlCompletion, readGoogleSqlHover } from '../src/shared/googlesql/scope'
+import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../src/shared/googlesql/scope'
 import { languageLookupLimits, languageLookupRequestSchema, languageLookupResultSchema, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath, type LanguageLookupResult } from '../src/shared/language-lookup'
 
 /** `|` marks the caret. */
@@ -352,9 +352,61 @@ describe('GoogleSQL scope reader', () => {
     expect(readGoogleSqlHover(hoverRead.text, hoverRead.offset)).toMatchObject({ parts: ['my-proj', '2024_sales', 'orders'], at: 2, object: true })
 
     // Numeric literals and non-object digit expressions stay non-completable.
-    for (const sql of ['SELECT 1.5|', 'SELECT .5|', 'SELECT 123|', 'WHERE a = 123|', 'SELECT a.123|', 'SELECT a.456.|', 'SELECT a.2024_sales|']) {
+    for (const sql of ['SELECT 1.5|', 'SELECT .5|', 'SELECT 123|', 'WHERE a = 123|', 'SELECT a.123|', 'SELECT a.456.|', 'SELECT a.2024_sales|', 'SELECT a-1.5|', 'SELECT a-1.5| FROM t', 'SELECT a-1.|5', 'SELECT t.x - 1.5| FROM t', 'SELECT 10-2.5|', 'SELECT -1.5|', 'WHERE a = 1-2.5|']) {
       expect(read(sql).site, sql).toEqual({ kind: 'none' })
     }
+  })
+
+  it('reads unquoted digit-starting segments after a dashed project ending in digits without breaking subtraction', () => {
+    const typingDataset = read('SELECT * FROM my-project-123456.2024_sales|')
+    expect(typingDataset.site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+    expect(typingDataset.word).toEqual({ start: 32, end: 42, typed: '2024_sales', quoted: false })
+
+    const midDataset = read('SELECT * FROM my-project-123456.20|24_sales')
+    expect(midDataset.site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+    expect(midDataset.word).toEqual({ start: 32, end: 42, typed: '20', quoted: false })
+
+    const digitOnlyDataset = read('SELECT * FROM my-project-123456.2024|')
+    expect(digitOnlyDataset.site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+    expect(digitOnlyDataset.word).toEqual({ start: 32, end: 36, typed: '2024', quoted: false })
+
+    const afterDatasetDot = read('SELECT * FROM my-project-123456.2024_sales.|')
+    expect(afterDatasetDot.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024_sales'] })
+    expect(afterDatasetDot.word).toEqual({ start: 43, end: 43, typed: '', quoted: false })
+
+    const afterDigitOnlyDot = read('SELECT * FROM my-project-123456.2024.|')
+    expect(afterDigitOnlyDot.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024'] })
+
+    const tableSeg = read('SELECT * FROM my-project-123456.2024_sales.orders|')
+    expect(tableSeg.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024_sales'] })
+    expect(tableSeg.word).toEqual({ start: 43, end: 49, typed: 'orders', quoted: false })
+
+    const threeDigitChain = read('SELECT * FROM my-project-123456.2024.345|')
+    expect(threeDigitChain.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024'] })
+    expect(threeDigitChain.word).toEqual({ start: 37, end: 40, typed: '345', quoted: false })
+
+    const dashedDigitDataset = read('SELECT * FROM my-proj.123-456.789|')
+    expect(dashedDigitDataset.site).toEqual({ kind: 'object', qualifier: ['my-proj', '123-456'] })
+    expect(dashedDigitDataset.word).toEqual({ start: 30, end: 33, typed: '789', quoted: false })
+
+    const memberAfter = read('SELECT o.| FROM my-project-123456.2024_sales.orders o')
+    expect(memberAfter.site).toEqual({ kind: 'member', qualifier: ['o'] })
+    expect(names(memberAfter.scope.sources)).toEqual(['o=my-project-123456.2024_sales.orders'])
+
+    const fullSql = 'SELECT * FROM my-project-123456.2024_sales.orders'
+    expect(readGoogleSqlStatementSources(fullSql, fullSql.length)).toEqual([
+      { kind: 'object', name: 'orders', parts: ['my-project-123456', '2024_sales', 'orders'], span: { start: 14, end: 49 } }
+    ])
+
+    const hoverOrders = at('SELECT * FROM my-project-123456.2024_sales.ord|ers')
+    expect(readGoogleSqlHover(hoverOrders.text, hoverOrders.offset)).toMatchObject({ parts: ['my-project-123456', '2024_sales', 'orders'], at: 2, object: true })
+    const hoverDataset = at('SELECT * FROM my-project-123456.2024_sal|es.orders')
+    expect(readGoogleSqlHover(hoverDataset.text, hoverDataset.offset)).toMatchObject({ parts: ['my-project-123456', '2024_sales', 'orders'], at: 1, object: true })
+
+    // Subtraction `a-1.5` never fabricates hover or spurious statement sources.
+    expect(readGoogleSqlHover('SELECT a-1.5 FROM t', 'SELECT a-'.length)).toBeUndefined()
+    expect(readGoogleSqlHover('SELECT a-1.5 FROM t', 'SELECT a-1.'.length)).toBeUndefined()
+    expect(names(readGoogleSqlStatementSources('SELECT a-1.5 FROM t', 'SELECT a-1.5 FROM t'.length))).toEqual(['t=t'])
   })
 
   it('suppresses ON and USING after CROSS JOIN and NATURAL JOIN while keeping them on other joins', async () => {
@@ -763,6 +815,20 @@ describe('Go To Definition from the index', () => {
     expect(await definition('SELECT * FROM sales.da|ily d')).toMatchObject(daily)
     expect(await definition('SELECT * FROM `varia-alpha.sales.da|ily`')).toMatchObject(daily)
     expect(await definition('SELECT * FROM varia-alpha.sales.dai|ly')).toMatchObject(daily)
+    const numericProjectLookup: IndexLookup = async requests => requests.map(request => {
+      const key = request.path.join('.')
+      if (key === 'my-project-123456.2024_sales.orders') {
+        return { state: 'ready', path: [...request.path], truncated: false, items: [], object: { name: 'orders', kind: 'bqTable', detailed: false } }
+      }
+      if (key === 'my-project-123456.2024_sales') return { state: 'ready', path: [...request.path], truncated: false, items: [{ name: 'orders', kind: 'bqTable' }] }
+      if (key === 'my-project-123456') return { state: 'ready', path: [...request.path], truncated: false, items: [{ name: '2024_sales', kind: 'bqDataset' }] }
+      return { state: 'ready', path: [...request.path], truncated: false, items: [] }
+    })
+    const numericProj = at('SELECT * FROM my-project-123456.2024_sales.ord|ers')
+    expect(await definitionFromIndex(readGoogleSqlHover(numericProj.text, numericProj.offset)!, dialect, numericProjectLookup)).toMatchObject({
+      path: ['my-project-123456', '2024_sales', 'orders'],
+      kind: 'bqTable'
+    })
     expect(await definition('SELECT * FROM census.peo|ple', googleSqlDialect({ project: 'varia-beta' }))).toMatchObject({ path: ['varia-beta', 'census', 'people'], kind: 'bqTable' })
     // Without a default dataset a bare name names nothing.
     expect(await definition('SELECT * FROM dai|ly', googleSqlDialect({ project: 'varia-alpha' }))).toBeUndefined()

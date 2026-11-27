@@ -127,6 +127,29 @@ class Statement {
           continue
         }
       }
+      // `my-project-123456.2024_sales`, `my-proj.123-456.789`: the scanner reads `123456.2024` as one number; split at `.` when adjacent to `-` (after a piece) or `.`.
+      if (token.kind === 'number') {
+        const prev = scanned[i - 1]
+        const afterDash = prev?.kind === 'punctuation' && text.charCodeAt(prev.start) === 45 && prev.end === token.start
+          && toks.length >= 2 && isPiece(toks.at(-2)) && toks.at(-2)!.end === prev.start
+        const afterDot = prev?.kind === 'punctuation' && text.charCodeAt(prev.start) === 46 && prev.end === token.start
+        if (afterDash || afterDot) {
+          let dot = -1, valid = true
+          for (let c = token.start; c < token.end; c++) {
+            const code = text.charCodeAt(c)
+            if (code === 46) {
+              if (dot >= 0) { valid = false; break }
+              dot = c
+            } else if (code < 48 || code > 57) { valid = false; break }
+          }
+          if (valid && dot > token.start && dot < token.end - 1) {
+            toks.push({ kind: 'number', start: token.start, end: dot, text: text.slice(token.start, dot), upper: '' })
+            toks.push({ kind: 'punctuation', start: dot, end: dot + 1, text: '.', upper: '' })
+            toks.push({ kind: 'number', start: dot + 1, end: token.end, text: text.slice(dot + 1, token.end), upper: '' })
+            continue
+          }
+        }
+      }
       const slice = text.slice(token.start, token.end)
       toks.push({ ...token, text: slice, upper: token.kind === 'word' ? slice.toUpperCase() : '' })
     }
@@ -767,6 +790,8 @@ function chainBefore(statement: Statement, end: number, allowDigitSegment = fals
     const [lo, hi] = segmentSpan(toks, at - 1)
     if (toks[lo].kind === 'number') {
       if (!allowDigitSegment || !isPunct(toks[lo - 1], '.') || toks[lo - 1].end !== toks[lo].start) return undefined
+      usedDigitSegment = true
+    } else if (toks[hi].kind === 'number' && lo < hi) {
       usedDigitSegment = true
     }
     reversed.push([text.slice(toks[lo].start, toks[hi].end)])

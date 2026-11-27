@@ -407,6 +407,14 @@ describe('IndexCompletionService', () => {
     expect(extractBigQueryRefreshScopes('SELECT * FROM `example.com:my-proj.my_ds.my_tbl` LIMIT 10', 'varia-alpha')).toEqual([
       { project: 'example.com:my-proj', dataset: 'my_ds' }
     ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM my-project-123456.2024_sales.orders', 'varia-alpha')).toEqual([
+      { project: 'my-project-123456', dataset: '2024_sales' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT * FROM my-project-123456.2024_sales.', 'varia-alpha')).toEqual([
+      { project: 'my-project-123456', dataset: '2024_sales' }
+    ])
+    expect(extractBigQueryRefreshScopes('SELECT a-1.5 FROM t', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
+    expect(extractBigQueryRefreshScopes('SELECT 10-2.5', 'varia-alpha')).toEqual([{ project: 'varia-alpha' }])
   })
 
   it('shows IntelliSense refreshing during refreshCache, deduplicates, and settles cleanly on cancel/close/switch (F10)', async () => {
