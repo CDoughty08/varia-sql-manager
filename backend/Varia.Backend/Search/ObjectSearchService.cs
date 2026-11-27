@@ -116,8 +116,10 @@ internal sealed partial class ObjectSearchService : IDisposable
         /// <summary>BigQuery reads loaded from the saved index that no listing has checked yet, by key, with the file each came
         /// from (under Gate): the status says how old they are while the build that checks them runs.</summary>
         public readonly Dictionary<string, (DatabaseIndex Read, SavedUnit Unit)> Saved = new(StringComparer.Ordinal);
-        /// <summary>Whether a full build has looked for the connection's saved index (once, when the store reads; under Gate).</summary>
-        public bool SavedLooked;
+        /// <summary>Whether a full build has loaded the connection's saved index (once, when the store reads; under Gate).</summary>
+        public bool SavedLoaded;
+        /// <summary>The build loading it now, if any (under Gate).</summary>
+        public CancellationTokenSource? SavedLoader;
         /// <summary>When the oldest of <see cref="Saved"/> was read, and as the status's text (read by the progress without Gate).</summary>
         public DateTime? SavedAt;
         public volatile string? SavedAtText;

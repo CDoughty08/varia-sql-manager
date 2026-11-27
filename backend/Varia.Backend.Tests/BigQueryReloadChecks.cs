@@ -26,6 +26,9 @@ internal static class BigQueryReloadChecks
         await StaleMarked(check);
         await MarkedElsewhere(check);
         await StoppedWhileLoading(check);
+        await Superseded(check);
+        await Unchecked(check);
+        await Rewritten(check);
         await Damaged(check);
         await Budget(check);
     }
@@ -226,7 +229,7 @@ internal static class BigQueryReloadChecks
                 "only a re-created table, a changed routine and a new dataset's objects cost details calls");
             check(Unit(third, Billing, "ops") is null && Unit(third, Billing, "fresh") is not null && folder.Units.Length == 4 && Hits(third, id, "events") == 0 && Hits(third, id, "brand_new") == 1,
                 "a dataset its project no longer lists loses its file and leaves the index; a new one is read and saved");
-            check(third.SavedLoads is { Loaded: 4, Unchanged: 2 } && Unit(third, Billing, "sales") is { } changed && BigQuerySync.From(changed.Sync) is { Whole: true, Listing: not null },
+            check(third.SavedLoads is { Loaded: 4, Unchanged: 2, Pruned: 0 } && Unit(third, Billing, "sales") is { } changed && BigQuerySync.From(changed.Sync) is { Whole: true, Listing: not null },
                 "a changed dataset is saved in place, whole; the unchanged ones are not");
         }
 
@@ -353,6 +356,99 @@ internal static class BigQueryReloadChecks
         await search.Store.Idle();
         check(source.TableCalls == 0 && source.RoutineCalls == 0 && Hits(search, id, "t3") == 1,
             "a build stopped while it loaded the saved index leaves the rest to the next full build, which loads it");
+    }
+
+    // ---- A build that replaces the one loading loads in its place ----
+
+    private static async Task Superseded(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        source.Reset();
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim();
+        var calls = 0;
+        search.SavedLoading = (_, _) =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            entered.TrySetResult();
+            release.Wait(TimeSpan.FromSeconds(60));
+        };
+        var replaced = Build(search, source, id);
+        await entered.Task;
+        // A rebuild while the first build is still inside a load: it does not wait for that build to notice it was replaced.
+        await Build(search, source, id);
+        release.Set();
+        try { await replaced; } catch (Exception error) when (error is OperationCanceledException or RequestException) { }
+        search.SavedLoading = null;
+        await search.Store.Idle();
+        check(source.TableCalls == 0 && source.RoutineCalls == 0 && Hits(search, id, "t3") == 1,
+            "a build that replaces one still loading the saved index loads it itself, rather than reading every dataset again");
+    }
+
+    // ---- What a build leaves unchecked: the status says so; a refresh does not claim to check it ----
+
+    private static async Task Unchecked(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        source.Reset();
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        source.OnDatasets = (project, _) => project == "proj-b" ? Task.FromException(new RequestException("BIGQUERY_ERROR", "unavailable")) : Task.CompletedTask;
+        var done = await Build(search, source, id);
+        check(done.Status.SavedAt is not null && Hits(search, id, "t3") == 1, "a build whose listing of a project failed leaves its loaded datasets unchecked, and its status says when they were saved");
+        source.OnDatasets = null;
+        var events = new ConcurrentQueue<object>();
+        await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new(Billing, "sales")), source, CancellationToken.None, events.Enqueue);
+        check(events.OfType<BigQueryIndexProgress>().Any() && events.OfType<BigQueryIndexProgress>().All(item => item.SavedAt is null),
+            "a refresh of another dataset does not say it is checking the saved index");
+        await search.Store.Idle();
+    }
+
+    // ---- A file written again between the listing and its load ----
+
+    private static async Task Rewritten(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        var before = folder.Units.ToDictionary(name => name, name => File.ReadAllBytes(Path.Combine(folder.Path, name)), StringComparer.Ordinal);
+        var sales = source.Projects[Billing]["sales"];
+        source.Projects[Billing]["sales"] = [.. sales.Select(item => item.Name == "orders" ? item with { Created = item.Created + 1 } : item)];
+        using (var second = Session(folder))
+        {
+            await Build(second, source, Guid.NewGuid().ToString());
+            await second.Store.Idle();
+        }
+        var salesFile = folder.Units.Single(name => !before[name].AsSpan().SequenceEqual(File.ReadAllBytes(Path.Combine(folder.Path, name))));
+        source.Reset();
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        // Between the listing (which read the newer header) and the load, the file holds another read of the dataset (as another
+        // connection's save would leave it): the older read stands here for any other.
+        search.SavedLoading = (_, dataset) => { if (dataset == "sales") File.WriteAllBytes(Path.Combine(folder.Path, salesFile), before[salesFile]); };
+        await Build(search, source, id);
+        search.SavedLoading = null;
+        await search.Store.Idle();
+        check(search.SavedLoads is { Loaded: 3, Stale: 1 } && source.TablesOf.GetValueOrDefault(Billing + ".sales") == 3 && source.TableCalls == 3,
+            "a file written again between the listing and its load is not held with the listed one's sync bytes: the dataset is read whole");
     }
 
     // ---- Corrupt files and another key's file ----

@@ -356,7 +356,8 @@ internal sealed partial class ObjectSearchService
             if (throttled != sentThrottled) throttleRepeats = ThrottleRepeats;
             sentThrottled = throttled;
             var growing = lastPhase == "names" && Volatile.Read(ref listingProjects) != 0;
-            progress!(new BigQueryIndexProgress(lastDone, Math.Max(lastDone, lastTotal), state.Index.Objects, lastPhase!, growing ? true : null, throttled ? true : null, state.SavedAtText));
+            progress!(new BigQueryIndexProgress(lastDone, Math.Max(lastDone, lastTotal), state.Index.Objects, lastPhase!, growing ? true : null, throttled ? true : null,
+                scope is null && !staleOnly ? state.SavedAtText : null));
         }
         // BigQuery's rate limit can stall every call at once, so no read finishes to report it: a change in throttling is sent by itself.
         // Progress EVENTs are droppable, so the watcher sends a change again on its next few ticks, in case main missed it.
@@ -653,9 +654,16 @@ internal sealed partial class ObjectSearchService
             void KeepProjectDatasets(string project, HashSet<string> names, bool cut, long beforeListing, string? onlyDataset = null)
             {
                 stop.ThrowIfCancellationRequested();
+                var heldGone = new HashSet<string>(StringComparer.Ordinal);
                 lock (state.Gate)
                 {
                     if (!Current()) throw new OperationCanceledException(stop);
+                    // Saved datasets held as the listing lands: dropping the read deletes the file, so the prune below leaves them.
+                    if (!cut && onlyDataset is null && savedUnits is not null)
+                        lock (savedUnits)
+                            if (savedUnits.TryGetValue(project, out var units))
+                                foreach (var unit in units)
+                                    if (!names.Contains(unit.Dataset!) && state.Index.Get(project + "\u0001" + unit.Dataset) is not null) heldGone.Add(unit.Dataset!);
                     state.Index.KeepWhere(read => read.Database != project || read.Dataset is not { } dataset || names.Contains(dataset) || cut
                         || onlyDataset is { } kept && kept != dataset, gone: true);
                     if (!cut)
@@ -667,7 +675,7 @@ internal sealed partial class ObjectSearchService
                     if (names.Count == 0) PruneEmptyProjectLocked(project, beforeListing);
                 }
                 if (!cut && onlyDataset is null && savedUnits is not null)
-                    lock (savedUnits) PruneSaved(state, savedUnits, project, names);
+                    lock (savedUnits) PruneSaved(state, savedUnits, project, names, heldGone);
                 if (!cut)
                 {
                     if (onlyDataset is null) PruneProjectStale(project, names, beforeListing);

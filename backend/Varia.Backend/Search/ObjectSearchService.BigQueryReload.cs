@@ -8,7 +8,8 @@ namespace Varia.Backend.Search;
 /// <param name="Refused">Files passed over as unreadable: a header or body that does not open (another key, damage, another
 /// version's sync bytes), or a file that is not the unit it says.</param>
 /// <param name="Budget">Files that did not fit the index's memory (or BigQuery's part of it) and stayed on disk.</param>
-/// <param name="Stale">Files left because DDL marked the dataset stale, or a newer save or a deletion of it is queued.</param>
+/// <param name="Stale">Files left because DDL marked the dataset stale, a newer save or a deletion of it is queued, or the file was
+/// written again after it was listed.</param>
 /// <param name="Unchanged">Datasets a listing found unchanged: held as loaded (or as read before), the file only marked used.</param>
 /// <param name="Pruned">Files deleted because their project's listing no longer names the dataset (and no read of it was held).</param>
 internal readonly record struct SavedLoadCounts(long Loaded, long Refused, long Budget, long Stale, long Unchanged, long Pruned);
@@ -41,21 +42,29 @@ internal sealed partial class ObjectSearchService
         if (state.Index.Sink?.Scope is not { Provider: IndexProvider.BigQuery } scope) return byProject;
         lock (state.Gate)
         {
-            if (state.SavedLooked || !ReferenceEquals(state.Build, owner)) return byProject;
+            // Loaded once per connection; a build that replaced the one still loading (which holds nothing more once replaced) loads
+            // in its place, without waiting for it to notice.
+            if (state.SavedLoaded || !ReferenceEquals(state.Build, owner) || state.SavedLoader is { } loader && ReferenceEquals(loader, state.Build)) return byProject;
             // Looked for once a store reads: one not configured yet (main configures it a moment after the backend starts) is
             // looked in by the next full build.
             if (!Store.Configured || Store.Mode is not (IndexStoreMode.Encrypted or IndexStoreMode.ClearText)) return byProject;
-            state.SavedLooked = true;
+            state.SavedLoader = owner;
         }
+        var done = false;
         try
         {
-            return LoadSaved(state, owner, scope, billing, starred, allProjects, token);
+            var units = LoadSaved(state, owner, scope, billing, starred, allProjects, token);
+            done = true;
+            return units;
         }
-        catch (OperationCanceledException)
+        finally
         {
             // A build stopped or replaced while it loaded leaves the rest to the next full build (what landed stays held).
-            lock (state.Gate) state.SavedLooked = false;
-            throw;
+            lock (state.Gate)
+            {
+                if (ReferenceEquals(state.SavedLoader, owner)) state.SavedLoader = null;
+                if (done) state.SavedLoaded = true;
+            }
         }
     }
 
@@ -113,6 +122,13 @@ internal sealed partial class ObjectSearchService
                 }
                 continue;
             }
+            // A newer file written since the listing (another connection's save) is not the one its sync bytes describe.
+            if (loaded.Header is not { } header || header.ReadAt != unit.Header.ReadAt || header.Objects != unit.Header.Objects)
+            {
+                state.Index.Abandon(read);
+                Interlocked.Increment(ref savedStale);
+                continue;
+            }
             // The read compares a later listing with what its file says (it is the file's: a load is never saved again).
             read.Sync = unit.Sync;
             // As a read begun now: DDL any connection of the principal marks after this has its listing read the dataset whole.
@@ -166,14 +182,14 @@ internal sealed partial class ObjectSearchService
         return true;
     }
 
-    /// <summary>Deletes the files of a project's datasets its listing no longer names that were listed at load and are not held
-    /// (a held one's file goes as its read is dropped).</summary>
-    private void PruneSaved(State state, Dictionary<string, List<SavedUnit>>? saved, string project, HashSet<string> names)
+    /// <summary>Deletes the files of a project's datasets its listing no longer names that were listed at load and were not held
+    /// as the listing landed (<paramref name="held"/>: a held one's file goes as its read is dropped).</summary>
+    private void PruneSaved(State state, Dictionary<string, List<SavedUnit>>? saved, string project, HashSet<string> names, IReadOnlySet<string> held)
     {
         if (saved is null || !saved.TryGetValue(project, out var units)) return;
         foreach (var unit in units)
         {
-            if (names.Contains(unit.Dataset!) || state.Index.Get(project + "\u0001" + unit.Dataset) is not null) continue;
+            if (names.Contains(unit.Dataset!) || held.Contains(unit.Dataset!) || state.Index.Get(project + "\u0001" + unit.Dataset) is not null) continue;
             Store.Delete(unit);
             Interlocked.Increment(ref savedPruned);
         }
