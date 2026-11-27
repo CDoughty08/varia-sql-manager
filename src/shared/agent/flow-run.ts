@@ -166,7 +166,7 @@ export function liveRunDrawing(flow: StepsFlow, passes: readonly FlowPass[], cur
     }
     const own = shown.filter(pass => pass.at === at)
     if (own.length) return { fade: false, right: stepWords(own), spoken: stepSpoken(own) }
-    if (!known) return { fade: true, right: [{ text: '—', tone: 'muted' as const }], spoken: 'not known yet' }
+    if (!known || origin < 0) return { fade: true, right: [{ text: '—', tone: 'muted' as const }], spoken: 'not known yet' }
     if (bySuccess[at]) return { fade: true, right: [{ text: 'Waiting', tone: 'muted' as const }], spoken: 'waiting' }
     if (byAny[at]) return { fade: true, right: [{ text: 'On failure only', tone: 'muted' as const }], spoken: 'runs only after a failure' }
     return { fade: true, right: [{ text: 'Not run', tone: 'muted' as const }], spoken: 'not run' }

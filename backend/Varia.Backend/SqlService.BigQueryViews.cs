@@ -314,7 +314,7 @@ internal sealed partial class SqlService
                 {
                     var (statement, from, session) = await StatementAsync(plan, token);
                     // The window it opens keeps them, so its own rerun starts from what ran.
-                    queryArgs = queryArgs with { Sql = statement, Dataset = from };
+                    queryArgs = queryArgs with { Sql = statement, Dataset = from, NoDefaultDataset = from is null };
                     dataset = from;
                     if (session) messages.Add(RerunOutsideSession);
                 }

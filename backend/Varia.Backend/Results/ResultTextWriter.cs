@@ -341,7 +341,10 @@ internal sealed class ResultTextWriter
                 if (page.TryExact(column, row, out var exact) && double.IsFinite(exact))
                 {
                     Span<byte> formatted = stackalloc byte[32];
-                    if (System.Buffers.Text.Utf8Formatter.TryFormat(exact, formatted, out var written) && IsJsonNumber(formatted[..written]))
+                    var formattedOk = columns[column].DataType.Equals("real", StringComparison.OrdinalIgnoreCase) && (float)exact == exact
+                        ? System.Buffers.Text.Utf8Formatter.TryFormat((float)exact, formatted, out var written)
+                        : System.Buffers.Text.Utf8Formatter.TryFormat(exact, formatted, out written);
+                    if (formattedOk && IsJsonNumber(formatted[..written]))
                     {
                         Write(formatted[..written]);
                         return;

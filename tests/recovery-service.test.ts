@@ -239,6 +239,11 @@ describe('AutoRecover in the workbench', () => {
       // A second flush with unchanged metadata is a no-op.
       await recovery.flush()
       expect(api.writeRecovery).toHaveBeenCalledTimes(2)
+      // Resuming a copy after a reload (without verified metadata) refreshes the same copy on the next flush.
+      const reloaded = documents.create('renamed.sql', 'SELECT 2', 'Payroll', 'c1', true)
+      recovery.resume(reloaded.id, 'r-reloaded')
+      await recovery.flush()
+      expect(api.writeRecovery).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r-reloaded', name: 'renamed.sql', server: 'c1.example', database: 'Payroll', text: 'SELECT 2' }))
     } finally { fixture.dispose() }
   })
 

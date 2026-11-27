@@ -299,7 +299,7 @@ describe('Job History documents', () => {
     expect(restore).toHaveBeenCalledTimes(1)
   })
   it('open the job\'s whole SQL in a new tab, and Re-run executes it there unless the SQL was cut', async () => {
-    const { service, grid, api, queries, documents } = history()
+    const { service, grid, api, queries, documents, results } = history()
     const id = service.open('bq1')
     service.attachGrid(id, grid as unknown as LiveGrid)
     grid.select(cells({ mine: '0', user: 'ben@example.com' }))
@@ -330,6 +330,7 @@ describe('Job History documents', () => {
     expect(documents.getModel(documents.active!.id)?.getValue()).toBe('SELECT amount FROM invoices')
     expect(execute).not.toHaveBeenCalled()
     expect(service.get(id)?.notice).toEqual({ tone: 'info', text: jobHistoryText.externalDataset('external-prod.finance_archive') })
+    expect(results.getSnapshot()[documents.active!.id]?.messages.map(message => message.text)).toContain(jobHistoryText.externalDataset('external-prod.finance_archive'))
     // Re-run of another user's job asks first, naming the job and its user; the tab opens and runs only on Re-run.
     documents.activate(id)
     const tabs = documents.getSnapshot().documents.length

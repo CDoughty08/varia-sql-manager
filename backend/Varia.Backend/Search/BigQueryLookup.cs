@@ -147,7 +147,7 @@ internal sealed class BigQueryLookup
             int found = -1, matches = 0;
             foreach (var (index, shards) in shardGroups)
             {
-                if (table.Kind(index) is "bqRoutine" or "bqModel") continue;
+                if (table.Kind(index) is "bqDataset" or "bqRoutine" or "bqModel" || !ValidShards(shards)) continue;
                 if (Shard(shards, name))
                 {
                     found = index;
@@ -161,7 +161,7 @@ internal sealed class BigQueryLookup
         int whole = -1, begun = -1, wholes = 0, begins = 0;
         foreach (var (index, shards) in shardGroups)
         {
-            if (table.Kind(index) is "bqRoutine" or "bqModel") continue;
+            if (table.Kind(index) is "bqDataset" or "bqRoutine" or "bqModel" || !ValidShards(shards)) continue;
             if (Shard(shards, name)) { whole = index; wholes++; }
             else if (shards.Prefix.Length > stem.Length && shards.Prefix.StartsWith(stem, StringComparison.Ordinal)) { begun = index; begins++; }
         }
@@ -172,11 +172,13 @@ internal sealed class BigQueryLookup
         {
             if (table.Parent(i) >= 0) continue;
             var kind = table.Kind(i);
-            if (kind is "bqDataset" or "bqRoutine" or "bqModel" || shardGroups.ContainsKey(i)) continue;
+            if (kind is "bqDataset" or "bqRoutine" or "bqModel" || (shardGroups.TryGetValue(i, out var group) && ValidShards(group))) continue;
             if (table.Name(i).StartsWith(stem, StringComparison.Ordinal)) return null;
         }
         return new(dataset.Project, table, begun, read);
     }
+
+    private static bool ValidShards(BigQueryShardsDto shards) => shards is { First.Length: 8, Last.Length: 8 };
 
     private static bool HasEightDigitSuffix(string name)
     {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { validateRequest } from '../src/main/validation'
 import { restoreMessages, type BackupSetRow, type RestoreModel, type RestoreServerFacts } from '../src/shared/actions/restore'
-import type { RestoreRequest } from '../src/shared/actions/restore-schema'
+import { restoreOptionsProblems, type RestoreRequest } from '../src/shared/actions/restore-schema'
 import type { ActionDescribeResult, ActionScriptResult } from '../src/shared/actions/schema'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import { checkable, destinationNote, deviceDatabases, draftPlan, draftProblems, fileRows, lastBackupOf, restoreRequest, restoreToText, setCells, setColumns, setManual, setReason, sourceSets, tailLogPossible, timelineCoverage, timelinePointAllowed, toggleSet, type RestoreDraft } from '../src/renderer/src/restore/model'
@@ -314,6 +314,15 @@ describe('Restore Database as a document', () => {
     const copyFacts = { ...state().facts, sets: [copyOnlyLog, ...state().facts.sets] }
     const copyDraft = { ...state().draft!, stopAt: undefined }
     expect(restoreToText(copyDraft, copyFacts, draftPlan(copyDraft, copyFacts))).toBe('Latest supported recovery point (2026-10-29 21:05:46; skips later copy-only log)')
+    // Under Manual Selection, unchecking a later normal log does not mislabel the older set as the latest supported recovery point.
+    const manualDraft = { ...copyDraft, manual: [history[2].id] }
+    expect(restoreToText(manualDraft, copyFacts, draftPlan(manualDraft, copyFacts))).toBe('The last backup taken (2026-10-29 21:05:44)')
+    // Mixed-slash UNC MOVE paths normalize to the same Windows path and are rejected as duplicates.
+    expect(restoreOptionsProblems({
+      sets: [{ id: history[2].id, devices: history[2].devices, file: 1, type: 'full' }],
+      relocate: [{ logical: 'Sales', physical: '/\\files\\share\\same.mdf' }, { logical: 'Sales_log', physical: '\\\\files\\share\\same.mdf' }],
+      replace: false, recovery: 'recovery', keepReplication: false, restrictedUser: false, closeConnections: false
+    }).some(problem => problem.path === 'relocate')).toBe(true)
   })
   it('says when the server goes while it reads, and the test hook opens it only on a live connection', async () => {
     const { restore, state, connections } = opened()

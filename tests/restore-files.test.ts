@@ -206,6 +206,27 @@ describe('Restore Files and Filegroups as a document', () => {
     restore.updateDraft(id, { restoreAs: { Sales_2: 'C:\\Data\\same.ndf', Sales_3: 'C:/Data/same.ndf' } })
     expect(filesMoveRows(draft(), state().facts).map(item => item.problem)).toEqual(['Another file is restored to this path.', 'Another file is restored to this path.'])
     check(uuid(1), 'Sales_2', false)
+    // Relocating a restored file onto an unrestored file of the same database is refused, while moving a previously moved file to its own live path is allowed.
+    restore.updateDraft(id, { restoreAs: { Sales_3: 'D:\\DATA\\Sales.mdf' } })
+    expect(filesMoveRows(draft(), state().facts)[0]?.problem).toBe('The file is in use by another file of Sales.')
+    const movedFacts = {
+      ...state().facts,
+      server: {
+        ...state().facts.server!,
+        files: [
+          { database: 'Sales', path: 'D:\\DATA\\Sales.mdf', logical: 'Sales' },
+          { database: 'Sales', path: 'E:\\LIVE\\Sales_3.ndf', logical: 'Sales_3' }
+        ]
+      }
+    }
+    expect(filesMoveRows({ ...draft(), restoreAs: { Sales_3: 'E:\\LIVE\\Sales_3.ndf' } }, movedFacts)[0]?.problem).toBeUndefined()
+    expect(filesMoveRows({ ...draft(), restoreAs: { Sales_3: 'D:\\DATA\\Sales.mdf' } }, movedFacts)[0]?.problem).toBe('The file is in use by another file of Sales.')
+    // Truncated server.files with logical names only for earlier databases still falls back to baseFiles for draft.destination.
+    const truncatedFacts = {
+      ...state().facts,
+      server: { ...state().facts.server!, filesTruncated: true, files: [{ database: 'Alpha', path: 'D:\\DATA\\Alpha.mdf', logical: 'Alpha' }] }
+    }
+    expect(filesMoveRows({ ...draft(), restoreAs: { Sales_3: 'D:\\DATA\\Sales.mdf' } }, truncatedFacts)[0]?.problem).toBe('The file is in use by another file of Sales.')
     restore.updateDraft(id, { restoreAs: {} })
     restore.setFrame(id, setScriptOpen(state().frame, true))
     await vi.waitFor(() => expect(state().script).toMatchObject({ state: 'ready' }))

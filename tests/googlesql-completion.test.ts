@@ -123,6 +123,15 @@ describe('GoogleSQL scope reader', () => {
     expect(derived.scope.sources[0]).toMatchObject({ kind: 'derived', name: 's', shape: { columns: ['id', 'at'] } })
     const unnest = read('SELECT item.| FROM sales.orders o, UNNEST(o.items) AS item WITH OFFSET pos')
     expect(unnest.scope.sources[1]).toEqual({ kind: 'unnest', name: 'item', path: ['o', 'items'] })
+    // WITH RECURSIVE exposes the CTE to its own body (and nested CTEs/subqueries inside it), not just the outer query.
+    const rec = read('WITH RECURSIVE r AS (SELECT 1 AS n UNION ALL SELECT r.| FROM r) SELECT * FROM r')
+    expect(rec.scope.ctes.map(entry => entry.name)).toEqual(['r'])
+    expect(rec.scope.sources).toEqual([expect.objectContaining({ kind: 'cte', name: 'r', cte: 'r', shape: { columns: ['n'], stars: [] } })])
+    const nestedRec = read('WITH RECURSIVE r AS (WITH helper AS (SELECT * FROM r) SELECT 1 AS n UNION ALL SELECT h.| FROM helper h) SELECT * FROM r')
+    expect(nestedRec.scope.sources).toEqual([expect.objectContaining({
+      kind: 'cte', name: 'h', cte: 'helper',
+      shape: { columns: [], stars: [expect.objectContaining({ kind: 'cte', cte: 'r', shape: { columns: ['n'], stars: [] } })] }
+    })])
   })
 
   it('scopes a position to its block: subqueries see outer sources, a WITH body and other set operations do not', () => {

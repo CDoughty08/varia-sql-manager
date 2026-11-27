@@ -612,7 +612,7 @@ internal sealed record BackupSetDto(string Id, string Name, string Type, string 
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null, bool? Absent = null);
 /// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
 internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null, int? WithTransaction = null, string? FamilyGuid = null);
-internal sealed record RestoreServerFileDto(string Database, string Path);
+internal sealed record RestoreServerFileDto(string Database, string Path, string? Logical = null);
 internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
     string? DataPath = null, string? LogPath = null, string? BackupPath = null);
 internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<string>? HistoryDatabases = null, bool? HistoryTruncated = null, List<BackupSetDto>? Sets = null,

@@ -95,10 +95,10 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
 
   copyId(tabId: string): string | undefined { return this.kept.get(tabId)?.id }
   /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
-  resume(tabId: string, id: string): void {
+  resume(tabId: string, id: string, matchedMetadata = false): void {
     const document = this.options.documents.get(tabId), model = this.options.documents.getModel(tabId)
-    // A SQL Server Agent document's copy is written again at the next interval, with its state as it is then.
-    if (isKeptAgentKind(document?.kind)) { this.kept.set(tabId, { id }); return }
+    // A SQL Server Agent document's copy, or one resumed after a reload whose metadata main did not verify, is refreshed at the next interval.
+    if (!matchedMetadata || isKeptAgentKind(document?.kind)) { this.kept.set(tabId, { id }); return }
     const provider = document && !document.kind ? document.provider : undefined
     const bigQuery = provider === 'bigquery'
     const server = document?.connectionId ? this.options.server?.(document.connectionId)?.slice(0, recoveryLimits.serverChars) : undefined
@@ -245,7 +245,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
             continue
           }
           const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider, taken.jobKey)
-          this.resume(document.id, id)
+          this.resume(document.id, id, true)
           if (taken.jobs?.length) this.options.restoredJobs?.(document.id, taken.jobs)
         }
       } finally { await this.options.files.release(files) }

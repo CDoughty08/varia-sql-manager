@@ -77,7 +77,7 @@ export interface JobHistoryServiceOptions extends CustomDocumentTargetOptions {
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly settings: ExternalStore<{ readonly values: SettingsValues }>
   /** Open Results and Re-attach (query.attach), Re-run (Execute, with the cost rules), and which tab already holds a job. */
-  readonly queries: Pick<QueryService, 'restoreJobs' | 'tabHoldingJob' | 'execute'>
+  readonly queries: Pick<QueryService, 'restoreJobs' | 'tabHoldingJob' | 'execute'> & Partial<Pick<QueryService, 'addSessionMessage'>>
   /** Focuses a document's grid (the app's DOM); tests leave it out. */
   readonly focus?: (id: string) => void
   readonly now?: () => number
@@ -574,8 +574,14 @@ export class JobHistoryService extends SnapshotStore<JobHistorySnapshot> impleme
     const externalDataset = details.value.job.dataset && !details.value.job.dataset.startsWith(state.project + '.') ? details.value.job.dataset : undefined
     const dataset = details.value.job.dataset && !externalDataset ? details.value.job.dataset.slice(state.project.length + 1) : ''
     const tab = this.options.documents.newQuery(sql, undefined, connectionId, dataset)
-    if (details.value.job.sqlTruncated) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.sqlTruncated } })
-    else if (run && externalDataset) this.patch(id, { notice: { tone: 'info', text: jobHistoryText.externalDataset(externalDataset) } })
+    if (details.value.job.sqlTruncated) {
+      this.patch(id, { notice: { tone: 'info', text: jobHistoryText.sqlTruncated } })
+      this.options.queries.addSessionMessage?.(tab.id, jobHistoryText.sqlTruncated, 'info')
+    } else if (run && externalDataset) {
+      const text = jobHistoryText.externalDataset(externalDataset)
+      this.patch(id, { notice: { tone: 'info', text } })
+      this.options.queries.addSessionMessage?.(tab.id, text, 'info')
+    }
     // The cost prompts name the job they would run again.
     else if (run) void this.options.queries.execute(tab.id, undefined, job.jobId).catch(onUnexpectedError)
   }

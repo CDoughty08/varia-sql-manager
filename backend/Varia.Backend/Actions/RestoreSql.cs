@@ -76,7 +76,7 @@ internal static partial class RestoreSql
     public const string Restored = "SELECT TOP (@take) d.database_id AS database_id, d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @db ORDER BY d.database_id;";
 
     /// <summary>Every database's files, so a Restore As path another database holds is a problem before OK.</summary>
-    public const string ServerFiles = "SELECT TOP (@take) d.name AS database_name, f.physical_name AS physical_name FROM sys.master_files AS f JOIN sys.databases AS d ON d.database_id = f.database_id "
+    public const string ServerFiles = "SELECT TOP (@take) d.name AS database_name, f.physical_name AS physical_name, f.name AS logical_name FROM sys.master_files AS f JOIN sys.databases AS d ON d.database_id = f.database_id "
         + "ORDER BY d.name, f.file_id;";
 
     private static string Devices(int count) => string.Join(", ", Enumerable.Range(1, count).Select(index => "DISK = @d" + index.ToString(CultureInfo.InvariantCulture)));

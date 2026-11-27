@@ -99,7 +99,7 @@ internal sealed partial class ActionService
 
     private static string MovePathKey(string physical)
     {
-        var linux = physical.StartsWith('/') && !physical.StartsWith("//", StringComparison.Ordinal);
+        var linux = physical.StartsWith('/') && !physical.StartsWith("//", StringComparison.Ordinal) && !physical.StartsWith("/\\", StringComparison.Ordinal);
         return ServerPath.Key(physical, linux) ?? (linux ? physical : physical.ToLowerInvariant());
     }
 

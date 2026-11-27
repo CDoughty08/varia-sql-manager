@@ -137,6 +137,11 @@ describe('the Flow view\'s run overlays', () => {
     expect(drawing.steps[2]).toMatchObject({ current: true })
     expect(drawing.steps[3]).toMatchObject({ fade: true, right: [{ text: 'Waiting' }], spoken: 'waiting' })
     expect(drawing.steps[4]).toMatchObject({ fade: true, right: [{ text: 'Not run' }], spoken: 'not run' })
+    // When the live step is unplaced (at < 0) after a pass already ran, remaining steps are not yet known rather than Not run.
+    const unplaced = liveRunDrawing(stepsFlow(branched), passes, { at: -1, retrying: false }, true)
+    expect(unplaced.steps[0]!.right[0]!.text).toBe('✗ 00:00:02')
+    expect(unplaced.steps[1]).toMatchObject({ fade: true, right: [{ text: '—' }], spoken: 'not known yet' })
+    expect(unplaced.steps[2]).toMatchObject({ fade: true, right: [{ text: '—' }], spoken: 'not known yet' })
   })
   it('says where the current step goes next, and how long it has run from the server\'s clock', () => {
     const flow = stepsFlow(nightly())

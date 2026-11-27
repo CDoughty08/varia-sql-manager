@@ -651,6 +651,8 @@ describe('file commands', () => {
     model(value.id).edit('edited:' + model(value.id).getValue())
     expect(documents.get(value.id)?.dirty).toBe(false)
     expect(documents.hasUnsavedEdits(value.id)).toBe(true)
+    expect(documents.getSnapshot().unsavedFill).toBe(true)
+    expect(files.canSaveAll()).toBe(true)
     // Cancel keeps the tab open and preserves the edit once remaining chunks arrive.
     api.confirmClose.mockResolvedValueOnce({ ok: true, value: 'cancel' })
     await files.close(value.id)
@@ -679,6 +681,11 @@ describe('file commands', () => {
     await discarding
     expect(files.getSnapshot().error).toBe('')
     expect(documents.get(second.id)).toBeUndefined()
+    // Disposing DocumentService while save() waits on fill.done resolves cleanly without hanging.
+    const third = documents.openText({ name: 'third.json', text, kind: 'json' })
+    const pendingSave = documents.save(third.id)
+    documents.dispose()
+    expect(await pendingSave).toBe(false)
   })
   it('unregisters file commands when the contribution is disposed', async () => {
     const { contribution, commands } = fixture()

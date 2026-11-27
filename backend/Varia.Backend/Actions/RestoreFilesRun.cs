@@ -168,7 +168,8 @@ internal sealed partial class ActionService
         var written = new List<(string Path, string What)>();
         if (options.Recovery == "standby" && options.StandbyFile is { } standby) written.Add((standby, "standby file"));
         if (options.LogBackup is { } backup) written.Add((backup.File, "log backup file"));
-        if (await WrittenProblemAsync(connection, database, restored!, options.Relocate, written, facts, linux, token) is { } paths) return (null, null, paths);
+        var restoredNames = new HashSet<string>(restored!.Select(file => file.Logical), StringComparer.OrdinalIgnoreCase);
+        if (await WrittenProblemAsync(connection, database, restored!, options.Relocate, written, facts, linux, token, page: "Options page", restoredNames: restoredNames) is { } paths) return (null, null, paths);
         // The log backup goes to a new file, so it is the file's first backup set, as Script writes it (FILE = 1).
         if (options.LogBackup is { } fresh && await ExistingAsync(connection, [fresh.File], facts, token) is { Count: > 0 })
             return (null, null, Error("NAME_IN_USE", "The log backup file " + ScriptingErrors.Display(fresh.File) + " is already on the server. Choose a new file for the log backup."));

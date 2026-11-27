@@ -956,7 +956,7 @@ internal static partial class ViewSorter
     }
 
     /// <summary>Non-Unicode SQL Server character types (char, varchar, text), which follow SQL sort-order rules under SQL_*
-    /// collations (SortId != 0) and code-page bytes under non-UTF-8 binary collations.</summary>
+    /// collations (SortId != 0) and code-point/byte order rather than legacy Unicode _BIN under binary collations.</summary>
     internal static bool IsNonUnicodeText(ResultColumn column) =>
         column.DataType.StartsWith("char", StringComparison.OrdinalIgnoreCase)
         || column.DataType.StartsWith("varchar", StringComparison.OrdinalIgnoreCase)
@@ -966,6 +966,94 @@ internal static partial class ViewSorter
     /// SQL string sort (a-c &lt; ab): always for Unicode types and Windows collations (SortId == 0); non-Unicode SQL_*
     /// collations (SortId != 0) use string sort.</summary>
     internal static bool UseWordSort(ResultColumn column) => column.Collation is { SortId: 0 } || !IsNonUnicodeText(column);
+
+    /// <summary>Whether SQL Server applies legacy Unicode _BIN order (SqlCompareOptions.BinarySort, not _BIN2).</summary>
+    internal static bool UseLegacyBinarySort(ResultColumn column) =>
+        column.Collation is { } collation && (collation.Options & 32768) != 0 && (collation.Options & 16384) == 0 && !IsNonUnicodeText(column);
+
+    /// <summary>Builds a collated sort key matching <see cref="CollatedKey"/> (including word-sort punctuation weighting).</summary>
+    internal static int WriteCollatedSortKey(CompareInfo info, CompareOptions options, bool wordSort, ReadOnlySpan<char> text,
+        ref char[]? strippedBuffer, ref byte[] buffer, Action<int>? onGrow = null)
+    {
+        if (!wordSort || text.IndexOfAny('-', '\'') < 0)
+        {
+            var written = SortKey(info, options, text, ref buffer, onGrow);
+            if (wordSort)
+                while (written > 0 && buffer[written - 1] == 0) written--;
+            return written;
+        }
+        var stripped = StripWordPunctuation(text, ref strippedBuffer, out var specials, onGrow);
+        var baseLen = SortKey(info, options, stripped, ref buffer, onGrow);
+        while (baseLen > 0 && buffer[baseLen - 1] == 0) baseLen--;
+        var needed = baseLen + 1 + specials * 5;
+        if (buffer.Length < needed)
+        {
+            var grown = Math.Max(needed, buffer.Length * 2);
+            onGrow?.Invoke(grown - buffer.Length);
+            Array.Resize(ref buffer, grown);
+        }
+        buffer[baseLen] = 0;
+        var at = baseLen + 1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch is not ('-' or '\'')) continue;
+            var inv = uint.MaxValue - (uint)i;
+            buffer[at++] = (byte)(inv >> 24);
+            buffer[at++] = (byte)(inv >> 16);
+            buffer[at++] = (byte)(inv >> 8);
+            buffer[at++] = (byte)inv;
+            buffer[at++] = (byte)ch;
+        }
+        return at;
+    }
+
+    /// <summary>Builds a legacy Unicode _BIN key matching <see cref="LegacyBinaryKey"/>: first UTF-16 unit big-endian,
+    /// remaining units UTF-16LE byte-by-byte.</summary>
+    internal static int WriteLegacyBinaryKey(ReadOnlySpan<char> chars, ref byte[] buffer, Action<int>? onGrow = null)
+    {
+        var needed = chars.Length * 2;
+        if (buffer.Length < needed)
+        {
+            var grown = Math.Max(needed, buffer.Length * 2);
+            onGrow?.Invoke(grown - buffer.Length);
+            buffer = new byte[grown];
+        }
+        for (var i = 0; i < chars.Length; i++)
+        {
+            var unit = (ushort)chars[i];
+            if (i == 0)
+            {
+                buffer[0] = (byte)(unit >> 8);
+                buffer[1] = (byte)unit;
+            }
+            else
+            {
+                buffer[i * 2] = (byte)unit;
+                buffer[i * 2 + 1] = (byte)(unit >> 8);
+            }
+        }
+        return needed;
+    }
+
+    private static ReadOnlySpan<char> StripWordPunctuation(ReadOnlySpan<char> text, ref char[]? buffer, out int specials, Action<int>? onGrow = null)
+    {
+        if (buffer is null || buffer.Length < text.Length)
+        {
+            var grown = Math.Max(Math.Max(text.Length, 256), 2 * (buffer?.Length ?? 0));
+            onGrow?.Invoke(2 * (grown - (buffer?.Length ?? 0)));
+            buffer = new char[grown];
+        }
+        int length = 0;
+        specials = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch is '-' or '\'') specials++;
+            else buffer[length++] = ch;
+        }
+        return buffer.AsSpan(0, length);
+    }
 
     private static Key BuildTextKey(ResultColumn meta, int capacity, int[]? kept, PageSource source, int column, KeyMemory? memory)
     {
@@ -1620,7 +1708,7 @@ internal static partial class ViewSorter
             room = null;
         }
         public char[] Chars = new char[256];
-        public char[] Stripped = new char[256];
+        public char[]? Stripped = new char[256];
         public byte[] SortKey = new byte[512];
         /// <summary>The page's sort keys end to end, <see cref="Used"/> bytes of them.</summary>
         public byte[] Keys = [];
@@ -1938,32 +2026,8 @@ internal static partial class ViewSorter
         protected override ReadOnlySpan<byte> Bytes(ReadOnlySpan<byte> cell, Scratch scratch)
         {
             var text = Decode(TrimEnd(cell), ref scratch.Chars!);
-            if (!wordSort || text.IndexOfAny('-', '\'') < 0)
-            {
-                var written = SortKey(info, options, text, ref scratch.SortKey);
-                if (wordSort)
-                    while (written > 0 && scratch.SortKey[written - 1] == 0) written--;
-                return scratch.SortKey.AsSpan(0, written);
-            }
-            var stripped = StripWordPunctuation(text, ref scratch.Stripped!, out var specials);
-            var baseLen = SortKey(info, options, stripped, ref scratch.SortKey);
-            while (baseLen > 0 && scratch.SortKey[baseLen - 1] == 0) baseLen--;
-            var needed = baseLen + 1 + specials * 5;
-            if (scratch.SortKey.Length < needed) Array.Resize(ref scratch.SortKey, Math.Max(needed, scratch.SortKey.Length * 2));
-            scratch.SortKey[baseLen] = 0;
-            var at = baseLen + 1;
-            for (var i = 0; i < text.Length; i++)
-            {
-                var ch = text[i];
-                if (ch is not ('-' or '\'')) continue;
-                var inv = uint.MaxValue - (uint)i;
-                scratch.SortKey[at++] = (byte)(inv >> 24);
-                scratch.SortKey[at++] = (byte)(inv >> 16);
-                scratch.SortKey[at++] = (byte)(inv >> 8);
-                scratch.SortKey[at++] = (byte)inv;
-                scratch.SortKey[at++] = (byte)ch;
-            }
-            return scratch.SortKey.AsSpan(0, at);
+            var written = WriteCollatedSortKey(info, options, wordSort, text, ref scratch.Stripped, ref scratch.SortKey);
+            return scratch.SortKey.AsSpan(0, written);
         }
 
         // Sorts compare on several threads.
@@ -1992,20 +2056,6 @@ internal static partial class ViewSorter
             }
         }
 
-        private static ReadOnlySpan<char> StripWordPunctuation(ReadOnlySpan<char> text, ref char[]? buffer, out int specials)
-        {
-            if (buffer is null || buffer.Length < text.Length) buffer = new char[Math.Max(Math.Max(text.Length, 256), 2 * (buffer?.Length ?? 0))];
-            int length = 0;
-            specials = 0;
-            for (var i = 0; i < text.Length; i++)
-            {
-                var ch = text[i];
-                if (ch is '-' or '\'') specials++;
-                else buffer[length++] = ch;
-            }
-            return buffer.AsSpan(0, length);
-        }
-
         private static ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8, ref char[]? buffer)
         {
             if (buffer is null || buffer.Length < utf8.Length) buffer = new char[Math.Max(Math.Max(utf8.Length, 256), 2 * (buffer?.Length ?? 0))];
@@ -2026,23 +2076,8 @@ internal static partial class ViewSorter
             var trimmed = TrimEnd(cell);
             if (scratch.Chars.Length < trimmed.Length) scratch.Chars = new char[Math.Max(Math.Max(trimmed.Length, 256), scratch.Chars.Length * 2)];
             var chars = scratch.Chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, scratch.Chars));
-            var needed = chars.Length * 2;
-            if (scratch.SortKey.Length < needed) scratch.SortKey = new byte[Math.Max(needed, scratch.SortKey.Length * 2)];
-            for (var i = 0; i < chars.Length; i++)
-            {
-                var unit = (ushort)chars[i];
-                if (i == 0)
-                {
-                    scratch.SortKey[0] = (byte)(unit >> 8);
-                    scratch.SortKey[1] = (byte)unit;
-                }
-                else
-                {
-                    scratch.SortKey[i * 2] = (byte)unit;
-                    scratch.SortKey[i * 2 + 1] = (byte)(unit >> 8);
-                }
-            }
-            return scratch.SortKey.AsSpan(0, needed);
+            var written = WriteLegacyBinaryKey(chars, ref scratch.SortKey);
+            return scratch.SortKey.AsSpan(0, written);
         }
 
         protected override int Cells(int a, int b)
@@ -2181,6 +2216,7 @@ internal static class ViewPages
             var packedSource = set.HasPacked;
             var grouping = packedSource;
             var columns = set.Wires.Count;
+            var exactColumns = set.Columns.Any(ColumnTypes.HoldsExact);
             var builder = new PageBuilder(set.ResultId, set.Wires, firstRow);
             var start = firstRow;
             for (var position = firstRow; position < end; position++)
@@ -2240,10 +2276,11 @@ internal static class ViewPages
                         parsed[index] = layout;
                     }
                 }
-                Copy(builder, PageView.At(layout.Body.AsSpan(0, page.Length), layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires);
+                Copy(builder, PageView.At(layout.Body.AsSpan(0, page.Length), layout.BlobStart, layout.Layout, page.FirstRow, page.Rows, columns), (int)(row - page.FirstRow), set.Wires, exactColumns ? set.Columns : null, page.Lengths);
                 if (builder.IsFull)
                 {
-                    var full = new StoredPage(start, (int)(position + 1 - start), builder.Seal(), PageLengths.Empty);
+                    var (sealedBody, sealedLengths) = SealViewPage(builder, exactColumns);
+                    var full = new StoredPage(start, (int)(position + 1 - start), sealedBody, sealedLengths);
                     // A read may wait for credit while it holds the page, so it keeps no unpacked group's working memory
                     // across the wait; Copy and Save (no wait, a lease) keep the group for the next page.
                     if (!grouping || endOnRelease)
@@ -2262,7 +2299,8 @@ internal static class ViewPages
             }
             if (builder.HasRows)
             {
-                var last = new StoredPage(start, (int)(end - start), builder.Seal(), PageLengths.Empty);
+                var (sealedBody, sealedLengths) = SealViewPage(builder, exactColumns);
+                var last = new StoredPage(start, (int)(end - start), sealedBody, sealedLengths);
                 set.ReturnWork(held);
                 held = 0;
                 set.ReturnRooms(rooms);
@@ -2278,14 +2316,26 @@ internal static class ViewPages
         }
     }
 
-    private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires)
+    private static (byte[] Body, PageLengths Lengths) SealViewPage(PageBuilder builder, bool exactColumns)
+    {
+        if (!exactColumns) return (builder.Seal(), PageLengths.Empty);
+        var body = builder.Seal(out var built);
+        return (body, built.HasExacts ? new PageLengths([], [], [], [.. built.Exacts]) : PageLengths.Empty);
+    }
+
+    private static void Copy(PageBuilder builder, PageView source, int row, IReadOnlyList<WireKind> wires, IReadOnlyList<ResultColumn>? exactColumns, PageLengths sourceLengths)
     {
         builder.BeginRow();
         for (var c = 0; c < wires.Count; c++)
         {
             if (source.IsNull(c, row)) builder.AppendNull(source.IsError(c, row));
             else if (wires[c] == WireKind.Binary) builder.AppendBinary(source.Span(c, row), source.IsTruncated(c, row));
-            else builder.AppendUtf8(source.Span(c, row), source.IsTruncated(c, row));
+            else
+            {
+                builder.AppendUtf8(source.Span(c, row), source.IsTruncated(c, row));
+                if (exactColumns is not null && ColumnTypes.HoldsExact(exactColumns[c]) && sourceLengths.TryExact(row, c, out var exact))
+                    builder.KeepExact(exact);
+            }
         }
         builder.CommitRow();
     }

@@ -146,8 +146,8 @@ function segments(statement: Statement, open: number): Run[] {
 
 /** Reads one block: its WITH queries, and per segment its sources and select list's shape. */
 class BlockReader {
-  private readonly bodies = new Map<number, { readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> }>()
-  private readonly shapes = new Map<number, QueryShape>()
+  private readonly bodies = new Map<number, { readonly outer: ReadonlyMap<string, CteScope>; readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> }>()
+  private readonly shapes = new Map<number, { readonly outer: ReadonlyMap<string, CteScope>; readonly shape: QueryShape }>()
   private depth = 0
   /** For each WITH query's body '(', the lexical CTE environment visible inside that body (outer CTEs + earlier siblings, plus itself if RECURSIVE). */
   readonly cteParenEnv = new Map<number, ReadonlyMap<string, CteScope>>()
@@ -159,9 +159,9 @@ class BlockReader {
   /** The block's segments after its WITH queries, plus the CTE environment visible in the block's body after its WITH clause. */
   body(open: number, outer: ReadonlyMap<string, CteScope>): { readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> } {
     const kept = this.bodies.get(open)
-    if (kept) return kept
+    if (kept && kept.outer === outer) return kept
     const read = this.readBody(open, outer)
-    this.bodies.set(open, read)
+    this.bodies.set(open, { outer, ...read })
     return read
   }
 
@@ -193,13 +193,13 @@ class BlockReader {
   /** The columns a parenthesized query gives: its first segment's select list. Nesting past readerLimits.depth gives none. */
   shape(open: number, outer: ReadonlyMap<string, CteScope>): QueryShape {
     const kept = this.shapes.get(open)
-    if (kept) return kept
+    if (kept && kept.outer === outer) return kept.shape
     if (this.depth >= readerLimits.depth) return { columns: [], stars: [] }
     this.depth++
     try {
       const { runs: [first], env } = this.body(open, outer)
       const shape = first ? this.selectShape(first, env) : { columns: [], stars: [] }
-      this.shapes.set(open, shape)
+      this.shapes.set(open, { outer, shape })
       return shape
     } finally { this.depth-- }
   }

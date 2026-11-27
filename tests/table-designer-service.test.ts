@@ -350,6 +350,45 @@ describe('table designer', () => {
     await scripting2
     expect(second.state().prompt).toBeUndefined()
     expect(second.state().phase).toBe('saved')
+
+    // Order 3: a dropped script reply arriving after a newer Generate Change Script started never clears the newer request's scripting flag.
+    const third = designer()
+    await settled()
+    third.designers.setCell(third.id, 0, 'name', 'Id')
+    let resolveLate!: (value: ApiResult<ActionScriptResult>) => void
+    let resolveFresh!: (value: ApiResult<ActionScriptResult>) => void
+    third.api.scriptObjectAction
+      .mockImplementationOnce(() => new Promise(resolve => { resolveLate = resolve }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveFresh = resolve }))
+    const firstScript = third.designers.generateScript(third.id)
+    const cancelledSave = third.designers.save(third.id)
+    third.designers.answerName(third.id, undefined)
+    expect(await cancelledSave).toBe(false)
+    const freshScript = third.designers.generateScript(third.id)
+    expect(third.state().scripting).toBe(true)
+    resolveLate({ ok: true, value: { text: 'STALE', database: 'AppData', warnings: [] } })
+    await firstScript
+    expect(third.state().scripting).toBe(true)
+    expect(third.state().prompt).toBeUndefined()
+    resolveFresh({ ok: true, value: { text: 'FRESH', database: 'AppData', warnings: [] } })
+    await freshScript
+    expect(third.state().scripting).toBe(false)
+    expect(third.state().prompt).toMatchObject({ kind: 'script', text: 'FRESH' })
+
+    // Order 4: Save with nameChosen already true clears an open Change Script prompt, and a refused Save drops an in-flight script.
+    const fourth = designer()
+    await settled()
+    fourth.designers.setCell(fourth.id, 0, 'name', 'Id')
+    fourth.api.executeObjectAction.mockResolvedValueOnce({ ok: false, error: 'Temporary error' })
+    const failedSave = fourth.designers.save(fourth.id)
+    fourth.designers.answerName(fourth.id, 'NamedOnce')
+    expect(await failedSave).toBe(false)
+    expect(fourth.state().nameChosen).toBe(true)
+    await fourth.designers.generateScript(fourth.id)
+    expect(fourth.state().prompt?.kind).toBe('script')
+    fourth.api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { elapsedMs: 1, steps: [], messages: [] } })
+    expect(await fourth.designers.save(fourth.id)).toBe(true)
+    expect(fourth.state().prompt).toBeUndefined()
   })
   it('resolves a pending Choose Name as Cancel when it closes or the service goes', async () => {
     const { designers, id } = designer()

@@ -155,16 +155,38 @@ export interface FilesMoveRow { readonly file: BackupFileRow; readonly restoreAs
 export function filesMoveRows(draft: RestoreDraft, facts: RestoreFacts): FilesMoveRow[] {
   const separator = facts.server?.separator ?? '\\'
   const key = (path: string) => serverPathKey(path, separator) ?? path
+  const base = filesBase(draft, facts)
+  const restored = restoredFiles(draft, facts)
+  const restoredLogicals = new Set(restored.map(file => file.logical.toLowerCase()))
   const taken = new Map<string, string>()
-  for (const file of facts.server?.files ?? []) if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(key(file.path), file.database)
+  const ownUnrestored = new Set<string>()
+  const seenOwnLogicals = new Set<string>()
+  for (const file of facts.server?.files ?? []) {
+    const fileKey = key(file.path)
+    if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(fileKey, file.database)
+    else if (file.logical !== undefined) {
+      const logicalKey = file.logical.toLowerCase()
+      seenOwnLogicals.add(logicalKey)
+      if (!restoredLogicals.has(logicalKey)) ownUnrestored.add(fileKey)
+    }
+  }
+  if (seenOwnLogicals.size === 0 || facts.server?.filesTruncated) {
+    const baseFiles = base && facts.setFiles && Object.hasOwn(facts.setFiles, base.id) ? facts.setFiles[base.id] : []
+    for (const file of baseFiles) {
+      const logicalKey = file.logical.toLowerCase()
+      if (!restoredLogicals.has(logicalKey) && !seenOwnLogicals.has(logicalKey)) ownUnrestored.add(key(file.physical))
+    }
+  }
   const counts = new Map<string, number>()
-  const rows = restoredFiles(draft, facts).map(file => {
+  const rows = restored.map(file => {
     const typed = Object.hasOwn(draft.restoreAs, file.logical) ? draft.restoreAs[file.logical] : undefined
     const restoreAs = typed ?? file.physical
     const targetKey = key(restoreAs)
     counts.set(targetKey, (counts.get(targetKey) ?? 0) + 1)
     const other = taken.get(targetKey)
-    const problem = serverPathProblem(restoreAs) ?? (other ? `The file is in use by the database ${other}.` : undefined)
+    const problem = serverPathProblem(restoreAs)
+      ?? (other ? `The file is in use by the database ${other}.` : undefined)
+      ?? (ownUnrestored.has(targetKey) ? `The file is in use by another file of ${draft.destination}.` : undefined)
     return { file, restoreAs, typed: typed !== undefined, targetKey, ...problem ? { problem } : {} }
   })
   return rows.map(({ targetKey, ...row }) => !row.problem && (counts.get(targetKey) ?? 0) > 1 ? { ...row, problem: 'Another file is restored to this path.' } : row)
@@ -194,7 +216,7 @@ export function filesProblems(draft: RestoreDraft, facts: RestoreFacts): FilesPr
   if (facts.sets.length > 0 && filesBaseSets(draft, facts).length === 0) general.push(restoreMessages.noFileBase)
   else if (facts.sets.length > 0 && !draft.files?.chosen.length) general.push(restoreMessages.noFiles)
   const base = filesBase(draft, facts)
-  if (base && draft.files?.set === base.id && !facts.setFiles?.[base.id]) general.push(restoreMessages.filesNotRead)
+  if (base && draft.files?.set === base.id && !(facts.setFiles && Object.hasOwn(facts.setFiles, base.id))) general.push(restoreMessages.filesNotRead)
   if (primaryRefused(draft, facts) && restoredFiles(draft, facts).some(primary)) general.push(restoreMessages.primaryOnline)
   const chosen = draft.files?.chosen.length ?? 0
   if (chosen > restoreLimits.restoreFiles) general.push(`A restore names at most ${restoreLimits.restoreFiles} files or filegroups.`)

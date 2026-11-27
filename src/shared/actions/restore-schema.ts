@@ -33,7 +33,7 @@ const moveSchema = z.object({ logical: ident, physical: path }).strict()
 
 /** Canonical path identity for duplicate MOVE checks: normalizes Windows slashes, dots, trailing spaces and case, and Linux segments. */
 const movePathKey = (physical: string): string => {
-  const separator = physical.startsWith('/') && !physical.startsWith('//') ? '/' : '\\'
+  const separator = physical.startsWith('/') && !physical.startsWith('//') && !physical.startsWith('/\\') ? '/' : '\\'
   return serverPathKey(physical, separator) ?? (separator === '\\' ? physical.toLowerCase() : physical)
 }
 

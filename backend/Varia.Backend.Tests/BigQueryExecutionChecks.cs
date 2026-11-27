@@ -740,6 +740,8 @@ internal static partial class BigQueryExecutionChecks
             $"noDefaultDataset: true sends no defaultDataset even when the connection sets one: {code} {message} {body}");
         var (bothCode, _, _) = await harness.Execute("SELECT * FROM t", args => { args["dataset"] = "other_set"; args["noDefaultDataset"] = true; });
         check(bothCode == "INVALID_PARAMS", $"combining dataset and noDefaultDataset is refused: {bothCode}");
+        var (previewBothCode, _, _) = await harness.Execute("", args => { args["dataset"] = "other_set"; args["noDefaultDataset"] = true; args["preview"] = new JsonObject { ["project"] = "varia-emulator", ["dataset"] = "other_set", ["table"] = "t" }; });
+        check(previewBothCode == "INVALID_PARAMS", $"preview refuses combining dataset and noDefaultDataset: {previewBothCode}");
 
         // Show cost as Bytes only: the same figures without dollars.
         (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["prices"] = false);

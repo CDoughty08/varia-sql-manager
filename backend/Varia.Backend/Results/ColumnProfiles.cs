@@ -247,6 +247,8 @@ internal static class ColumnProfiler
         private readonly ViewSorter.Kind kind;
         private readonly Basis basis;
         private readonly (CompareInfo Info, CompareOptions Options)? culture;
+        private readonly bool wordSort;
+        private readonly bool legacyBinary;
         private readonly bool trim;
         private readonly bool timeOnly;
         private readonly Charges charges;
@@ -256,6 +258,7 @@ internal static class ColumnProfiler
         private byte[]? registers;
         private byte[] key = new byte[64];
         private char[] chars = new char[256];
+        private char[]? stripped;
         /// <summary>The lowest and highest keys so far, in buffers reused as they change (grown, and charged, only for a
         /// longer key), and the starts of their cells for display.</summary>
         private byte[] minKey = [], maxKey = [];
@@ -275,7 +278,10 @@ internal static class ColumnProfiler
             length = set.Lengths[column];
             kind = ViewSorter.KindOf(meta, wire);
             basis = BasisOf(meta, wire, kind);
-            culture = kind == ViewSorter.Kind.Collated ? ViewSorter.Culture(meta.Collation) : null;
+            legacyBinary = ViewSorter.UseLegacyBinarySort(meta);
+            wordSort = kind == ViewSorter.Kind.Collated && ViewSorter.UseWordSort(meta);
+            if (kind == ViewSorter.Kind.Collated && ViewSorter.Culture(meta.Collation) is { } resolved)
+                culture = (resolved.Info, wordSort ? resolved.Options : resolved.Options | CompareOptions.StringSort);
             trim = meta.Collation is not null;
             timeOnly = meta.SortKind == ColumnTypes.Time;
             if (wire == WireKind.Binary || ViewSorter.IsText(meta))
@@ -307,7 +313,7 @@ internal static class ColumnProfiler
                 charStats?.Add(size.Chars, size.Exact);
                 byteStats.Add(size.Bytes, size.Exact);
             }
-            if (basis is Basis.Value or Basis.Time && (hasExact ? exact : Measure(cell)) is { } measure)
+            if (basis is Basis.Value or Basis.Time && (hasExact ? (double.IsFinite(exact) ? (double?)exact : null) : Measure(cell)) is { } measure)
             {
                 if (measure < low) low = measure;
                 if (measure > high) high = measure;
@@ -360,7 +366,7 @@ internal static class ColumnProfiler
             {
                 Basis.Chars => Size(lengths, row, cell, view.IsTruncated(column, row)).Chars,
                 Basis.Bytes => Size(lengths, row, cell, view.IsTruncated(column, row)).Bytes,
-                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? exact : Measure(cell)
+                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? (double.IsFinite(exact) ? exact : null) : Measure(cell)
             };
             if (measure is not { } value) return -1;
             var (from, to) = Range();
@@ -458,10 +464,24 @@ internal static class ColumnProfiler
                     }
                     var text = chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, chars));
                     // Asked for once; a longer key than the buffer grows it, charged as any growth is.
-                    var written = ViewSorter.SortKey(compare.Info, compare.Options, text, ref key, grown => charges.Add(grown));
+                    var written = ViewSorter.WriteCollatedSortKey(compare.Info, compare.Options, wordSort, text, ref stripped, ref key, grown => charges.Add(grown));
                     return key.AsSpan(0, written);
                 }
-                default: return trim ? ViewSorter.TrimEnd(cell) : cell;
+                default:
+                    if (legacyBinary)
+                    {
+                        var trimmed = ViewSorter.TrimEnd(cell);
+                        if (chars.Length < trimmed.Length)
+                        {
+                            var grown = Math.Max(trimmed.Length, 2 * chars.Length);
+                            charges.Add(2L * (grown - chars.Length));
+                            chars = new char[grown];
+                        }
+                        var text = chars.AsSpan(0, Encoding.UTF8.GetChars(trimmed, chars));
+                        var written = ViewSorter.WriteLegacyBinaryKey(text, ref key, grown => charges.Add(grown));
+                        return key.AsSpan(0, written);
+                    }
+                    return trim ? ViewSorter.TrimEnd(cell) : cell;
             }
         }
 

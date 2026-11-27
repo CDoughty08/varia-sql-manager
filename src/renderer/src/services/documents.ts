@@ -34,7 +34,7 @@ interface Fill { appending: boolean; userEdited: boolean; done: Promise<void>; f
 interface DocumentEntry { model: editor.ITextModel; subscription: Disposable; viewState?: editor.ICodeEditorViewState | null; fill?: Fill; plain?: boolean; edits: number }
 /** A text document opened from a value: its tab name, its text, and what it holds. */
 export interface TextDocument { readonly name: string; readonly text: string; readonly kind: Exclude<DocumentKind, 'sql'>; readonly file?: QueryDocument['file']; readonly eol?: LineEnding }
-export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
+export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean; readonly unsavedFill?: boolean }
 export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
 interface ClosedQuery { readonly name: string; readonly baseName?: string; readonly text: string; readonly database: string; readonly lastServer?: string; readonly provider?: ProviderId; readonly eol: LineEnding; readonly viewState?: editor.ICodeEditorViewState }
 type DocumentPatch = Partial<Pick<QueryDocument, 'name' | 'connectionId' | 'targetId' | 'attachWanted' | 'database' | 'file' | 'sessionNotice' | 'lastServer' | 'includeActualPlan' | 'includeLivePlan' | 'includeClientStatistics' | 'jobKey'>>
@@ -281,8 +281,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const preferred = this.successor?.(id)
     return preferred && preferred !== id && next.tabs.some(document => document.id === preferred) ? { ...next, activeId: preferred } : next
   }
+  private hasUnsavedFill(): boolean {
+    for (const entry of this.entries.values()) if (entry.fill?.userEdited) return true
+    return false
+  }
   private changed(snapshot: DocumentSnapshot): void {
-    this.publish(snapshot)
+    const unsavedFill = this.hasUnsavedFill()
+    const { unsavedFill: _previous, ...base } = snapshot
+    this.publish(unsavedFill ? { ...base, unsavedFill: true } : base)
     this.events.emit({ type: 'documents.changed' })
   }
   private replace(id: string, patch: Partial<Omit<QueryDocument, 'id'>>): void {
@@ -407,7 +413,13 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
       const current = this.get(id), entry = this.entries.get(id), fill = entry?.fill
       if (entry && !fill?.appending) entry.edits++
       if (!current) return
-      if (fill) { if (!fill.appending) fill.userEdited = true; return }
+      if (fill) {
+        if (!fill.appending && !fill.userEdited) {
+          fill.userEdited = true
+          this.changed(this.getSnapshot())
+        }
+        return
+      }
       const dirty = current.savedVersionId === null ? !!current.file || model.getValueLength() > 0 : model.getAlternativeVersionId() !== current.savedVersionId
       // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
       if (dirty !== current.dirty) this.replace(id, { dirty })
@@ -698,7 +710,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     for (const instance of this.shown.keys()) instance.setModel(null)
     this.shown.clear()
     this.follower = undefined
-    for (const entry of this.entries.values()) { entry.subscription.dispose(); entry.model.dispose() }
+    for (const entry of this.entries.values()) { entry.fill?.finish(); entry.fill = undefined; entry.subscription.dispose(); entry.model.dispose() }
     this.entries.clear()
     this.clearListeners()
     this.publish({ documents: [], activeId: '', busy: false })

@@ -180,7 +180,7 @@ export function restoreToText(draft: RestoreDraft, facts: RestoreFacts, plan: Dr
   const sets = sourceSets(draft, facts)
   const last = lastBackupTaken(sets, plan.ids)
   if (!last) return 'The last backup taken'
-  const skippedCopyOnly = sets.some(set => set.type === 'log' && set.copyOnly && !set.problem && !set.damaged && set.finish > last)
+  const skippedCopyOnly = !draft.manual && sets.some(set => set.type === 'log' && set.copyOnly && !set.problem && !set.damaged && set.finish > last)
   return skippedCopyOnly ? `Latest supported recovery point (${last.replace('T', ' ')}; skips later copy-only log)` : `The last backup taken (${last.replace('T', ' ')})`
 }
 
