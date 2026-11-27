@@ -121,8 +121,6 @@ internal sealed partial class ObjectSearchService : IDisposable
         public readonly SortedSet<(long Ticks, string Key)> SavedOrder = [];
         /// <summary>Whether a full build has loaded the connection's saved index (once, when the store reads; under Gate).</summary>
         public bool SavedLoaded;
-        /// <summary>The build loading it now, if any (under Gate).</summary>
-        public CancellationTokenSource? SavedLoader;
         /// <summary>When the oldest of <see cref="Saved"/> was read, and as the status's text (read by the progress without Gate).</summary>
         public DateTime? SavedAt;
         public volatile string? SavedAtText;

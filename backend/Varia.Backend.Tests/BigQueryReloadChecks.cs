@@ -356,8 +356,8 @@ internal static class BigQueryReloadChecks
         source.Reset();
         await Build(search, source, id);
         await search.Store.Idle();
-        check(source.TableCalls == 0 && source.RoutineCalls == 0 && Hits(search, id, "t3") == 1,
-            "a build stopped while it loaded the saved index leaves the rest to the next full build, which loads it");
+        check(source.TableCalls == 0 && source.RoutineCalls == 0 && Hits(search, id, "t3") == 1 && search.SavedLoads.Stale == 0,
+            "a build stopped while it loaded the saved index leaves the rest to the next full build, which loads it (what is held counts as nothing stale)");
     }
 
     // ---- A build that replaces the one loading loads in its place ----

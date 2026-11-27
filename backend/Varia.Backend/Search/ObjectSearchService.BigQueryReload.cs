@@ -49,13 +49,12 @@ internal sealed partial class ObjectSearchService
         if (state.Index.Sink?.Scope is not { Provider: IndexProvider.BigQuery } scope) return byProject;
         lock (state.Gate)
         {
-            // Loaded once per connection; a build that replaced the one still loading (which holds nothing more once replaced) loads
-            // in its place, without waiting for it to notice.
-            if (state.SavedLoaded || !ReferenceEquals(state.Build, owner) || state.SavedLoader is { } loader && ReferenceEquals(loader, state.Build)) return byProject;
+            // Loaded once per connection, by the build that is current: one replaced while it loads holds nothing more, and the build
+            // that replaced it loads in its place.
+            if (state.SavedLoaded || !ReferenceEquals(state.Build, owner)) return byProject;
             // Looked for once a store reads: one not configured yet (main configures it a moment after the backend starts) is
             // looked in by the next full build.
             if (!Store.Configured || Store.Mode is not (IndexStoreMode.Encrypted or IndexStoreMode.ClearText)) return byProject;
-            state.SavedLoader = owner;
         }
         var done = false;
         try
@@ -69,7 +68,6 @@ internal sealed partial class ObjectSearchService
             // A build stopped or replaced while it loaded leaves the rest to the next full build (what landed stays held).
             lock (state.Gate)
             {
-                if (ReferenceEquals(state.SavedLoader, owner)) state.SavedLoader = null;
                 // A build replaced after its last load (that load left on disk) leaves the reload to the build that replaced it.
                 if (done && ReferenceEquals(state.Build, owner)) state.SavedLoaded = true;
             }
@@ -112,6 +110,8 @@ internal sealed partial class ObjectSearchService
             lock (state.Gate)
             {
                 if (!ReferenceEquals(state.Build, owner)) throw new OperationCanceledException(token);
+                // Held already (an earlier build loaded it before it stopped): nothing to load, and not stale.
+                if (state.Index.Get(key) is not null) continue;
                 if (!Standing()) { Interlocked.Increment(ref savedStale); continue; }
             }
             SavedLoading?.Invoke(project, dataset);
