@@ -8,6 +8,7 @@ import {
   type OverviewAlert, type OverviewCheck, type OverviewFacts, type OverviewFix, type OverviewJob, type OverviewObject, type OverviewRead, type OverviewReadState,
   type OverviewSchedule, type OverviewTile
 } from '../../../shared/agent/overview'
+import type { AgentJobView } from '../../../shared/agent/jobs'
 import { liveProbes } from '../../../shared/live/catalog'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -22,6 +23,8 @@ import type { PaneService } from '../services/panes'
 /** How a check's fix runs: each through the surface that owns it. A failure throws, and the document shows it. */
 export interface AgentOverviewFixes {
   readonly failedJobs: (connectionId: string) => void
+  readonly jobsView?: (connectionId: string, view: AgentJobView) => void
+  readonly alerts?: (connectionId: string) => void
   readonly changeOwner: (connectionId: string, jobs: readonly { readonly id: string; readonly name: string; readonly owner: string }[]) => void | Promise<void>
   readonly openJob: (connectionId: string, name: string, section?: 'notifications') => void
   readonly agentProperties: (connectionId: string, page?: 'history') => void
@@ -59,6 +62,15 @@ export const agentOverviewText = {
   failed: 'The Agent overview stopped reading SQL Server Agent.',
   notConnected: 'Connect to the server again to run this fix.'
 } as const
+
+/** Restores focus on an Agent Overview document: actionable check button, then KPI tile, then header tool, then any enabled button. */
+export function focusAgentOverview(id: string): void {
+  const root = document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"]`)
+  ;(root?.querySelector<HTMLElement>('.ov-check button:not(:disabled)')
+    ?? root?.querySelector<HTMLElement>('.agent-overview-tile:not(:disabled)')
+    ?? root?.querySelector<HTMLElement>('.document-actions button:not(:disabled)')
+    ?? root?.querySelector<HTMLElement>('button:not(:disabled)'))?.focus()
+}
 
 const spec = liveProbes[agentOverviewProbe]
 const columnsOf = (table: number) => Object.fromEntries(spec.tables![table]!.columns.map((column, index) => [column.id, index])) as Record<string, number>
@@ -238,6 +250,20 @@ export class AgentOverviewService extends SnapshotStore<AgentOverviewSnapshot> i
     const connectionId = this.live(id) ? this.get(id)?.connectionId : undefined
     if (!connectionId) { this.patch(id, { notice: agentOverviewText.notConnected }); return }
     try { this.options.fixes.agentProperties(connectionId) } catch (failure) { this.patch(id, { notice: failure instanceof Error ? failure.message : String(failure) }) }
+  }
+  /** A KPI tile clicked: opens Job Activity Monitor (all, failed, or running) or Operators and Notifications. */
+  openTile(id: string, tileId: OverviewTile['id']): void {
+    const connectionId = this.live(id) ? this.get(id)?.connectionId : undefined
+    if (!connectionId) { this.patch(id, { notice: agentOverviewText.notConnected }); return }
+    this.patch(id, { notice: undefined })
+    try {
+      switch (tileId) {
+        case 'jobs': this.options.fixes.jobsView?.(connectionId, 'all'); break
+        case 'failed': this.options.fixes.failedJobs(connectionId); break
+        case 'running': this.options.fixes.jobsView?.(connectionId, 'running'); break
+        case 'alerts': this.options.fixes.alerts?.(connectionId); break
+      }
+    } catch (failure) { this.patch(id, { notice: failure instanceof Error ? failure.message : String(failure) }) }
   }
 
   private live(id: string): boolean {

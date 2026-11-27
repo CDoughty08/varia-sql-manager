@@ -202,7 +202,7 @@ internal static class IndexFile
                 account.Credited > 0 ? account.Credit : null, pooled: true, readAt: header.ReadAt)
             {
                 Dataset = unit.Dataset, Facts = unit.Facts, LeftOut = unit.LeftOut, ChildrenLeftOut = unit.ChildrenLeftOut, DefinitionsLeftOut = unit.DefinitionsLeftOut,
-                Detailed = unit.Detailed, FailedPart = unit.FailedPart, CaseSensitive = unit.CaseSensitive, DottedI = unit.DottedI, NameBytes = account.NameBytes
+                Detailed = unit.Detailed, FailedPart = unit.FailedPart, CaseSensitive = unit.CaseSensitive, DottedI = unit.DottedI, NameBytes = account.NameBytes, Loaded = true
             };
             return new(index, IndexFileProblem.None, header, unit.Extra);
         }

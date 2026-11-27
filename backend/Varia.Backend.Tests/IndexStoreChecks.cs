@@ -175,7 +175,8 @@ internal static class IndexStoreChecks
             "a header's sync state carries the unit's names (an unpaired surrogate as it was) before the builder's bytes, and anything else is refused");
         var sync = new BigQuerySync(true, 7, 2, 3);
         check(BigQuerySync.From(sync.ToBytes()) == sync && BigQuerySync.From(new BigQuerySync(false, 0, 0, 0).ToBytes()) == new BigQuerySync(false, 0, 0, 0)
-            && BigQuerySync.From([]) is null && BigQuerySync.From([.. sync.ToBytes(), 0]) is null && BigQuerySync.From([2, .. sync.ToBytes()[1..]]) is null,
+            && BigQuerySync.From([]) is null && BigQuerySync.From([.. sync.ToBytes(), 0]) is null && BigQuerySync.From([1, .. sync.ToBytes()[1..]]) is null && BigQuerySync.From([3, .. sync.ToBytes()[1..]]) is null
+            && BigQuerySync.From((sync with { Listing = "00112233445566778899aabbccddeeff" }).ToBytes()) is { Listing: "00112233445566778899aabbccddeeff" },
             "a BigQuery dataset's sync state round-trips, and bytes another version wrote read as none");
     }
 

@@ -17,6 +17,7 @@ import type { Camera } from '../plans/geometry'
 import type { FlowCanvas, FlowCanvasColors, FlowCanvasModel, FlowCanvasNode } from './FlowCanvas'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
 import { LastRunPanel, LiveRunPanel, RunPicker, useFlowRun } from './FlowRunPanel'
+import { flowCamera, setFlowCamera } from './step-models'
 import { jobHistoryCopy } from './JobHistory'
 
 interface FlowProps {
@@ -202,7 +203,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
     return () => { visibility.dispose(); adoption.dispose(); owner.removeEventListener('visibilitychange', changed) }
   }, [])
   /** The camera a released canvas left, and whether the selection moved while none existed (then the next one brings it into view). */
-  const released = useRef<{ camera?: Camera; reveal: boolean }>({ reveal: true })
+  const released = useRef<{ camera?: Camera; reveal: boolean }>({ camera: flowCamera(state.id), reveal: !flowCamera(state.id) })
   useEffect(() => {
     const element = root.current
     if (!element || !onScreen) return
@@ -211,10 +212,11 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
     void import('./FlowCanvas').then(({ FlowCanvas }) => {
       if (disposed) return
       const now = latest.current, { camera, reveal } = released.current
-      released.current = { reveal: false }
+      const savedCamera = camera ?? flowCamera(now.state.id)
+      released.current = { camera: savedCamera, reveal: false }
       canvas.current = new FlowCanvas({
         root: element, model: now.canvasModel, colors: now.palette, selected: now.selected, focused: now.focused, editable: now.editable,
-        ...camera ? { camera } : {}, revealSelected: reveal, platform,
+        ...savedCamera ? { camera: savedCamera } : {}, revealSelected: reveal, platform,
         select: index => { const step = latest.current.steps[index]; if (step) service.selectStep(latest.current.state.id, step.key) },
         open: index => { const step = latest.current.steps[index]; if (step) service.openStepEditor(latest.current.state.id, step.key) },
         connect: (from, which, to) => {
@@ -228,7 +230,7 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
           Object.assign(marker.style, { left: `${clientX - box.left}px`, top: `${clientY - box.top}px` })
           void commands.execute(which === 'success' ? 'agentJob.pickStepOnSuccess' : 'agentJob.pickStepOnFailure', { tabId: latest.current.state.id, target: { kind: 'agentStep', tabId: latest.current.state.id, key: step.key }, anchor: marker }, 'toolbar')
         },
-        cameraChanged: camera => { cameraRef.current = camera; released.current.camera = camera; place(camera); setZoom(current => current === camera.scale ? current : camera.scale) },
+        cameraChanged: camera => { cameraRef.current = camera; released.current.camera = camera; setFlowCamera(latest.current.state.id, camera); place(camera); setZoom(current => current === camera.scale ? current : camera.scale) },
         failed: () => { if (!disposed) setFailed(true) }
       })
     }).catch(() => { if (!disposed) setFailed(true) })
@@ -238,7 +240,13 @@ export default function JobStepsFlow({ state, model, draft, editable, service, s
   }, [retry, service, onScreen])
   useEffect(() => { canvas.current?.update(canvasModel, selected, focused, editable) }, [canvasModel, selected, focused, editable])
   useEffect(() => { canvas.current?.colors(palette) }, [palette])
-  useEffect(() => { if (selected < 0) return; if (canvas.current) canvas.current.reveal(selected); else released.current.reveal = true }, [selected])
+  const prevSelected = useRef(selected)
+  useEffect(() => {
+    if (prevSelected.current === selected) return
+    prevSelected.current = selected
+    if (selected < 0) return
+    if (canvas.current) canvas.current.reveal(selected); else released.current.reveal = true
+  }, [selected])
   useLayoutEffect(() => place(cameraRef.current))
   // The docked editor narrows the graph, as closing it widens it: the graph is placed again for its new width (Fit when it no longer fits).
   // Watched on what the layout shows (an editor needs a step), so deleting the last step under the editor places it too.

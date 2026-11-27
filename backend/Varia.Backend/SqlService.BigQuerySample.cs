@@ -41,7 +41,7 @@ internal sealed partial class SqlService
         // re-attached job's): the statement is always read from the job, which also says whether it was one SELECT.
         return new RemotePlan(set, window, "", [], false, null, false)
         {
-            Kind = kind, FromJob = true, Dataset = window.Args.Dataset ?? window.Connection.Options.Dataset
+            Kind = kind, FromJob = true, Dataset = window.Args.NoDefaultDataset ? null : window.Args.Dataset ?? window.Connection.Options.Dataset
         };
     }
 
@@ -64,6 +64,8 @@ internal sealed partial class SqlService
             throw new RequestException("INVALID_PARAMS", "Only a single SELECT's result runs again in place, and BigQuery does not name this result's statement a SELECT. Run the query again.");
         // A job made outside Varia may be legacy SQL, which Varia never runs (nor guesses at as GoogleSQL).
         if (query.UseLegacySql == true || BigQueryErrors.IsLegacySql(query.Query)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
+        if (query.DefaultDataset is { DatasetId: { Length: > 0 } externalDataset, ProjectId: { } externalProject } && externalProject != window.Project)
+            throw new RequestException("INVALID_PARAMS", $"This result came from default dataset {externalProject}.{externalDataset} in another project, so it cannot run again in place. Open the job's SQL in a new tab and choose a dataset.");
         var own = query.DefaultDataset is { DatasetId: { } dataset, ProjectId: var project } && (project is null || project == window.Project) && BqNames.IsDataset(dataset) ? dataset : null;
         return (query.Query, own ?? plan.Dataset, job.Statistics?.SessionInfo?.SessionId is { Length: > 0 });
     }

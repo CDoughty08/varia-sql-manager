@@ -1,11 +1,14 @@
 // Playwright-over-Electron live screenshot capture harness for SQL Server Agent polish lanes (AP-1..AP-6).
 // Usage: node scripts/capture-agent-polish.mjs --lane <ap-1|ap-2|ap-3|ap-4|ap-5|ap-6> [--out <dir>]
+import { captureAp4 } from './capture-agent-polish-lanes/ap4.mjs'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
 import {
-  connectDialogWindow, documentFrame, documentTab, gridPart, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton
+  chooseJamMoreAction, connectDialogWindow, documentFrame, documentTab, gridPart, jamToolbar, liveGrid, quickInputRows, statusBar, submitConnect, toolbarButton
 } from './fixtures/ui.mjs'
+import { captureAp3 } from './capture-agent-polish-lanes/ap3.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
+import { captureAp2 } from './capture-agent-polish-lanes/ap2.mjs'
 import { captureAp5 } from './capture-agent-polish-lanes/ap5.mjs'
 import react from '@vitejs/plugin-react'
 import { existsSync } from 'node:fs'
@@ -167,7 +170,7 @@ async function captureAp1(outDir, profile) {
 
     // 1. Log File Viewer layout (.lfv-* namespace after collision split).
     await jobCell('Nightly').click()
-    await documentFrame(page, 'Job Activity Monitor').getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'View history', exact: true }).click()
+    await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'View history')
     await expect(documentTab(page, 'Log File Viewer - server-a')).toHaveAttribute('aria-selected', 'true')
     const viewer = documentFrame(page, 'Log File Viewer')
     const runs = liveGrid(page, 'Runs')
@@ -193,7 +196,7 @@ async function captureAp1(outDir, profile) {
     // 4. AgentJobStatus status bar item.
     await documentTab(page, 'Job Activity Monitor - server-a').click()
     await jobCell('Backup').click()
-    await documentFrame(page, 'Job Activity Monitor').getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Start', exact: true }).click()
+    await jamToolbar(documentFrame(page, 'Job Activity Monitor')).getByRole('button', { name: 'Start', exact: true }).click()
     await expect(statusBar(page).getByRole('button', { name: 'Dismiss Backup', exact: true })).toBeVisible()
     await captureMatrix(app, page, outDir, '04-status-bar-agent-job')
 
@@ -223,6 +226,9 @@ async function captureAp1(outDir, profile) {
 
 const lanes = {
   'ap-1': captureAp1,
+  'ap-2': (outDir, profile) => captureAp2({ outDir, profile, launchMainApp, connectFakeServer, captureMatrix, expect }),
+  'ap-3': (outDir, profile) => captureAp3(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix }),
+  'ap-4': captureAp4,
   'ap-5': (outDir, profile) => captureAp5(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix })
 }
 const implementedLanes = new Set(Object.keys(lanes))
@@ -263,7 +269,7 @@ const watchdog = setTimeout(() => {
 }, 300000)
 
 try {
-  await lanes[parsed.lane](outDir, profile)
+  await lanes[parsed.lane](outDir, profile, { captureMatrix, launchMainApp, connectFakeServer, viewports, themes })
 } finally {
   clearTimeout(watchdog)
   await rm(profile, { recursive: true, force: true }).catch(() => {})

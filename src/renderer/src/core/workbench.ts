@@ -130,7 +130,7 @@ import { JobDocumentService } from '../agent/JobDocumentService'
 import { stepMenuProviders } from '../agent/step-menus'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
-import { AgentOverviewService } from '../agent/AgentOverviewService'
+import { AgentOverviewService, focusAgentOverview } from '../agent/AgentOverviewService'
 import { createAgentOverviewFixes } from '../agent/agent-overview-fixes'
 import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
@@ -651,7 +651,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // SQL Server Agent's overview (AG-15): each check's fix runs through the surface that owns it; the overview itself writes nothing.
   const agentOverview = new AgentOverviewService({
     documents, panes, groups: editorGroups, live, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
+    focus: id => focusLater(() => { focusAgentOverview(id) }),
     fixes: createAgentOverviewFixes({ jobActivity, jobDocuments, dialogs, operatorsDocuments, schedules, explorer, commands: () => commands })
   })
   const objectSearch = new ObjectSearchService({
@@ -668,7 +668,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     for (const connection of connections.liveBigQuery()) objectSearch.syncBigQueryStarred(connection.id)
   }
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
-  const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
+  const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, {
+    ensureIndex: id => objectSearch.ensureIndex(id),
+    refreshScopes: (id, scopes) => objectSearch.refreshBigQueryScopes(id, scopes),
+    refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes),
+    indexState: objectSearch
+  })
   const bigQueryProperties = new BigQueryPropertiesService({
     api, documents, connections, results, scriptingOptions,
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),

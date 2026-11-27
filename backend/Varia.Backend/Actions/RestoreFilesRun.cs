@@ -54,7 +54,7 @@ internal sealed partial class ActionService
         var moves = options.Relocate ?? throw Invalid("restoreFiles.relocate.");
         if (moves.Count > Restore.Limit("restoreMoves") || moves.Any(move => move is null || !ExplorerRefs.Ident(move.Logical) || !RestorePath(move.Physical))) throw Invalid("restoreFiles.relocate.");
         if (moves.Select(move => move.Logical).Distinct(StringComparer.Ordinal).Count() != moves.Count
-            || moves.Select(move => move.Physical.ToLowerInvariant()).Distinct(StringComparer.Ordinal).Count() != moves.Count) throw Invalid("restoreFiles.relocate: a file or a path is listed twice.");
+            || moves.Select(move => MovePathKey(move.Physical)).Distinct(StringComparer.Ordinal).Count() != moves.Count) throw Invalid("restoreFiles.relocate: a file or a path is listed twice.");
         if (RestoreFilesParameters(options) > Restore.Limit("parameters")) throw Invalid("restoreFiles: too many parameters for one RESTORE.");
         if (!Restore.RecoveryStates.Contains(options.Recovery, StringComparer.Ordinal)) throw Invalid("restoreFiles.recovery.");
         if ((options.Recovery == "standby") != (options.StandbyFile is not null) || (options.StandbyFile is not null && !RestorePath(options.StandbyFile))) throw Invalid("restoreFiles.standbyFile.");
@@ -168,7 +168,8 @@ internal sealed partial class ActionService
         var written = new List<(string Path, string What)>();
         if (options.Recovery == "standby" && options.StandbyFile is { } standby) written.Add((standby, "standby file"));
         if (options.LogBackup is { } backup) written.Add((backup.File, "log backup file"));
-        if (await WrittenProblemAsync(connection, database, restored!, options.Relocate, written, facts, linux, token) is { } paths) return (null, null, paths);
+        var restoredNames = new HashSet<string>(restored!.Select(file => file.Logical), StringComparer.OrdinalIgnoreCase);
+        if (await WrittenProblemAsync(connection, database, restored!, options.Relocate, written, facts, linux, token, page: "Options page", restoredNames: restoredNames) is { } paths) return (null, null, paths);
         // The log backup goes to a new file, so it is the file's first backup set, as Script writes it (FILE = 1).
         if (options.LogBackup is { } fresh && await ExistingAsync(connection, [fresh.File], facts, token) is { Count: > 0 })
             return (null, null, Error("NAME_IN_USE", "The log backup file " + ScriptingErrors.Display(fresh.File) + " is already on the server. Choose a new file for the log backup."));

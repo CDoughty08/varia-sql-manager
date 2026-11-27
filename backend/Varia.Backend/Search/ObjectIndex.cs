@@ -83,6 +83,8 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public bool FailedPart { get; set; }
     /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
     public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
+    /// <summary>Loaded from the saved index rather than read from its source (the status says the index was saved, not read).</summary>
+    public bool Loaded { get; init; }
     /// <summary>What the store keeps in the read's file beside the unit (<see cref="IndexStore"/>), set by its builder before
     /// the read is held: Sync in the header, which a listing of saved units reads without the body (what the builder will
     /// compare with the source to tell how stale the file is), and Extra in the body. Both are the builder's own bytes.</summary>
@@ -526,6 +528,11 @@ internal sealed class SearchMatcher
         if (!regex)
         {
             var literal = wholeWord ? text : text.Trim('*');
+            if (!wholeWord && literal.Length == 0 && text.Length > 0)
+            {
+                // All-star wildcard (*, **): matches any non-empty name or line, matching Whole Word's * behaviour.
+                return (new SearchMatcher(text, caseSensitive, false, new Regex(".+", options, timeout), true), null);
+            }
             if (literal.IndexOfAny(['*', '?']) < 0) return (new SearchMatcher(literal, caseSensitive, wholeWord, null, true), null);
             var pattern = Wildcard(literal);
             if (wholeWord)
@@ -674,7 +681,7 @@ internal sealed class SearchMatcher
                 (index, length) = (start + at, text.Length);
             }
             if (!wholeWord || Bounded(value, index, length)) return true;
-            start = index + Math.Max(1, length);
+            start = index + 1;
         }
         (index, length) = (-1, 0);
         return false;

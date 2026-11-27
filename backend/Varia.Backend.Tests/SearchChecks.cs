@@ -140,6 +140,10 @@ internal static class SearchChecks
             && Make("?x?", wholeWord: true).Find("!x!", 0, out at, out length) && at == 0 && length == 3,
             "whole-word wildcards support all stars, punctuation, question marks and both ends of the input");
         check(Make("a?c").Find("xabcx", 0, out at, out length) && at == 1 && length == 3 && !Make("a?c").Find("ac", 0, out _, out _), "a plain search's ? stands for one character");
+        check(Make("*").Find("Orders", 0, out at, out length) && at == 0 && length == 6 && Make("**").Find("Orders", 0, out at, out length) && at == 0 && length == 6,
+            "all-star wildcards (*, **) match non-empty text without Whole Word");
+        check(Make("END END", wholeWord: true).Find("FRIEND END END", 0, out at, out length) && at == 7 && length == 7,
+            "Whole Word advances by one character after a boundary rejection so overlapping valid matches are not skipped");
         check(Make("a+b*c").Find("a+bXc", 0, out at, out _) && at == 0 && Make("[x]?").Find("[x]1", 0, out at, out _) && at == 0, "a wildcard search keeps every other character literal");
         check(SearchMatcher.Wildcard("a**b?c") == "a.*?b.c" && SearchMatcher.Wildcard("*ab*") == "[\\p{L}\\p{Nd}_@#$]*ab[\\p{L}\\p{Nd}_@#$]*", "wildcards become a NonBacktracking pattern");
     }

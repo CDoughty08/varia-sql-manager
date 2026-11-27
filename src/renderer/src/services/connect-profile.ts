@@ -46,8 +46,20 @@ export async function connectBigQueryProfile({ api, connections, targets, backen
       connections.failAttempt(attempt, result.code === 'CANCELLED' ? 'cancelled' : result.connectionFailure ?? 'unknown')
       return { ok: false, error: result.error, ...result.code === 'CANCELLED' ? { cancelled: true as const } : {} }
     }
-    opened = await acceptConnectionReceipt({ api, connections, info: result.value, options, details, attempt, requestId, signal, current: () => !signal.aborted && !documents.getSnapshot().busy })
     const changed = { ok: false as const, error: 'This connection changed while connecting.' }
+    while (documents.getSnapshot().busy) {
+      if (!await whenConnectionDocumentsIdle(documents, signal)) {
+        connections.failAttempt(attempt, signal.aborted ? 'cancelled' : 'unknown')
+        void api.cancelConnectionRequests([requestId]).catch(() => {})
+        return changed
+      }
+    }
+    if (signal.aborted) {
+      connections.failAttempt(attempt, 'cancelled')
+      void api.cancelConnectionRequests([requestId]).catch(() => {})
+      return changed
+    }
+    opened = await acceptConnectionReceipt({ api, connections, info: result.value, options, details, attempt, requestId, signal, current: () => !signal.aborted })
     if (!opened) return changed
     while (documents.getSnapshot().busy) if (!await whenConnectionDocumentsIdle(documents, signal)) return changed
     if (signal.aborted) return changed

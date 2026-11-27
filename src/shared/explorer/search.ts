@@ -199,8 +199,10 @@ export interface BigQueryBulkStatus { readonly locations: number; readonly faile
 export const bigQueryBulkLocations = 64
 /** BigQuery only (SQL Server refuses them): `starredProjects` names the user's starred projects (indexed with details even if
  *  projects.list does not return them, e.g. public or dataset-ACL projects), `allProjects` discovers every accessible project via
- *  projects.list (default true), `maxProjects` caps discovered projects (1..5000, default 500), `scope` re-reads one project or
- *  dataset whole (Object Explorer's Refresh), and `stale` re-reads only the datasets DDL run from a tab marked. */
+ *  projects.list (default true), `maxProjects` caps discovered projects (1..5000, default 500) and `scope` re-reads one project or
+ *  dataset whole (Object Explorer's Refresh). Either engine: `stale` is a check rather than a build, which reads only what DDL
+ *  marked or a search found due (docs/object-search.md, Freshness); with it, SQL Server's `database` (Object Explorer's Refresh on
+ *  a database) or `checkAll` (on the server) checks that database or every one, whatever its age. */
 export interface ObjectIndexParams {
   readonly connectionId: string
   readonly requestId: string
@@ -212,6 +214,8 @@ export interface ObjectIndexParams {
   /** With `scope`: skip all BigQuery API calls when the requested project/dataset is already cleanly covered in the index, and reuse held details instead of forcing re-reads. */
   readonly missingOnly?: true
   readonly stale?: true
+  readonly database?: string
+  readonly checkAll?: true
   /** A full build only: pass 2 reads these locations with the billed bulk queries. */
   readonly bulk?: BigQueryBulkIndex
   /** Either engine: the memory every connection's index shares, in MiB (objectExplorer.search.memoryLimitMiB), from this build
@@ -245,7 +249,8 @@ export interface ObjectIndexStatus {
   readonly bulk?: BigQueryBulkStatus
   /** BigQuery: how many distinct projects the index holds reads for. */
   readonly projects?: number
-  /** BigQuery: the newest DDL stale mark no stale-only build has spent yet (absent when none is left). */
+  /** The newest stale mark (DDL, or a unit a search found due by age) no check has spent yet (absent when none is left): the
+   *  renderer asks one check for each new mark. */
   readonly staleMark?: number
   /** The last full build was stopped before it finished: the index holds only what it read (absent otherwise). */
   readonly stopped?: true
@@ -253,6 +258,20 @@ export interface ObjectIndexStatus {
    *  datasets) they belong to (the server's own and the system objects are in none); each absent when zero. */
   readonly leftOut?: number
   readonly leftOutIn?: number
+  /** BigQuery, UTC: when the oldest dataset loaded from the saved index that no listing has checked yet was read (absent when none is). */
+  readonly savedAt?: string
+  /** Freshness (docs/object-search.md), each absent when there is nothing to say. UTC: when the oldest held database or dataset was
+   *  read, and `saved` when that read came from the saved index. */
+  readonly readAt?: string
+  readonly saved?: true
+  /** UTC: when the unit checked longest ago was last confirmed against its source. */
+  readonly checkedAt?: string
+  /** A check is running. */
+  readonly checking?: true
+  /** Units marked (by DDL, or due by age) and not yet checked. */
+  readonly stale?: number
+  /** Units that cannot be checked yet: a SQL Server read with no fingerprint, a BigQuery dataset loaded and not yet listed. */
+  readonly unverified?: number
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 /** explorer.indexStatus: what a connection's index holds now, without building or searching. */
@@ -370,6 +389,9 @@ export interface ObjectSearchResult {
   readonly problem?: string
 }
 
+/** A saved index's age as the backend states it (ObjectSearchService.SavedAtText): UTC to the second, nothing else. */
+export const savedAtSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+
 /** A build's progress EVENT, as the backend sends it. */
 export const objectIndexProgressEventSchema = z.object({
   type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0),
@@ -377,11 +399,15 @@ export const objectIndexProgressEventSchema = z.object({
   /** BigQuery names pass: projects still being listed may add datasets to the total. */
   growing: z.literal(true).optional(),
   /** BigQuery: its rate limit is refusing the principal's calls, which retry. */
-  throttled: z.literal(true).optional()
+  throttled: z.literal(true).optional(),
+  /** BigQuery, UTC to the second: when the oldest dataset loaded from the saved index that the build has not checked yet was read. */
+  savedAt: savedAtSchema.optional(),
+  /** BigQuery: a full build, which checks what was loaded from the saved index (its savedAt absent once all is checked). */
+  full: z.literal(true).optional()
 }).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
 export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
 /** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
-export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true }
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true; readonly savedAt?: string; readonly full?: true }
 
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)
@@ -398,12 +424,14 @@ export const objectIndexParamsSchema = z.object({
   maxProjects: z.number().int().min(1).max(objectSearchLimits.bigQuery.maxProjectsCap).optional(),
   scope: z.object({ project: bigQueryName('project'), dataset: bigQueryName('dataset').optional() }).strict().optional(),
   missingOnly: z.literal(true).optional(), stale: z.literal(true).optional(),
+  database: units(maxIdentifierLength).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.').optional(), checkAll: z.literal(true).optional(),
   bulk: z.object({
     locations: z.array(bigQueryIndexLocationSchema).min(1).max(bigQueryBulkLocations), maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
     budgetBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
   }).strict().optional(),
   memoryLimitMiB: z.number().int().min(objectSearchLimits.memoryMiB.min).max(objectSearchLimits.memoryMiB.max).optional()
 }).strict().refine(value => !(value.scope && value.stale), 'A refresh is scoped or stale-only, not both.')
+  .refine(value => (value.database === undefined && value.checkAll === undefined) || (value.stale === true && !(value.database !== undefined && value.checkAll)), 'database or checkAll goes with stale, not both.')
   .refine(value => !value.missingOnly || value.scope !== undefined, 'missingOnly requires a scope.')
   .refine(value => !(value.bulk && (value.scope || value.stale)), 'The bulk path reads a full build only.') satisfies z.ZodType<ObjectIndexParams>
 export const bigQueryIndexEstimateRequestSchema = z.object({ connectionId: z.uuid(), definitions: z.boolean().optional(), starredProjects: starredProjectsSchema.optional() }).strict() satisfies z.ZodType<BigQueryIndexEstimateRequest>

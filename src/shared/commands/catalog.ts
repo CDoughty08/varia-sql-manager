@@ -925,7 +925,7 @@ export const commandCatalog = {
   },
   'edit.refreshIntelliSense': {
     title: 'Refresh Local Cache', category: 'Edit', icon: 'refresh', keywords: ['intellisense', 'schema', 'metadata', 'cache'],
-    precondition: 'backendReady && !documentBusy', unavailableHint: 'Connect a SQL query to refresh its IntelliSense cache.',
+    precondition: 'backendReady && !documentBusy', unavailableHint: 'Connect a SQL query to refresh its IntelliSense cache.', providers: both,
     keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
     menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
   },

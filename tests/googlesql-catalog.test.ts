@@ -6,6 +6,7 @@ import {
 import { renderGoogleSqlDocs } from '../src/shared/googlesql/docs'
 import { googleSqlCallContext, scanGoogleSql } from '../src/shared/googlesql/lexer'
 import { googleSqlConfiguration, googleSqlLanguage, googleSqlSignatureHelp, googleSqlSignatureHelpProvider } from '../src/renderer/src/languages/googlesql'
+import { getWordAtText } from 'monaco-editor/editor/common/core/wordHelper.js'
 
 const unique = (list: readonly string[]) => new Set(list).size === list.length
 
@@ -76,6 +77,48 @@ describe('GoogleSQL catalogue', () => {
     expect(language.namespaces.sort()).toEqual(['AEAD', 'HLL_COUNT', 'KEYS', 'NET'])
     expect(googleSqlConfiguration.comments).toEqual({ lineComment: '--', blockComment: ['/*', '*/'] })
     expect(googleSqlConfiguration.autoClosingPairs?.map(pair => pair.open)).toEqual(['(', '[', '\'', '"', '`'])
+    expect(googleSqlConfiguration.wordPattern).toBeInstanceOf(RegExp)
+    const words = (text: string) => text.match(googleSqlConfiguration.wordPattern!) ?? []
+    expect(words('SELECT * FROM project-name.dataset.raw-events')).toEqual(['SELECT', 'FROM', 'project-name', 'dataset', 'raw-events'])
+    expect(words('SELECT * FROM my-proj-2.ds')).toEqual(['SELECT', 'FROM', 'my-proj-2', 'ds'])
+    expect(words('SELECT * FROM ds1.2026q1')).toEqual(['SELECT', 'FROM', 'ds1', '2026q1'])
+    expect(words('SELECT * FROM `my-proj-2.2026q1`')).toEqual(['SELECT', 'FROM', 'my-proj-2', '2026q1'])
+    expect(words('SELECT * FROM `my-proj.ds.2026q1-report`')).toEqual(['SELECT', 'FROM', 'my-proj', 'ds', '2026q1-report'])
+    expect(words('SELECT 1-2')).toEqual(['SELECT', '1', '2'])
+    expect(words('SELECT 10-2')).toEqual(['SELECT', '10', '2'])
+    expect(words('SELECT 1.5, .5, -2.5')).toEqual(['SELECT', '1.5', '.5', '-2.5'])
+    expect(words('SELECT 1.5, .5, -2.5, 10-2')).toEqual(['SELECT', '1.5', '.5', '-2.5', '10', '2'])
+    expect(words('SELECT 10-2.5')).toEqual(['SELECT', '10', '2.5'])
+    expect(words('SELECT -2.5')).toEqual(['SELECT', '-2.5'])
+    expect(words('SELECT a - b -- comment')).toEqual(['SELECT', 'a', 'b', 'comment'])
+    expect(words('SELECT a--comment')).toEqual(['SELECT', 'a', 'comment'])
+    expect(words('SELECT * FROM my-project--comment')).toEqual(['SELECT', 'FROM', 'my-project', 'comment'])
+    expect(words('SELECT * FROM my-proj.123-456_tbl')).toEqual(['SELECT', 'FROM', 'my-proj', '123-456_tbl'])
+    expect(words('SELECT * FROM 123-456_tbl')).toEqual(['SELECT', 'FROM', '123-456_tbl'])
+    expect(words('SELECT * FROM my-proj.123-')).toEqual(['SELECT', 'FROM', 'my-proj', '123-'])
+    expect(words('SELECT * FROM gcp-123abc')).toEqual(['SELECT', 'FROM', 'gcp-123abc'])
+    expect(words('SELECT * FROM my-project-123456.2024e1')).toEqual(['SELECT', 'FROM', 'my-project-123456', '2024e1'])
+    expect(words('SELECT a -- comment-word')).toEqual(['SELECT', 'a', 'comment-word'])
+    expect(words('SELECT * FROM my-proj.123--comment-word')).toEqual(['SELECT', 'FROM', 'my-proj', '123', 'comment-word'])
+    expect(words('SELECT 100-50')).toEqual(['SELECT', '100', '50'])
+    // Trailing hyphen keeps `leadingWord` non-empty in Monaco SuggestModel._onNewContext on backspace/incomplete retrigger.
+    const wordAt = (sqlWithCaret: string) => {
+      const col = sqlWithCaret.indexOf('|') + 1
+      const line = sqlWithCaret.replace('|', '')
+      return getWordAtText(col, googleSqlConfiguration.wordPattern!, line, 0)
+    }
+    expect(wordAt('SELECT * FROM my-project-|')).toEqual({ word: 'my-project-', startColumn: 15, endColumn: 26 })
+    expect(wordAt('SELECT * FROM my-|')).toEqual({ word: 'my-', startColumn: 15, endColumn: 18 })
+    expect(wordAt('SELECT * FROM my-project-| ds')).toEqual({ word: 'my-project-', startColumn: 15, endColumn: 26 })
+    expect(wordAt('SELECT * FROM my-project-123|')).toEqual({ word: 'my-project-123', startColumn: 15, endColumn: 29 })
+    expect(wordAt('SELECT * FROM my-proj.123-456_tbl|')).toEqual({ word: '123-456_tbl', startColumn: 23, endColumn: 34 })
+    expect(wordAt('SELECT * FROM my-proj.123-|')).toEqual({ word: '123-', startColumn: 23, endColumn: 27 })
+    expect(wordAt('SELECT * FROM gcp-123abc|')).toEqual({ word: 'gcp-123abc', startColumn: 15, endColumn: 25 })
+    expect(wordAt('SELECT * FROM my-project-123456.2024e1|')).toEqual({ word: '2024e1', startColumn: 33, endColumn: 39 })
+    expect(wordAt('SELECT a--comment|')).toEqual({ word: 'comment', startColumn: 11, endColumn: 18 })
+    expect(wordAt('SELECT a -- comment-word|')).toEqual({ word: 'comment-word', startColumn: 13, endColumn: 25 })
+    expect(wordAt('SELECT 100-50|')).toEqual({ word: '50', startColumn: 12, endColumn: 14 })
+    expect(('123-'.repeat(2000) + '456').match(googleSqlConfiguration.wordPattern!)?.length).toBe(2001)
   })
 
   it('keeps docs/googlesql.md in sync', async () => {

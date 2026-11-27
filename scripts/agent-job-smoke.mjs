@@ -12,7 +12,10 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, editorSurface, gridPart, liveGrid, part, quickInputRows, statusBar, submitConnect, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import {
+  chooseJamMoreAction, closeDocumentButton, connectDialogWindow, documentFrame, documentState, documentTab, documentVerb, editorSurface, gridPart, inspectorPanel, inspectorTab, inspectorTabs,
+  liveGrid, part, quickInputRows, statusBar, stepCardFlowGeometry, submitConnect, toolbarButton, unsavedMark
+} from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -58,7 +61,9 @@ try {
   await expect(documentState(job('Nightly'))).toContainText('Idle · Last run failed')
   // The header can already show the state from Job Activity Monitor's snapshot before the watched subscribe lands in calls.jsonl.
   await expect.poll(async () => (await calls('live.subscribe')).some(call => call.source === 'agent.jobs' && call.args?.watch?.length === 1 && call.probes.some(probe => probe.probe === 'agent.jobs.watched'))).toBe(true)
+  await inspectorTab(job('Nightly'), 'Notifications & Alerts').click()
   await expect(job('Nightly').getByRole('table', { name: 'Alerts that run this job', exact: true })).toContainText('Nightly failed')
+  await inspectorTab(job('Nightly'), 'General').click()
   // Enter on another selected job opens a second tab; the first stays open.
   await documentTab(page, 'Job Activity Monitor - server-a').click()
   await jobCell('Backup').click()
@@ -74,8 +79,8 @@ try {
   step = 'history'
   // History (AG-6d): one agent.history view of this job with its usual durations; the newest run is selected with its failed step's
   // message open, and the step's SSIS execution link opens that execution's messages document (AG-13).
-  await job('Nightly').getByRole('button', { name: 'History', exact: true }).click()
-  const history = job('Nightly').getByRole('group', { name: 'History', exact: true })
+  await inspectorTab(job('Nightly'), 'History').click()
+  const history = inspectorPanel(job('Nightly'))
   await expect(history.getByRole('list', { name: 'Runs', exact: true }).getByRole('button')).toHaveCount(2)
   await expect(history.getByRole('button', { name: /Failed at step 2/ })).toHaveAttribute('aria-pressed', 'true')
   await expect(history.getByRole('img', { name: /^Durations of the last 2 runs, 1 failed; usual 2 s$/ })).toBeVisible()
@@ -103,13 +108,14 @@ try {
   await expect(picked).toContainText('The job succeeded.')
   await expect(picked).not.toContainText('The job failed.')
   await page.screenshot({ path: 'artifacts/agent-job-history-dark.png' })
-  await job('Nightly').getByRole('button', { name: 'General', exact: true }).click()
+  await inspectorTab(job('Nightly'), 'General').click()
   console.log('History passed: the job\'s runs with the usual time, the failed step\'s message open, the SSIS execution link and the Failed filter.')
 
   step = 'save'
   // An edit counts on Save; Save sends only what changed with the version it read, then reads the job again.
   await job('Nightly').getByLabel('Description', { exact: true }).fill('Nightly integrity and index care.')
   await expect(verb('Nightly', 'Save · 1 change')).toBeEnabled()
+  await inspectorTab(job('Nightly'), 'Notifications & Alerts').click()
   await job('Nightly').getByRole('button', { name: 'Remove Nightly failed', exact: true }).click()
   await verb('Nightly', 'Save · 2 changes').click()
   await expect(job('Nightly').getByRole('status').filter({ hasText: 'The job was saved.' })).toBeVisible()
@@ -117,6 +123,7 @@ try {
     agentJob: { version: 3, modified: '2026-11-10T09:15:30.120', description: 'Nightly integrity and index care.', removeAlerts: [{ id: 7, name: 'Nightly failed' }] } })
   await expect(verb('Nightly', 'Save')).toBeVisible()
   await expect(job('Nightly').getByText('No alert runs this job.', { exact: true })).toBeVisible()
+  await inspectorTab(job('Nightly'), 'General').click()
   console.log('Save passed: Save sends the changes with the version it read and the document reads the saved job.')
 
   step = 'stale'
@@ -139,7 +146,8 @@ try {
 
   step = 'schedules'
   // The Schedules section: New schedule from a preset with its sentence and next runs, and a shared schedule found by search and attached.
-  const section = job('Nightly').getByRole('group', { name: /^Schedules/ })
+  await inspectorTab(job('Nightly'), 'Schedules').click()
+  const section = inspectorPanel(job('Nightly'))
   await expect(section.getByRole('button', { name: /Nightly 02:30/ })).toBeVisible()
   await section.getByRole('button', { name: 'New schedule', exact: true }).click()
   // A schedule that blocks Save says so on its row and under the list, even while another is selected.
@@ -170,9 +178,9 @@ try {
   await expect(documentTab(page, 'Schedules')).toHaveAttribute('aria-selected', 'true')
   const grid = page.getByRole('table', { name: 'Schedules', exact: true })
   await expect(grid.getByRole('button', { name: 'Weekly reports', exact: true })).toBeVisible()
-  await grid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true }).click()
+  await grid.getByRole('switch', { name: 'Enabled: Nightly 02:30', exact: true }).click()
   await expect.poll(async () => (await scheduleSaves()).at(-1)).toMatchObject({ target: { kind: 'agent' }, agentSchedule: { op: 'disable', schedule: { id: 1, version: 2 } } })
-  await expect(grid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true })).not.toBeChecked()
+  await expect(grid.getByRole('switch', { name: 'Enabled: Nightly 02:30', exact: true })).not.toBeChecked()
   await grid.getByRole('button', { name: 'Quarter end', exact: true }).click()
   const detail = page.getByRole('region', { name: 'Schedule Quarter end', exact: true })
   await detail.getByLabel('Name', { exact: true }).fill('Quarter close')
@@ -208,6 +216,7 @@ try {
   step = 'steps'
   // Steps (AG-6b): pick a step, point its failure at another, move a step to the top (its targets follow), Parse, delete with Undo, and
   // Save sends the planner's renumbering with the Start step.
+  await inspectorTab(job('Nightly'), 'Steps').click()
   const list = job('Nightly').getByRole('listbox', { name: 'Steps', exact: true })
   await expect(list.getByRole('option')).toHaveCount(3)
   await list.getByRole('option', { name: /Rebuild indexes/ }).click()
@@ -272,6 +281,20 @@ try {
   expect((await saves()).at(-1).agentJob.steps.writes.find(write => write.name === 'Rebuild indexes')).toMatchObject({ subsystem: 'PowerShell', command: 'Write-Output "Grüße"\r\nGet-ChildItem D:\\Backups\r\n' })
   console.log('Load from file passed: the step type\'s filter, the text as one undoable edit, and Save writes it.')
 
+  step = 'step card geometry'
+  // Balanced 3-column step cards: mixed TSQL, SSIS, and PowerShell cards share identical 44px badge width and aligned ✓/✗ X-offsets.
+  await list.getByRole('option', { name: /Check integrity/ }).click()
+  await job('Nightly').getByRole('group', { name: 'Step 2: Check integrity', exact: true }).getByRole('radio', { name: 'SSIS package', exact: true }).click()
+  const geo = await stepCardFlowGeometry(list)
+  expect(geo.map(row => row.typeText)).toEqual(['TSQL', 'SSIS', 'PS'])
+  expect([...new Set(geo.map(row => row.typeWidth))]).toEqual([44])
+  expect(new Set(geo.map(row => row.okX)).size).toBe(1)
+  expect(new Set(geo.map(row => row.badX)).size).toBe(1)
+  expect(geo.every(row => row.okHeight > 0 && row.okHeight <= 20 && row.badHeight > 0 && row.badHeight <= 20)).toBe(true)
+  await verb('Nightly', 'Reload').click()
+  await expect(verb('Nightly', 'Save')).toBeVisible()
+  console.log('Step card geometry passed: TSQL, SSIS, and PS cards align ✓ and ✗ columns at identical X-offsets.')
+
   step = 'new job'
   // New Job from the palette: Copy an existing job fills General and Notifications; Create adds the job.
   await page.keyboard.press('F1')
@@ -283,8 +306,10 @@ try {
   await panel.getByRole('button', { name: /Copy an existing job/ }).click()
   await quickInputRows(page).filter({ hasText: 'Backup' }).click()
   const draft = documentFrame(page, 'Copy of Backup')
+  await inspectorTab(draft, 'General').click()
   await expect(draft.getByLabel('Description', { exact: true })).toHaveValue('Backup maintenance.')
   // Copy an existing job opens Create Job Like This (AG-6e): Changes from source holds a Name of its own beside General's.
+  await inspectorTab(draft, 'Changes from source').click()
   await draft.getByRole('group', { name: 'Job', exact: true }).getByLabel('Name', { exact: true }).fill('Backup weekly')
   await documentVerb(documentFrame(page, 'Backup weekly'), 'Backup weekly', 'Create').click()
   await expect(documentTab(page, 'Job Properties - Backup weekly')).toHaveAttribute('aria-selected', 'true')
@@ -296,7 +321,9 @@ try {
 
   step = 'new alert'
   // The job document's Alerts section opens New Alert with the job as its response; Create sends one agentAlert action on the Agent node.
-  await documentFrame(page, 'Backup weekly').getByRole('button', { name: 'New alert for this job…', exact: true }).click()
+  const backupWeekly = documentFrame(page, 'Backup weekly')
+  await inspectorTab(backupWeekly, 'Notifications & Alerts').click()
+  await backupWeekly.getByRole('button', { name: 'New alert for this job…', exact: true }).click()
   await expect(documentTab(page, 'New Alert')).toHaveAttribute('aria-selected', 'true')
   await documentFrame(page, 'New Alert').getByLabel('Name', { exact: true }).fill('Backup weekly late')
   const alert = documentFrame(page, 'Backup weekly late')
@@ -341,10 +368,10 @@ try {
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
   await expect(documentTab(page, 'Job Activity Monitor - server-a')).toHaveAttribute('aria-selected', 'true')
   await jobCell('Backup').click()
-  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'Create Job Like This…')
   const like = documentFrame(page, 'Copy of Backup')
-  await expect(like.getByRole('navigation', { name: 'Sections', exact: true }).getByRole('button').first()).toContainText('Changes from source')
-  await expect(like.getByRole('group', { name: 'Job', exact: true }).getByRole('checkbox', { name: 'Enable when saved', exact: true })).not.toBeChecked()
+  await expect(inspectorTabs(like).getByRole('tab').first()).toContainText('Changes from source')
+  await expect(like.getByRole('group', { name: 'Job', exact: true }).getByRole('switch', { name: 'Enable when saved', exact: true })).not.toBeChecked()
   await expect(like.getByRole('group', { name: /^Step 1 / })).toContainText('Database')
   await like.getByLabel('Find', { exact: true }).fill('Backup')
   await like.getByLabel('Replace with', { exact: true }).fill('Archive')
@@ -370,7 +397,7 @@ try {
   // editor opens a row as a job tab whose edits come back as Other changes; each row is created on its own, then Enable the created jobs.
   await chooseExplorerMenuItem(page, ['server-a', 'SQL Server Agent'], 'Job Activity Monitor')
   await jobCell('Backup').click()
-  await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+  await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'Create Job Like This…')
   await documentFrame(page, 'Copy of Backup').getByRole('button', { name: 'Create several…', exact: true }).click()
   const several = documentFrame(page, 'Create several jobs')
   await expect(documentTab(page, 'Create several jobs')).toHaveAttribute('aria-selected', 'true')
@@ -386,6 +413,7 @@ try {
   await several.getByRole('button', { name: 'Open full editor', exact: true }).click()
   await expect(documentTab(page, 'Row 2 · Backup HR')).toHaveAttribute('aria-selected', 'true')
   const rowEditor = documentFrame(page, 'Backup HR')
+  await inspectorTab(rowEditor, 'General').click()
   await rowEditor.getByLabel('Description', { exact: true }).fill('HR backups.')
   await rowEditor.getByRole('button', { name: 'Back to the table', exact: true }).click()
   await expect(documentTab(page, 'Create several jobs')).toHaveAttribute('aria-selected', 'true')
@@ -424,7 +452,7 @@ try {
   await quickInputRows(page).filter({ hasText: 'Manage Schedules' }).first().click()
   await expect(documentTab(page, 'Schedules')).toHaveAttribute('aria-selected', 'true')
   const scheduleGrid = page.getByRole('table', { name: 'Schedules', exact: true })
-  const nightlyEnabled = scheduleGrid.getByRole('checkbox', { name: 'Enabled: Nightly 02:30', exact: true })
+  const nightlyEnabled = scheduleGrid.getByRole('switch', { name: 'Enabled: Nightly 02:30', exact: true })
   if (!await nightlyEnabled.isChecked()) {
     await nightlyEnabled.click()
     await expect(nightlyEnabled).toBeChecked()

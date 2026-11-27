@@ -252,7 +252,7 @@ export interface RestoreServerFacts {
   readonly destinations: readonly RestoreDestination[]
   readonly destinationsTruncated: boolean
   /** Other databases' files (sys.master_files), so two databases never get one Restore As path. */
-  readonly files: readonly { readonly database: string; readonly path: string }[]
+  readonly files: readonly { readonly database: string; readonly path: string; readonly logical?: string }[]
   readonly filesTruncated: boolean
 }
 /** A restore describe's answer: `server` with history and devices; the databases with history; the sets; one set's files. */
