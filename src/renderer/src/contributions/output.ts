@@ -280,7 +280,14 @@ export function outputContribution({ commands, results, queries, menuTargets, do
     commands.register('output.saveResultsAs', {
       unavailable: args => liveOf(args) ? undefined : noResults,
       // A query's result sets, or a live view's grid with rows (which has no query, so no hasResultSets precondition).
-      when: args => { const live = liveOf(args); return live ? live.hasRows() && (live.canSave?.() ?? true) : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
+      // Non-live, non-grid invocations require a focused saveable entry so Summary never exposes Save Results As as a no-op.
+      when: args => {
+        const live = liveOf(args)
+        if (live) return live.hasRows() && (live.canSave?.() ?? true)
+        const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
+        if (!hasResultSets(tabId)) return false
+        return target?.view === 'grid' ? target.entry !== undefined : results.focusedEntry(tabId) !== undefined
+      },
       run: async args => {
         const live = liveOf(args)
         if (live) { if (live.hasRows() && (live.canSave?.() ?? true)) live.save(); return }

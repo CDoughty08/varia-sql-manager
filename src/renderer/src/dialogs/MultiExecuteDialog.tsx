@@ -5,7 +5,7 @@ import { dryRunLimits, incompleteText, pricedBytes, type BigQueryDryRunResult } 
 import { environmentPreset } from '../../../shared/environments'
 import { classifyStatements, type StatementClassification } from '../../../shared/multi-query'
 import type { ProviderId } from '../../../shared/providers'
-import { focusToReturn, returnFocusTo } from '../core/focus'
+import { focusToReturn, isElement, returnFocusTo } from '../core/focus'
 import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
 import DialogFooter from '../kit/DialogFooter'
@@ -177,13 +177,20 @@ export function MultiExecuteDialogModal({
   const [stopOnError, setStopOnError] = useState<boolean>(() => !isBigQuery && !!request.defaultStopOnError)
   const [showAllTargets, setShowAllTargets] = useState(false)
 
-  // If dry run dynamically discovers BigQuery emulator mode while transaction is selected, fall back to Fire and Forget.
+  // If dry run dynamically discovers BigQuery emulator mode, disable pre-flight dry run and fall back to Fire and Forget.
   useEffect(() => {
-    if (txDisabled && mode === 'transaction') {
-      setMode('fireAndForget')
-      if (hasEmulator) setPreflightDryRun(false)
-    }
+    if (hasEmulator) setPreflightDryRun(false)
+    if (txDisabled && mode === 'transaction') setMode('fireAndForget')
   }, [txDisabled, mode, hasEmulator])
+
+  // When Coordinated Transaction becomes disabled while focused, move focus to Fire and Forget so Escape/Tab never break.
+  useEffect(() => {
+    if (!txDisabled) return
+    const active = ownerDocument.activeElement
+    if (!active || active === ownerDocument.body || active === txRadioRef.current) {
+      fafRadioRef.current?.focus()
+    }
+  }, [txDisabled, ownerDocument])
 
   // Initial focus lands on the active radio input (never on Execute); focus returns on unmount.
   useEffect(() => {
@@ -231,7 +238,7 @@ export function MultiExecuteDialogModal({
     onConfirm({
       mode: effectiveMode,
       sequential: effectiveMode === 'fireAndForget' ? sequential : false,
-      preflightDryRun: isBigQuery ? preflightDryRun : false,
+      preflightDryRun: isBigQuery && !hasEmulator ? preflightDryRun : false,
       stopOnError: !isBigQuery && effectiveMode === 'fireAndForget' ? stopOnError : false,
       autoCombine: true
     })
@@ -246,7 +253,7 @@ export function MultiExecuteDialogModal({
       return
     }
     // Keyboard safety: when PROD + mutation is present, a stray Enter on a radio/checkbox must not submit immediately.
-    if (event.key === 'Enter' && hasProd && isMutation && event.target instanceof HTMLElement && event.target.tagName === 'INPUT') {
+    if (event.key === 'Enter' && hasProd && isMutation && isElement(event.target) && event.target.tagName === 'INPUT') {
       event.preventDefault()
     }
   }
@@ -435,7 +442,8 @@ export function MultiExecuteDialogModal({
                 <label className="checkbox-label">
                   <input
                     type="checkbox"
-                    checked={preflightDryRun}
+                    disabled={hasEmulator}
+                    checked={!hasEmulator && preflightDryRun}
                     onChange={event => setPreflightDryRun(event.target.checked)}
                   />
                   <span>Pre-flight Dry Run (free)</span>

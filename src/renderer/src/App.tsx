@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BackendHealth, BackendState, ProviderConnectionOptions } from '../../shared/contracts'
-import type { ConnectionDetailField, ConnectionDetails } from '../../shared/connection-targets'
+import type { ConnectionDetailField, ConnectionDetails, ConnectionTarget } from '../../shared/connection-targets'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { isLiveConnection } from './services/connection-availability'
@@ -39,14 +39,15 @@ import ConnectDialog from './ConnectDialog'
 import { busyRequestNotice, nextConnectReconnecting, planConnectRequest, type ConnectIncomingRequest, type ConnectRequestTrigger } from './connect-form'
 import ConnectionDetailsDialog from './ConnectionDetailsDialog'
 import DisconnectDialog from './disconnect/DisconnectDialog'
-import { detailsOf, type ConnectionAttempt, type TargetConnectionInfo } from './services/connections'
+import { detailsOf, type ConnectionAttempt, type LiveConnection, type TargetConnectionInfo } from './services/connections'
 import { executePendingQuery, finishConnectionDetails, needsDetailsConfirmation, whenConnectionDocumentsIdle, withChangedDetails, yieldReviewToClose, type OpenedConnection } from './services/connection-opening'
 import { acceptConnectionReceipt } from './services/connection-receipts'
 import { focusWhenDrawn } from './core/modal'
 import { nextFrame } from './core/frame'
 import EnvironmentDialog from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
-import { environmentTag } from '../../shared/environments'
+import { environmentPreset, environmentTag } from '../../shared/environments'
+import { resolveMultiTargets } from './MultiTargetPopover'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import PeekCard from './explorer/PeekCard'
@@ -73,12 +74,52 @@ function useStableCallback<A extends unknown[], R>(callback: (...args: A) => R):
   return useCallback((...args: A) => latest.current(...args), [])
 }
 
+/** Computes the default window status bar's accent color and PROD environment tag for single- or multi-target tabs. */
+export function statusBarAppearance(
+  tab: Pick<QueryTab, 'multiMode' | 'multiTargets'>,
+  connection: Pick<LiveConnection, 'color' | 'displayName' | 'server' | 'options'> | undefined,
+  connections: readonly LiveConnection[],
+  rememberedTargets: readonly ConnectionTarget[]
+): { readonly accentColor?: string; readonly environment?: string; readonly environmentAbout?: string } {
+  if (!tab.multiMode) {
+    return {
+      accentColor: connection?.color,
+      environment: connection?.options.environment,
+      environmentAbout: connection?.displayName || connection?.server
+    }
+  }
+  const multiEnabled = resolveMultiTargets(tab, connections, rememberedTargets).filter(item => item.target.enabled)
+  const prodTargets = multiEnabled.filter(item => environmentPreset(item.environment) === 'Production')
+  const prodTarget = prodTargets[0]
+  const accentColor = prodTarget
+    ? (prodTarget.color ?? 'red')
+    : tab.multiMode === 'cross'
+      ? 'purple'
+      : multiEnabled.find(item => item.color)?.color
+  return {
+    accentColor,
+    environment: prodTargets.length > 0 ? 'Production' : undefined,
+    environmentAbout: prodTargets.length > 0
+      ? `${prodTargets.length} Production ${prodTargets.length === 1 ? 'target' : 'targets'}`
+      : undefined
+  }
+}
+
+/** Whether a live reconnect target may reattach to `tab` (never hijacks multi-target tabs or tabs with no targetId). */
+export function canReattachTabOnReconnect(
+  tab: Pick<QueryTab, 'multiMode' | 'targetId' | 'kind'> | undefined,
+  lost: { readonly targetId?: string }
+): boolean {
+  return !!tab && !tab.multiMode && !!tab.targetId && tab.targetId === lost.targetId && isQueryDocument(tab)
+}
+
 export default function App() {
   const workbench = useWorkbench()
   const { documents, queries, commands, files, targets } = workbench
   const { documents: tabs, activeId } = useServiceSnapshot(documents)
   const queryState = useServiceSnapshot(queries)
   const connections = useServiceSnapshot(workbench.connections)
+  const rememberedTargets = useServiceSnapshot(targets)
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
@@ -151,7 +192,11 @@ export default function App() {
   // moving between the two does not resize the editor each time.
   const yieldsOutput = !!active.id && !isQuery && !queryInSplit
   useEffect(() => { workspaceRef.current?.yieldOutput(yieldsOutput) }, [yieldsOutput])
-  const accent = useConnectionAccent(connection?.color)
+  const statusAppearance = statusBarAppearance(active, connection, connections, rememberedTargets)
+  const accent = useConnectionAccent(statusAppearance.accentColor)
+  const statusEnvironmentTag = environmentTag(statusAppearance.environment)
+    ? <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={statusAppearance.environment} place="status" about={statusAppearance.environmentAbout} /></span>
+    : null
   const versions = health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined
 
   // The active query's facts are in the window's status bar. Options can bring back SSMS's query window status bar, below
@@ -204,7 +249,7 @@ export default function App() {
       if (!lost) return
       const tab = documents.active
       if (workbench.connections.isLive(lost.id)) {
-        if (tab && tab.targetId === lost.targetId && isQueryDocument(tab)) void targets.changeConnection(tab.id, lost.id)
+        if (canReattachTabOnReconnect(tab, lost)) void targets.changeConnection(tab!.id, lost.id)
         return
       }
       triggerConnect({
@@ -244,6 +289,7 @@ export default function App() {
     const subscription = workbench.events.subscribe(event => {
       // As in SSMS, executing shows the results (even when Ctrl+R hid them); background tabs must not steal the editor.
       if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput(activeOutputView())
+      if (event.type === 'query.outputSelected' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput(event.view)
       if (event.type === 'query.estimateStarted' && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.revealOutput('plan')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
@@ -371,11 +417,11 @@ export default function App() {
     {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !activeConnected ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
       {compactConnection ? <>
-        {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
+        {statusEnvironmentTag}
         <span className="backend-status compact" title={backendTooltip}><span className="status-dot online" /><span className="visually-hidden">Ready</span></span>
       </> : <>
         <span className="backend-status" title={backendTooltip}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>
-        {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
+        {statusEnvironmentTag}
       </>}
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><IndexStatus /><EditorStatus /><DiscardStatus /><MemoryIndicator /><UpdateStatus /><AgentJobStatus />
     </footer>

@@ -591,3 +591,225 @@ describe('executeMultiTab: Cross-Engine orchestration, read-only guard, and mult
     expect(finishedCalls.at(-1)).toMatchObject({ code: 'READ_ONLY_VIOLATION' })
   })
 })
+
+describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt mooting', () => {
+  it('refuses with warning instead of dispatching stale targets if a target disconnects or is disabled while MultiExecuteDialog is open', async () => {
+    const s1 = sqlConnection(1)
+    const s2 = sqlConnection(2)
+    const liveIds = new Set([s1.id, s2.id])
+    const h = createHarness({ connections: [s1, s2] })
+    const deps: MultiExecuteDeps = {
+      ...h.deps,
+      connections: { get: id => h.deps.connections.get(id), isLive: id => liveIds.has(id) }
+    }
+    const doc = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'sqlserver',
+      sql: 'UPDATE dbo.Items SET Active = 1;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: s2.targetId, connectionId: s2.id, database: 'Sales', enabled: true, provider: 'sqlserver' }
+      ]
+    })
+
+    // Case 1: target 2 disconnects while dialog is open.
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      liveIds.delete(s2.id)
+      return { mode: 'transaction', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    const disconnected = await executeMultiTab(doc.id, deps)
+    expect(disconnected).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.notifications.at(-1)?.severity).toBe('warning')
+    expect(h.notifications.at(-1)?.message).toContain('sql-srv-02')
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // Case 2: target 2 is disabled in document.multiTargets while dialog is open.
+    liveIds.add(s2.id)
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      h.docs.documents.updateMultiTarget(doc.id, 1, { enabled: false })
+      return { mode: 'transaction', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    const disabled = await executeMultiTab(doc.id, deps)
+    expect(disabled).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // Case 3: documents becomes busy before dispatch.
+    h.docs.documents.updateMultiTarget(doc.id, 1, { enabled: true })
+    let isBusy = false
+    let modeOverride: 'same' | 'cross' | undefined
+    const busyDeps: MultiExecuteDeps = {
+      ...deps,
+      documents: {
+        get: id => {
+          const current = h.docs.documents.get(id)
+          return current && id === doc.id && modeOverride ? { ...current, multiMode: modeOverride } : current
+        },
+        getExecuteText: id => h.docs.documents.getExecuteText(id),
+        getCrossEngineScripts: id => h.docs.documents.getCrossEngineScripts(id),
+        getSnapshot: () => ({ ...h.docs.documents.getSnapshot(), busy: isBusy })
+      }
+    }
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      isBusy = true
+      return { mode: 'fireAndForget', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    const busyOutcome = await executeMultiTab(doc.id, busyDeps)
+    expect(busyOutcome).toEqual({ status: 'refused', reason: 'busy' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // Case 4: document.multiMode changes while dialog is open.
+    isBusy = false
+    h.dialogAskSpy.mockImplementationOnce(async () => {
+      modeOverride = 'cross'
+      return { mode: 'fireAndForget', sequential: false, preflightDryRun: false, stopOnError: false, autoCombine: true }
+    })
+    const modeChanged = await executeMultiTab(doc.id, busyDeps)
+    expect(modeChanged).toEqual({ status: 'cancelled' })
+    expect(h.executeMultiCalls).toHaveLength(0)
+  })
+
+  it('refuses 1-target shortcut and Cross-Engine runs with warning if a target disconnects during async dry run / cost prompt', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const liveIds = new Set([s1.id, b1.id])
+    const h = createHarness({
+      connections: [s1, b1],
+      dryRuns: { [b1.id]: { ok: true, value: { bytesProcessed: 15 * GiB } } }
+    })
+    const deps: MultiExecuteDeps = {
+      ...h.deps,
+      connections: { get: id => h.deps.connections.get(id), isLive: id => liveIds.has(id) }
+    }
+
+    // 1-target BigQuery shortcut: target disconnects during cost prompt.
+    const sameDoc = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT * FROM analytics.events',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    h.singleAskSpy.mockImplementationOnce(async () => {
+      liveIds.delete(b1.id)
+      return { run: true }
+    })
+    const singleRefused = await executeMultiTab(sameDoc.id, deps)
+    expect(singleRefused).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.notifications.at(-1)?.severity).toBe('warning')
+    expect(h.executeMultiCalls).toHaveLength(0)
+
+    // Cross-Engine: SQL Server target disconnects during BigQuery cost prompt.
+    liveIds.add(b1.id)
+    const crossDoc = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    h.multiAskSpy.mockImplementationOnce(async () => {
+      liveIds.delete(s1.id)
+      return { run: true }
+    })
+    const crossRefused = await executeMultiTab(crossDoc.id, deps)
+    expect(crossRefused).toEqual({ status: 'refused', reason: 'targetsChanged' })
+    expect(h.notifications.at(-1)?.message).toContain('sql-srv-01')
+    expect(h.executeMultiCalls).toHaveLength(0)
+  })
+
+  it('passes stillAsks to costPrompts.ask and costPrompts.askMulti so Dont ask again moots queued prompts for the same project', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const docs = documentFixture()
+    const conns = new Map<string, LiveConnection>([[s1.id, s1], [b1.id, b1]])
+    const declined = new Set<string>()
+    let settingValues: SettingsValues = { ...defaultSettings }
+    const costPrompts = new CostPromptService()
+    const multiExecutePrompts = new MultiExecutePromptService()
+    const executeMulti = vi.fn(async () => {})
+    const deps: MultiExecuteDeps = {
+      documents: docs.documents,
+      connections: { get: id => conns.get(id), isLive: id => conns.has(id) },
+      queries: { isRunning: () => false, executeMulti, refuseReadOnly: vi.fn() },
+      settings: { get: <K extends SettingKey>(key: K) => settingValues[key] },
+      api: { bigQueryDryRun: vi.fn(async () => ({ ok: true as const, value: { bytesProcessed: 20 * GiB } })) },
+      optOut: {
+        asks: conn => !declined.has(conn.id),
+        refresh: async () => {},
+        dontAsk: async conn => { declined.add(conn.id) },
+        threshold: () => undefined
+      },
+      costPrompts,
+      multiExecutePrompts,
+      notify: vi.fn(),
+      disableIncompleteWarning: async () => { settingValues = { ...settingValues, 'queryExecution.bigQuery.incompleteEstimateWarning': false } }
+    }
+
+    // 1. Two queued 1-target BigQuery prompts for the same project.
+    const tab1 = docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT 1 FROM analytics.a',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    const tab2 = docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT 2 FROM analytics.b',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+
+    const run1 = executeMultiTab(tab1.id, deps)
+    const run2 = executeMultiTab(tab2.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    const firstPrompt = costPrompts.getSnapshot().pending
+    expect(firstPrompt).toBeDefined()
+    costPrompts.answer(firstPrompt!.id, { run: true, dontAskAgain: true })
+
+    // Second prompt must be mooted immediately without appearing on screen.
+    expect(costPrompts.getSnapshot().pending).toBeUndefined()
+    await expect(run1).resolves.toEqual({ status: 'executed', mode: 'fireAndForget', targetCount: 1, skippedDialog: true })
+    await expect(run2).resolves.toEqual({ status: 'executed', mode: 'fireAndForget', targetCount: 1, skippedDialog: true })
+    expect(executeMulti).toHaveBeenCalledTimes(2)
+
+    // 2. Two queued Cross-Engine multi-project prompts for the same project.
+    declined.clear()
+    const cross1 = docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 1 FROM analytics.a',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    const cross2 = docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 2',
+      bigQuerySql: 'SELECT 2 FROM analytics.b',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+
+    const cRun1 = executeMultiTab(cross1.id, deps)
+    const cRun2 = executeMultiTab(cross2.id, deps)
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+
+    const firstMulti = costPrompts.getSnapshot().pendingMulti
+    expect(firstMulti).toBeDefined()
+    costPrompts.answer(firstMulti!.id, { run: true, dontAskAgain: true })
+
+    // Second cross-engine prompt must be mooted immediately.
+    expect(costPrompts.getSnapshot().pendingMulti).toBeUndefined()
+    await expect(cRun1).resolves.toEqual({ status: 'executed', mode: 'crossEngineReadOnly', targetCount: 2 })
+    await expect(cRun2).resolves.toEqual({ status: 'executed', mode: 'crossEngineReadOnly', targetCount: 2 })
+    expect(executeMulti).toHaveBeenCalledTimes(4)
+
+    costPrompts.dispose()
+    multiExecutePrompts.dispose()
+  })
+})
