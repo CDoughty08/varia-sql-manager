@@ -40,6 +40,109 @@ export const googleSqlOperatorWords = [
 /** Functions GoogleSQL also accepts without parentheses (`SELECT CURRENT_DATE`). */
 export const googleSqlNiladicFunctions = ['CURRENT_DATE', 'CURRENT_DATETIME', 'CURRENT_TIME', 'CURRENT_TIMESTAMP'] as const
 
+/** Date/time part granularities accepted by EXTRACT and *_TRUNC/*_DIFF/LAST_DAY functions. */
+export const googleSqlDateParts = [
+  'YEAR', 'ISOYEAR', 'QUARTER', 'MONTH', 'WEEK', 'ISOWEEK', 'DAY', 'DAYOFWEEK', 'DAYOFYEAR',
+  'HOUR', 'MINUTE', 'SECOND', 'MILLISECOND', 'MICROSECOND', 'DATE', 'DATETIME', 'TIME'
+] as const
+export type GoogleSqlDatePart = typeof googleSqlDateParts[number]
+
+const datePartsDate: readonly GoogleSqlDatePart[] = ['DAY', 'WEEK', 'ISOWEEK', 'MONTH', 'QUARTER', 'YEAR', 'ISOYEAR']
+const datePartsTime: readonly GoogleSqlDatePart[] = ['MICROSECOND', 'MILLISECOND', 'SECOND', 'MINUTE', 'HOUR']
+const datePartsDateTime: readonly GoogleSqlDatePart[] = ['MICROSECOND', 'MILLISECOND', 'SECOND', 'MINUTE', 'HOUR', 'DAY', 'WEEK', 'ISOWEEK', 'MONTH', 'QUARTER', 'YEAR', 'ISOYEAR']
+const datePartsTimestampDiff: readonly GoogleSqlDatePart[] = ['MICROSECOND', 'MILLISECOND', 'SECOND', 'MINUTE', 'HOUR', 'DAY']
+const datePartsLastDay: readonly GoogleSqlDatePart[] = ['YEAR', 'ISOYEAR', 'QUARTER', 'MONTH', 'WEEK', 'ISOWEEK']
+
+const datePartsByFunction: Readonly<Record<string, readonly GoogleSqlDatePart[]>> = {
+  EXTRACT: googleSqlDateParts,
+  DATE_TRUNC: datePartsDate,
+  DATE_DIFF: datePartsDate,
+  DATETIME_TRUNC: datePartsDateTime,
+  DATETIME_DIFF: datePartsDateTime,
+  TIMESTAMP_TRUNC: datePartsDateTime,
+  TIMESTAMP_DIFF: datePartsTimestampDiff,
+  TIME_TRUNC: datePartsTime,
+  TIME_DIFF: datePartsTime,
+  LAST_DAY: datePartsLastDay
+}
+
+/** Valid GoogleSQL date/time parts for a function (case-insensitive, `SAFE.` prefix stripped), or all date parts when unspecified. */
+export function googleSqlDatePartsFor(functionName?: string): readonly GoogleSqlDatePart[] {
+  if (!functionName) return googleSqlDateParts
+  const key = functionName.toUpperCase().replace(/^SAFE\./, '')
+  return datePartsByFunction[key] ?? googleSqlDateParts
+}
+
+/** Curated BigQuery scripting and session system variables (`@@...`). */
+export interface GoogleSqlSystemVariable {
+  readonly name: string
+  readonly type: string
+  readonly readOnly: boolean
+  readonly summary: string
+}
+
+export const googleSqlSystemVariables: readonly GoogleSqlSystemVariable[] = [
+  { name: '@@dataset_id', type: 'STRING', readOnly: false, summary: 'Default dataset for unqualified table names in the script.' },
+  { name: '@@dataset_project_id', type: 'STRING', readOnly: false, summary: 'Default project for unqualified table names in the script.' },
+  { name: '@@project_id', type: 'STRING', readOnly: true, summary: 'Project ID executing the current query or script.' },
+  { name: '@@query_label', type: 'STRING', readOnly: false, summary: 'Key-value labels attached to jobs run by the script.' },
+  { name: '@@time_zone', type: 'STRING', readOnly: false, summary: 'Default time zone for date and time operations.' },
+  { name: '@@last_job_id', type: 'STRING', readOnly: true, summary: 'Job ID of the most recently executed child job in the script.' },
+  { name: '@@row_count', type: 'INT64', readOnly: true, summary: 'Number of rows modified by the most recent DML statement.' },
+  { name: '@@error.formatted_stack_trace', type: 'STRING', readOnly: true, summary: 'Formatted stack trace of the most recent exception.' },
+  { name: '@@error.message', type: 'STRING', readOnly: true, summary: 'Error message of the most recent exception.' },
+  { name: '@@error.stack_trace', type: 'ARRAY<STRUCT>', readOnly: true, summary: 'Structured stack frames of the most recent exception.' },
+  { name: '@@error.statement_text', type: 'STRING', readOnly: true, summary: 'SQL text of the statement that raised the most recent exception.' },
+  { name: '@@script.bytes_billed', type: 'INT64', readOnly: true, summary: 'Total bytes billed across all completed jobs in the script.' },
+  { name: '@@script.bytes_processed', type: 'INT64', readOnly: true, summary: 'Total bytes processed across all completed jobs in the script.' },
+  { name: '@@script.creation_time', type: 'TIMESTAMP', readOnly: true, summary: 'Timestamp when the script began executing.' },
+  { name: '@@script.job_id', type: 'STRING', readOnly: true, summary: 'Job ID of the running script.' },
+  { name: '@@script.num_child_jobs', type: 'INT64', readOnly: true, summary: 'Number of child jobs executed by the script so far.' },
+  { name: '@@script.slot_ms', type: 'INT64', readOnly: true, summary: 'Total slot-milliseconds consumed by the script.' },
+  { name: '@@script.statement_text', type: 'STRING', readOnly: true, summary: 'SQL text of the currently executing statement in the script.' }
+]
+
+/** Curated BigQuery `INFORMATION_SCHEMA` metadata views and their dataset/region scopes. */
+export type GoogleSqlInfoSchemaScope = 'dataset' | 'region' | 'both'
+export interface GoogleSqlInfoSchemaView {
+  readonly name: string
+  readonly scope: GoogleSqlInfoSchemaScope
+  readonly summary: string
+}
+
+export const googleSqlInformationSchemaViews: readonly GoogleSqlInfoSchemaView[] = [
+  { name: 'TABLES', scope: 'both', summary: 'Metadata for tables, views, materialized views and external tables.' },
+  { name: 'TABLE_OPTIONS', scope: 'both', summary: 'Options configured on tables and views.' },
+  { name: 'COLUMNS', scope: 'both', summary: 'Top-level column names, data types, ordinals and nullability.' },
+  { name: 'COLUMN_FIELD_PATHS', scope: 'both', summary: 'Nested STRUCT field paths, data types, descriptions and policy tags.' },
+  { name: 'VIEWS', scope: 'both', summary: 'SQL definitions of views in the dataset or region.' },
+  { name: 'MATERIALIZED_VIEWS', scope: 'both', summary: 'SQL definitions and refresh metadata for materialized views.' },
+  { name: 'PARTITIONS', scope: 'dataset', summary: 'Partition IDs, row counts and storage sizes for partitioned tables.' },
+  { name: 'TABLE_STORAGE', scope: 'region', summary: 'Active, long-term, logical and physical storage bytes per table.' },
+  { name: 'TABLE_STORAGE_BY_ORGANIZATION', scope: 'region', summary: 'Table storage usage across every project in the organization.' },
+  { name: 'TABLE_STORAGE_TIMELINE', scope: 'region', summary: 'Daily historical storage usage per table.' },
+  { name: 'ROUTINES', scope: 'both', summary: 'Metadata and definitions for UDFs, table functions and stored procedures.' },
+  { name: 'ROUTINE_OPTIONS', scope: 'both', summary: 'Options configured on routines.' },
+  { name: 'PARAMETERS', scope: 'both', summary: 'Input and output parameters of routines.' },
+  { name: 'TABLE_CONSTRAINTS', scope: 'both', summary: 'Primary key and foreign key constraints defined on tables.' },
+  { name: 'KEY_COLUMN_USAGE', scope: 'both', summary: 'Columns participating in primary key or foreign key constraints.' },
+  { name: 'SCHEMATA', scope: 'region', summary: 'Datasets in the project and region.' },
+  { name: 'SCHEMATA_OPTIONS', scope: 'region', summary: 'Options configured on datasets in the project and region.' },
+  { name: 'JOBS_BY_PROJECT', scope: 'region', summary: 'Near real-time metadata for jobs submitted in the project.' },
+  { name: 'JOBS_BY_USER', scope: 'region', summary: 'Metadata for jobs submitted by the current user in the project.' },
+  { name: 'JOBS_BY_FOLDER', scope: 'region', summary: 'Metadata for jobs submitted in a Google Cloud folder.' },
+  { name: 'JOBS_BY_ORGANIZATION', scope: 'region', summary: 'Metadata for jobs submitted across the organization.' },
+  { name: 'JOBS_TIMELINE_BY_PROJECT', scope: 'region', summary: 'Per-second slot usage and job activity timeline in the project.' },
+  { name: 'SESSIONS_BY_PROJECT', scope: 'region', summary: 'Active and recent BigQuery sessions in the project.' },
+  { name: 'SESSIONS_BY_USER', scope: 'region', summary: 'Active and recent BigQuery sessions for the current user.' },
+  { name: 'RESERVATIONS', scope: 'region', summary: 'Slot reservations configured in the administration project.' },
+  { name: 'RESERVATION_ASSIGNMENTS', scope: 'region', summary: 'Project, folder and organization assignments to slot reservations.' },
+  { name: 'SEARCH_INDEXES', scope: 'region', summary: 'Search indexes defined on tables.' },
+  { name: 'SEARCH_INDEX_COLUMNS', scope: 'region', summary: 'Columns covered by search indexes.' },
+  { name: 'VECTOR_INDEXES', scope: 'region', summary: 'Vector indexes defined on tables.' },
+  { name: 'OBJECT_PRIVILEGES', scope: 'region', summary: 'Access privileges granted on datasets, tables and routines.' }
+]
+
 /** The function reference's sections, in its order. */
 export const googleSqlCategories = {
   aggregate: 'Aggregate',

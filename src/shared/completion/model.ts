@@ -2,7 +2,7 @@
 // every engine shares. An engine's grammar reads a statement into this model (src/shared/googlesql/scope.ts for BigQuery)
 // and its dialect says how names are written and how a written name becomes an index path; complete.ts and hover.ts do the
 // rest from language.lookup's answers. Nothing here knows an engine.
-import type { LanguageLookupAnswer, LanguageLookupItem, LanguageLookupPath } from '../language-lookup'
+import type { LanguageLookupAnswer, LanguageLookupItem, LanguageLookupObject, LanguageLookupPath } from '../language-lookup'
 
 /** A span of the text: `end` is exclusive. */
 export interface TextSpan { readonly start: number; readonly end: number }
@@ -68,17 +68,46 @@ export type CompletionSite =
  * name part under the caret), what is typed of it, and whether it sits inside an open or closed quoted identifier, whose
  * insert text is the bare name (the quotes are already there).
  */
-export interface CompletionWord extends TextSpan { readonly typed: string; readonly quoted: boolean }
+export interface CompletionWord extends TextSpan {
+  readonly typed: string
+  readonly quoted: boolean
+  /** True when `(` already follows the word on the same line, so call completions skip inserting `($0)`. */
+  readonly parenAhead?: boolean
+  /** True when `<` already follows the word on the same line, so generic types skip inserting `<$0>`. */
+  readonly angleAhead?: boolean
+}
 
 /** A grammar's reading of one position: what to complete, the scope, and the word. */
-export interface CompletionRead { readonly site: CompletionSite; readonly scope: QueryScope; readonly word: CompletionWord }
+export interface CompletionRead {
+  readonly site: CompletionSite
+  readonly scope: QueryScope
+  readonly word: CompletionWord
+  /** Start offset of an unquoted dotted qualifier chain immediately before `word` (e.g. `o` in `o.items.`). */
+  readonly qualifierStart?: number
+  /** True when the caret is inside an `UNNEST(...)` argument (including `UNNEST(o.|)`), prioritizing ARRAY columns. */
+  readonly preferArray?: boolean
+}
 
 /** A name chain under the caret for hover: its parts, which part the caret is on, its span, whether it names a table (FROM), and
  *  whether a parenthesis follows it outside FROM (`call`: a function, which Go To Definition looks up as a routine). */
 export interface HoverRead { readonly parts: readonly string[]; readonly at: number; readonly span: TextSpan; readonly object: boolean; readonly call?: boolean; readonly scope: QueryScope }
 
 /** A function the dialect knows, for completion and hover. */
-export interface DialectFunction { readonly name: string; readonly summary: string; readonly signatures: readonly string[] }
+export interface DialectFunction { readonly name: string; readonly summary: string; readonly signatures: readonly string[]; readonly niladic?: boolean }
+
+/** A dialect-synthesized column (such as BigQuery `_TABLE_SUFFIX`, `_PARTITIONTIME`, `_PARTITIONDATE`, `_FILE_NAME`). */
+export interface DialectColumn { readonly name: string; readonly type: string; readonly description?: string; readonly pseudo?: boolean }
+
+/** An extra object completion item synthesized alongside an index entry (such as a date-sharded wildcard `events_*`). */
+export interface ObjectVariant {
+  readonly label: string
+  readonly kind?: CompletionKind
+  readonly insertName?: string
+  readonly detail?: string
+  readonly documentation?: string
+  readonly filterText?: string
+  readonly before?: boolean
+}
 
 /** What an object site's qualifier may name: the index paths whose children complete it. */
 export interface ContainerQuery { readonly path: readonly string[] }
@@ -94,6 +123,14 @@ export interface CompletionDialect {
   /** An index entry's completion kind, and the detail its item shows (its kind, a routine's signature, a sharded group). */
   itemKind(item: LanguageLookupItem): CompletionKind
   itemDetail(item: LanguageLookupItem): string | undefined
+  /** Synthesized variants for an index object entry (e.g. `events_*` wildcard ahead of the latest concrete shard). */
+  objectVariants?(item: LanguageLookupItem): readonly ObjectVariant[]
+  /** Engine-specific pseudo-columns for a resolved object (excluded from `SELECT *` expansion). */
+  pseudoColumns?(object: LanguageLookupObject, writtenParts: readonly string[]): readonly DialectColumn[]
+  /** Whether a column type is an ARRAY type (for `UNNEST` ranking and blocking direct field access on `ARRAY<STRUCT>`). */
+  isArrayType?(type: string | undefined): boolean
+  /** Actionable replacement suggestion when the user attempts direct `.` field access on an `ARRAY<...>` expression. */
+  arrayMemberHint?(targetParts: readonly string[], childFields: readonly string[], arrayType?: string, qualifierSpan?: TextSpan): CompletionItem | undefined
   /** Deduplication identity for completion items (default: case-insensitive `kind:label`). */
   itemKey?(kind: CompletionKind, label: string): string
   /** An object's kind as hover names it (Table, View). */
@@ -103,6 +140,8 @@ export interface CompletionDialect {
   readonly keywords: readonly string[]
   /** Context-specific keywords for clause sites (e.g. `afterFromTable`, `statementStart`, `castType`). */
   keywordsFor?(site: CompletionSite): readonly string[]
+  /** Engine-specific completion items for specialized sites (`castType`, `datePart`, `systemVar`, `infoSchema`). */
+  siteItems?(site: CompletionSite, word: CompletionWord, insert: (name: string) => string): readonly CompletionItem[] | undefined
   readonly functions: readonly DialectFunction[]
   /** The function a written name calls, if the dialect knows it. */
   functionNamed(name: string): DialectFunction | undefined
@@ -123,6 +162,12 @@ export interface CompletionItem {
   readonly sortText: string
   /** What the editor matches the typed text against, when not the label. */
   readonly filterText?: string
+  /** True when `insertText` uses snippet tabstop syntax (e.g. `DATE_TRUNC($0)`). */
+  readonly insertTextIsSnippet?: boolean
+  /** True when accepting the item should open Signature Help (`editor.action.triggerParameterHints`). */
+  readonly triggerParameterHints?: boolean
+  /** Optional span to delete atomically when accepting the item (e.g. replacing `o.items.` with `UNNEST(o.items)`). */
+  readonly additionalDeleteSpan?: TextSpan
 }
 /** `incomplete`: more names exist than came back, so the editor asks again as the word grows. */
 export interface CompletionList { readonly items: readonly CompletionItem[]; readonly incomplete: boolean }
