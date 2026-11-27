@@ -27,7 +27,8 @@ internal interface IObjectSearchHost
 /// explorer.index and explorer.search: an in-memory index per connection of the objects Object Explorer lists by schema and
 /// name (and their module definitions), read two databases at a time (<see cref="ObjectIndexLimits.Total"/>) from constant catalog SQL (<see cref="ObjectSearchSql"/>),
 /// and searched in memory. A disconnect drops the connection's index; each read it held whole is saved by the
-/// <see cref="IndexStore"/> (when main has configured one), which no build reads back yet. A database that cannot be read is
+/// <see cref="IndexStore"/> (when main has configured one), which a connection's first build reads back once its fingerprint matches
+/// (<see cref="ReloadAsync"/>). A database that cannot be read is
 /// skipped as a value, and the index keeps every other one.
 /// </summary>
 internal sealed partial class ObjectSearchService : IDisposable
@@ -602,24 +603,32 @@ internal sealed partial class ObjectSearchService : IDisposable
         await total.WaitAsync(token);
         // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
         budgetSource.CancelAfter(Limits.DatabaseBudget);
-        var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
+        var held = state.Index.Get(database);
+        var reader = new DatabaseReader(database, Limits, pool, held);
         var Put = Holding(state.Index, children);
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
             await host.OpenAsync(connection, budgetSource.Token);
+            // Nothing held yet (the connection's first build, or a database it could not read before): what was saved of it stands
+            // in only once its fingerprint says it still may, or once what changed has been read again.
+            if (held is null && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token) is { } reloaded) return reloaded.Skip;
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
-            var batch = ObjectSearchSql.Batch(render, definitions, children);
-            if (perDatabase) command.CommandText = ObjectSearchSql.Prologue + batch;
-            else
+            // The fingerprint comes first: whatever DDL lands while the batch reads makes the next fingerprint differ from the saved one.
+            InDatabase(command, database, perDatabase, ObjectSearchSql.Fingerprint(render) + ObjectSearchSql.Batch(render, definitions, children));
+            SqlFingerprint? fingerprint = null;
+            var index = await ReadBatchAsync(command, async rows =>
             {
-                command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.ModuleCall;
-                command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
-                command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
-            }
-            var index = await ReadBatchAsync(command,
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), Put, budgetSource.Token);
+                fingerprint = await SqlFingerprint.ReadAsync(rows, budgetSource.Token);
+                await rows.NextResultAsync(budgetSource.Token);
+                return await reader.ReadAsync(rows, definitions, budgetSource.Token, children);
+            }, read =>
+            {
+                read.Sync = fingerprint?.Sync(definitions, children).ToBytes() ?? default(ReadOnlyMemory<byte>);
+                read.Extra = fingerprint is null ? default : reader.Listing ?? default(ReadOnlyMemory<byte>);
+                Put(read);
+            }, budgetSource.Token);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
             return null;
         }
@@ -642,6 +651,21 @@ internal sealed partial class ObjectSearchService : IDisposable
             throw;
         }
         finally { total.Release(); }
+    }
+
+    /// <summary>Sets <paramref name="command"/> to run <paramref name="batch"/> in <paramref name="database"/>: directly on a connection
+    /// already in it (<paramref name="perDatabase"/>), else through <see cref="ObjectSearchSql.ModuleCall"/> (with <paramref name="ids"/>,
+    /// <see cref="ObjectSearchSql.ModuleCallIds"/>), the name only as a parameter.</summary>
+    internal static void InDatabase(SqlCommand command, string database, bool perDatabase, string batch, string? ids = null)
+    {
+        if (perDatabase) command.CommandText = ObjectSearchSql.Prologue + batch;
+        else
+        {
+            command.CommandText = ObjectSearchSql.Prologue + (ids is null ? ObjectSearchSql.ModuleCall : ObjectSearchSql.ModuleCallIds);
+            command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
+            command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
+        }
+        if (ids is not null) command.Parameters.Add(new SqlParameter("@ids", SqlDbType.NVarChar, -1) { Value = ids });
     }
 
     /// <summary>Puts a read into <paramref name="index"/>. A read without children is the fallback for a database too large with them
@@ -867,6 +891,35 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private bool definitionsRead = true;
     private bool? caseSensitive;
     private bool dottedI;
+    /// <summary>The sys.objects rows the read listed (<see cref="SqlListing"/>), each with the entry it added (or -1); null where the
+    /// batch's first result set has no checksum column (a read of another shape).</summary>
+    private List<SqlListingRow>? listed;
+    /// <summary>A selective re-read's saved side (<see cref="Seed"/>), or null for a whole read.</summary>
+    private Merge? merge;
+
+    /// <summary>The listing the last <see cref="Partial"/> kept for the read's file, or null (none read, too large, or no room).</summary>
+    public byte[]? Listing { get; private set; }
+
+    /// <summary>The sys.objects rows the batch itself listed: a selective re-read's own (the checks count them).</summary>
+    public int Listed { get; private set; }
+
+    /// <summary>What a selective re-read carries over from the saved read it replaces: each kept entry where it went, the saved
+    /// entries' object ids, and what can only be set once the batch has read its own part (types, keys, a history table's table).</summary>
+    private sealed class Merge(DatabaseIndex from)
+    {
+        public readonly ObjectTable Table = from.Table;
+        /// <summary>Object ids to the read's entries: the kept objects and their kept child objects, then the batch's own.</summary>
+        public readonly Dictionary<int, int> Ids = [];
+        /// <summary>Saved entries to their object ids.</summary>
+        public readonly Dictionary<int, int> SavedIds = [];
+        public readonly Dictionary<int, int> Moved = [];
+        public readonly List<(int To, int From)> Typed = [];
+        public readonly List<(int To, int From)> Keys = [];
+        /// <summary>A kept history table and the object id of the table it is shown below.</summary>
+        public readonly List<(int To, int ViaId)> Via = [];
+        /// <summary>The saved listing's rows the read keeps, by their saved entries.</summary>
+        public readonly List<SqlListingRow> Carried = [];
+    }
 
     /// <summary>A read past the budget.</summary>
     private sealed class TooLarge : Exception;
@@ -876,6 +929,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         pool.Release(objects.Texts);
         objects.Clear();
+        listed = null;
+        Listing = null;
         budget.Release(taken);
         taken = 0;
         credited = 0;
@@ -899,7 +954,9 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         foreach (var (at, _, _) in pending) objects.Remove(at);
         pending.Clear();
-        var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
+        var table = objects.Build();
+        Listing = KeptListing();
+        var index = new DatabaseIndex(database, table, taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
         {
             // A read that failed part way (KeepPartial) says what it read as much as a whole one.
             DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI, LeftOut = leftOut
@@ -911,6 +968,135 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         return index;
     }
 
+    /// <summary>The listing of the table just built: the batch's rows, then the saved rows a selective re-read kept, each with the
+    /// entry it is now; charged to the read, and left out (null) when it does not fit or is too large for a file.</summary>
+    private byte[]? KeptListing()
+    {
+        if (listed is null) return null;
+        Listed = listed.Count;
+        var rows = new List<SqlListingRow>(listed.Count + (merge?.Carried.Count ?? 0));
+        var ids = new HashSet<int>();
+        foreach (var row in listed)
+            if (ids.Add(row.Id)) rows.Add(row with { Entry = row.Entry < 0 ? -1 : objects.BuiltAt(row.Entry) });
+        if (merge is not null)
+            foreach (var row in merge.Carried)
+                if (ids.Add(row.Id)) rows.Add(row with { Entry = row.Entry < 0 ? -1 : objects.BuiltAt(row.Entry) });
+        listed = null;
+        if (SqlListing.ToBytes(rows) is not { } bytes || !TryCharge(bytes.Length, 0)) return null;
+        return bytes;
+    }
+
+    /// <summary>
+    /// Makes this read a selective re-read of <paramref name="from"/> (loaded from the saved index, its listing
+    /// <paramref name="saved"/>): every top-level object <paramref name="keeps"/> accepts is copied with its children, its
+    /// definition, its type and key details and the table a history table is shown below, charged as the batch's own rows are;
+    /// then <see cref="ReadAsync"/> reads the batch's part (<see cref="ObjectSearchSql.Batch"/>'s only) beside them. The named
+    /// objects, types, table types, DDL triggers and plan guides are never copied: the batch reads them whole. A read past the
+    /// budget answers false, having given back what it took.
+    /// </summary>
+    public bool Seed(DatabaseIndex from, IReadOnlyDictionary<int, SqlListingRow> saved, Func<int, bool> keeps)
+    {
+        var seed = new Merge(from);
+        var table = seed.Table;
+        merge = seed;
+        try
+        {
+            var children = new Dictionary<int, List<int>>();
+            for (var at = 0; at < table.Count; at++)
+                if (table.Parent(at) is var parent and >= 0)
+                {
+                    if (!children.TryGetValue(parent, out var list)) children[parent] = list = [];
+                    list.Add(at);
+                }
+            foreach (var (id, row) in saved)
+                if (row.Entry >= 0) seed.SavedIds[row.Entry] = id;
+            foreach (var row in saved.Values.OrderBy(row => row.Id))
+            {
+                if (row.Entry < 0 || table.Parent(row.Entry) >= 0 || !keeps(row.Id)) continue;
+                var to = Copy(table, row.Entry);
+                seed.Moved[row.Entry] = to;
+                if (table.Via(row.Entry) is var via and >= 0) seed.Via.Add((to, seed.SavedIds.GetValueOrDefault(via)));
+                if (!children.TryGetValue(row.Entry, out var kids)) continue;
+                foreach (var child in kids)
+                {
+                    var copied = Copy(table, child);
+                    objects.Attach(copied, to, table.System(child));
+                    seed.Moved[child] = copied;
+                }
+            }
+            foreach (var (id, row) in saved)
+            {
+                if (!keeps(id)) continue;
+                var moved = row.Entry >= 0 && seed.Moved.TryGetValue(row.Entry, out var at) ? at : -1;
+                if (moved >= 0) seed.Ids[id] = moved;
+                seed.Carried.Add(row with { Entry = moved });
+            }
+            return true;
+        }
+        catch (TooLarge)
+        {
+            Abandon();
+            merge = null;
+            return false;
+        }
+    }
+
+    /// <summary>Copies the saved entry <paramref name="from"/> (a kept object or one of its children) into the read: its names, its
+    /// definition (left out, and counted, where the pool refuses it below the names' reserve) and, for later, its details.</summary>
+    private int Copy(ObjectTable table, int from)
+    {
+        var name = Intern(table.Name(from));
+        var schema = table.Schema(from) is { } held ? Intern(held) : null;
+        var at = Add(new IndexedObject(table.Kind(from), table.Folder(from), schema, name, Modified: table.Modified(from), System: table.System(from), Subtype: table.Subtype(from)));
+        if (table.StoredDefinition(from) is { } stored)
+        {
+            var reserve = limits.NamesReserveBytes;
+            var copy = stored is PackedText packed ? (object?)Pooled(packed, reserve) : Pooled((string)stored, reserve);
+            if (copy is null) { cut++; leftOut++; }
+            else
+            {
+                modules++;
+                if (table.DefinitionCut(from)) cut++;
+                objects.SetDefinition(at, copy, table.DefinitionCut(from));
+            }
+        }
+        if (table.Typed(from) is not null) merge!.Typed.Add((at, from));
+        if (table.KeyColumns(from).Length > 0) merge!.Keys.Add((at, from));
+        return at;
+    }
+
+    /// <summary>Gives the kept entries the types the batch's types result set numbers now (by user_type_id; one no longer there is
+    /// left out).</summary>
+    private void CarryTyped(Dictionary<int, ushort> types)
+    {
+        if (merge is null) return;
+        foreach (var (to, from) in merge.Typed)
+        {
+            if (merge.Table.Typed(from) is not { } typed || !types.TryGetValue(typed.UserTypeId, out var type)) continue;
+            Charge(IndexMemory.TypedBytes);
+            objects.Details.SetTyped(to, type, typed.MaxLength, typed.Precision, typed.Scale, typed.Ordinal, typed.Flags);
+        }
+    }
+
+    /// <summary>Gives the kept indexes and keys their columns, and a kept foreign key the table it references as the read holds it
+    /// now (a kept one or one the batch read again; -1 when it holds none).</summary>
+    private void CarryKeys(Dictionary<int, int> byId)
+    {
+        if (merge is null) return;
+        foreach (var (to, from) in merge.Keys)
+        {
+            var referenced = merge.Table.Referenced(from);
+            var target = referenced >= 0 && merge.SavedIds.TryGetValue(referenced, out var id) && byId.TryGetValue(id, out var at) && !objects.Removed(at) && objects.Kind(at) == "table" ? at : -1;
+            Charge(IndexMemory.KeyBytes);
+            objects.Details.StartKey(to, target);
+            foreach (var column in merge.Table.KeyColumns(from))
+            {
+                Charge(IndexMemory.KeyColumnBytes);
+                objects.Details.AddKeyColumn(column.Column, column.Referenced, column.Flags);
+            }
+        }
+    }
+
     /// <summary>The database's index, or null when it does not fit in the budget. Without
     /// <paramref name="children"/> the batch has no column, index, statistics or parameter result sets.</summary>
     public async Task<DatabaseIndex?> ReadAsync(DbDataReader reader, bool definitions, CancellationToken token, bool children = true)
@@ -918,7 +1104,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         definitionsRead = definitions;
         try
         {
-            var byId = new Dictionary<int, int>();
+            var byId = merge?.Ids ?? [];
+            listed = reader.FieldCount > 9 ? [] : null;
             while (await reader.ReadAsync(token))
             {
                 var id = reader.GetInt32(0);
@@ -930,17 +1117,20 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 var system = reader.GetBoolean(6);
                 var variant = reader.GetByte(7);
                 var current = reader.IsDBNull(8) ? 0 : reader.GetInt32(8);
+                var checksum = listed is null || reader.IsDBNull(9) ? 0 : reader.GetInt32(9);
+                var entry = -1;
                 if (ChildOf(type, parent) is { } child)
                 {
                     // Its parent may come later in id order, or be a table type (read next): placed once every parent is read.
-                    byId[id] = Add(new(child.Kind, child.Folder, null, name, Modified: modified, Subtype: child.Subtype));
+                    byId[id] = entry = Add(new(child.Kind, child.Folder, null, name, Modified: modified, Subtype: child.Subtype));
                     pending.Add((byId[id], parent, false));
                 }
                 else if (Map(type, schema, name, modified, system, variant) is { } item)
                 {
-                    byId[id] = Add(item);
+                    byId[id] = entry = Add(item);
                     if (variant is 6 or 7) pending.Add((byId[id], current, true));
                 }
+                listed?.Add(new(id, parent, modified.Ticks, checksum, entry));
             }
             await reader.NextResultAsync(token);
             while (await reader.ReadAsync(token))
@@ -983,11 +1173,13 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 await reader.NextResultAsync(token);
                 var types = await ReadTypes(reader, objects, Intern, Charge, token);
+                CarryTyped(types);
                 await Columns(reader, byId, types, definitions, token);
                 var indexes = await Indexes(reader, byId, token);
                 await Children(reader, byId, "statistic", "statistics", false, token);
                 await Parameters(reader, byId, types, token);
                 await Keys(reader, byId, indexes, token);
+                CarryKeys(byId);
             }
             await Definitions(reader, byId, definitions, token);
             // The last result set (ObjectSearchSql.CaseSensitive): absent from a batch that stopped short, which leaves it unknown.
@@ -1021,6 +1213,13 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private void Place(Dictionary<int, int> byId)
     {
         int Owner(int id) => id != 0 && byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1;
+        // A kept history table is shown below its table as the read holds it now, kept or read again; with neither, it goes.
+        if (merge is not null)
+            foreach (var (to, via) in merge.Via)
+            {
+                if (Owner(via) is var table and >= 0 && objects.Kind(table) == "table") objects.SetVia(to, table);
+                else objects.Remove(to);
+            }
         foreach (var (at, owner, history) in pending)
         {
             if (!history) continue;

@@ -635,7 +635,7 @@ refuses a word glued to a number (`CatalogSql.GluedNumbers`; T-SQL reads `1DELET
   and drops their answers.
 - **Search Objects' index** (`backend/Varia.Backend/Search/`, docs/object-search.md) is held in backend memory, one per
   connection, dropped on disconnect; each read it holds is also saved to disk by the `IndexStore` (the end of this
-  bullet), which no build reads back yet. Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
+  bullet), which a connection's first build reads back (a SQL Server database only once its fingerprint matches). Limits are `objectSearchLimits` (`src/shared/explorer/search.ts`, mirrored in C#,
   `tests/object-search.test.ts`); everything it holds (an `ObjectTable` per database with its editor metadata, `ObjectDetails`, and the lookup arrays the
   editor's in-process `IndexLookup` builds on first use, names, definitions, by
   `IndexMemory`'s estimates) is under one budget for all connections (`IndexBudget`; `objectExplorer.search.memoryLimitMiB`, 512 MiB by default,

@@ -22,6 +22,14 @@ internal static class ObjectSearchSql
     /// <summary>Runs @stmt in @db, whose name reaches T-SQL only through QUOTENAME.</summary>
     public const string ModuleCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt;";
 
+    /// <summary>As <see cref="ModuleCall"/>, passing @ids (a JSON array of object ids) on to @stmt: a selective re-read (<see cref="Batch"/>'s only).</summary>
+    public const string ModuleCallIds = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt, N'@ids nvarchar(max)', @ids;";
+
+    /// <summary>The object ids a selective re-read names (OPENJSON, so only in a database at compatibility level 130 or more).</summary>
+    internal const string Only = "(SELECT CONVERT(int, j.value) FROM OPENJSON(@ids) AS j)";
+    /// <summary>The table types' own object ids: a selective re-read reads every table type again, with its columns, keys and indexes.</summary>
+    internal const string TableTypeIds = "(SELECT tt.type_table_object_id FROM sys.table_types AS tt)";
+
     /// <summary>The sys.objects types the index lists, as Object Explorer's folders do: tables (and external tables), views,
     /// procedures (T-SQL, CLR, extended and replication-filter), functions, synonyms, sequences, rules, stand-alone defaults and
     /// security policies, and the children kept with their table or view: DML triggers, keys and constraints.</summary>
@@ -89,7 +97,7 @@ internal static class ObjectSearchSql
     /// <see cref="ResourceObjects"/> read lists them once per server build. Text columns come last in their rows and
     /// definitions in id order, so a reader with sequential access reads each one only as far as the index keeps it.
     /// </summary>
-    public static string Batch(SqlRender r, bool definitions, bool children = true) =>
+    public static string Batch(SqlRender r, bool definitions, bool children = true, bool only = false) =>
         "SELECT o.object_id, s.name, o.name, o.type, o.modify_date, o.parent_object_id,"
         + " CONVERT(bit, CASE WHEN o.is_ms_shipped = 1 OR ep.major_id IS NOT NULL THEN 1 ELSE 0 END),"
         + " CONVERT(tinyint, CASE WHEN " + r.Col(16, "t.ledger_type", "CONVERT(tinyint, 0)") + " = 1 AND " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 1 THEN 8"
@@ -97,15 +105,49 @@ internal static class ObjectSearchSql
         + " WHEN t.is_filetable = 1 THEN 1 WHEN " + r.Col(13, "t.is_external", "CONVERT(bit, 0)") + " = 1 THEN 2"
         + " WHEN " + r.Col(14, "t.is_node", "CONVERT(bit, 0)") + " = 1 THEN 3 WHEN " + r.Col(14, "t.is_edge", "CONVERT(bit, 0)") + " = 1 THEN 4"
         + " WHEN " + r.Col(16, "t.is_dropped_ledger_table", "CONVERT(bit, 0)") + " = 1 OR " + r.Col(16, "v.is_dropped_ledger_view", "CONVERT(bit, 0)") + " = 1 THEN 5 ELSE 0 END),"
-        + " " + r.Col(13, "cur.object_id", "CONVERT(int, NULL)")
+        + " " + r.Col(13, "cur.object_id", "CONVERT(int, NULL)") + ", " + RowChecksum
         + " FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id"
         + " LEFT JOIN sys.tables AS t ON t.object_id = o.object_id LEFT JOIN sys.views AS v ON v.object_id = o.object_id"
         + (r.Band >= 13 ? " LEFT JOIN sys.tables AS cur ON cur.history_table_id = o.object_id" : "")
         + " LEFT JOIN sys.extended_properties AS ep ON ep.class = 1 AND ep.major_id = o.object_id AND ep.minor_id = 0 AND ep.name = N'microsoft_database_tools_support'"
-        + " WHERE o.type IN (" + ObjectTypes + ") ORDER BY o.object_id;\n"
+        + StatsChecksums
+        + " WHERE o.type IN (" + ObjectTypes + ")" + (only ? " AND (o.object_id IN " + Only + " OR o.parent_object_id IN " + TableTypeIds + ")" : "") + " ORDER BY o.object_id;\n"
         + "SELECT t.user_type_id, s.name, t.name, t.is_table_type, t.is_assembly_type, tt.type_table_object_id FROM sys.types AS t JOIN sys.schemas AS s ON s.schema_id = t.schema_id"
         + " LEFT JOIN sys.table_types AS tt ON tt.user_type_id = t.user_type_id WHERE t.is_user_defined = 1 ORDER BY t.user_type_id;\n"
-        + "SELECT 'US', CONVERT(sysname, NULL), dp.name, dp.modify_date, CONVERT(bit, CASE WHEN dp.principal_id BETWEEN 2 AND 4 THEN 1 ELSE 0 END) FROM sys.database_principals AS dp"
+        + NamedObjects(r) + ";\n"
+        + "SELECT tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped FROM sys.triggers AS tr WHERE tr.parent_class = 0 ORDER BY tr.object_id;\n"
+        + "SELECT g.name, g.modify_date" + (definitions ? ", g.query_text" : "") + " FROM sys.plan_guides AS g ORDER BY g.plan_guide_id;\n"
+        + (children
+            ? Types(userDefined: true)
+                + "SELECT c.object_id, c.name, " + TypedColumns(r.VectorDimensions) + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
+                + (definitions ? " LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id" : "")
+                + " WHERE " + ExplorerQueries.ColumnVisibility(r) + (only ? " AND (c.object_id IN " + Only + " OR c.object_id IN " + TableTypeIds + ")" : "") + " ORDER BY c.object_id, c.column_id;\n"
+                + "SELECT i.object_id, i.name, i.type, i.index_id FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL"
+                + (only ? " AND (i.object_id IN " + Only + " OR i.object_id IN " + TableTypeIds + ")" : "") + " ORDER BY i.object_id, i.index_id;\n"
+                + "SELECT st.object_id, st.name FROM sys.stats AS st WHERE st.auto_created = 0" + (only ? " AND st.object_id IN " + Only : "") + " ORDER BY st.object_id, st.stats_id;\n"
+                + "SELECT p.object_id, p.name, " + TypedParameters(r.VectorDimensions) + " FROM sys.parameters AS p" + (only ? " WHERE p.object_id IN " + Only : "") + " ORDER BY p.object_id, p.parameter_id;\n"
+                + "SELECT ic.object_id, ic.index_id, ic.column_id, ic.is_descending_key, ic.is_included_column FROM sys.index_columns AS ic"
+                + " WHERE NOT (ic.key_ordinal = 0 AND ic.is_included_column = 0 AND ic.partition_ordinal > 0)" + (only ? " AND (ic.object_id IN " + Only + " OR ic.object_id IN " + TableTypeIds + ")" : "")
+                + " ORDER BY ic.object_id, ic.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id;\n"
+                + "SELECT kc.object_id, kc.parent_object_id, kc.unique_index_id FROM sys.key_constraints AS kc"
+                + (only ? " WHERE kc.parent_object_id IN " + Only + " OR kc.parent_object_id IN " + TableTypeIds : "") + " ORDER BY kc.object_id;\n"
+                + "SELECT fk.constraint_object_id, fk.parent_column_id, fk.referenced_object_id, fk.referenced_column_id FROM sys.foreign_key_columns AS fk"
+                + (only ? " WHERE fk.parent_object_id IN " + Only : "") + " ORDER BY fk.constraint_object_id, fk.constraint_column_id;\n"
+            : "")
+        + (definitions
+            ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL" + (only ? " AND m.object_id IN " + Only : "")
+                + " UNION ALL SELECT cc.object_id, cc.definition FROM sys.check_constraints AS cc WHERE cc.definition IS NOT NULL"
+                + (only ? " AND (cc.parent_object_id IN " + Only + " OR cc.parent_object_id IN " + TableTypeIds + ")" : "")
+                + " UNION ALL SELECT dc.object_id, dc.definition FROM sys.default_constraints AS dc WHERE dc.definition IS NOT NULL"
+                + (only ? " AND (dc.parent_object_id IN " + Only + " OR dc.parent_object_id IN " + TableTypeIds + ")" : "") + " ORDER BY object_id;\n"
+            : "")
+        + CaseSensitive;
+
+
+    /// <summary>The database's other named objects (<see cref="Batch"/>'s third result set, without its terminator): code, schema,
+    /// name, modify date and whether it is a system one.</summary>
+    internal static string NamedObjects(SqlRender r) =>
+        "SELECT 'US', CONVERT(sysname, NULL), dp.name, dp.modify_date, CONVERT(bit, CASE WHEN dp.principal_id BETWEEN 2 AND 4 THEN 1 ELSE 0 END) FROM sys.database_principals AS dp"
         + " WHERE dp.type IN ('S', 'U', 'G', 'E', 'X', 'C', 'K')"
         + " UNION ALL SELECT 'RL', NULL, dp.name, dp.modify_date, CONVERT(bit, CASE WHEN dp.is_fixed_role = 1 OR dp.principal_id = 0 THEN 1 ELSE 0 END) FROM sys.database_principals AS dp WHERE dp.type = 'R'"
         + " UNION ALL SELECT 'AR', NULL, dp.name, dp.modify_date, CONVERT(bit, 0) FROM sys.database_principals AS dp WHERE dp.type = 'A'"
@@ -127,30 +169,43 @@ internal static class ObjectSearchSql
         + " UNION ALL SELECT 'PF', NULL, pf.name, pf.modify_date, CONVERT(bit, 0) FROM sys.partition_functions AS pf"
         + " UNION ALL SELECT 'PL', NULL, sp.name, sp.modify_date, CONVERT(bit, 0) FROM sys.registered_search_property_lists AS sp"
         + " UNION ALL SELECT 'XS', xs.name, x.name, x.modify_date, CONVERT(bit, 0) FROM sys.xml_schema_collections AS x JOIN sys.schemas AS xs ON xs.schema_id = x.schema_id"
-        + " WHERE x.xml_collection_id > 1;\n"
-        + "SELECT tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped FROM sys.triggers AS tr WHERE tr.parent_class = 0 ORDER BY tr.object_id;\n"
-        + "SELECT g.name, g.modify_date" + (definitions ? ", g.query_text" : "") + " FROM sys.plan_guides AS g ORDER BY g.plan_guide_id;\n"
-        + (children
-            ? Types(userDefined: true)
-                + "SELECT c.object_id, c.name, " + TypedColumns(r.VectorDimensions) + (definitions ? ", cc.definition" : "") + " FROM sys.columns AS c"
-                + (definitions ? " LEFT JOIN sys.computed_columns AS cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id" : "")
-                + " WHERE " + ExplorerQueries.ColumnVisibility(r) + " ORDER BY c.object_id, c.column_id;\n"
-                + "SELECT i.object_id, i.name, i.type, i.index_id FROM sys.indexes AS i WHERE i.type > 0 AND i.is_hypothetical = 0 AND i.name IS NOT NULL ORDER BY i.object_id, i.index_id;\n"
-                + "SELECT st.object_id, st.name FROM sys.stats AS st ORDER BY st.object_id, st.stats_id;\n"
-                + "SELECT p.object_id, p.name, " + TypedParameters(r.VectorDimensions) + " FROM sys.parameters AS p ORDER BY p.object_id, p.parameter_id;\n"
-                + "SELECT ic.object_id, ic.index_id, ic.column_id, ic.is_descending_key, ic.is_included_column FROM sys.index_columns AS ic"
-                + " WHERE NOT (ic.key_ordinal = 0 AND ic.is_included_column = 0 AND ic.partition_ordinal > 0)"
-                + " ORDER BY ic.object_id, ic.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id;\n"
-                + "SELECT kc.object_id, kc.parent_object_id, kc.unique_index_id FROM sys.key_constraints AS kc ORDER BY kc.object_id;\n"
-                + "SELECT fk.constraint_object_id, fk.parent_column_id, fk.referenced_object_id, fk.referenced_column_id FROM sys.foreign_key_columns AS fk"
-                + " ORDER BY fk.constraint_object_id, fk.constraint_column_id;\n"
-            : "")
-        + (definitions
-            ? "SELECT m.object_id, m.definition FROM sys.sql_modules AS m WHERE m.definition IS NOT NULL"
-                + " UNION ALL SELECT cc.object_id, cc.definition FROM sys.check_constraints AS cc WHERE cc.definition IS NOT NULL"
-                + " UNION ALL SELECT dc.object_id, dc.definition FROM sys.default_constraints AS dc WHERE dc.definition IS NOT NULL ORDER BY object_id;\n"
-            : "")
-        + CaseSensitive;
+        + " WHERE x.xml_collection_id > 1";
+
+    /// <summary>A sys.objects row's own checksum beside its id, parent and date: what a rename, a schema transfer, a type change or
+    /// a statistic created, renamed or dropped on it (CREATE STATISTICS leaves the table's date as it was) changes even where the date
+    /// stays (<see cref="Listing"/>, and the last column of <see cref="Batch"/>'s first result set), over <see cref="StatsChecksums"/>.</summary>
+    internal const string RowChecksum = "BINARY_CHECKSUM(o.name, o.schema_id, o.type, sk.c)";
+
+    /// <summary>Each object's statistics (those the index keeps: not auto-created) as one checksum, joined to sys.objects as sk.</summary>
+    internal const string StatsChecksums = " LEFT JOIN (SELECT sx.object_id, CHECKSUM_AGG(BINARY_CHECKSUM(sx.stats_id, sx.name)) FROM sys.stats AS sx WHERE sx.auto_created = 0 GROUP BY sx.object_id)"
+        + " AS sk (object_id, c) ON sk.object_id = o.object_id";
+
+    /// <summary>
+    /// What tells whether a saved database still stands for the one the login sees now (<see cref="SqlSync"/>), one row: the
+    /// database's identity (its id, when it was created or restored, its Service Broker GUID and a checksum of its collation, which
+    /// decides how names compare), its compatibility level (a selective re-read needs 130 for OPENJSON), then counts, latest dates
+    /// and checksums of everything a database's batch reads: the indexed sys.objects rows (by id, parent, date, name, schema and
+    /// type), the other named objects, the user-defined types, the database DDL triggers, the plan guides and the statistics the index keeps. Only what the login
+    /// may see is counted. No row where sys.databases does not show the database to the login.
+    /// </summary>
+    public static string Fingerprint(SqlRender r) =>
+        "SELECT d.database_id, d.create_date, d.service_broker_guid, CHECKSUM(d.collation_name), d.compatibility_level,"
+        + " ob.n, ob.m, ob.c, nm.n, nm.c, ty.n, ty.c, tr.n, tr.m, tr.c, pg.n, pg.m, pg.c, ss.n, ss.c FROM sys.databases AS d"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(o.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(o.object_id, o.parent_object_id, o.modify_date, o.name, o.schema_id, o.type))"
+        + " FROM sys.objects AS o WHERE o.type IN (" + ObjectTypes + ")) AS ob (n, m, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(u.k, u.s, u.n, u.d, u.f)) FROM (" + NamedObjects(r) + ") AS u (k, s, n, d, f)) AS nm (n, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(t.user_type_id, t.name, t.schema_id, t.is_table_type, t.is_assembly_type))"
+        + " FROM sys.types AS t WHERE t.is_user_defined = 1) AS ty (n, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(tr.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(tr.object_id, tr.name, tr.modify_date, tr.is_ms_shipped))"
+        + " FROM sys.triggers AS tr WHERE tr.parent_class = 0) AS tr (n, m, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), MAX(g.modify_date), CHECKSUM_AGG(BINARY_CHECKSUM(g.plan_guide_id, g.name, g.modify_date)) FROM sys.plan_guides AS g) AS pg (n, m, c)"
+        + " CROSS JOIN (SELECT COUNT_BIG(*), CHECKSUM_AGG(BINARY_CHECKSUM(sx.object_id, sx.stats_id, sx.name)) FROM sys.stats AS sx WHERE sx.auto_created = 0) AS ss (n, c)"
+        + " WHERE d.database_id = DB_ID();\n";
+
+    /// <summary>The indexed sys.objects rows as a selective re-read compares them with a saved database's (<see cref="SqlListing"/>):
+    /// id, parent, date and <see cref="RowChecksum"/>, in id order.</summary>
+    public const string Listing = "SELECT o.object_id, o.parent_object_id, o.modify_date, " + RowChecksum + " FROM sys.objects AS o" + StatsChecksums
+        + " WHERE o.type IN (" + ObjectTypes + ") ORDER BY o.object_id;\n";
 
     /// <summary>Whether the database's catalog collation, which its object names compare under, tells case apart: a and A compared
     /// under CATALOG_DEFAULT (the database's collation, or a contained database's fixed catalog collation). No catalog row, so no
@@ -198,7 +253,7 @@ internal static class ObjectSearchSql
     public static List<string> Lint()
     {
         var problems = new List<string>();
-        var texts = new List<string> { Databases, ResourceFingerprint, ModuleCall, ResourceObjects(true), Server(true, true), Agent };
+        var texts = new List<string> { Databases, ResourceFingerprint, ModuleCall, ModuleCallIds, Listing, ResourceObjects(true), Server(true, true), Agent };
         for (var band = ExplorerCatalog.MinBand; band <= ExplorerCatalog.MaxBand; band++)
         {
             var render = new SqlRender(band);
@@ -207,17 +262,23 @@ internal static class ObjectSearchSql
             {
                 foreach (var children in new[] { false, true })
                 {
-                    texts.Add(Batch(render, definitions, children));
-                    problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
-                    var vector = render with { VectorDimensions = true };
-                    texts.Add(Batch(vector, definitions, children));
-                    problems.AddRange(CatalogSql.Lint(Batch(vector, definitions, children), vector, list: false, mayCheckAccess: false).Select(problem => "vector batch " + band + " " + problem));
+                    foreach (var only in new[] { false, true })
+                    {
+                        texts.Add(Batch(render, definitions, children, only));
+                        problems.AddRange(CatalogSql.Lint(Batch(render, definitions, children, only), render, list: false, mayCheckAccess: false).Select(problem => "batch " + band + " " + problem));
+                        var vector = render with { VectorDimensions = true };
+                        texts.Add(Batch(vector, definitions, children, only));
+                        problems.AddRange(CatalogSql.Lint(Batch(vector, definitions, children, only), vector, list: false, mayCheckAccess: false).Select(problem => "vector batch " + band + " " + problem));
+                    }
                 }
                 problems.AddRange(CatalogSql.Lint(ResourceObjects(definitions), render, list: false, mayCheckAccess: false).Select(problem => "resource " + problem));
                 foreach (var box in new[] { false, true })
                     problems.AddRange(CatalogSql.Lint(Server(box, definitions), render, list: false, mayCheckAccess: false).Select(problem => "server " + problem));
             }
             problems.AddRange(CatalogSql.Lint(ResourceFingerprint, render, list: false, mayCheckAccess: false).Select(problem => "fingerprint " + problem));
+            texts.Add(Fingerprint(render));
+            problems.AddRange(CatalogSql.Lint(Fingerprint(render), render, list: false, mayCheckAccess: false).Select(problem => "database fingerprint " + band + " " + problem));
+            problems.AddRange(CatalogSql.Lint(Listing, render, list: false, mayCheckAccess: false).Select(problem => "listing " + problem));
             problems.AddRange(CatalogSql.Lint(Agent, render, list: false, mayCheckAccess: false, AgentLiterals).Select(problem => "agent " + problem));
         }
         foreach (var text in texts)
@@ -227,6 +288,9 @@ internal static class ObjectSearchSql
                 if (text.Contains(write, StringComparison.OrdinalIgnoreCase)) problems.Add("contains " + write.Trim());
         }
         if (Batch(new SqlRender(ExplorerCatalog.MaxBand), true).Contains("@db", StringComparison.Ordinal)) problems.Add("the batch names @db");
+        if (Batch(new SqlRender(ExplorerCatalog.MaxBand), true, only: true).Contains("@db", StringComparison.Ordinal)) problems.Add("the selective batch names @db");
+        if (Batch(new SqlRender(ExplorerCatalog.MaxBand), true).Contains("@ids", StringComparison.Ordinal)) problems.Add("the whole batch names @ids");
+        if (!Batch(new SqlRender(ExplorerCatalog.MaxBand), true).Contains("st.auto_created = 0", StringComparison.Ordinal)) problems.Add("the batch indexes auto-created statistics");
         return problems;
     }
 }
