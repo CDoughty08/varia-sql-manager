@@ -101,13 +101,21 @@ internal static class LiveDataChecks
                 // Sample SQL Server's own ms_ticks right after ticks[1] and ticks[2]: on contended Linux containers SQLPAL's
                 // ms_ticks can jump forward relative to the host wall clock, so comparing ElapsedMs against SQL Server's own
                 // ms_ticks span directly proves the sample tracks the server's clock even across a jump.
-                long? tick1Ms = null, tick2Ms = null;
-                long probe1Ms = 0, probe2Ms = 0;
-                var sampled = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2, 20_000);
-                if (sampled) (tick1Ms, probe1Ms) = await ReadMsTicksAsync();
-                sampled = sampled && await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 20_000);
-                if (sampled) (tick2Ms, probe2Ms) = await ReadMsTicksAsync();
-                return (view, sampled, view.Recorder.Ticks.Take(3).ToList(), tick1Ms, probe1Ms, tick2Ms, probe2Ms);
+                try
+                {
+                    long? tick1Ms = null, tick2Ms = null;
+                    long probe1Ms = 0, probe2Ms = 0;
+                    var sampled = await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 2, 20_000);
+                    if (sampled) (tick1Ms, probe1Ms) = await ReadMsTicksAsync();
+                    sampled = sampled && await view.Recorder.WaitAsync(recorder => recorder.Ticks.Count >= 3, 20_000);
+                    if (sampled) (tick2Ms, probe2Ms) = await ReadMsTicksAsync();
+                    return (view, sampled, view.Recorder.Ticks.Take(3).ToList(), tick1Ms, probe1Ms, tick2Ms, probe2Ms);
+                }
+                catch
+                {
+                    await Stop(view);
+                    throw;
+                }
             }
             finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(session), json), json); }
         }

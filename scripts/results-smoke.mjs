@@ -2864,8 +2864,9 @@ try {
     await resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'One Row per Entry', exact: true }).click()
   }
   await expect(cell(5, 0, diff)).toHaveText('5')
-  if (!layoutFolded) {
-    await expect(diffTools.getByRole('button', { name: 'Two rows', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const twoRowsButton = diffTools.getByRole('button', { name: 'Two rows', exact: true })
+  if (await twoRowsButton.isVisible()) {
+    await expect(twoRowsButton).toHaveAttribute('aria-pressed', 'true')
   } else {
     await moreResultsTools(page).click()
     await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'One Row per Entry', exact: true })).toHaveAttribute('aria-checked', 'false')

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Xml.Linq;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Actions;
+using Varia.Backend.Explorer;
 using Varia.Backend.Ssis;
 
 namespace Varia.Backend.Tests;
@@ -265,7 +266,7 @@ internal static class LoginLiveChecks
         await LoginMappingLiveChecks.RunAsync(check, actions, info, scratch, Sql);
 
         await ExtendedEventsDefinedAsync(check, Sql);
-        if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_XE") == "1") await ExtendedEventsAsync(check, actions, info, scratch, Sql, With, Create);
+        if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_XE") == "1") await ExtendedEventsAsync(check, service, actions, info, scratch, Sql, With, Create);
         else Console.WriteLine("New Login Extended Events check (critic A16) skipped: it runs only where VARIA_TEST_SQL_XE=1 (CI's disposable SQL Server).");
     }
 
@@ -359,7 +360,7 @@ internal static class LoginLiveChecks
     /// password with its old one (@password and @old_password), each with throwaway passwords. It reads the ring buffer until each run's
     /// password-bearing RPC is seen completed (or 30 seconds pass, which fails), then no password may appear in any field, as text,
     /// doubled quotes, XML-escaped or as UTF-16 bytes.</summary>
-    private static async Task ExtendedEventsAsync(Action<bool, string> check, ActionService actions, ConnectionInfo info, ScratchDatabase scratch, Func<string, string, int, Task<SqlRun>> sql,
+    private static async Task ExtendedEventsAsync(Action<bool, string> check, SqlService service, ActionService actions, ConnectionInfo info, ScratchDatabase scratch, Func<string, string, int, Task<SqlRun>> sql,
         Func<Func<SqlConnection, Task<string?>>, Task<string?>> with, Func<NewLoginDto, string?, List<string>?, LoginStatusDto?, ActionArgs> create)
     {
         check(LoginSql.PasswordGuard.Contains(XeLoginMarker, StringComparison.Ordinal) && SsisCreateSql.MasterKey.Text.Contains(XeKeyMarker, StringComparison.Ordinal)
@@ -370,18 +371,23 @@ internal static class LoginLiveChecks
             + string.Join(", ", XeEvents.Select(item => "ADD EVENT sqlserver." + item.Event + "(SET " + string.Join(", ", item.Fields.Select(field => field + " = (1)")) + " "
                 + "ACTION (sqlserver.client_app_name, sqlserver.sql_text) "
                 + "WHERE ([sqlserver].[is_system] = (0) AND [sqlserver].[like_i_sql_unicode_string]([sqlserver].[client_app_name], N'%Object Actions%')))"))
-            + " ADD TARGET package0.ring_buffer (SET max_memory = (16384)) WITH (MAX_DISPATCH_LATENCY = 1 SECONDS, EVENT_RETENTION_MODE = NO_EVENT_LOSS);\n"
+            + " ADD TARGET package0.ring_buffer (SET max_memory = (16384), max_events_limit = (0)) WITH (MAX_DISPATCH_LATENCY = 1 SECONDS, EVENT_RETENTION_MODE = NO_EVENT_LOSS);\n"
             + "ALTER EVENT SESSION [" + session + "] ON SERVER STATE = START;";
         var started = await sql(definition, "master", 300);
         check(started.Status == "completed", "the Extended Events session starts: " + started.Error);
-        async Task<string> Read() => await with(async connection =>
+        // Read the ring buffer on a non-Object Actions connection (ExplorerPool) so polling never pollutes the XE session's
+        // own ring buffer while still reading full un-truncated nvarchar(max) XML via ExecuteScalarAsync.
+        var readerHost = (IExplorerHost)service;
+        async Task<string> Read()
         {
+            await using var connection = readerHost.Connection(info.Id, "master");
+            await readerHost.OpenAsync(connection, CancellationToken.None);
             await using var command = connection.CreateCommand();
             command.CommandText = "SELECT CONVERT(nvarchar(max), t.target_data) FROM sys.dm_xe_session_targets AS t JOIN sys.dm_xe_sessions AS s ON s.address = t.event_session_address "
                 + "WHERE s.name = @name AND t.target_name = N'ring_buffer';";
             command.Parameters.Add(new SqlParameter("@name", System.Data.SqlDbType.NVarChar, 128) { Value = session });
-            return (string?)await command.ExecuteScalarAsync();
-        }) ?? "";
+            return (string?)await command.ExecuteScalarAsync() ?? "";
+        }
         // Each event: its name and every value it holds, unescaped.
         static List<(string Name, string Text)> Events(string xml) => xml.Length == 0 ? [] : [.. XDocument.Parse(xml).Root!.Elements("event").Select(item =>
             (item.Attribute("name")?.Value ?? "", string.Join("\n", item.Descendants("value").Select(value => value.Value))))];
@@ -394,15 +400,15 @@ internal static class LoginLiveChecks
         async Task<(bool Seen, List<(string Name, string Text)> Events)> WaitForNewAsync(string marker, int prior)
         {
             var waited = Stopwatch.StartNew();
-            var events = new List<(string Name, string Text)>();
             while (true)
             {
                 var xml = await Read();
-                events = Events(xml);
-                if (CountMatching(events, marker) > prior || waited.Elapsed > TimeSpan.FromSeconds(30))
+                var events = Events(xml);
+                var seen = CountMatching(events, marker) > prior;
+                if (seen || waited.Elapsed > TimeSpan.FromSeconds(30))
                 {
                     allData.Append(xml);
-                    return (CountMatching(events, marker) > prior, events);
+                    return (seen, events);
                 }
                 await Task.Delay(250);
             }
@@ -422,7 +428,7 @@ internal static class LoginLiveChecks
             await command.ExecuteNonQueryAsync();
             return "done";
         });
-        var (key, afterKey) = await WaitForNewAsync(XeKeyMarker, beforeKey);
+        var (key, _) = await WaitForNewAsync(XeKeyMarker, beforeKey);
         // Login Properties' password with Specify old password, on a login of the run's own.
         var changing = scratch.OwnLogin("xeprops");
         var oldPassword = "XeOld-" + ScratchDatabase.Throwaway() + "'";

@@ -184,24 +184,38 @@ describe('saved connection library', () => {
     expect(second.library.profiles.find(profile => profile.id === second.id)?.options.database).toBe('Sales')
     expect(await readFile(path, 'utf8')).not.toContain('secret-marker')
   })
-  it('evicts the oldest entry rather than a newer one when connects share the same millisecond', async () => {
+  it('evicts the oldest entry rather than a newer one when connects share the same millisecond, without reordering favorites', async () => {
     const { path } = await store()
     const fixed = () => new Date('2026-11-26T00:00:00.000Z')
     const library = new ConnectionStore(path, fixed)
+    const fav1 = { ...connectionDefaults('win32'), server: 'fav-1', database: 'master' }
+    const fav2 = { ...connectionDefaults('win32'), server: 'fav-2', database: 'master' }
+    await library.save({ options: fav1, favorite: true })
+    await library.save({ options: fav2, favorite: true })
+    await library.rememberEntry(fav1)
+    expect((await library.load()).library.profiles.filter(profile => profile.favorite).map(profile => profile.options.server)).toEqual(['fav-1', 'fav-2'])
     const base = { ...connectionDefaults('win32'), server: 'sql01', database: 'base' }
     await library.setEnvironment({ options: base, environment: 'Production' })
     for (let index = 0; index < 30; index++) await library.rememberEntry({ ...base, database: `db${index}` })
     let profiles = (await library.load()).library.profiles
-    expect(profiles).toHaveLength(30)
+    expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
     expect(profiles.some(profile => profile.options.database === 'base')).toBe(false)
-    // Re-connecting the oldest remaining entry moves it ahead of older ties; relabelling base keeps base and evicts the next oldest.
+    // Re-connecting the oldest remaining entry moves its recency ahead without reordering favorites; relabelling base keeps base and evicts the next oldest.
     await library.rememberEntry({ ...base, database: 'db0' })
     await library.setEnvironment({ options: base, environment: 'Staging' })
     profiles = (await library.load()).library.profiles
-    expect(profiles).toHaveLength(30)
+    expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
+    expect(profiles.filter(profile => profile.favorite).map(profile => profile.options.server)).toEqual(['fav-1', 'fav-2'])
     expect(profiles.some(profile => profile.options.database === 'base' && profile.options.environment === 'Staging')).toBe(true)
     expect(profiles.some(profile => profile.options.database === 'db0')).toBe(true)
     expect(profiles.some(profile => profile.options.database === 'db1')).toBe(false)
+    // Existing entries right at the 60 s forward cap still tie cleanly without falling back to `now()` and dropping the new entry.
+    const cappedAt = new Date('2026-11-26T00:01:00.000Z').toISOString()
+    await writeFile(path, JSON.stringify({ version: 1, profiles: Array.from({ length: 30 }, (_, index) => ({ id: crypto.randomUUID(), options: { ...base, database: `cap${index}` }, favorite: false, registered: false, lastConnected: cappedAt })) }))
+    await library.setEnvironment({ options: base, environment: 'Production' })
+    profiles = (await library.load()).library.profiles
+    expect(profiles).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.database === 'base' && profile.options.environment === 'Production' && profile.lastConnected === cappedAt)).toBe(true)
   })
   it('refuses to replace a directory found at the library path', async () => {
     const { directory } = await store()
