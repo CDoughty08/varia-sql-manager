@@ -50,6 +50,13 @@ internal static partial class BigQueryChecks
             && body["configuration"]?["query"]?["defaultDataset"]?["datasetId"]?.GetValue<string>() == "sales" && body["jobReference"]?["jobId"] is null,
             $"bigquery.dryRun is one dry-run job with the tab's dataset, answering its bytes: {plain.Code} {plain.Message} {plain.Result} {body}");
 
+        var clearedArgs = Args("SELECT * FROM orders");
+        clearedArgs["noDefaultDataset"] = true;
+        var cleared = await harness.Call("bigquery.dryRun", clearedArgs);
+        var clearedBody = JsonNode.Parse(harness.Fake.To(BigQueryFake.Jobs).Last().Body)!;
+        check(cleared.Code == "ok" && clearedBody["configuration"]?["query"]?["defaultDataset"] is null,
+            $"bigquery.dryRun with noDefaultDataset omits defaultDataset even on a connection with a default dataset: {cleared.Code} {clearedBody}");
+
         foreach (var (answer, expected, what) in new (string, string?, string)[]
         {
             (DryRunAnswer(20_971_520, "SCRIPT"), "script", "a script, estimated only up to its first DDL or control statement"),

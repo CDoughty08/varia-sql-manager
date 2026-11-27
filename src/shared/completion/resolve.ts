@@ -157,7 +157,7 @@ export class ScopeResolver {
           const path = this.dialect.objectPath(source.parts)
           if (path && !paths.has(key(path))) paths.set(key(path), [...path])
         } else if (source.kind === 'cte' || source.kind === 'derived') {
-          const shape = source.kind === 'cte' ? this.cte(source.cte) : source.shape
+          const shape = source.kind === 'cte' ? source.shape ?? this.cte(source.cte) : source.shape
           if (shape && !seen.has(shape)) { seen.add(shape); for (const star of shape.stars) next.push(star) }
         }
       }
@@ -255,7 +255,7 @@ export class ScopeResolver {
         }
         return shared
       }
-      case 'cte': { const shape = this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
+      case 'cte': { const shape = source.shape ?? this.cte(source.cte); return shape ? this.shape(shape, hops) : { columns: [], truncated: false } }
       case 'derived': return this.shape(source.shape, hops)
       case 'unnest': {
         if (this.spent > resolverLimits.work) { this.overBudget = true; return { columns: [], truncated: true, budget: true } }

@@ -1353,8 +1353,10 @@ view is an order of some or all of a result's base rows, read through the result
   result; a ninth drops the oldest.
 - **Order.** Stable, as ORDER BY: NULL and unreadable cells lowest; exact numerics by value, real/float as doubles,
   uniqueidentifier in SQL Server's byte order, datetimeoffset by UTC instant, other date/time types by fixed-width text,
-  binary bytewise, character columns by collation (code points for _BIN/_BIN2) ignoring trailing spaces, other types by
-  display text code points. `chars`/`bytes` order character, xml, json (and binary, for `bytes`) by cell length
+  binary bytewise, character columns by collation (non-Unicode `SQL_*` collations with string sort, Unicode and Windows
+  collations with word sort, legacy Unicode `_BIN` in SQL Server's legacy binary order, `_BIN2` by code points) ignoring
+  trailing spaces, other types by display text code points. `chars`/`bytes` order character, xml, json (and binary, for
+  `bytes`) by cell length
   ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); other columns ignore the mode.
 - **Progress (`op.progress`).** `results.view`, `.profile`, `.distinct` (open), `.pivot` and `.diff` send droppable
   `{ type: 'op.progress', phase, percent? }` EVENTs (`OperationProgress.cs`). Phases: `filter`, `keys`, `sort`, `unpack`,
@@ -1841,7 +1843,7 @@ escaping is ASCII (plus U+2028/U+2029 as their three bytes).
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
-| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits, otherwise a string; bit as `true`/`false`; everything else a string |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as a JSON number (using the page's exact finite double for real/float when available so extreme values round-trip, otherwise the display text when it is a finite JSON number of at most 15 significant digits) or a string; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
 | Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
 

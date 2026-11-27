@@ -473,29 +473,104 @@ function timesOfDay(timing: AgentScheduleTiming): DayTimes {
   return { own, carried }
 }
 
-/** The runs on or after `fromSeconds` the walk finds, at most `count`, none after `until`. */
+/** First value >= `from` congruent to `base` modulo `step`. */
+const alignUp = (from: number, base: number, step: number): number => {
+  const rem = (((from - base) % step) + step) % step
+  return rem === 0 ? from : from + (step - rem)
+}
+/** The runs on or after `fromSeconds` the walk finds, at most `count`, none after `until`. Advances by recurrence so sparse
+ *  schedules (e.g. every 48 or 99 months) still find all requested runs up to the end date or 9999-12-31. */
 function walkRuns(schedule: AgentScheduleTiming, times: DayTimes, cycle: ScheduleCycle, fromSeconds: number, count: number, until: number | undefined): number[] {
   const runs: number[] = []
   // No end date still ends with msdb's calendar, on 9999-12-31.
   const startDay = dayNumber(schedule.activeStartDate)
   const lastDay = schedule.activeEndDate >= noEndDate || !validDate(schedule.activeEndDate) ? dayNumber(noEndDate) : dayNumber(schedule.activeEndDate)
   const firstDay = Math.max(startDay, Math.floor(fromSeconds / 86_400))
-  // A day's own runs, and the morning after a run day carries the rest of its window, but never past the end date (a live Agent writes
-  // no next run for a window whose last run day was yesterday, though its window still runs this morning).
+  if (firstDay > lastDay) return runs
   const runDay = (day: number) => day >= startDay && day <= lastDay && runsOn(schedule, day, cycle)
-  for (let day = firstDay; day <= lastDay && day - firstDay <= scheduleSearchDays && runs.length < count; day++) {
-    if (until !== undefined && day * 86_400 > until) break
-    const carried = times.carried.length && runDay(day - 1) ? times.carried : []
-    const own = runDay(day) ? times.own : []
-    for (const time of carried.length ? [...carried, ...own] : own) {
+  const emit = (day: number, list: readonly number[]): boolean => {
+    for (const time of list) {
       const seconds = day * 86_400 + time
       if (seconds < fromSeconds) continue
-      if (until !== undefined && seconds > until) break
+      if (until !== undefined && seconds > until) return false
       runs.push(seconds)
-      if (runs.length >= count) break
+      if (runs.length >= count) return false
     }
+    return true
   }
-  return runs
+  const pastUntil = (day: number) => until !== undefined && day * 86_400 > until
+  switch (schedule.freqType) {
+    case freq.daily: {
+      const step = Math.max(1, schedule.freqInterval)
+      if (times.carried.length && runDay(firstDay - 1) && !emit(firstDay, times.carried)) return runs
+      for (let day = alignUp(firstDay, startDay, step); day <= lastDay && !pastUntil(day) && runs.length < count; day += step) {
+        if (!emit(day, times.own)) return runs
+        if (times.carried.length && day + 1 <= lastDay && !pastUntil(day + 1) && !emit(day + 1, times.carried)) return runs
+      }
+      return runs
+    }
+    case freq.weekly: {
+      if ((schedule.freqInterval & 0x7f) === 0) return runs
+      const step = cycleStep(schedule), baseWeek = cycle.week ?? weekOf(startDay)
+      for (let week = alignUp(weekOf(firstDay), baseWeek, step); runs.length < count; week += step) {
+        const sunday = week * 7 - 4
+        if (sunday > lastDay || pastUntil(sunday)) break
+        for (let offset = 0; offset < 7 && runs.length < count; offset++) {
+          const day = sunday + offset
+          if (day < firstDay) continue
+          if (day > lastDay || pastUntil(day)) return runs
+          if ((schedule.freqInterval & (1 << offset)) !== 0 && !emit(day, times.own)) return runs
+        }
+      }
+      return runs
+    }
+    case freq.monthly: {
+      const dom = schedule.freqInterval
+      if (dom < 1 || dom > 31) return runs
+      const step = cycleStep(schedule), baseMonth = cycle.month ?? monthOf(schedule.activeStartDate)
+      let misses = 0
+      for (let monthIndex = alignUp(monthOf(dateOfDay(firstDay)), baseMonth, step); runs.length < count && misses <= 4800; monthIndex += step) {
+        const year = Math.floor(monthIndex / 12), month = (monthIndex % 12) + 1
+        if (year > 9999) break
+        const monthDate = year * 10_000 + month * 100 + 1
+        const monthStart = dayNumber(monthDate)
+        if (monthStart > lastDay || pastUntil(monthStart)) break
+        if (dom > daysInMonth(monthDate)) { misses++; continue }
+        const day = monthStart + dom - 1
+        if (day < firstDay) continue
+        if (day > lastDay || pastUntil(day)) break
+        misses = 0
+        if (!emit(day, times.own)) return runs
+      }
+      return runs
+    }
+    case freq.relative: {
+      const step = Math.max(1, schedule.freqRecurrenceFactor), baseMonth = monthOf(schedule.activeStartDate)
+      let misses = 0
+      for (let monthIndex = alignUp(monthOf(dateOfDay(firstDay)), baseMonth, step); runs.length < count && misses <= 4800; monthIndex += step) {
+        const year = Math.floor(monthIndex / 12), month = (monthIndex % 12) + 1
+        if (year > 9999) break
+        const monthDate = year * 10_000 + month * 100 + 1
+        const monthStart = dayNumber(monthDate), total = daysInMonth(monthDate)
+        if (monthStart > lastDay || pastUntil(monthStart)) break
+        let found = false
+        for (let d = 0; d < total; d++) {
+          const day = monthStart + d
+          if (day < firstDay) continue
+          if (day > lastDay || pastUntil(day)) return runs
+          if (runsOn(schedule, day, cycle)) {
+            found = true
+            misses = 0
+            if (!emit(day, times.own)) return runs
+            break
+          }
+        }
+        if (!found) misses++
+      }
+      return runs
+    }
+    default: return runs
+  }
 }
 
 /**
@@ -652,6 +727,7 @@ export function freeSlotCheck(schedule: AgentScheduleTiming & { readonly enabled
       if (hits.length) clashes.push({ job: job.name, at: momentOfSeconds(Math.min(...hits)), mine: run })
     }
   }
+  clashes.sort((a, b) => momentSeconds(a.at) - momentSeconds(b.at) || momentSeconds(a.mine) - momentSeconds(b.mine))
   return { runs, usualSeconds: mine, measured: usualSeconds !== undefined, clashes }
 }
 /** The free-slot check in words: "Nothing else is scheduled during this job's usual 16 minutes." or the first clash. */

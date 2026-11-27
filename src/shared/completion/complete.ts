@@ -15,7 +15,7 @@ export async function completeFromIndex(read: CompletionRead, dialect: Completio
   const typed = word.quoted ? word.typed.replace(/\\(.)/g, '$1') : word.typed
   const insert = (name: string) => word.quoted ? name.replace(/[\\`]/g, '\\$&') : dialect.quote(name)
   const items = new Map<string, CompletionItem>()
-  const add = (item: CompletionItem) => { const id = `${item.kind}:${item.label.toLowerCase()}`; if (!items.has(id)) items.set(id, item) }
+  const add = (item: CompletionItem) => { const id = dialect.itemKey ? dialect.itemKey(item.kind, item.label) : `${item.kind}:${item.label.toLowerCase()}`; if (!items.has(id)) items.set(id, item) }
   let incomplete = false
   switch (site.kind) {
     case 'none': return { items: [], incomplete: false }

@@ -82,21 +82,44 @@ class Statement {
 
   constructor(readonly text: string, readonly offset: number) {
     const scanned = scanGoogleSql(text)
-    // `my-proj-2.sales`: the scanner reads `2.` as a number; a name follows, so it is `2` then a dot.
-    // So is a dashed name's last piece before a dot (my-project-123456.), whatever follows.
-    const dashedPiece = (index: number) => scanned[index - 1]?.kind === 'punctuation' && text[scanned[index - 1].start] === '-' && scanned[index - 1].end === scanned[index].start
-    const split = scanned.flatMap((token, index) => token.kind === 'number' && /^\d+\.$/.test(text.slice(token.start, token.end)) && ((scanned[index + 1]?.kind === 'word' && scanned[index + 1].start === token.end) || dashedPiece(index))
-      ? [{ kind: 'number' as const, start: token.start, end: token.end - 1 }, { kind: 'punctuation' as const, start: token.end - 1, end: token.end }] : [token])
-    const all = split.map(token => ({ ...token, text: text.slice(token.start, token.end), upper: token.kind === 'word' ? text.slice(token.start, token.end).toUpperCase() : '' }))
     let start = 0, end = text.length
-    for (const token of all) {
-      if (token.kind !== 'punctuation' || token.text !== ';') continue
+    for (let i = 0; i < scanned.length; i++) {
+      const token = scanned[i]
+      if (token.kind !== 'punctuation' || token.end - token.start !== 1 || text.charCodeAt(token.start) !== 59) continue
       if (token.end <= offset) start = token.end
       else if (token.start >= offset) { end = token.start; break }
     }
-    this.inside = all.find(token => (token.kind === 'comment' || token.kind === 'string' || token.kind === 'quotedIdentifier')
-      && token.start < offset && (offset < token.end || (offset === token.end && !!token.open)))
-    this.toks = all.filter(token => token.kind !== 'whitespace' && token.kind !== 'comment' && token.start >= start && token.end <= end)
+    const toks: Tok[] = []
+    for (let i = 0; i < scanned.length; i++) {
+      const token = scanned[i]
+      if (token.end < start) continue
+      if (token.start > end) break
+      if (!this.inside && (token.kind === 'comment' || token.kind === 'string' || token.kind === 'quotedIdentifier')
+        && token.start < offset && (offset < token.end || (offset === token.end && !!token.open))) {
+        const slice = text.slice(token.start, token.end)
+        this.inside = { ...token, text: slice, upper: '' }
+      }
+      if (token.kind === 'whitespace' || token.kind === 'comment' || token.start < start || token.end > end) continue
+      // `my-proj-2.sales`: the scanner reads `2.` as a number; a name follows, so it is `2` then a dot.
+      // So is a dashed name's last piece before a dot (my-project-123456.), whatever follows.
+      if (token.kind === 'number' && text.charCodeAt(token.end - 1) === 46 && token.end - token.start >= 2) {
+        let digitsOnly = true
+        for (let c = token.start; c < token.end - 1; c++) {
+          const code = text.charCodeAt(c)
+          if (code < 48 || code > 57) { digitsOnly = false; break }
+        }
+        const prev = scanned[i - 1], next = scanned[i + 1]
+        const dashedPiece = prev?.kind === 'punctuation' && text.charCodeAt(prev.start) === 45 && prev.end === token.start
+        if (digitsOnly && ((next?.kind === 'word' && next.start === token.end) || dashedPiece)) {
+          toks.push({ kind: 'number', start: token.start, end: token.end - 1, text: text.slice(token.start, token.end - 1), upper: '' })
+          toks.push({ kind: 'punctuation', start: token.end - 1, end: token.end, text: '.', upper: '' })
+          continue
+        }
+      }
+      const slice = text.slice(token.start, token.end)
+      toks.push({ ...token, text: slice, upper: token.kind === 'word' ? slice.toUpperCase() : '' })
+    }
+    this.toks = toks
     this.match = this.toks.map(() => -1)
     this.parent = this.toks.map(() => -1)
     const stack: number[] = []
@@ -154,76 +177,74 @@ function segments(statement: Statement, open: number): Run[] {
 
 /** Reads one block: its WITH queries, and per segment its sources and select list's shape. */
 class BlockReader {
-  private readonly bodies = new Map<number, Run[]>()
-  private readonly shapes = new Map<number, QueryShape>()
+  private readonly bodies = new Map<number, { readonly outer: ReadonlyMap<string, CteScope>; readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> }>()
+  private readonly shapes = new Map<number, { readonly outer: ReadonlyMap<string, CteScope>; readonly shape: QueryShape }>()
   private depth = 0
-  /** For a WITH query's body (by its '('), the WITH names it cannot see: itself (unless RECURSIVE) and the ones after it. */
-  readonly hidden = new Map<number, { readonly siblings: readonly CteScope[]; readonly from: number }>()
-  /** The WITH names read so far by lower-case name, the first of a name winning. */
-  private readonly named = new Map<string, CteScope>()
+  /** For each WITH query's body '(', the lexical CTE environment visible inside that body (outer CTEs + earlier siblings, plus itself if RECURSIVE). */
+  readonly cteParenEnv = new Map<number, ReadonlyMap<string, CteScope>>()
 
-  constructor(private readonly statement: Statement, private readonly ctes: CteScope[]) {}
+  constructor(private readonly statement: Statement) {}
 
   private get toks() { return this.statement.toks }
 
-  /** The block's segments after its WITH queries (whose shapes are added to the scope's), read once. */
-  body(open: number): Run[] {
+  /** The block's segments after its WITH queries, plus the CTE environment visible in the block's body after its WITH clause. */
+  body(open: number, outer: ReadonlyMap<string, CteScope>): { readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> } {
     const kept = this.bodies.get(open)
-    if (kept) return kept
-    const read = this.readBody(open)
-    this.bodies.set(open, read)
+    if (kept && kept.outer === outer) return kept
+    const read = this.readBody(open, outer)
+    this.bodies.set(open, { outer, ...read })
     return read
   }
 
-  private readBody(open: number): Run[] {
+  private readBody(open: number, outer: ReadonlyMap<string, CteScope>): { readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> } {
     const all = segments(this.statement, open)
     const first = all[0]
-    if (!first.length || !isWord(this.toks[first[0]], 'WITH')) return all
+    if (!first.length || !isWord(this.toks[first[0]], 'WITH')) return { runs: all, env: outer }
     let at = 1
     const recursive = isWord(this.toks[first[at]], 'RECURSIVE')
     if (recursive) at++
-    const siblings: { cte: CteScope; paren: number }[] = []
+    const env = new Map(outer)
     while (at < first.length) {
       const name = this.toks[first[at]], as = this.toks[first[at + 1]], paren = first[at + 2]
       if (!isName(name) || !isWord(as, 'AS') || !isPunct(this.toks[paren], '(')) break
-      // Read before its name is added: a WITH query sees only the ones before it (GoogleSQL's rule without RECURSIVE).
-      const cte = { name: partsOf(name).join('.'), shape: this.shape(paren) }
-      this.ctes.push(cte)
-      if (!this.named.has(cte.name.toLowerCase())) this.named.set(cte.name.toLowerCase(), cte)
-      siblings.push({ cte, paren })
+      const cteName = partsOf(name).join('.')
+      const before = new Map(env)
+      // Read before its name is added: a WITH query sees only outer CTEs and the siblings before it (without RECURSIVE).
+      const cte: CteScope = { name: cteName, shape: this.shape(paren, before) }
+      env.set(cteName.toLowerCase(), cte)
+      // Inside this CTE's body, RECURSIVE exposes the CTE itself (but never later siblings).
+      this.cteParenEnv.set(paren, recursive ? new Map(env) : before)
       at += 3
       if (!isPunct(this.toks[first[at]], ',')) break
       at++
     }
-    const list = siblings.map(entry => entry.cte)
-    siblings.forEach(({ paren }, index) => this.hidden.set(paren, { siblings: list, from: recursive ? index + 1 : index }))
-    return [first.slice(at), ...all.slice(1)]
+    return { runs: [first.slice(at), ...all.slice(1)], env }
   }
 
   /** The columns a parenthesized query gives: its first segment's select list. Nesting past readerLimits.depth gives none. */
-  shape(open: number): QueryShape {
+  shape(open: number, outer: ReadonlyMap<string, CteScope>): QueryShape {
     const kept = this.shapes.get(open)
-    if (kept) return kept
+    if (kept && kept.outer === outer) return kept.shape
     if (this.depth >= readerLimits.depth) return { columns: [], stars: [] }
     this.depth++
     try {
-      const [first] = this.body(open)
-      const shape = first ? this.selectShape(first) : { columns: [], stars: [] }
-      this.shapes.set(open, shape)
+      const { runs: [first], env } = this.body(open, outer)
+      const shape = first ? this.selectShape(first, env) : { columns: [], stars: [] }
+      this.shapes.set(open, { outer, shape })
       return shape
     } finally { this.depth-- }
   }
 
   /** A segment's sources: the targets of DML, then its FROM (or MERGE's USING) items. An INSERT's target counts only for a caret
    *  in its column list (`caret`; its SELECT reads other tables), unless `includeInsertTarget` is true. */
-  sources(run: Run, caret?: number, includeInsertTarget = false): ScopeSource[] {
+  sources(run: Run, env: ReadonlyMap<string, CteScope>, caret?: number, includeInsertTarget = false): ScopeSource[] {
     const { toks } = this
     const out: ScopeSource[] = []
     const lead = toks[run[0]]
     if (isWord(lead, 'UPDATE', 'DELETE', 'MERGE', 'INSERT')) {
       let at = 1
       if (isWord(toks[run[at]], 'FROM', 'INTO')) at++
-      const target = this.item(run, at, true)
+      const target = this.item(run, at, env, true)
       const list = run[target.next] ?? -1
       const inList = isPunct(toks[list], '(') && caret !== undefined && toks[list].end <= caret
         && (this.statement.match[list] >= toks.length || toks[this.statement.match[list]].start >= caret)
@@ -242,7 +263,7 @@ class BlockReader {
         const word = toks[run[next]]
         if (word.kind === 'word' && (fromEnd.has(word.upper) || word.upper === 'FROM')) break
         if (isPunct(word, ',') || (word.kind === 'word' && joinWords.has(word.upper))) { next++; continue }
-        const read = this.item(run, next)
+        const read = this.item(run, next, env)
         if (read.source) {
           const source = implicitUnnest(read.source, names)
           items.push(source)
@@ -270,12 +291,12 @@ class BlockReader {
   }
 
   /** One FROM item at `at`: a table name, a subquery or UNNEST, with its alias. A DML `target` may be followed by a column list. */
-  item(run: Run, at: number, target = false): { source?: ScopeSource; next: number } {
+  item(run: Run, at: number, env: ReadonlyMap<string, CteScope>, target = false): { source?: ScopeSource; next: number } {
     const { toks } = this
     const token = toks[run[at]]
     let source: ScopeSource | undefined
     if (isPunct(token, '(')) {
-      source = this.statement.isQuery(run[at]) ? { kind: 'derived', shape: this.shape(run[at]) } : undefined
+      source = this.statement.isQuery(run[at]) ? { kind: 'derived', shape: this.shape(run[at], env) } : undefined
       at++
     } else if (isWord(token, 'UNNEST') && isPunct(toks[run[at + 1]], '(')) {
       const inner = this.statement.top(run[at + 1]).map(index => toks[index])
@@ -359,12 +380,12 @@ class BlockReader {
   }
 
   /** A segment's select list: named columns (aliases, a column reference's last part) and `*` or `alias.*`. */
-  selectShape(run: Run): QueryShape {
+  selectShape(run: Run, env: ReadonlyMap<string, CteScope>): QueryShape {
     const { toks } = this
     const select = run.findIndex(index => isWord(toks[index], 'SELECT'))
     if (select < 0) return { columns: [], stars: [] }
-    // WITH names as far as they are known here: a WITH query's body is read before its own name and the later ones are added.
-    const sources = this.sources(run).map(source => resolveCte(source, name => this.named.get(name)))
+    // WITH names visible in this block's lexical scope (outer + own WITH queries).
+    const sources = this.sources(run, env).map(source => resolveCte(source, name => env.get(name)))
     let at = select + 1
     if (isWord(toks[run[at]], 'AS') && isWord(toks[run[at + 1]], 'STRUCT', 'VALUE')) at += 2
     if (isWord(toks[run[at]], 'DISTINCT', 'ALL')) at++
@@ -458,39 +479,36 @@ function chainOf(tokens: readonly Tok[]): string[] | undefined {
 }
 
 /** The scope a position sees: the sources of its query block's segment, then of each enclosing query block's segment that holds
- *  it (a WITH query's body sees no other query's sources), and the WITH queries of those blocks. */
+ *  it (a WITH query's body sees no other query's sources), and the WITH queries visible in its lexical scope (inner shadowing outer). */
 function scopeAt(statement: Statement, open: number, offset: number): QueryScope {
-  const ctes: CteScope[] = []
-  const reader = new BlockReader(statement, ctes)
+  const reader = new BlockReader(statement)
   const blocks = statement.ancestors(open).filter(block => statement.isQuery(block))
   if (!blocks.includes(-1)) blocks.push(-1)
-  const bodies = new Map<number, Run[]>()
-  // Outer blocks first, so their WITH queries are known when an inner block's names are read.
-  for (const block of [...blocks].reverse()) bodies.set(block, reader.body(block))
-  // Inside a WITH query's body, the names it cannot see (itself and the later ones) are out of scope.
-  const hidden = new Set<CteScope>()
-  for (const block of blocks) {
-    const entry = reader.hidden.get(block)
-    if (entry) for (let at = entry.from; at < entry.siblings.length; at++) hidden.add(entry.siblings[at])
+  const bodies = new Map<number, { readonly runs: Run[]; readonly env: ReadonlyMap<string, CteScope> }>()
+  // Outer blocks first, passing each block's lexical CTE environment inward (with CTE bodies receiving only earlier siblings).
+  let currentEnv: ReadonlyMap<string, CteScope> = new Map()
+  for (const block of [...blocks].reverse()) {
+    const entryEnv = reader.cteParenEnv.get(block) ?? currentEnv
+    const read = reader.body(block, entryEnv)
+    bodies.set(block, read)
+    currentEnv = read.env
   }
-  const visible = ctes.filter(cte => !hidden.has(cte))
-  const named = new Map<string, CteScope>()
-  for (const cte of visible) if (!named.has(cte.name.toLowerCase())) named.set(cte.name.toLowerCase(), cte)
+  const visible = [...currentEnv.values()]
   const sources: ScopeSource[] = []
   const end = (run: Run) => run.length ? statement.toks[run.at(-1)!].end : -1
   blocks.forEach((block, depth) => {
-    const body = bodies.get(block)!
+    const { runs: body, env } = bodies.get(block)!
     const run = depth === 0 ? body.find(segment => segment.length && end(segment) >= offset) ?? body.at(-1) : body.find(segment => segment.includes(blocks[depth - 1]))
-    if (run) for (const source of reader.sources(run, offset)) sources.push(resolveCte(source, name => named.get(name)))
+    if (run) for (const source of reader.sources(run, env, offset)) sources.push(resolveCte(source, name => env.get(name)))
   })
   return { sources, ctes: visible }
 }
 
-/** A one-part name that is a WITH query refers to it (`find` takes a lower-case name). */
+/** A one-part name that is a WITH query refers to it (`find` takes a lower-case name), binding its resolved shape. */
 function resolveCte(source: ScopeSource, find: (name: string) => CteScope | undefined): ScopeSource {
   if (source.kind !== 'object' || source.parts.length !== 1) return source
   const cte = find(source.parts[0].toLowerCase())
-  return cte ? { kind: 'cte', name: source.name, cte: cte.name, span: source.span } : source
+  return cte ? { kind: 'cte', name: source.name, cte: cte.name, shape: cte.shape, span: source.span } : source
 }
 
 /** The top-level token index at `open`'s level immediately before `index`, or -1. */
@@ -838,16 +856,17 @@ export function readGoogleSqlHover(text: string, offset: number): HoverRead | un
  */
 export function readGoogleSqlStatementSources(text: string, offset: number): ScopeSource[] {
   const statement = new Statement(text, offset)
-  const ctes: CteScope[] = []
-  const reader = new BlockReader(statement, ctes)
+  const reader = new BlockReader(statement)
   const blocks = [-1]
   for (let index = 0; index < statement.toks.length; index++) {
     if (isPunct(statement.toks[index], '(') && statement.isQuery(index)) blocks.push(index)
   }
+  const emptyEnv: ReadonlyMap<string, CteScope> = new Map()
   const sources: ScopeSource[] = []
   for (const block of blocks) {
-    for (const run of reader.body(block)) {
-      for (const source of reader.sources(run, undefined, true)) sources.push(source)
+    const { runs, env } = reader.body(block, reader.cteParenEnv.get(block) ?? emptyEnv)
+    for (const run of runs) {
+      for (const source of reader.sources(run, env, undefined, true)) sources.push(source)
     }
   }
   return sources

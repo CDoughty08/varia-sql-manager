@@ -91,6 +91,46 @@ internal static class FloatExactChecks
         check(open >= 4 + 2 * PageLengths.ExactBytes && lengths.MemoryBytes == PageLengths.Overhead + 4 * 2 + 2 * PageLengths.ExactBytes,
             "the exact values are charged with the page's lengths sidecar, and an open row's are counted before it commits");
         check(!PageView.Parse(page, 2).TryExact(1, 0, out _), "a view without its page's sidecar reads only text");
+        // JSON export writes a finite round-trippable number for double.MaxValue / -double.MaxValue from page exacts, and KeepsValue rejects overflowing G15 text.
+        var boundsBuilder = new PageBuilder(1, [WireKind.Text]);
+        boundsBuilder.BeginRow(); boundsBuilder.AppendFloat(double.MaxValue); boundsBuilder.CommitRow();
+        boundsBuilder.BeginRow(); boundsBuilder.AppendFloat(-double.MaxValue); boundsBuilder.CommitRow();
+        var boundsPage = boundsBuilder.Seal(out var boundsLengths);
+        var boundsView = PageView.Parse(boundsPage, 1).With(boundsLengths);
+        var jsonOut = new System.Buffers.ArrayBufferWriter<byte>();
+        var writer = new ResultTextWriter(jsonOut, new TextOptions(TextFormat.Json, true, true, false, false, false), [new ResultColumn("v", "float", "text")]);
+        writer.Begin(); writer.Row(boundsView, 0, [0]); writer.Row(boundsView, 1, [0]); writer.End();
+        using var jsonDoc = System.Text.Json.JsonDocument.Parse(jsonOut.WrittenMemory);
+        var parsedMax = jsonDoc.RootElement[0].GetProperty("v").GetDouble();
+        var parsedMin = jsonDoc.RootElement[1].GetProperty("v").GetDouble();
+        check(double.IsFinite(parsedMax) && parsedMax == double.MaxValue && double.IsFinite(parsedMin) && parsedMin == -double.MaxValue
+            && !ResultTextWriter.KeepsValue("1.79769313486232E+308"u8) && !ResultTextWriter.KeepsValue("-1.79769313486232E+308"u8),
+            "JSON export writes round-trippable finite doubles for double.MaxValue and -double.MaxValue and KeepsValue refuses overflowing G15 bounds");
+        // real (float32) exact values export as float32 without float64 widening artifacts (0.10000001f -> 0.10000001, not 0.10000000894069672).
+        var realOut = new System.Buffers.ArrayBufferWriter<byte>();
+        var realWriter = new ResultTextWriter(realOut, new TextOptions(TextFormat.Json, true, true, false, false, false), [new ResultColumn("a", "float", "text"), new ResultColumn("b", "real", "text")]);
+        realWriter.Begin(); realWriter.Row(view, 1, [1]); realWriter.End();
+        var realJson = System.Text.Encoding.UTF8.GetString(realOut.WrittenSpan);
+        check(realJson.Contains("0.10000001", StringComparison.Ordinal) && !realJson.Contains("0.1000000089", StringComparison.Ordinal),
+            "JSON export writes exact real values as float32 without float64 widening artifacts: " + realJson);
+        // Sorted/filtered view pages preserve exact float values so JSON export through a view also round-trips double.MaxValue.
+        var viewStore = new ResultStore(1L << 30, 1L << 29);
+        var floatSet = Fill(viewStore, viewStore.BeginQuery("view-float"), [(1, double.MaxValue, RealHigh), (2, -double.MaxValue, RealLow)]);
+        var sortedView = viewStore.AddView(floatSet, [0, 1], [], false, true, 0, null);
+        var viewOut = new System.Buffers.ArrayBufferWriter<byte>();
+        var viewWriter = new ResultTextWriter(viewOut, new TextOptions(TextFormat.Json, true, true, false, false, false), floatSet.Columns);
+        viewWriter.Begin();
+        var viewLengthsRows = 0;
+        foreach (var stored in ViewPages.Stored(sortedView, 0, 2))
+        {
+            viewLengthsRows += stored.Lengths.Rows;
+            var pv = PageView.Parse(stored.Body(), floatSet.Columns.Count).With(stored.Lengths);
+            for (var r = 0; r < stored.Rows; r++) viewWriter.Row(pv, r, [1]);
+        }
+        viewWriter.End();
+        using var viewJson = System.Text.Json.JsonDocument.Parse(viewOut.WrittenMemory);
+        check(viewLengthsRows == 0 && viewJson.RootElement[0].GetProperty("F").GetDouble() == double.MaxValue && viewJson.RootElement[1].GetProperty("F").GetDouble() == -double.MaxValue,
+            "JSON export through a sorted/filtered view preserves exact finite doubles without attaching zeroed rowBytes: " + System.Text.Encoding.UTF8.GetString(viewOut.WrittenSpan));
     }
 
     private static string CellText(double value)

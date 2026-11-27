@@ -264,7 +264,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method !== 'query.execute') return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
-  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined && options.residence === undefined && options.windowCacheMiB === undefined
+  return options.dataset === undefined && options.noDefaultDataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined && options.residence === undefined && options.windowCacheMiB === undefined
 }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */

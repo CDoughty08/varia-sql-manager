@@ -24,7 +24,7 @@ export interface QueryShape {
  */
 export type ScopeSource =
   | { readonly kind: 'object'; readonly name: string; readonly parts: readonly string[]; readonly span?: TextSpan }
-  | { readonly kind: 'cte'; readonly name: string; readonly cte: string; readonly span?: TextSpan }
+  | { readonly kind: 'cte'; readonly name: string; readonly cte: string; readonly shape?: QueryShape; readonly span?: TextSpan }
   | { readonly kind: 'derived'; readonly name?: string; readonly shape: QueryShape }
   | { readonly kind: 'unnest'; readonly name?: string; readonly path: readonly string[] }
 
@@ -94,6 +94,8 @@ export interface CompletionDialect {
   /** An index entry's completion kind, and the detail its item shows (its kind, a routine's signature, a sharded group). */
   itemKind(item: LanguageLookupItem): CompletionKind
   itemDetail(item: LanguageLookupItem): string | undefined
+  /** Deduplication identity for completion items (default: case-insensitive `kind:label`). */
+  itemKey?(kind: CompletionKind, label: string): string
   /** An object's kind as hover names it (Table, View). */
   objectLabel(kind: string, subtype?: string): string
   /** An object's index path as the editor writes it in hover (`project.dataset.table`). */

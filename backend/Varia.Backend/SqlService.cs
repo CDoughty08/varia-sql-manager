@@ -1310,7 +1310,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection)
             return args.Preview is { } preview ? await PreviewBigQueryAsync(args, preview, bigQueryConnection, context) : await ExecuteBigQueryAsync(args, bigQueryConnection, context);
         if (args.Preview is not null) throw new RequestException("INVALID_PARAMS", "Preview Rows through tabledata.list applies only to BigQuery connections.");
-        if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
+        if (args.Dataset is not null || args.NoDefaultDataset) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         if (args.Residence is not null || args.WindowCacheMiB is not null) throw new RequestException("INVALID_PARAMS", "Result residence and the window cache apply only to BigQuery connections.");
         Name(args.Database);
