@@ -66,9 +66,9 @@ export function shortenDistinct(a: string, b: string, max: number): [string, str
   const windowOf = (chars: string[]) => {
     const start = Math.max(lead, Math.min(diff, Math.max(0, chars.length - room)))
     const end = Math.min(chars.length, start + room)
-    const body = chars.slice(start, end).join('')
     const suffix = end < chars.length ? '…' : ''
-    return (lead > 0 ? chars.slice(0, lead).join('') : '') + '…' + (suffix ? body.slice(0, Math.max(1, room - 1)) + suffix : body)
+    const body = chars.slice(start, suffix ? Math.min(end, start + Math.max(1, room - 1)) : end).join('')
+    return (lead > 0 ? chars.slice(0, lead).join('') : '') + '…' + body + suffix
   }
   const wa = windowOf(ca), wb = windowOf(cb)
   return wa !== wb ? [wa, wb] : [a, b]

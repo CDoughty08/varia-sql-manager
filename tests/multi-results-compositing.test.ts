@@ -13,7 +13,7 @@ import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { minGridHeight, setFloors, stackLayout } from '../src/renderer/src/grid/stack'
 import ResultsTabs, { tabsFold, tabsNeed } from '../src/renderer/src/grid/ResultsTabs'
-import ResultsStack, { entryNotices, entryNoticesHeight, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
+import ResultsStack, { entryNotices, entryNoticesHeight, entryTotalBatches, multiNoticeHeight, multiStackHeaderHeight, multiSummaryMinHeight, scrollbarSize, settledContent, stackNeed } from '../src/renderer/src/grid/ResultsStack'
 import { combinedTargetCount, comparisonTabLabel, jumpResult, pickerRequests, pickerRows, shortenDistinct, stackReveals, stepResult, topItems } from '../src/renderer/src/grid/result-picker'
 import { CompareService, isCrossEnginePair } from '../src/renderer/src/results/CompareService'
 import ComparePopover from '../src/renderer/src/results/ComparePopover'
@@ -3076,5 +3076,266 @@ describe('Round 7 adversarial regression checks (Domain 4: Results & CSS)', () =
       { property: 'outline', value: '1px solid var(--varia-focusBorder)' },
       { property: 'outline-offset', value: '-1px' }
     ]))
+  })
+
+  it('R8 D4 #3: resolves per-entry batch totals so single-batch 3-server runs never print "Batch 1 of 3" while multi-batch targets still show their own batch total', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 800 })
+    cleanups.add(() => {
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    })
+
+    // 3-server single-batch run (sum of batchesTotal = 3 -> tab.totalBatches === 3, each target batchesTotal === 1).
+    const doc = f.documents.create('r8-batch.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, batchNumber: 1, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, batchNumber: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, batchNumber: 1, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, batchNumber: 1, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { batchesCompleted: 1, batchesTotal: 1, resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { batchesCompleted: 1, batchesTotal: 1, resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { batchesCompleted: 1, batchesTotal: 1, resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb]
+      )
+    })
+    const tab = f.results.getSnapshot()[doc.id]
+    expect(tab.totalBatches).toBe(3)
+    const eastEntry = tab.sets.find(entry => entry.descriptor.targetKey === 'prod-east')!
+    const combEntry = tab.sets.find(entry => entry.descriptor.kind === 'combined')!
+    expect(entryTotalBatches(tab, eastEntry)).toBe(1)
+    expect(entryTotalBatches(tab, combEntry)).toBe(0)
+
+    // ResultsTabs (inline ViewFacts without .rt-views): no "Batch 1 of 3".
+    f.results.focusEntry(doc.id, eastEntry.key)
+    const tabsHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    expect(tabsHost.querySelector('.rt-facts')?.textContent).not.toContain('Batch')
+
+    // ResultsTabs (expanded .rt-views ViewFacts with a Pivot): still no "Batch 1 of 3".
+    f.results.addSet(doc.id, descriptor(801, { index: 0, kind: 'pivot', rowsRead: 1, rowsStored: 1, rowsAvailable: 1 }), 'Pivot of prod-sql-east-01', [`1:1`])
+    f.results.focusEntry(doc.id, eastEntry.key)
+    const tabsExpandedHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    expect(tabsExpandedHost.querySelector('.rt-views .rt-facts')?.textContent).not.toContain('Batch')
+
+    // ResultsStack: no .rs-caption-batch on any single-batch server or Combined.
+    const stackHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+    }))
+    expect(stackHost.querySelectorAll('.rs-caption-batch')).toHaveLength(0)
+
+    // Multi-batch per-server target (batchesTotal: 2, batchNumber: 2) DOES display "Batch 2 of 2" in both Tabs and Stacked.
+    const docMulti = f.documents.create('r8-multibatch.sql', 'SELECT 1;\nGO\nSELECT 2;', 'SalesDB')
+    f.results.begin(docMulti.id, 'q2', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets.slice(0, 2) } })
+    const b1 = descriptor(21, { index: 0, batchNumber: 2, targetKey: 'prod-east', statementSlot: 0 })
+    const b2 = descriptor(22, { index: 1, batchNumber: 1, targetKey: 'prod-west', statementSlot: 0 })
+    void f.results.finish(docMulti.id, 'q2', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { batchesCompleted: 2, batchesTotal: 2, resultSetIds: [21] }),
+          multiOutcome(sqlTargets[1], { batchesCompleted: 1, batchesTotal: 1, resultSetIds: [22] })
+        ],
+        [b1, b2]
+      )
+    })
+    const multiTab = f.results.getSnapshot()[docMulti.id]
+    const b1Key = multiTab.sets.find(entry => entry.descriptor.targetKey === 'prod-east')!.key
+    f.results.focusEntry(docMulti.id, b1Key)
+    const tabsMultiBatch = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsTabs, { tabId: docMulti.id, tab: f.results.getSnapshot()[docMulti.id] })
+    }))
+    expect(tabsMultiBatch.querySelector('.rt-facts')?.textContent).toContain('Batch 2 of 2')
+
+    const stackMultiBatch = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: docMulti.id, tab: f.results.getSnapshot()[docMulti.id] })
+    }))
+    const batchLabels = [...stackMultiBatch.querySelectorAll('.rs-caption-batch')].map(el => el.textContent)
+    expect(batchLabels).toEqual(['Batch 2 of 2'])
+  })
+
+  it('R8 D4 #4: windowed multi-server BigQuery results show "cached result: may expire early" from target.job.cacheHit in both Stacked and Tabs layouts', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 800 })
+    cleanups.add(() => {
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    })
+
+    const bqTargets: MultiTargetIdentity[] = [
+      { targetKey: 'bq-cached', connectionId: 'c-bq-1', provider: 'bigquery', label: 'analytics-cached' },
+      { targetKey: 'bq-fresh', connectionId: 'c-bq-2', provider: 'bigquery', label: 'analytics-fresh' }
+    ]
+    const cachedJob: BigQueryJobSummary = { jobId: 'job-cached', location: 'US', project: 'proj-1', bytesProcessed: 0, cacheHit: true }
+    const freshJob: BigQueryJobSummary = { jobId: 'job-fresh', location: 'US', project: 'proj-2', bytesProcessed: 1024, cacheHit: false }
+    const doc = f.documents.create('r8-bq-cache.sql', 'SELECT * FROM big.table;', 'core')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: bqTargets } })
+    const rCached = descriptor(31, { index: 0, targetKey: 'bq-cached', statementSlot: 0, residence: 'remote', rowsRead: 50_000, rowsStored: 0, rowsAvailable: 50_000 })
+    const rFresh = descriptor(32, { index: 1, targetKey: 'bq-fresh', statementSlot: 0, residence: 'remote', rowsRead: 50_000, rowsStored: 0, rowsAvailable: 50_000 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(bqTargets[0], { resultSetIds: [31], job: cachedJob }),
+          multiOutcome(bqTargets[1], { resultSetIds: [32], job: freshJob })
+        ],
+        [rCached, rFresh]
+      )
+    })
+    const tab = f.results.getSnapshot()[doc.id]
+    expect(tab.summary).toBeUndefined()
+    const cachedEntry = tab.sets.find(entry => entry.descriptor.targetKey === 'bq-cached')!
+    const freshEntry = tab.sets.find(entry => entry.descriptor.targetKey === 'bq-fresh')!
+
+    // Stacked layout: cached target shows the expiry notice, uncached target does not.
+    const stackHost = mount(createElement(WorkbenchProvider, {
+      workbench: f as unknown as Workbench,
+      children: createElement(ResultsStack, { tabId: doc.id, tab })
+    }))
+    const captionFacts = [...stackHost.querySelectorAll('.rs-caption-facts')].map(el => el.textContent ?? '')
+    expect(captionFacts[0]).toContain('windowed in BigQuery · cached result: may expire early')
+    expect(captionFacts[1]).toContain('windowed in BigQuery')
+    expect(captionFacts[1]).not.toContain('cached result: may expire early')
+
+    // Tabs layout: selecting cached target shows expiry notice; selecting fresh target omits it.
+    f.results.focusEntry(doc.id, cachedEntry.key)
+    const tabsHost = document.body.appendChild(document.createElement('div'))
+    const tabsRoot = createRoot(tabsHost)
+    cleanups.add(() => { act(() => tabsRoot.unmount()); tabsHost.remove() })
+    const renderTabs = () => act(() => {
+      tabsRoot.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    renderTabs()
+    expect(tabsHost.querySelector('.rt-facts')?.textContent).toContain('windowed in BigQuery · cached result: may expire early')
+
+    f.results.focusEntry(doc.id, freshEntry.key)
+    renderTabs()
+    expect(tabsHost.querySelector('.rt-facts')?.textContent).toContain('windowed in BigQuery')
+    expect(tabsHost.querySelector('.rt-facts')?.textContent).not.toContain('cached result: may expire early')
+  })
+
+  it('R8 D4 #5: closing stale Combined from EntryNoticeBars in a short folded Tabs pane (data-fold="none") restores focus to the visible panel grid instead of a hidden tab', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    // 80px forces tabsFold(...) === 'none' even without notice strips.
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 80 })
+    cleanups.add(() => {
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, 'clientHeight', origClientHeight)
+      else delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+    })
+
+    const doc = f.documents.create('r8-fold-close.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb]
+      )
+    })
+    const initialTab = f.results.getSnapshot()[doc.id]
+    const combKey = initialTab.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const devKey = initialTab.sets.find(entry => entry.descriptor.targetKey === 'dev-01')!.key
+    expect(f.results.removeEntry(doc.id, devKey)).toBe(true)
+    f.results.focusEntry(doc.id, combKey)
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    const render = () => act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(ResultsTabs, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+    render()
+
+    expect(host.querySelector('.rt-root')?.getAttribute('data-fold')).toBe('none')
+    const closeBtn = [...host.querySelectorAll<HTMLButtonElement>('[data-notice-kind="staleCombined"] .multi-grid-notice-btn')]
+      .find(btn => btn.textContent?.includes('Close'))!
+    closeBtn.focus()
+    act(() => { closeBtn.click() })
+    render()
+
+    expect(f.results.getSnapshot()[doc.id].sets.some(entry => entry.key === combKey)).toBe(false)
+    expect(host.querySelector('.rt-root')?.getAttribute('data-fold')).toBe('none')
+    expect(document.activeElement).toBe(host.querySelector('.rt-panel [data-result-grid]'))
+  })
+
+  it('R8 D4 #6 & #8: styles.css sets GrayText on aria-disabled notice buttons in forced-colors mode, and tabsNeed accepts partial combinedCounts', () => {
+    const rules = stylesheetRules()
+    const disabledNoticeBtn = rules.find(rule =>
+      rule.at.includes('@media (forced-colors: active)') && rule.selector === '.multi-grid-notice-btn[aria-disabled="true"]'
+    )
+    expect(disabledNoticeBtn?.declarations).toEqual(expect.arrayContaining([
+      { property: 'color', value: 'GrayText' },
+      { property: 'opacity', value: '1' }
+    ]))
+
+    // R8 D4 #8: partial TabResults with combinedCounts compiles and accounts for partialCombine notice height.
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('r8-tabsneed.sql', 'SELECT 1;', 'SalesDB')
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets: sqlTargets } })
+    const s1 = descriptor(1, { index: 0, targetKey: 'prod-east', statementSlot: 0 })
+    const s2 = descriptor(2, { index: 1, targetKey: 'prod-west', statementSlot: 0 })
+    const s3 = descriptor(3, { index: 2, targetKey: 'dev-01', statementSlot: 0 })
+    const comb = descriptor(10, { index: 3, kind: 'combined', statementSlot: 0 })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: multiSummaryOf(
+        [
+          multiOutcome(sqlTargets[0], { resultSetIds: [1] }),
+          multiOutcome(sqlTargets[1], { resultSetIds: [2] }),
+          multiOutcome(sqlTargets[2], { resultSetIds: [3] })
+        ],
+        [s1, s2, s3, comb]
+      )
+    })
+    const tab = f.results.getSnapshot()[doc.id]
+    const combKey = tab.sets.find(entry => entry.descriptor.kind === 'combined')!.key
+    const base = tabsNeed({
+      sets: tab.sets,
+      settled: tab.settled,
+      focused: combKey,
+      groups: tab.groups,
+      comparisons: tab.comparisons,
+      multi: tab.multi,
+      combinedCounts: new Map([[combKey, 3]])
+    })
+    const partial = tabsNeed({
+      sets: tab.sets,
+      settled: tab.settled,
+      focused: combKey,
+      groups: tab.groups,
+      comparisons: tab.comparisons,
+      multi: tab.multi,
+      combinedCounts: new Map([[combKey, 2]])
+    })
+    expect(partial - base).toBe(multiNoticeHeight)
   })
 })

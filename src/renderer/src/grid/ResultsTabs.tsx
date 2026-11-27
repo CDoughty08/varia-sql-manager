@@ -2,12 +2,12 @@ import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState,
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import MultiRunSummary, { targetPhaseInfo } from '../results/MultiRunSummary'
-import { distinctName, entryName, entrySecondary, hasMultiSummary, isSummaryActive, pivotOutOfDate, setKey, spokenName, summaryEntryKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entrySecondary, hasMultiSummary, isSummaryActive, pivotOutOfDate, setKey, spokenName, summaryEntryKey, targetOfEntry, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultGroup, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { observeResize, windows } from '../core/windows'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
-import { batchText, EntryNoticeBars, entryNoticesHeight, FilterChips, multiSummaryMinHeight, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
+import { batchText, EntryNoticeBars, entryNoticesHeight, entryTotalBatches, FilterChips, multiSummaryMinHeight, PivotMark, scrollbarSize, settledContent } from './ResultsStack'
 import { minGridHeight } from './stack'
 import { visibleColumnCount } from './hidden-columns'
 import { groupView, pickerRequests, selectedEntry, selectedGroup, selectedItem, topItems, type TopItem } from './result-picker'
@@ -89,7 +89,7 @@ export function showsViewRow(group: ReturnType<typeof selectedGroup>, sort?: Gri
 
 /** The room the Tabs layout needs before the Messages strip opens by itself: its tab row(s), any multi-server notice
  *  strips, and the selected grid at its minimum height (or its rows' height when settled and shorter). */
-export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons' | 'multi' | 'activeSummary' | 'staleCombined' | 'combineWarnings'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons' | 'multi' | 'activeSummary' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
   if (isSummaryActive(tab)) return g.resultTabsHeight + multiSummaryMinHeight
   const entry = selectedEntry(tab)
   if (!entry) return 0
@@ -190,6 +190,13 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const select = useCallback((key: EntryKey) => results.focusEntry(tabId, key), [results, tabId])
   const tabIdOf = (key: EntryKey, row: 'result' | 'view' | 'stmt') => `${id}${row}-${key}`
 
+  // A short pane folds the rows of tabs (`tabsFold`, accounting for exact notice strip height so grids are never starved).
+  const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
+  const effectiveFold = summaryActive ? undefined : fold
+  const foldRef = useRef(effectiveFold)
+  foldRef.current = effectiveFold
+  const collapseStatements = effectiveFold === 'one' || statementGroups.length > 3
+
   // Closing a view: when the focus was in what closes (or nowhere), it goes to the tab selected next, in the row the closed
   // tab was in, once that tab is drawn; with nothing left, to the Results tab. Only once, in the first layout without it.
   const pendingFocus = useRef<{ readonly closed: EntryKey; readonly row: 'result' | 'view' } | undefined>(undefined)
@@ -230,16 +237,11 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     pendingFocus.current = undefined
     const root = rootRef.current, active = root?.ownerDocument.activeElement
     if (active && active !== root?.ownerDocument.body && !root?.contains(active)) return
-    const target = root?.querySelector<HTMLElement>(`[data-tab-row="${pending.row}"] [role="tab"][aria-selected="true"]`) ?? root?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]') ?? resultsTab()
+    const target = foldRef.current === 'none'
+      ? root?.querySelector<HTMLElement>('.rt-panel [data-result-grid], .rt-panel [data-multi-summary]') ?? resultsTab()
+      : root?.querySelector<HTMLElement>(`[data-tab-row="${pending.row}"] [role="tab"][aria-selected="true"]`) ?? root?.querySelector<HTMLElement>('[data-tab-row="result"] [role="tab"][aria-selected="true"]') ?? resultsTab()
     target?.focus({ preventScroll: true })
   })
-
-  // A short pane folds the rows of tabs (`tabsFold`, accounting for exact notice strip height so grids are never starved).
-  const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
-  const effectiveFold = summaryActive ? undefined : fold
-  const foldRef = useRef(effectiveFold)
-  foldRef.current = effectiveFold
-  const collapseStatements = effectiveFold === 'one' || statementGroups.length > 3
 
   const gridFocus = useRef(false)
   const tabRow = useRef<string | undefined>(undefined)
@@ -440,7 +442,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     : group && showViewRow && (views.length > 1 || statementGroups.length <= 1)
       ? tabIdOf(selected!.key, 'view')
       : tabIdOf(items[at]?.key ?? selected!.key, 'result')
-  const cached = tab.summary?.job?.cacheHit === true
+  const cached = tab.summary?.job?.cacheHit === true || targetOfEntry(tab, selected)?.job?.cacheHit === true
   const budget = tab.summary?.budget ?? tab.multiSummary?.budget
 
   return <div ref={rootRef} className="rt-root" data-fold={effectiveFold} data-compact={!showViewRow || undefined} data-summary={summaryActive || undefined} onFocus={trackFocus} onBlur={trackBlur}>
@@ -475,7 +477,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
         aria-label={`All results, views and comparisons; ${formatCount(hidden)} not shown as tabs`} title="All results, views and comparisons (Go to Result…)"
         onClick={() => { pickerFrom.current = undefined; setPicking(open => !open) }}>+{formatCount(hidden)}<Icon name="chevron-down" /></button>}
       {!showViewRow && selected && <div className="rt-inline-right">
-        <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={cached} />
+        <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={entryTotalBatches(tab, selected)} cached={cached} />
         <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />
       </div>}
       {picking && <ResultsPicker tab={tab} anchor={pickerAnchor} selected={summaryActive ? summaryEntryKey : selected?.key} onPick={pick} onClose={closePicker} />}
@@ -507,7 +509,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
           </div>
         })}
       </div> : <span className="rt-view-label"><Icon name="git-compare" />Comparison</span>}
-      <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={tab.totalBatches} cached={cached} />
+      <ViewFacts key={selected.key} entry={selected} sort={sort} totalBatches={entryTotalBatches(tab, selected)} cached={cached} />
       {group?.pivot && selected.key === group.pivot.key && !tab.bare && <PivotMark key={`mark:${group.pivot.key}`} tabId={tabId} entry={selected} name={selectedName} ordinal={group.ordinal} source={distinctName(group.table.entry, tab.sets)} stale={stale} running={running} refocus={refocusView} />}
       <FilterChips tabId={tabId} entry={selected} name={spokenName(selected)} sort={sort} refocus={refocusView} />
       <SaveView tabId={tabId} entry={selected} name={spokenName(selected)} />

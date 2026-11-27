@@ -217,6 +217,10 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
   return iteration > 1 ? batch ? `${batch}, repetition ${iteration}` : `Repetition ${iteration}` : batch
 }
 
+/** Per-entry batch total: single-server runs use `tab.totalBatches`; multi-server runs use the entry's own target's `batchesTotal` (0 for Combined). */
+export const entryTotalBatches = (tab: Pick<TabResults, 'totalBatches' | 'multi'>, entry: ResultSetEntry): number =>
+  !hasMultiSummary(tab) ? tab.totalBatches : entry.descriptor.targetKey ? targetOfEntry(tab, entry)?.batchesTotal ?? 0 : 0
+
 /**
  * A filtered result's filters, each its words and a Remove button, and Clear filters when there are several. Removing the
  * last one (or clearing them) removes the button that has the focus, so the focus goes first to `refocus`'s target: the
@@ -288,7 +292,10 @@ const ResultCaption = memo(function ResultCaption({ tabId, tab, entry, collapsed
 }) {
   const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const cached = useSyncExternalStore(results.subscribe, () => results.getSnapshot()[tabId]?.summary?.job?.cacheHit === true)
+  const cached = useSyncExternalStore(results.subscribe, () => {
+    const current = results.getSnapshot()[tabId] ?? tab
+    return current?.summary?.job?.cacheHit === true || targetOfEntry(current, entry)?.job?.cacheHit === true
+  })
   const { descriptor } = entry, columns = visibleColumnCount(descriptor), name = entryName(entry), number = entrySecondary(entry)
   const target = targetOfEntry(tab, entry)
   const targetIndex = target && tab.multi ? tab.multi.targets.findIndex(item => item.targetKey === target.targetKey) : -1
@@ -615,7 +622,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const shut = collapsed.has(index), slot = slots.get(entry.key), sort = tab.sorts.get(entry.key)
     const plain = bare || captionless
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!plain && <ResultCaption tabId={tabId} tab={tab} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} named={!!slot?.named} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, pivotSource: slot.source, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
+      {!plain && <ResultCaption tabId={tabId} tab={tab} entry={entry} collapsed={shut} totalBatches={entryTotalBatches(tab, entry)} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} named={!!slot?.named} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, pivotSource: slot.source, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
       {!shut && <EntryNoticeBars tabId={tabId} tab={tab} entry={entry} running={tab.status === 'running'} onClose={closable ? close : undefined} onRebuiltFocus={() => focusRebuilt(entry.key)} />}
       {!shut && mounted.has(entry.key) && <ResultGrid key={setKey(entry.descriptor)} tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={budget} sort={sort}
         view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} />}

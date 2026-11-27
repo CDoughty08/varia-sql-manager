@@ -77,6 +77,58 @@ export interface CostPromptSnapshot {
   readonly pendingMulti?: PendingMulti
 }
 
+export type ModalPromptOwner = 'cost' | 'multi'
+
+/**
+ * Non-preemptive turn coordinator shared by `BigQueryCostPrompt` and `MultiExecuteDialog` so whichever modal is
+ * already open stays mounted uninterrupted until its current prompt queue drains (never unmounting an open dialog
+ * mid-interaction when a background prompt of the other kind arrives).
+ */
+export class PromptTurnLock extends SnapshotStore<ModalPromptOwner | undefined> {
+  private readonly waiting = new Set<ModalPromptOwner>()
+  constructor() { super(undefined) }
+
+  /** Requests ownership for `owner` while it has a pending prompt. Returns true if `owner` now holds the turn. */
+  claim(owner: ModalPromptOwner): boolean {
+    const current = this.getSnapshot()
+    if (current === owner) return true
+    if (current === undefined) {
+      this.waiting.delete(owner)
+      this.publish(owner)
+      return true
+    }
+    this.waiting.add(owner)
+    return false
+  }
+
+  /** Releases ownership (or cancels a waiting claim) for `owner` and grants the turn to any waiting peer. */
+  release(owner: ModalPromptOwner): void {
+    this.waiting.delete(owner)
+    if (this.getSnapshot() !== owner) return
+    const next = this.waiting.values().next().value as ModalPromptOwner | undefined
+    if (next) this.waiting.delete(next)
+    this.publish(next)
+  }
+
+  reset(): void {
+    this.waiting.clear()
+    if (this.getSnapshot() !== undefined) this.publish(undefined)
+    this.clearListeners()
+  }
+}
+
+const turnLocks = new WeakMap<CostPromptService, PromptTurnLock>()
+
+/** Returns the non-preemptive modal turn lock associated with a `CostPromptService` instance. */
+export function promptTurnLockFor(costPrompts: CostPromptService): PromptTurnLock {
+  let lock = turnLocks.get(costPrompts)
+  if (!lock) {
+    lock = new PromptTurnLock()
+    turnLocks.set(costPrompts, lock)
+  }
+  return lock
+}
+
 /**
  * The cost prompts waiting for an answer, which BigQueryCostPrompt shows one at a time (it is modal). Another tab's prompt
  * waits its turn rather than replacing the one on screen, so an answer always goes to the query it was shown for; a
@@ -149,6 +201,7 @@ export class CostPromptService extends SnapshotStore<CostPromptSnapshot> {
     for (const item of this.queue.splice(0)) item.resolve({ run: false })
     this.publish({})
     this.clearListeners()
+    turnLocks.get(this)?.reset()
   }
 }
 

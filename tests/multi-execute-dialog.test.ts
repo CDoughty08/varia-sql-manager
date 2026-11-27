@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, createElement } from 'react'
+import { act, createElement, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ApiResult } from '../src/shared/contracts'
 import type { BigQueryDryRunResult } from '../src/shared/bigquery/dry-run'
@@ -1144,5 +1144,199 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     expect(optionsRun).toHaveBeenCalledTimes(1)
     expect(optionsRun).toHaveBeenCalledWith({ setting: 'queryExecution.bigQuery.costPrompt' })
     expect(modalOpenDuringHandler).toBe(false)
+  })
+
+  it('R8 D3 #1: non-preemptive turn-taking keeps open MultiExecuteDialog mounted when BigQueryCostPrompt arrives, then hands off and restores focus', async () => {
+    const trigger = document.body.appendChild(document.createElement('button'))
+    trigger.textContent = 'Editor Trigger'
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const costPrompts = new CostPromptService()
+    const multiService = new MultiExecutePromptService()
+    const workbench = { costPrompts, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench,
+        children: [
+          createElement(BigQueryCostPrompt, { key: 'cost' }),
+          createElement(MultiExecuteDialog, { key: 'multi', service: multiService })
+        ]
+      }))
+    })
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose(); multiService.dispose() })
+
+    // 1. Open MultiExecuteDialog FIRST (mutation defaults to transaction mode).
+    let multiPrompt!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      multiPrompt = multiService.ask({
+        tabId: 'q-open-first',
+        provider: 'sqlserver',
+        sql: 'DELETE FROM dbo.Orders WHERE Id = 1;',
+        targets: [sqlTarget(1), sqlTarget(2)],
+        prices: true
+      })
+    })
+    const formBefore = document.body.querySelector<HTMLFormElement>('form.multi-execute-dialog')!
+    expect(formBefore).not.toBeNull()
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).toBeNull()
+
+    // User switches radio to Fire and Forget and checks Sequential rollout.
+    const fafRadio = formBefore.querySelector<HTMLInputElement>('input[type="radio"][value="fireAndForget"]')!
+    await act(async () => { fafRadio.click() })
+    const seqCheckbox = [...formBefore.querySelectorAll('label.checkbox-label')]
+      .find(label => label.textContent?.includes('Sequential rollout'))!
+      .querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    await act(async () => { seqCheckbox.click() })
+    expect(fafRadio.checked).toBe(true)
+    expect(seqCheckbox.checked).toBe(true)
+
+    // 2. Background BigQueryCostPrompt arrives while MultiExecuteDialog is open: MUST NOT preempt or unmount MultiExecuteDialog!
+    let bgCost!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      bgCost = costPrompts.ask({
+        prompt: { kind: 'threshold', bytes: 18 * GiB },
+        connection: 'bg-analytics',
+        thresholdBytes: 10 * GiB,
+        prices: true
+      })
+    })
+    expect(document.body.querySelector('form.multi-execute-dialog')).toBe(formBefore)
+    expect(fafRadio.checked).toBe(true)
+    expect(seqCheckbox.checked).toBe(true)
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).toBeNull()
+
+    // 3. Dismiss MultiExecuteDialog -> releases turn -> BigQueryCostPrompt now mounts and focuses Cancel!
+    const multiCancel = [...formBefore.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { multiCancel.click() })
+    await expect(multiPrompt).resolves.toBeUndefined()
+    expect(document.body.querySelector('form.multi-execute-dialog')).toBeNull()
+
+    const costForm = document.body.querySelector<HTMLFormElement>('form.bigquery-cost-prompt')
+    expect(costForm).not.toBeNull()
+    const costCancel = [...costForm!.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    expect(document.activeElement).toBe(costCancel)
+
+    // 4. Dismiss BigQueryCostPrompt -> focus restores cleanly back to underlying trigger!
+    await act(async () => { costCancel.click() })
+    await expect(bgCost).resolves.toEqual({ run: false })
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+
+    // 5. Same-render handoff from an unrelated closing modal -> BigQueryCostPrompt ignores closing modal during render,
+    // recaptures trigger in onBeforeInitialFocus, and restores focus to trigger on close.
+    function ClosingModal({ open, restoreTo }: { readonly open: boolean; readonly restoreTo: HTMLElement }) {
+      useEffect(() => {
+        if (!open) return
+        const btn = document.body.querySelector<HTMLButtonElement>('[data-other-modal] button')
+        btn?.focus()
+        return () => { restoreTo.focus() }
+      }, [open, restoreTo])
+      if (!open) return null
+      return createElement('div', { role: 'dialog', 'aria-modal': 'true', 'data-other-modal': '' },
+        createElement('button', { type: 'button' }, 'Other Close')
+      )
+    }
+    const host2 = document.body.appendChild(document.createElement('div'))
+    const root2 = createRoot(host2)
+    const costPrompts2 = new CostPromptService()
+    const workbench2 = { costPrompts: costPrompts2, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    cleanups.push(() => { act(() => root2.unmount()); host2.remove(); costPrompts2.dispose() })
+
+    trigger.focus()
+    await act(async () => {
+      root2.render(createElement(WorkbenchProvider, {
+        workbench: workbench2,
+        children: [
+          createElement(ClosingModal, { key: 'other', open: true, restoreTo: trigger }),
+          createElement(BigQueryCostPrompt, { key: 'cost' })
+        ]
+      }))
+    })
+    expect(document.activeElement?.closest('[data-other-modal]')).not.toBeNull()
+
+    let handoffCost!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      handoffCost = costPrompts2.ask({
+        prompt: { kind: 'threshold', bytes: 16 * GiB },
+        connection: 'handoff-bq',
+        thresholdBytes: 10 * GiB,
+        prices: true
+      })
+      root2.render(createElement(WorkbenchProvider, {
+        workbench: workbench2,
+        children: [
+          createElement(ClosingModal, { key: 'other', open: false, restoreTo: trigger }),
+          createElement(BigQueryCostPrompt, { key: 'cost' })
+        ]
+      }))
+    })
+    const handoffForm = document.body.querySelector<HTMLFormElement>('form.bigquery-cost-prompt')!
+    const handoffCancel = [...handoffForm.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    expect(document.activeElement).toBe(handoffCancel)
+    await act(async () => { handoffCancel.click() })
+    await expect(handoffCost).resolves.toEqual({ run: false })
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('R8 D3 #2: MultiExecuteDialog reads and clears returnFocus in effect cleanup so focus recaptured in onBeforeInitialFocus is restored', async () => {
+    const trigger = document.body.appendChild(document.createElement('button'))
+    trigger.textContent = 'Query Editor'
+    trigger.focus()
+
+    function OtherModal({ open, restoreTo }: { readonly open: boolean; readonly restoreTo: HTMLElement }) {
+      useEffect(() => {
+        if (!open) return
+        document.body.querySelector<HTMLButtonElement>('[data-closing-modal] button')?.focus()
+        return () => { restoreTo.focus() }
+      }, [open, restoreTo])
+      if (!open) return null
+      return createElement('div', { role: 'dialog', 'aria-modal': 'true', 'data-closing-modal': '' },
+        createElement('button', { type: 'button' }, 'Dismiss')
+      )
+    }
+
+    const multiService = new MultiExecutePromptService()
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); multiService.dispose() })
+
+    // Open unrelated modal first so activeElement is inside [aria-modal="true"].
+    await act(async () => {
+      root.render(createElement('div', null,
+        createElement(OtherModal, { open: true, restoreTo: trigger }),
+        createElement(MultiExecuteDialog, { service: multiService })
+      ))
+    })
+    expect(document.activeElement?.closest('[data-closing-modal]')).not.toBeNull()
+
+    // In the SAME render: close OtherModal and open MultiExecuteDialog (standalone, no turn lock).
+    // During render activeElement is still inside [aria-modal="true"], so returnFocus.current starts null;
+    // OtherModal's effect cleanup restores focus to trigger, then MultiExecuteDialogModal's onBeforeInitialFocus captures it.
+    let prompt!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      prompt = multiService.ask({
+        tabId: 'q-recapture',
+        provider: 'sqlserver',
+        sql: 'SELECT 1;',
+        targets: [sqlTarget(1), sqlTarget(2)],
+        prices: true
+      })
+      root.render(createElement('div', null,
+        createElement(OtherModal, { open: false, restoreTo: trigger }),
+        createElement(MultiExecuteDialog, { service: multiService })
+      ))
+    })
+    const form = document.body.querySelector<HTMLFormElement>('form.multi-execute-dialog')!
+    expect(form).not.toBeNull()
+    expect(document.activeElement).toBe(form.querySelector('input[type="radio"][value="fireAndForget"]'))
+
+    // Cancel MultiExecuteDialog: cleanup must read the updated returnFocus.current (trigger), NOT the stale null closed over at render!
+    const cancelBtn = [...form.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelBtn.click() })
+    await expect(prompt).resolves.toBeUndefined()
+    expect(document.activeElement).toBe(trigger)
   })
 })

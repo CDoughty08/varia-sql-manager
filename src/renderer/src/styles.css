@@ -4675,4 +4675,5 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .multi-target-trigger, .multi-target-popover, .multi-target-row, .cross-engine-chip, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-phase-pill { border-color: CanvasText; }
   .multi-target-trigger[data-open], .multi-exec-mode-card.is-picked, .cross-engine-view-btn[aria-pressed="true"], .rs-stmt-btn[aria-pressed="true"], .rt-stmt-tab[aria-selected="true"], .messages-filter-pill[aria-pressed="true"] { border-color: Highlight; }
   .tab-swatch, .multi-swatch, .multi-target-dot, .rt-server-dot, .rs-server-dot, .cross-engine-chip-dot, .multi-exec-target-dot { forced-color-adjust: none; }
+  .multi-grid-notice-btn[aria-disabled="true"] { color: GrayText; opacity: 1; }
 }

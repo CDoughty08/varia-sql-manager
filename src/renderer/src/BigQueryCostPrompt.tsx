@@ -5,11 +5,16 @@ import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import SubDialog from './dialogs/SubDialog'
 import EnvironmentTag from './EnvironmentTag'
 import type { CostPromptRequest } from './services/bigquery-cost'
-import { costPromptText, multiCostPromptText, type MultiProjectCostPromptRequest } from './services/bigquery-cost-prompt'
+import { costPromptText, multiCostPromptText, promptTurnLockFor, type MultiProjectCostPromptRequest } from './services/bigquery-cost-prompt'
 
 type ActiveCostPrompt =
   | { readonly kind: 'single'; readonly id: number; readonly request: CostPromptRequest }
   | { readonly kind: 'multi'; readonly id: number; readonly request: MultiProjectCostPromptRequest }
+
+function focusCandidate(): HTMLElement | null {
+  const candidate = focusToReturn()
+  return candidate && candidate !== candidate.ownerDocument.body && !candidate.closest('[aria-modal="true"]') ? candidate : null
+}
 
 /**
  * Execute's cost prompt for a BigQuery query (docs/bigquery.md, Cost): above the threshold, or when the estimate may be
@@ -19,33 +24,59 @@ type ActiveCostPrompt =
 export default function BigQueryCostPrompt() {
   const { costPrompts } = useWorkbench()
   const { pending, pendingMulti } = useServiceSnapshot(costPrompts)
+  const turnLock = promptTurnLockFor(costPrompts)
+  const turnOwner = useServiceSnapshot(turnLock)
   const active: ActiveCostPrompt | undefined = pending
     ? { kind: 'single', id: pending.id, request: pending.request }
     : pendingMulti
       ? { kind: 'multi', id: pendingMulti.id, request: pendingMulti.request }
       : undefined
-  const isOpen = !!active
+  const hasPending = !!active
+  const isOpen = hasPending && turnOwner === 'cost'
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
   if (isOpen && !wasOpen.current) {
-    returnFocus.current = focusToReturn()
-  } else if (!isOpen) {
-    returnFocus.current = null
+    // Ignore elements inside a closing modal (e.g. MultiExecuteDialog unmounting in the same render);
+    // ActivePrompt re-captures focus via onBeforeInitialFocus once the closing modal's cleanup restores it.
+    returnFocus.current = focusCandidate()
   }
   wasOpen.current = isOpen
 
   useEffect(() => {
     if (!isOpen) return
-    const target = returnFocus.current
-    return () => returnFocusTo(target)
+    return () => {
+      const target = returnFocus.current
+      returnFocus.current = null
+      returnFocusTo(target)
+    }
   }, [isOpen])
 
-  if (!active) return null
-  return <ActivePrompt active={active} />
+  // Declared after returnFocus cleanup so focus returns to the underlying surface before handing the turn to a waiting peer.
+  useEffect(() => {
+    if (hasPending) {
+      turnLock.claim('cost')
+      return () => { turnLock.release('cost') }
+    }
+    turnLock.release('cost')
+    return undefined
+  }, [turnLock, hasPending])
+
+  if (!isOpen || !active) return null
+  return (
+    <ActivePrompt
+      active={active}
+      onBeforeInitialFocus={() => {
+        if (!returnFocus.current?.isConnected) {
+          const candidate = focusCandidate()
+          if (candidate) returnFocus.current = candidate
+        }
+      }}
+    />
+  )
 }
 
 /** Keeps one SubDialog mounted across back-to-back queued prompts so focus never drops to document.body between items. */
-function ActivePrompt({ active }: { readonly active: ActiveCostPrompt }) {
+function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: ActiveCostPrompt; readonly onBeforeInitialFocus: () => void }) {
   const { costPrompts, commands } = useWorkbench()
   const [dontAskFor, setDontAskFor] = useState<{ readonly id: number; readonly checked: boolean }>({ id: active.id, checked: false })
   const dontAsk = dontAskFor.id === active.id && dontAskFor.checked
@@ -67,6 +98,7 @@ function ActivePrompt({ active }: { readonly active: ActiveCostPrompt }) {
   if (active.kind === 'single') {
     const text = costPromptText(active.request)
     return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt"
+      manageReturnFocus={false} onBeforeInitialFocus={onBeforeInitialFocus}
       onOk={() => costPrompts.answer(active.id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(active.id, { run: false })}
       status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
       <div id={describedBy} ref={bodyRef}>
@@ -79,6 +111,7 @@ function ActivePrompt({ active }: { readonly active: ActiveCostPrompt }) {
 
   const text = multiCostPromptText(active.request)
   return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt bigquery-cost-prompt-multi"
+    manageReturnFocus={false} onBeforeInitialFocus={onBeforeInitialFocus}
     onOk={() => costPrompts.answer(active.id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(active.id, { run: false })}
     status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
     <div id={describedBy} ref={bodyRef}>

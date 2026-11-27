@@ -12,6 +12,7 @@ import Icon from '../Icon'
 import DialogFooter from '../kit/DialogFooter'
 import StatusPill from '../kit/StatusPill'
 import { useDialogWindow } from '../popouts/DialogWindow'
+import { promptTurnLockFor } from '../services/bigquery-cost-prompt'
 import {
   runBoundedPool,
   type BigQueryDryRunEstimator,
@@ -103,6 +104,11 @@ const defaultEstimator: BigQueryDryRunEstimator = request => window.varia.bigQue
 const noopSubscribe = () => () => {}
 const noopSnapshot = () => undefined
 
+function focusCandidate(): HTMLElement | null {
+  const candidate = focusToReturn()
+  return candidate && candidate !== candidate.ownerDocument.body && !candidate.closest('[aria-modal="true"]') ? candidate : null
+}
+
 /**
  * Connected Run Mode Prompt modal mounted once in App.tsx's modal layer. Subscribes to `MultiExecutePromptService`
  * and renders `MultiExecuteDialogModal` whenever a same-engine multi-target execution (`>= 2` targets) awaits confirmation.
@@ -110,32 +116,44 @@ const noopSnapshot = () => undefined
 export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiExecuteDialogProps) {
   const { pending } = useSyncExternalStore(service.subscribe, service.getSnapshot, service.getSnapshot)
   const costPrompts = useOptionalWorkbench()?.costPrompts
-  const costPromptState = useSyncExternalStore(
-    costPrompts?.subscribe ?? noopSubscribe,
-    costPrompts?.getSnapshot ?? noopSnapshot,
-    costPrompts?.getSnapshot ?? noopSnapshot
+  const turnLock = costPrompts ? promptTurnLockFor(costPrompts) : undefined
+  const turnOwner = useSyncExternalStore(
+    turnLock?.subscribe ?? noopSubscribe,
+    turnLock?.getSnapshot ?? noopSnapshot,
+    turnLock?.getSnapshot ?? noopSnapshot
   )
-  const blockedByCostPrompt = !!(costPromptState?.pending || costPromptState?.pendingMulti)
-  const isOpen = !!pending && !blockedByCostPrompt
+  const hasPending = !!pending
+  const isOpen = hasPending && (!turnLock || turnOwner === 'multi')
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
   if (isOpen && !wasOpen.current) {
-    const candidate = focusToReturn()
     // Ignore elements inside a closing modal (e.g. BigQueryCostPrompt unmounting in the same render);
     // MultiExecuteDialogModal re-captures focus via onBeforeInitialFocus once the closing modal's cleanup restores it.
-    returnFocus.current = candidate && !candidate.closest('[aria-modal="true"]') ? candidate : null
-  } else if (!isOpen) {
-    returnFocus.current = null
+    returnFocus.current = focusCandidate()
   }
   wasOpen.current = isOpen
 
   useEffect(() => {
     if (!isOpen) return
-    const target = returnFocus.current
-    return () => returnFocusTo(target)
+    return () => {
+      const target = returnFocus.current
+      returnFocus.current = null
+      returnFocusTo(target)
+    }
   }, [isOpen])
 
-  if (!pending || blockedByCostPrompt) return null
+  // Declared after returnFocus cleanup so focus returns to the underlying surface before handing the turn to a waiting peer.
+  useEffect(() => {
+    if (!turnLock) return
+    if (hasPending) {
+      turnLock.claim('multi')
+      return () => { turnLock.release('multi') }
+    }
+    turnLock.release('multi')
+    return undefined
+  }, [turnLock, hasPending])
+
+  if (!isOpen || !pending) return null
   return (
     <MultiExecuteDialogModal
       key={pending.id}
@@ -144,8 +162,8 @@ export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiE
       manageReturnFocus={false}
       onBeforeInitialFocus={() => {
         if (!returnFocus.current?.isConnected) {
-          const candidate = focusToReturn()
-          if (candidate && !candidate.closest('[aria-modal="true"]')) returnFocus.current = candidate
+          const candidate = focusCandidate()
+          if (candidate) returnFocus.current = candidate
         }
       }}
       onConfirm={choice => service.answer(pending.id, choice)}
