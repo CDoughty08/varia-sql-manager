@@ -155,6 +155,8 @@ internal sealed partial class ObjectSearchService
                     var ticks = Utc(read.ReadAt).Ticks;
                     state.Saved[key] = (new WeakReference<DatabaseIndex>(read), unit, ticks);
                     state.SavedOrder.Add((ticks, key));
+                    // Its details are as old as the file's read: the background re-read gets them again first.
+                    state.DetailsAt[key] = ticks;
                     SavedAtLocked(state);
                     held = true;
                 }

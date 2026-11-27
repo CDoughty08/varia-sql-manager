@@ -69,7 +69,7 @@ internal sealed partial class ObjectSearchService
     public long? StaleMarkOf(string connectionId)
     {
         if (!states.TryGetValue(connectionId, out var state)) return null;
-        lock (state.Gate) return state.BigQuery ? state.StaleMark : null;
+        lock (state.Gate) return state.StaleMark;
     }
 
     /// <summary>Atomically marks a dataset stale if the connection's BigQuery index tracks <paramref name="project"/> (billing, starred, discovered, in-flight, or held).</summary>
@@ -150,6 +150,8 @@ internal sealed partial class ObjectSearchService
         var watch = Stopwatch.StartNew();
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        // A check of one database, or of every one, is SQL Server's (a BigQuery check reads what its marks name).
+        if (args.Database is not null || args.CheckAll is not null) throw Invalid(args.Database is not null ? "database." : "checkAll.");
         if (args.StarredProjects is { } rawStarred && (rawStarred.Count > BigQueryIndexLimits.StarredProjects || rawStarred.Any(project => !BqNames.IsProject(project))))
             throw Invalid("starredProjects.");
         var billing = source.BillingProject(args.ConnectionId);
@@ -193,6 +195,8 @@ internal sealed partial class ObjectSearchService
         var stop = source2.Token;
         var finishedBuild = false;
         HashSet<(string Project, string Dataset)> stale;
+        // A stale-only build's due datasets (a search found them older than BigQueryCheckAfter): listed again, reusing what is unchanged.
+        List<string> due;
         Dictionary<string, long> wholeProjects;
         List<string> knownProjects;
         List<string> priorNamesOnly;
@@ -210,12 +214,14 @@ internal sealed partial class ObjectSearchService
         lock (state.Gate)
         {
             stale = [.. state.Stale.Keys];
+            due = staleOnly ? [.. state.Due.Keys] : [];
             wholeProjects = new Dictionary<string, long>(state.StaleProjects, StringComparer.Ordinal);
             priorNamesOnly = state.NamesOnly is { Count: > 0 } prior ? [.. prior] : [];
             priorPartialProjects = state.PartialProjects.Count > 0 ? [.. state.PartialProjects] : [];
             try { state.Build?.Cancel(); } catch (ObjectDisposedException) { }
             state.Build = source2;
             state.Building = true;
+            state.Checking = staleOnly;
             state.BigQuery = true;
             state.Phase = "names";
             // What the index as a whole holds is a full build's to say: a refresh re-reads part of it with whatever Options says now.
@@ -578,7 +584,12 @@ internal sealed partial class ObjectSearchService
                     carried.Clear();
                     loop.ThrowIfCancellationRequested();
                     NamesHeld?.Invoke(project, dataset);
-                    lock (state.Gate) if (Current()) state.Indexed++;
+                    lock (state.Gate)
+                        if (Current())
+                        {
+                            state.Indexed++;
+                            CheckedLocked(state, key);
+                        }
                     ObjectIndexSkip? cutSkip = null;
                     if (listing.Cut)
                     {
@@ -740,6 +751,15 @@ internal sealed partial class ObjectSearchService
                     }
                     targets.AddRange(stale.Where(item => allowedStale.Contains(item.Project))
                         .OrderBy(item => item.Project, StringComparer.Ordinal).ThenBy(item => item.Dataset, StringComparer.Ordinal));
+                    // Due by age: listed again like any dataset a build reads, so only what was created or changed since costs a get.
+                    var listedTargets = targets.ToHashSet();
+                    foreach (var key in due.Order(StringComparer.Ordinal))
+                    {
+                        var cut = key.IndexOf('\u0001', StringComparison.Ordinal);
+                        if (cut <= 0) continue;
+                        var target = (key[..cut], key[(cut + 1)..]);
+                        if (allowedStale.Contains(target.Item1) && !wholeProjects.ContainsKey(target.Item1) && listedTargets.Add(target)) targets.Add(target);
+                    }
                 }
                 else
                 {
@@ -1424,11 +1444,19 @@ internal sealed partial class ObjectSearchService
             {
                 if (!Current()) throw new OperationCanceledException(stop);
                 state.Building = false;
+                state.Checking = false;
                 state.Built = true;
                 // Only a full build reads everything; a refresh re-reads a part and leaves a stopped build's gaps as they were.
                 if (scope is null && !staleOnly) state.Stopped = false;
                 state.BuiltAt = DateTime.UtcNow;
                 state.Phase = null;
+                PruneLocked(state);
+            }
+            // In-place changes no listing sees are caught by a slow background re-read, from the first full build on.
+            if (scope is null && !staleOnly)
+            {
+                BeforeSweep?.Invoke();
+                StartSweep(args.ConnectionId, state, source);
             }
             Finish(build: true, watch.ElapsedMilliseconds);
             finishedBuild = true;
@@ -1445,7 +1473,7 @@ internal sealed partial class ObjectSearchService
             watchStop.Cancel();
             await watcher;
             lock (state.Gate)
-                if (ReferenceEquals(state.Build, source2)) { state.Build = null; state.Building = false; state.Phase = null; state.InFlightProjects.Clear(); }
+                if (ReferenceEquals(state.Build, source2)) { state.Build = null; state.Building = false; state.Checking = false; state.Phase = null; state.InFlightProjects.Clear(); }
             if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
@@ -1570,6 +1598,7 @@ internal sealed partial class ObjectSearchService
                         // A read that fit only without columns has no details left to read: they would not fit either.
                         built.Sync = new BigQuerySync(saved.Cut, childrenLeftOut ? 0 : saved.Pending, saved.Failed, detailsLeftOut, saved.Listing).ToBytes();
                         state.Index.Put(built);
+                        CheckedLocked(state, built.Key);
                         // A loaded read it replaces has been checked.
                         if (state.Saved.Remove(built.Database + "\u0001" + built.Dataset, out var replaced))
                         {

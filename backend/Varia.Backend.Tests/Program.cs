@@ -175,6 +175,12 @@ if (args is ["--bigquery-reload-checks"])
     Console.WriteLine("Passed " + passed + " BigQuery reload checks.");
     return;
 }
+if (args is ["--freshness-checks"])
+{
+    await FreshnessChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " freshness checks.");
+    return;
+}
 if (args is ["--sql-reload-checks"])
 {
     await SqlReloadChecks.RunAsync(Check);
@@ -574,6 +580,7 @@ if (liveGroup is null)
         ("IndexFile", () => IndexFileChecks.RunAsync(Check)),
         ("IndexStore", () => IndexStoreChecks.RunAsync(Check)),
         ("BigQueryReload", () => BigQueryReloadChecks.RunAsync(Check)),
+        ("Freshness", () => FreshnessChecks.RunAsync(Check)),
         ("SqlReload", () => SqlReloadChecks.RunAsync(Check)),
         ("Scripting", () => ScriptingChecks.RunAsync(Check)),
         ("Action", () => ActionChecks.RunAsync(Check)),

@@ -70,7 +70,7 @@ internal sealed partial class ObjectSearchService : IDisposable
     public const string ChildrenLeftOut = "CHILDREN_LEFT_OUT";
 
     /// <summary>One connection's index and its build.</summary>
-    private sealed class State(StringPool pool, ResourceCatalog resources)
+    private sealed partial class State(StringPool pool, ResourceCatalog resources)
     {
         public readonly object Gate = new();
         public ConnectionIndex Index { get; } = new(pool.Budget, resources, pool);
@@ -127,7 +127,9 @@ internal sealed partial class ObjectSearchService : IDisposable
         public volatile string? SavedAtText;
         /// <summary>The newest stale mark not yet spent, or null: index status carries it so the renderer asks a stale-only
         /// build once per new mark (never again for a mark a failed read left).</summary>
-        public long? StaleMark => Stale.Count + StaleProjects.Count == 0 ? null : Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max());
+        public long? StaleMark => Stale.Count + StaleProjects.Count + SqlStale.Count + Due.Count == 0 ? null
+            : Math.Max(Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max()),
+                Math.Max(SqlStale.Count == 0 ? 0 : SqlStale.Values.Max(), Due.Count == 0 ? 0 : Due.Values.Max()));
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -294,19 +296,26 @@ internal sealed partial class ObjectSearchService : IDisposable
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
         var render = IndexRender(profile);
+        if (args.Database is { } checkDatabase && (!ExplorerRefs.Ident(checkDatabase) || args.Stale != true)) throw Invalid("database.");
+        if (args.CheckAll is not null && (args.CheckAll != true || args.Stale != true || args.Database is not null)) throw Invalid("checkAll.");
         SetMemoryLimit(args.MemoryLimitMiB);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
         state.Index.Sink ??= Store.Sink(ScopeOf(args.ConnectionId, profile));
+        if (args.Stale == true) return await CheckSqlAsync(args, state, profile, token, progress);
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
         var finishedBuild = false;
+        long seen;
         lock (state.Gate)
         {
-            // A newer build supersedes a running one, which answers CANCELLED and keeps what it read.
+            // A newer build supersedes a running one (or a check), which answers CANCELLED and keeps what it read.
             try { state.Build?.Cancel(); } catch (ObjectDisposedException) { }
             state.Build = source;
             state.Building = true;
+            state.Checking = false;
+            // The marks this build spends: those made before it began (DDL that lands while it reads stays marked).
+            seen = state.StaleMarks;
             state.Definitions = definitions;
             state.Indexed = 0;
             state.Skipped = new(MaxSkipped);
@@ -315,14 +324,35 @@ internal sealed partial class ObjectSearchService : IDisposable
         try
         {
             var names = await ListAsync(args.ConnectionId, source.Token);
+            var listed = names.ToHashSet(StringComparer.Ordinal);
             lock (state.Gate)
             {
                 state.Databases = names.Count;
                 state.Ledger.List(names);
+                if (ReferenceEquals(state.Build, source)) { state.Listed = listed; PruneLocked(state); }
+                foreach (var gone in state.SqlStale.Keys.Concat(state.Due.Keys).Where(key => key.Length > 0 && !listed.Contains(key)).ToList())
+                {
+                    state.SqlStale.Remove(gone);
+                    state.Due.Remove(gone);
+                }
             }
-            state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
-            if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
+            state.Index.Keep(listed);
+            // Spends a unit's marks made before the build began, once it has read the unit.
+            void Spend(string key, bool read)
+            {
+                lock (state.Gate)
+                {
+                    if (!ReferenceEquals(state.Build, source)) return;
+                    if (state.SqlStale.TryGetValue(key, out var mark) && mark <= seen) state.SqlStale.Remove(key);
+                    if (state.Due.TryGetValue(key, out var due) && due <= seen) state.Due.Remove(key);
+                    if (read) CheckedLocked(state, key);
+                    else state.Tried[key] = UtcNow().Ticks;
+                }
+            }
+            var serverRead = await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token);
+            if (serverRead is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
+            Spend(ServerScope, serverRead is null);
             if (explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Agent, agentSkip);
             if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
@@ -335,6 +365,7 @@ internal sealed partial class ObjectSearchService : IDisposable
                     if (skip is not null) state.Skipped.Add(at, skip);
                     state.Ledger.Done(names[at], skip);
                 }
+                Spend(names[at], skip is null or { Code: ChildrenLeftOut });
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
             {
@@ -388,6 +419,9 @@ internal sealed partial class ObjectSearchService : IDisposable
         token.ThrowIfCancellationRequested();
         if (!bigQuery) host.Profile(args.ConnectionId);
         if (!states.TryGetValue(args.ConnectionId, out var state)) return new([], 0, false, 0, new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null, Projects: bigQuery ? 0 : null));
+        // A unit the search reads that was checked longer ago than its threshold is due: the status names a new mark, and the
+        // renderer asks one check for it, while this search answers from what is held.
+        lock (state.Gate) DueOnUseLocked(state, args.Database, args.Project, args.Dataset);
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
@@ -424,6 +458,8 @@ internal sealed partial class ObjectSearchService : IDisposable
     {
         running.Forget(connectionId);
         if (!states.TryRemove(connectionId, out var state)) return;
+        lock (state.Gate) state.Closed = true;
+        StopSweep(state);
         state.Index.Dispose();
         // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
         Interlocked.Increment(ref forgets);
@@ -433,7 +469,11 @@ internal sealed partial class ObjectSearchService : IDisposable
     public void Dispose()
     {
         running.ForgetAll();
-        foreach (var state in states.Values) state.Index.Dispose();
+        foreach (var state in states.Values)
+        {
+            StopSweep(state);
+            state.Index.Dispose();
+        }
         states.Clear();
         Store.Dispose();
     }
@@ -476,20 +516,24 @@ internal sealed partial class ObjectSearchService : IDisposable
                 var skipped = state.Skipped.ToList();
                 var (bigQueryLeftOut, bigQueryLeftOutIn) = (Total(databases.Select(value => value.LeftOut)), databases.Count(value => value.LeftOut > 0));
                 var savedAt = SavedAtText(SavedAtLocked(state));
+                var (bigQueryReadAt, bigQuerySaved, bigQueryChecked, bigQueryStale, bigQueryUnverified) = FreshnessLocked(state, databases);
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
                     state.Building ? state.Indexed : held, state.Index.Objects, Total(databases.Select(value => value.Modules)), Total(databases.Select(value => value.Cut)), skipped, state.Definitions,
                     state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped,
-                    bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null, savedAt);
+                    bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null, savedAt, bigQueryReadAt, bigQuerySaved, bigQueryChecked,
+                    state.Checking ? true : null, bigQueryStale, bigQueryUnverified);
             }
             // LeftOutIn counts databases only: the server's own objects and the system objects are in none.
             var leftOut = Total(databases.Select(value => value.LeftOut).Append(state.Index.Resource?.LeftOut ?? 0).Append(state.Index.Server?.LeftOut ?? 0));
             var leftOutIn = databases.Count(value => value.LeftOut > 0);
+            var (readAt, saved, checkedAt, stale, unverified) = FreshnessLocked(state, databases);
             // A stopped first build that read only the server's own objects still holds an index.
             return new(state.Building ? "building" : state.Built || databases.Count > 0 || state.Index.Objects > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
                 state.Index.Objects, Total(databases.Select(value => value.Modules).Append(state.Index.Resource?.Modules ?? 0).Append(state.Index.Server?.Modules ?? 0)),
                 Total(databases.Select(value => value.Cut).Append(state.Index.Resource?.Cut ?? 0).Append(state.Index.Server?.Cut ?? 0)), state.Skipped.ToList(), state.Definitions,
-                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null, LeftOutIn: leftOutIn > 0 ? leftOutIn : null);
+                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), StaleMark: state.StaleMark, Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null,
+                LeftOutIn: leftOutIn > 0 ? leftOutIn : null, ReadAt: readAt, Saved: saved, CheckedAt: checkedAt, Checking: state.Checking ? true : null, Stale: stale, Unverified: unverified);
         }
     }
 
@@ -506,8 +550,8 @@ internal sealed partial class ObjectSearchService : IDisposable
     /// and reports progress: Done 0 first, then completions, whichever read ends first, one call at a time, at most one per
     /// <see cref="ProgressEvery"/> but always the last. Each read takes the loop's token, so one that fails stops the read
     /// still in flight and its error comes out at once, rather than after that read's own budget.</summary>
-    internal static async Task ReadDatabasesAsync(IReadOnlyList<string> names, int degree, Func<string, CancellationToken, Task<ObjectIndexSkip?>> read,
-        Action<int, ObjectIndexSkip?> completed, Action<int>? progress, CancellationToken token)
+    internal static async Task ReadDatabasesAsync<T>(IReadOnlyList<string> names, int degree, Func<string, CancellationToken, Task<T>> read,
+        Action<int, T> completed, Action<int>? progress, CancellationToken token)
     {
         var last = Stopwatch.StartNew();
         progress?.Invoke(0);
@@ -863,6 +907,18 @@ internal sealed class SkipList(int capacity)
     }
 
     public List<ObjectIndexSkip> ToList() => [.. items.Select(item => item.Skip)];
+
+    /// <summary>Removes the skips at a fixed place (<see cref="Server"/>, <see cref="Agent"/>) that <paramref name="match"/> picks: a
+    /// check that reads the server again replaces what an earlier read reported there, rather than adding to it.</summary>
+    public void RemoveFixed(int order, Func<ObjectIndexSkip, bool>? match = null) =>
+        items.RemoveAll(item => item.Order == order && order < 0 && (match is null || match(item.Skip)));
+
+    /// <summary>Removes a database's skips (a check read it again); the server's, Agent's and the resource database's stay.</summary>
+    public void Remove(string database)
+    {
+        var removed = items.RemoveAll(item => item.Order >= 0 && item.Skip.Database == database && item.Skip.Agent is null);
+        databases -= removed;
+    }
 }
 
 /// <summary>Reads the server batch (<see cref="ObjectSearchSql.Server"/>) or one database's batch (<see cref="ObjectSearchSql.Batch"/>)

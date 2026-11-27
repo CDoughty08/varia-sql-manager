@@ -5,7 +5,8 @@ using System.Text.RegularExpressions;
 namespace Varia.Backend.Tests;
 
 /// <summary>A script's outcome with its rows already read (display text, null for NULL), so its session can close at once.</summary>
-internal sealed record SqlRun(string Status, string? Error, List<List<string?[]>> Sets)
+/// <summary>A script's run: its status, first error, rows, and (through query.execute) the stale mark its result names.</summary>
+internal sealed record SqlRun(string Status, string? Error, List<List<string?[]>> Sets, long? IndexStale = null)
 {
     public string? Scalar => Sets.Count > 0 && Sets[0].Count > 0 ? Sets[0][0][0] : null;
 }
