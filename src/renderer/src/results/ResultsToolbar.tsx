@@ -46,7 +46,11 @@ function ResultsSearchBox({ tabId, disabled = false }: { tabId: string; disabled
   const focus = search.focus
   // Find in Results (Ctrl+F in a grid) puts the focus here with the text selected, so typing replaces it; once, even when
   // the box is shown only after it (the Messages view), and not again each time the box is shown.
-  useEffect(() => { if (!disabled && resultsSearch.takeFocus(tabId)) { inputRef.current?.focus(); inputRef.current?.select() } }, [disabled, focus, resultsSearch, tabId])
+  useEffect(() => {
+    if (!resultsSearch.takeFocus(tabId) || disabled) return
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [focus, resultsSearch, tabId])
   const keyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (disabled) return
     const action = searchBoxKeyAction(event.nativeEvent, !!search.text)

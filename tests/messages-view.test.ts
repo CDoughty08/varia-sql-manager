@@ -1,8 +1,23 @@
-import { describe, expect, it } from 'vitest'
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
 import type { MessageEntry } from '../src/shared/contracts'
-import { jobLinkConnection, messageTail } from '../src/renderer/src/results/MessagesView'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import MessagesView, { jobLinkConnection, messageTail } from '../src/renderer/src/results/MessagesView'
 import { completionSentence, formatCount, formatDuration, formatElapsed, messagesSummary, runSummary, statusSentence, timeOfDay } from '../src/renderer/src/results/status'
 import { summaryOf } from './fixtures/results'
+import { workbenchFixture } from './fixtures/workbench'
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const cleanups = new Set<() => void>()
+afterEach(() => {
+  for (const cleanup of [...cleanups].reverse()) cleanup()
+  cleanups.clear()
+  document.body.replaceChildren()
+})
 
 const info = (text: string): MessageEntry => ({ text, kind: 'info' })
 
@@ -91,5 +106,74 @@ describe('the Messages job line', () => {
     expect(jobLinkConnection('alpha', 'bq-b', connections)).toBeUndefined()
     expect(jobLinkConnection('alpha', undefined, connections)).toBeUndefined()
     expect(jobLinkConnection('alpha', 'gone', connections)).toBeUndefined()
+  })
+})
+
+describe('multi-server Messages filter pill accessibility (R5-D4-6)', () => {
+  it('places the error count in the filter button aria-label and hides the decorative ! badge from screen readers', () => {
+    const f = workbenchFixture()
+    cleanups.add(f.dispose)
+    const doc = f.documents.create('multi.sql', 'SELECT 1', 'master')
+    const targets = [
+      { targetKey: 'east', connectionId: 'c1', provider: 'sqlserver' as const, label: 'prod-east' },
+      { targetKey: 'west', connectionId: 'c2', provider: 'sqlserver' as const, label: 'prod-west' },
+      { targetKey: 'dev', connectionId: 'c3', provider: 'sqlserver' as const, label: 'dev-01' }
+    ]
+    f.results.begin(doc.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets } })
+    void f.results.finish(doc.id, 'q1', {
+      multiSummary: {
+        status: 'completedWithErrors',
+        mode: 'fireAndForget',
+        targets: targets.map(target => ({
+          targetKey: target.targetKey,
+          provider: target.provider,
+          label: target.label,
+          status: target.targetKey === 'dev' ? 'succeeded' : 'failed',
+          batchesCompleted: 1,
+          batchesTotal: 1,
+          rowsAffected: 0,
+          elapsedMs: 12,
+          resultSetIds: []
+        })),
+        resultSets: [],
+        discardedResultSets: 0,
+        messages: [
+          { text: 'Divide by zero', kind: 'error', targetKey: 'east' },
+          { text: 'Timeout expired', kind: 'error', targetKey: 'west' },
+          { text: 'Deadlock victim', kind: 'error', targetKey: 'west' },
+          { text: '(1 row affected)', kind: 'info', targetKey: 'dev' }
+        ],
+        messagesTruncated: false,
+        elapsedMs: 12,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T18:30:00.0000000+00:00'
+      }
+    })
+
+    const host = document.body.appendChild(document.createElement('div'))
+    const root: Root = createRoot(host)
+    cleanups.add(() => { act(() => root.unmount()); host.remove() })
+    act(() => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: f as unknown as Workbench,
+        children: createElement(MessagesView, { tabId: doc.id, tab: f.results.getSnapshot()[doc.id] })
+      }))
+    })
+
+    const pills = [...host.querySelectorAll<HTMLButtonElement>('.messages-filter-pill')]
+    // [All, prod-east, prod-west, dev-01]
+    expect(pills.map(pill => pill.getAttribute('aria-label'))).toEqual([
+      null,
+      'prod-east, 1 error',
+      'prod-west, 2 errors',
+      null
+    ])
+    const badges = [...host.querySelectorAll<HTMLElement>('.messages-filter-err')]
+    expect(badges).toHaveLength(2)
+    for (const badge of badges) {
+      expect(badge.textContent).toBe('!')
+      expect(badge.getAttribute('aria-hidden')).toBe('true')
+      expect(badge.hasAttribute('aria-label')).toBe(false)
+    }
   })
 })

@@ -649,3 +649,81 @@ describe('named captions in the stack', () => {
     ])
   })
 })
+
+describe('Round 5 multi-server statement-filtered close focus', () => {
+  it('R5-D4-4: closing a statement-filtered entry computes next from visible sets and keeps focus on the visible next entry', () => {
+    const client = fakeResultClient(), events = new EventBus()
+    const api = { copyResults: vi.fn<VariaApi['copyResults']>(), saveResults: vi.fn<VariaApi['saveResults']>(), cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(), onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}) }
+    const results = new ResultsService({ client, api, events, frame: callback => callback() })
+    const targets = [
+      { targetKey: 'srv-a', connectionId: 'c1', provider: 'sqlserver' as const, label: 'srv-a' },
+      { targetKey: 'srv-b', connectionId: 'c2', provider: 'sqlserver' as const, label: 'srv-b' }
+    ]
+    const rows = { rowsRead: 10, rowsStored: 10, rowsAvailable: 10 }
+    // Raw tab.sets interleaves statements: [srv-a stmt1, srv-a stmt2, srv-b stmt1, srv-b stmt2].
+    const a1 = descriptor(1, { index: 0, targetKey: 'srv-a', statementSlot: 0, ...rows })
+    const a2 = descriptor(2, { index: 1, targetKey: 'srv-a', statementSlot: 1, ...rows })
+    const b1 = descriptor(3, { index: 2, targetKey: 'srv-b', statementSlot: 0, ...rows })
+    const b2 = descriptor(4, { index: 3, targetKey: 'srv-b', statementSlot: 1, ...rows })
+    results.begin('t1', 'q1', undefined, { multi: { mode: 'fireAndForget', targets } })
+    void results.finish('t1', 'q1', {
+      multiSummary: {
+        status: 'completed',
+        mode: 'fireAndForget',
+        targets: [
+          { targetKey: 'srv-a', provider: 'sqlserver', label: 'srv-a', status: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 0, elapsedMs: 10, resultSetIds: [1, 2] },
+          { targetKey: 'srv-b', provider: 'sqlserver', label: 'srv-b', status: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 0, elapsedMs: 10, resultSetIds: [3, 4] }
+        ],
+        resultSets: [a1, a2, b1, b2],
+        discardedResultSets: 0,
+        messages: [],
+        messagesTruncated: false,
+        elapsedMs: 10,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T18:30:00.0000000+00:00'
+      }
+    })
+
+    const none = {}, resultsSearch = { subscribe: () => () => {}, getSnapshot: () => none, pendingReveal: () => false }
+    const workbench = { results, resultsSearch, commands: { execute: vi.fn(async () => true) }, pivot: new PivotService(results) } as unknown as Workbench
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    const draw = () => {
+      act(() => {
+        root!.render(createElement(WorkbenchProvider, {
+          workbench,
+          children: createElement('div', { className: 'output-panel' },
+            createElement('button', { role: 'tab', 'data-output-tab': 'results' }),
+            createElement(ResultsStack, { tabId: 't1', tab: results.getSnapshot().t1 })
+          )
+        }))
+      })
+      for (let frame = 0; frame < 4; frame++) act(() => { vi.advanceTimersByTime(50) })
+    }
+    draw()
+
+    // Filter Stacked layout to Statement 2: visible sets are [a2, b2].
+    const stmt2Btn = [...container.querySelectorAll<HTMLButtonElement>('.rs-stmt-btn')].find(btn => btn.textContent === 'Statement 2')!
+    act(() => { stmt2Btn.click() })
+    for (let frame = 0; frame < 4; frame++) act(() => { vi.advanceTimersByTime(50) })
+
+    const keysById = new Map(results.getSnapshot().t1.sets.map(entry => [entry.descriptor.resultId, entry.key]))
+    const a2Key = keysById.get(2)!
+    const b2Key = keysById.get(4)!
+    const visibleToggles = [...container.querySelectorAll<HTMLElement>('[data-caption-entry]')].map(el => el.dataset.captionEntry)
+    expect(visibleToggles).toEqual([a2Key, b2Key])
+
+    // Focus a2 (whose next neighbor in raw tab.sets is hidden b1, NOT visible b2) and close it via its caption button.
+    results.focusEntry('t1', a2Key)
+    draw()
+    const closeA2 = container.querySelector<HTMLButtonElement>(`[data-caption-entry="${a2Key}"]`)!.closest('.rs-caption')!.querySelector<HTMLButtonElement>('.rs-caption-close')!
+    closeA2.focus()
+    act(() => { closeA2.click() })
+    draw()
+
+    // Both service focused entry and DOM caption focus land on visible b2Key (not hidden b1 or Results tab).
+    expect(results.getSnapshot().t1.focused).toBe(b2Key)
+    expect((document.activeElement as HTMLElement).dataset.captionEntry).toBe(b2Key)
+  })
+})

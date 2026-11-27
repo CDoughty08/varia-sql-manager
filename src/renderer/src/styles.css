@@ -4591,7 +4591,10 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-banner-facts { margin-left: auto; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
 .multi-notice { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
 .multi-notice-warn { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); border-color: var(--varia-warningForeground); }
+.multi-notice-err { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); border-color: var(--varia-errorForeground); }
 .multi-notice-info { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
+.multi-notice-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.multi-notice-action { margin-left: auto; flex: none; }
 .multi-notice-list { display: flex; flex-direction: column; gap: var(--varia-space-0); min-width: 0; }
 .multi-summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--varia-space-2); }
 .multi-target-card { display: flex; flex-direction: column; gap: var(--varia-space-1); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); color: var(--varia-foreground); }
@@ -4601,11 +4604,6 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-target-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .multi-target-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-sm); font-weight: 600; }
 .multi-provider-badge { display: inline-flex; align-items: center; gap: var(--varia-space-0); padding: 0 var(--varia-space-1); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.multi-env-pill { display: inline-flex; align-items: center; padding: 0 var(--varia-space-1); border: 1px solid transparent; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); font-weight: 700; letter-spacing: 0.03em; }
-.multi-env-pill[data-env="prod"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
-.multi-env-pill[data-env="staging"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
-.multi-env-pill[data-env="dev"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
-.multi-env-pill[data-env="custom"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
 .multi-phase-pill { display: inline-flex; align-items: center; gap: var(--varia-space-0); padding: 0 var(--varia-space-2); height: 20px; border: 1px solid transparent; border-radius: var(--varia-radius-pill); font-size: var(--varia-size-xs); font-weight: 600; white-space: nowrap; }
 .multi-phase-pill[data-tone="ok"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
 .multi-phase-pill[data-tone="warn"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
@@ -4673,7 +4671,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .message-target-tag { display: inline-block; margin-right: var(--varia-space-2); padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); font-weight: 600; }
 
 @media (forced-colors: active) {
-  .multi-target-trigger, .multi-target-popover, .multi-target-row, .cross-engine-chip, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-env-pill, .multi-phase-pill { border-color: CanvasText; }
+  .multi-target-trigger, .multi-target-popover, .multi-target-row, .cross-engine-chip, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-phase-pill { border-color: CanvasText; }
   .multi-target-trigger[data-open], .multi-exec-mode-card.is-picked, .cross-engine-view-btn[aria-pressed="true"], .rs-stmt-btn[aria-pressed="true"], .rt-stmt-tab[aria-selected="true"], .messages-filter-pill[aria-pressed="true"] { border-color: Highlight; }
   .tab-swatch, .multi-swatch, .multi-target-dot, .rt-server-dot, .rs-server-dot, .cross-engine-chip-dot, .multi-exec-target-dot { forced-color-adjust: none; }
 }
