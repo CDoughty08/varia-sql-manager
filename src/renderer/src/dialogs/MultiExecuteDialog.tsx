@@ -336,13 +336,18 @@ export function MultiExecuteDialogModal({
       const ownCap = connection?.options.provider === 'bigquery' ? connection.options.maximumBytesBilled : undefined
       const cap = ownCap ?? defaultCap
       const ownThresholdGiB = connection && workbench?.costOptOut ? workbench.costOptOut.threshold(connection) : undefined
-      const costThresholdBytes = gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0
-      const asks = connection && workbench?.costOptOut ? (globalCostPrompt && workbench.costOptOut.asks(connection)) : globalCostPrompt
+      const ownCostThreshold = connection ? ownThresholdGiB !== undefined : !!target.ownCostThreshold
+      const costThresholdBytes = connection
+        ? (gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0)
+        : (target.ownCostThreshold ? target.costThresholdBytes : (gibibytes(globalThresholdGiB) ?? target.costThresholdBytes))
+      const asks = connection && workbench?.costOptOut
+        ? (globalCostPrompt && workbench.costOptOut.asks(connection))
+        : (target.costPrompt === false ? false : globalCostPrompt)
       return {
         ...target,
         costPrompt: asks,
         costThresholdBytes,
-        ownCostThreshold: ownThresholdGiB !== undefined,
+        ownCostThreshold,
         ...cap !== undefined ? { maximumBytesBilled: cap } : { maximumBytesBilled: undefined }
       }
     })
@@ -469,7 +474,7 @@ export function MultiExecuteDialogModal({
         </div>
 
         <div className="connection-scroll multi-exec-scroll">
-          <div className="multi-exec-targets" aria-label="Target connections">
+          <div className="multi-exec-targets" role="group" aria-label="Target connections">
             {visibleTargets.map(target => (
               <TargetChip key={target.targetKey} target={target} />
             ))}
@@ -486,7 +491,7 @@ export function MultiExecuteDialogModal({
           </div>
 
           {detectedTags.length > 0 && (
-            <div className="multi-exec-detected" aria-label="Detected statements">
+            <div className="multi-exec-detected" role="group" aria-label="Detected statements">
               <span className="multi-exec-detected-label">Detected:</span>
               {detectedTags.map(tag => (
                 <span key={tag} className="multi-exec-stmt-tag">{tag}</span>

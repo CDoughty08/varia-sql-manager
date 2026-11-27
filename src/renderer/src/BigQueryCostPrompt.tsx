@@ -123,8 +123,8 @@ function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: Activ
       const ownCap = connection?.options.provider === 'bigquery' ? connection.options.maximumBytesBilled : undefined
       const cap = connectionId ? (ownCap ?? defaultCap) : defaultCap
       const ownThresholdGiB = connection && workbench.costOptOut ? workbench.costOptOut.threshold(connection) : undefined
-      const liveThreshold = connectionId ? (gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0) : (fallbackOwn ? fallbackThreshold : (gibibytes(globalThresholdGiB) ?? fallbackThreshold))
-      const liveOwn = connectionId ? (ownThresholdGiB !== undefined ? true as const : undefined) : fallbackOwn
+      const liveThreshold = connection ? (gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0) : (fallbackOwn ? fallbackThreshold : (gibibytes(globalThresholdGiB) ?? fallbackThreshold))
+      const liveOwn = connection ? (ownThresholdGiB !== undefined ? true as const : undefined) : fallbackOwn
       // Never produce mathematically false "X > Y" copy if Options raised threshold above prompt.bytes while already open.
       const keepOriginalThreshold = prompt.kind === 'threshold' && liveThreshold >= prompt.bytes
       const thresholdBytes = keepOriginalThreshold ? fallbackThreshold : liveThreshold

@@ -1660,4 +1660,82 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     expect(document.body.querySelector('form.multi-execute-dialog')).toBeNull()
     expect(estimateBigQuery).not.toHaveBeenCalled()
   })
+
+  it('R13 D3 Lows: MultiExecuteDialog groups use role="group" and both BigQuery modals preserve per-connection ownThreshold/opt-out when connection lookup is missing', async () => {
+    const values = {
+      'queryExecution.bigQuery.showCost': 'onDemand' as const,
+      'queryExecution.bigQuery.maximumBytesBilled': 50 as number | null,
+      'queryExecution.bigQuery.costPrompt': true,
+      'queryExecution.bigQuery.costThreshold': 1,
+      'queryExecution.bigQuery.incompleteEstimateWarning': true
+    }
+    const settingsSnap = { values }
+    const settingsStub = {
+      subscribe: () => () => {},
+      getSnapshot: () => settingsSnap,
+      get: <K extends keyof typeof values>(k: K) => values[k]
+    }
+    const costPrompts = new CostPromptService()
+    const multiService = new MultiExecutePromptService()
+    const estimateBigQuery = vi.fn(async () => ({ ok: true as const, value: { bytesProcessed: 5 * GiB } }))
+    const emptyConns = {}
+    const wb = {
+      settings: settingsStub,
+      connections: { subscribe: () => () => {}, getSnapshot: () => emptyConns, get: () => undefined },
+      costPrompts,
+      commands: { execute: vi.fn(async () => {}) }
+    } as unknown as Workbench
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); costPrompts.dispose(); multiService.dispose() })
+
+    let multiPromise!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: wb,
+        children: [
+          createElement(MultiExecuteDialog, { key: 'multi', service: multiService, estimateBigQuery }),
+          createElement(BigQueryCostPrompt, { key: 'cost' })
+        ]
+      }))
+      multiPromise = multiService.ask({
+        tabId: 'q-role-group',
+        provider: 'bigquery',
+        sql: 'SELECT 1;',
+        targets: [
+          { ...bqTarget(1), costPrompt: false, ownCostThreshold: true, costThresholdBytes: 20 * GiB },
+          { ...bqTarget(2), ownCostThreshold: true, costThresholdBytes: 20 * GiB }
+        ],
+        prices: true
+      })
+    })
+    await act(async () => { await Promise.resolve() })
+
+    const form = document.body.querySelector<HTMLFormElement>('form.multi-execute-dialog')!
+    expect(form.querySelector('.multi-exec-targets')?.getAttribute('role')).toBe('group')
+    expect(form.querySelector('.multi-exec-detected')?.getAttribute('role')).toBe('group')
+    // Even though global costThreshold is 1 GiB (< 5 GiB estimate), ownCostThreshold (20 GiB) & costPrompt: false are preserved when connections.get returns undefined!
+    expect(form.textContent).not.toContain('Exceeds')
+    const cancelMulti = [...form.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelMulti.click() })
+    await expect(multiPromise).resolves.toBeUndefined()
+
+    // BigQueryCostPrompt preserves ownThreshold (2.00 GiB) when connections.get(connectionId) is undefined.
+    let costPromise!: ReturnType<CostPromptService['ask']>
+    await act(async () => {
+      costPromise = costPrompts.ask({
+        prompt: { kind: 'threshold', bytes: 5 * GiB },
+        connection: 'own-thresh-bq',
+        connectionId: 'missing-id',
+        thresholdBytes: 2 * GiB,
+        ownThreshold: true,
+        prices: true
+      })
+    })
+    const costForm = document.body.querySelector<HTMLFormElement>('form.bigquery-cost-prompt')!
+    expect(costForm.textContent).toContain('2.00 GiB')
+    const cancelCost = [...costForm.querySelectorAll<HTMLButtonElement>('button')].find(b => b.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelCost.click() })
+    await expect(costPromise).resolves.toEqual({ run: false })
+  })
 })
