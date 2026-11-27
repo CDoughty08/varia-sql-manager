@@ -25,6 +25,10 @@ internal static class ObjectSearchSql
     /// <summary>As <see cref="ModuleCall"/>, passing @ids (a JSON array of object ids) on to @stmt: a selective re-read (<see cref="Batch"/>'s only).</summary>
     public const string ModuleCallIds = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt, N'@ids nvarchar(max)', @ids;";
 
+    /// <summary>Runs a fingerprint under READ COMMITTED (the catalog batches read uncommitted): it waits on DDL still open, and a
+    /// wait past the prologue's lock timeout fails it, so a fingerprint never counts a change that may yet roll back.</summary>
+    internal const string Committed = "SET TRANSACTION ISOLATION LEVEL READ COMMITTED;\n";
+
     /// <summary>The object ids a selective re-read names (OPENJSON, so only in a database at compatibility level 130 or more). Typed
     /// through WITH: beside an OR, OPENJSON's untyped value is read again for every row it filters (seconds for a few thousand ids).</summary>
     internal const string Only = "(SELECT j.id FROM OPENJSON(@ids) WITH (id int '$') AS j)";
@@ -285,7 +289,7 @@ internal static class ObjectSearchSql
                     problems.AddRange(CatalogSql.Lint(Server(box, definitions), render, list: false, mayCheckAccess: false).Select(problem => "server " + problem));
             }
             problems.AddRange(CatalogSql.Lint(ResourceFingerprint, render, list: false, mayCheckAccess: false).Select(problem => "fingerprint " + problem));
-            texts.Add(Fingerprint(render));
+            texts.Add(Committed + Fingerprint(render));
             problems.AddRange(CatalogSql.Lint(Fingerprint(render), render, list: false, mayCheckAccess: false).Select(problem => "database fingerprint " + band + " " + problem));
             problems.AddRange(CatalogSql.Lint(Listing, render, list: false, mayCheckAccess: false).Select(problem => "listing " + problem));
             problems.AddRange(CatalogSql.Lint(Agent, render, list: false, mayCheckAccess: false, AgentLiterals).Select(problem => "agent " + problem));

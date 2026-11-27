@@ -13,6 +13,11 @@ internal readonly record struct SqlReloadCounts(long Unchanged, long Reread, lon
 
 internal sealed partial class ObjectSearchService
 {
+    private long reloadUnverified;
+
+    /// <summary>Reads held with nothing to compare because the fingerprint after them differed or failed (the checks read it).</summary>
+    internal long SqlUnverified => Interlocked.Read(ref reloadUnverified);
+
     private long reloadUnchanged, reloadReread, reloadRereadIds, reloadUnverifiable, reloadMode, reloadIdentity, reloadFailed, reloadRefused, reloadWhole;
 
     internal SqlReloadCounts SqlReloads => new(Interlocked.Read(ref reloadUnchanged), Interlocked.Read(ref reloadReread), Interlocked.Read(ref reloadRereadIds),
@@ -84,6 +89,13 @@ internal sealed partial class ObjectSearchService
             return Count(ref reloadWhole, database, "whole");
         }
         DatabaseReader? reader = null;
+        DatabaseIndex? kept = null;
+        // A merged read whose batch then failed to close is held, with nothing to compare (the whole read that follows replaces it).
+        void HoldKept()
+        {
+            if (kept is { } read) Holding(state.Index, children)(read);
+            kept = null;
+        }
         // The listing and selective read have a deadline of their own: past it the database is read whole, within its budget.
         using var selective = CancellationTokenSource.CreateLinkedTokenSource(token);
         selective.CancelAfter(SelectiveBudget ?? Limits.DatabaseBudget / 3);
@@ -106,15 +118,16 @@ internal sealed partial class ObjectSearchService
             command.CommandTimeout = 0;
             InDatabase(command, database, perDatabase, ObjectSearchSql.Batch(render, definitions, children, only: true),
                 "[" + string.Join(",", plan.Reread.Order().Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture))) + "]");
-            var merged = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, selective.Token, children), read =>
+            var merged = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, selective.Token, children), read => kept = read, selective.Token);
+            if (merged is null)
             {
-                // The fingerprint taken before the listing: whatever changed after it makes the next one differ from this.
-                read.Sync = current.ToBytes();
-                read.Extra = reader.Listing ?? default(ReadOnlyMemory<byte>);
-                Holding(state.Index, children)(read);
-            }, selective.Token);
+                state.Index.Abandon(loaded);
+                return new(new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection)."));
+            }
+            kept = null;
+            // Verified against the fingerprint taken before the listing (now), as a whole read is against its own.
+            await HoldVerifiedAsync(connection, database, render, perDatabase, now, merged, reader.Listing, definitions, children, Holding(state.Index, children), token);
             state.Index.Abandon(loaded);
-            if (merged is null) return new(new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection)."));
             Interlocked.Increment(ref reloadReread);
             Interlocked.Add(ref reloadRereadIds, plan.Reread.Count);
             ReloadOutcome?.Invoke(database, "reread:" + plan.Reread.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + reader.Listed.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -122,12 +135,14 @@ internal sealed partial class ObjectSearchService
         }
         catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException && !token.IsCancellationRequested)
         {
+            HoldKept();
             reader?.Abandon();
             state.Index.Abandon(loaded);
             return Count(ref reloadFailed, database, "failed");
         }
         catch
         {
+            HoldKept();
             reader?.Abandon();
             state.Index.Abandon(loaded);
             throw;
@@ -152,7 +167,7 @@ internal sealed partial class ObjectSearchService
         limit.CancelAfter(FingerprintBudget);
         await using var command = connection.CreateCommand();
         command.CommandTimeout = 0;
-        InDatabase(command, database, perDatabase, ReloadFingerprint(render));
+        InDatabase(command, database, perDatabase, ObjectSearchSql.Committed + ReloadFingerprint(render));
         await using var rows = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, limit.Token);
         return await SqlFingerprint.ReadAsync(rows, limit.Token);
     }
@@ -163,6 +178,34 @@ internal sealed partial class ObjectSearchService
     {
         try { return await FingerprintAsync(connection, database, render, perDatabase, token); }
         catch (Exception error) when (error is SqlException or OperationCanceledException or InvalidOperationException && !token.IsCancellationRequested) { return null; }
+    }
+
+    /// <summary>A check's hook: runs after a read and before the fingerprint that verifies it (the live checks change the database there).</summary>
+    internal Func<string, Task>? AfterRead { get; set; }
+
+    /// <summary>Holds <paramref name="read"/> with the fingerprint taken before it (and its listing) only where one taken after it
+    /// is the same: a change that landed meanwhile, committed or still open (the read sees uncommitted DDL; the fingerprint waits
+    /// on it), leaves the read held with nothing to compare, so the next build reads the database whole. Held whatever happens.</summary>
+    private async Task HoldVerifiedAsync(SqlConnection connection, string database, SqlRender render, bool perDatabase, SqlFingerprint? before, DatabaseIndex read,
+        byte[]? listing, bool definitions, bool children, Action<DatabaseIndex> put, CancellationToken token)
+    {
+        SqlFingerprint? after = null;
+        try
+        {
+            if (before is not null)
+            {
+                if (AfterRead is { } hook) await hook(database);
+                after = await TryFingerprintAsync(connection, database, render, perDatabase, token);
+            }
+        }
+        finally
+        {
+            var same = before is { } was && after is { } now && now.Sync(definitions, children).Unchanged(was.Sync(definitions, children));
+            read.Sync = same ? before!.Value.Sync(definitions, children).ToBytes() : default(ReadOnlyMemory<byte>);
+            read.Extra = same && listing is not null ? listing : default(ReadOnlyMemory<byte>);
+            if (!same && before is not null) Interlocked.Increment(ref reloadUnverified);
+            put(read);
+        }
     }
 
     /// <summary>The database's indexed sys.objects rows now (<see cref="ObjectSearchSql.Listing"/>), at most as many as a listing holds.</summary>

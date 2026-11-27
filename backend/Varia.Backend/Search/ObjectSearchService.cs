@@ -614,20 +614,24 @@ internal sealed partial class ObjectSearchService : IDisposable
             // in only once its fingerprint says it still may, or once what changed has been read again.
             // A read again without children (WithFallbackAsync) follows a reload that already answered for the database.
             if (held is null && children && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token) is { } reloaded) return reloaded.Skip;
-            // The fingerprint is taken before the batch (whatever DDL lands while it reads makes the next one differ from the saved
-            // one), and only where a file would keep it; one that fails leaves the read as it was, with nothing to compare next time.
+            // The fingerprint is taken before the batch, and again after it (HoldVerifiedAsync), only where a file would keep it; one
+            // that fails leaves the read as it was, with nothing to compare next time.
             var fingerprint = state.Index.Sink?.Scope is not null && Store.Saves ? await TryFingerprintAsync(connection, database, render, perDatabase, budgetSource.Token) : null;
             if (fingerprint is null) reader.ListNothing();
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
             InDatabase(command, database, perDatabase, ObjectSearchSql.Batch(render, definitions, children));
-            var index = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), read =>
+            DatabaseIndex? kept = null;
+            DatabaseIndex? index;
+            try { index = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), read => kept = read, budgetSource.Token); }
+            catch (Exception) when (kept is not null)
             {
-                read.Sync = fingerprint?.Sync(definitions, children).ToBytes() ?? default(ReadOnlyMemory<byte>);
-                read.Extra = fingerprint is null ? default : reader.Listing ?? default(ReadOnlyMemory<byte>);
-                Put(read);
-            }, budgetSource.Token);
+                // Read whole, then an error closing the batch: held, with nothing to compare.
+                Put(kept);
+                throw;
+            }
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
+            await HoldVerifiedAsync(connection, database, render, perDatabase, fingerprint, index, reader.Listing, definitions, children, Put, budgetSource.Token);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)

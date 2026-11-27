@@ -391,9 +391,12 @@ database's catalog can run:
   count, latest change and checksum of its objects, users, roles, schemas, keys and the rest of what the index names,
   user types, DDL triggers, plan guides and the statistics the index keeps. Another database under the same name (dropped
   and created again, or restored over it) is read whole, as is a file saved with another **Index module definitions**
-  or children setting, or one with no fingerprint this version reads.
+  or children setting, or one with no fingerprint this version reads. The fingerprint reads committed catalog rows (it waits
+  on DDL still open), and a read is saved with its fingerprint only when one taken after the read is the same; otherwise
+  it is saved with none, and the next build reads it whole.
 - **Unchanged.** A database whose fingerprint matches is held from its file as it was saved. Nothing else is read from
-  it, and its file is not written again, only marked used.
+  it, and its file is not written again, only marked used. One saved with definitions left out for memory is read whole
+  instead once there is room for them.
 - **Changed.** Otherwise the build lists the database's objects (each id, parent, last change and a checksum of its name,
   schema, type and statistics) and compares them with the list saved beside the file. Only new and changed objects, a
   changed child's parent, and their children and definitions are read again; dropped ones are dropped, and the rest keep
@@ -410,7 +413,8 @@ database's catalog can run:
 - **What the fingerprint misses.** A grant or revoke of VIEW DEFINITION or of column permissions that shows or hides a
   definition or column without changing which objects the login sees; a change to the `microsoft_database_tools_support`
   extended property (which hides an object); a foreign key's referenced table, or a history table's current table, that
-  becomes visible to the login while the key's own table (or the history table) stays as it was; and a change whose checksums collide (CHECKSUM_AGG and BINARY_CHECKSUM are weak
+  becomes visible to the login while the key's own table (or the history table) stays as it was; DDL that another session runs in a transaction while the
+  database is being read and rolls back before the read ends (the catalog is read uncommitted); and a change whose checksums collide (CHECKSUM_AGG and BINARY_CHECKSUM are weak
   hashes). Each is seen when the database is refreshed. Checked live on SQL Server 2025 only; the SQL is written for 2016
   and later.
 

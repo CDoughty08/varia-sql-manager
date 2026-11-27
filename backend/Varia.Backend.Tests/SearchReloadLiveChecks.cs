@@ -153,6 +153,25 @@ internal static class SearchReloadLiveChecks
             await Session();
             check(outcomes.GetValueOrDefault(database) == "unchanged", "and is then held from its file (" + outcomes.GetValueOrDefault(database) + ")");
 
+            // DDL that lands after a read and before the fingerprint that verifies it (as a deployment's, committed or still open, may):
+            // the read is held with nothing to compare, and the next build reads the database whole.
+            await Run("CREATE TABLE rl.Before (id int);", "create a table");
+            var unverified = service.Search.SqlUnverified;
+            service.Search.AfterRead = async name =>
+            {
+                if (name != database) return;
+                service.Search.AfterRead = null;
+                await Run("CREATE TABLE rl.Midway (id int);", "create a table between a read and its check");
+            };
+            try { await Session(); }
+            finally { service.Search.AfterRead = null; }
+            check(outcomes.GetValueOrDefault(database) is { } between && between.StartsWith("reread:", StringComparison.Ordinal) && service.Search.SqlUnverified > unverified
+                && service.Search.Store.Find(scope, IndexUnitKind.Database, database) is { Sync.Length: 0 },
+                "a read the database changed under before its check is saved with nothing to compare (" + outcomes.GetValueOrDefault(database) + ")");
+            await Session();
+            check(outcomes.GetValueOrDefault(database) == "unverifiable" && (await Names("Midway")).Contains("table:rl.Midway"),
+                "and the next build reads it whole (" + outcomes.GetValueOrDefault(database) + ")");
+
             // Dropped and created again under the same name: another database, read whole.
             SqlConnection.ClearAllPools();
             var dropped = await sql("ALTER DATABASE " + Bracket(database) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE " + Bracket(database) + "; CREATE DATABASE " + Bracket(database) + ";", "master");
@@ -183,6 +202,7 @@ internal static class SearchReloadLiveChecks
             service.Search.ReloadFingerprint = ObjectSearchSql.Fingerprint;
             service.Search.FingerprintBudget = TimeSpan.FromSeconds(15);
             service.Search.SelectiveBudget = null;
+            service.Search.AfterRead = null;
             service.Search.Store.Configure(new("disabled", storeFolder, IndexStoreLimits.DefaultDiskMiB));
             await service.Search.Store.Idle();
             try { Directory.Delete(storeRoot, recursive: true); }
