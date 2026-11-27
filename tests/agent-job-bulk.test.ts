@@ -1,12 +1,18 @@
+// @vitest-environment happy-dom
 // Job Activity Monitor's bulk Change owner and Attach schedule (AG-3b): the request each sends for one job, which jobs get one, and the
 // forms' flow through JobActivityService, with a refusal failing only its own job's line.
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { actionExecuteRequestSchema } from '../src/shared/actions/schema'
 import type { AgentScheduleRecord, AgentSchedulesModel } from '../src/shared/actions/agent-schedule'
 import { agentBulkText, attachPlan, changeJobOwnerRequestSchema, ownerPlan, ownerUnavailable } from '../src/shared/agent/bulk'
+import JobBulkForm from '../src/renderer/src/agent/JobBulkForms'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)) }
 const cleanups: (() => void)[] = []
@@ -183,6 +189,44 @@ describe('Job Activity Monitor: Attach schedule', () => {
     grid.select([])
     await settled()
     await jobActivity.openForm(id, 'attachSchedule')
+    expect(jobActivity.get(id)?.form).toBeUndefined()
+  })
+})
+
+describe('JobBulkForms UI (AP-3)', () => {
+  it('renders Change owner and Attach schedule in 160px PropertyField rows and closes on Escape', async () => {
+    const fixture = await monitor([row(nightly, 'Nightly'), row(backup, 'Backup')])
+    const { jobActivity, api, id } = fixture
+    api.describeObject.mockImplementation(async () => ({ ok: true, value: { elapsedMs: 1, agentJobDocument: { login: 'sa', sysadmin: true, owners: ['sa', 'ops'] } } }) as never)
+    await jobActivity.openForm(id, 'changeOwner')
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const renderForm = async () => {
+      await act(async () => { root.render(createElement(JobBulkForm, { id, service: jobActivity, form: jobActivity.get(id)?.form })) })
+    }
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+    await renderForm()
+
+    const ownerField = host.querySelector('.agent-bulk-form .property-field')!
+    expect(ownerField).not.toBeNull()
+    expect(ownerField.querySelector('.property-field-label label')?.textContent).toBe('New owner')
+    expect(ownerField.querySelector('.property-field-note')?.textContent).toContain(agentBulkText.ownerHint)
+    const ownerInput = ownerField.querySelector<HTMLInputElement>('input')!
+    await act(async () => { ownerInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(jobActivity.get(id)?.form).toBeUndefined()
+
+    api.describeObject.mockImplementation(async () => ({ ok: true, value: { elapsedMs: 1, agentSchedules: schedulesModel() } }) as never)
+    await jobActivity.openForm(id, 'attachSchedule')
+    await renderForm()
+    const scheduleField = host.querySelector('.agent-bulk-form .property-field')!
+    expect(scheduleField.querySelector('.property-field-label label')?.textContent).toBe('Shared schedule')
+    const pickBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('.agent-schedule-item')).find(btn => btn.textContent?.includes('Nightly 02:30'))!
+    await act(async () => { pickBtn.click() })
+    await renderForm()
+    expect(host.querySelector('.agent-schedule-preview')?.textContent).toContain('Next 5 runs')
+    await act(async () => { host.querySelector('.agent-bulk-form')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
     expect(jobActivity.get(id)?.form).toBeUndefined()
   })
 })
