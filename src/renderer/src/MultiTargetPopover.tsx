@@ -306,8 +306,10 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   const filterInput = useRef<HTMLInputElement>(null)
   const openedByKeyboard = useRef(false)
   const focusOnOpen = useRef(false)
+  const initialProviderRef = useRef<ProviderId | undefined>(undefined)
   const inFlightRef = useRef<Set<string>>(new Set())
   const [open, setOpen] = useState(false)
+  const [openSeq, setOpenSeq] = useState(0)
   const [filter, setFilter] = useState('')
   const [coords, setCoords] = useState<{ top: number; left: number; maxHeight: number } | undefined>()
   const [sharedChoice, setSharedChoice] = useState('')
@@ -320,6 +322,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     if (returnFocus) trigger.current?.focus({ preventScroll: true })
     openedByKeyboard.current = false
     focusOnOpen.current = false
+    initialProviderRef.current = undefined
   }, [])
 
   const prevTabId = useRef(tabId)
@@ -330,24 +333,27 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
     setSharedChoice('')
   }, [tabId, close])
 
-  const openPopover = useCallback((fromKeyboard: boolean) => {
+  const openPopover = useCallback((fromKeyboard: boolean, provider?: ProviderId) => {
     if (modalOpen() || menus?.ownsKeyboard?.()) return
     onActivate?.()
     openedByKeyboard.current = fromKeyboard
+    initialProviderRef.current = provider
     focusOnOpen.current = true
+    setOpenSeq(seq => seq + 1)
     setOpen(true)
   }, [menus, onActivate])
 
   useLayoutEffect(() => {
-    const listener: OpenRequestListener = requestedTabId => {
+    const listener: OpenRequestListener = (requestedTabId, provider) => {
       if (requestedTabId !== tabId) return false
-      openPopover(false)
+      openPopover(false, provider)
       return true
     }
     openRequestListeners.add(listener)
     if (pendingOpen?.tabId === tabId) {
+      const requestedProvider = pendingOpen.provider
       clearPendingOpen()
-      openPopover(false)
+      openPopover(false, requestedProvider)
     }
     return () => { openRequestListeners.delete(listener) }
   }, [tabId, openPopover])
@@ -554,24 +560,31 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
       adoption.dispose()
       stopMenus?.()
     }
-  }, [menus, open, close, filteredRows.length, sharedSqlDatabases.length])
+  }, [menus, open, close, filteredRows.length, sharedSqlDatabases.length, locked, showFilter])
 
   const placed = !!coords
   useLayoutEffect(() => {
     if (!open || !placed || !focusOnOpen.current) return
     focusOnOpen.current = false
+    const requestedProvider = initialProviderRef.current
+    initialProviderRef.current = undefined
+    const section = requestedProvider
+      ? popover.current?.querySelector<HTMLElement>(`.multi-target-section[data-provider="${requestedProvider}"]`)
+      : null
+    section?.scrollIntoView?.({ block: 'nearest' })
     if (showFilter && filterInput.current) {
       filterInput.current.focus({ preventScroll: true })
       return
     }
     const focusableSelector = 'input:not(:disabled), select:not(:disabled), button:not(:disabled)'
+    const sectionFirst = section?.querySelector<HTMLElement>(focusableSelector)
     const body = popover.current?.querySelector<HTMLElement>('.multi-target-popover-body')
     const bodyFirst = body?.querySelector<HTMLElement>(focusableSelector)
     const dialogFirst = popover.current?.querySelector<HTMLElement>(
       '.multi-target-popover-foot button:not(:disabled), input:not(:disabled), select:not(:disabled), button:not(:disabled):not(.multi-target-popover-close)'
     )
-    ;(bodyFirst ?? dialogFirst ?? popover.current)?.focus({ preventScroll: true })
-  }, [open, placed, showFilter])
+    ;(sectionFirst ?? bodyFirst ?? dialogFirst ?? popover.current)?.focus({ preventScroll: true })
+  }, [open, placed, showFilter, openSeq])
 
   if (!tab || !tab.multiMode || !summary) return null
 
@@ -608,7 +621,7 @@ export default function MultiTargetPopover({ tabId, variant = 'bar', onActivate,
   const clearDetachedRow = (row: PopoverRow) => {
     if (locked || row.targetIndex === undefined) return
     const key = row.key
-    documents.updateMultiTarget(tab.id, row.targetIndex, { enabled: false })
+    documents.setMultiTargets(tab.id, currentTargets.filter((_, index) => index !== row.targetIndex))
     const moveFocus = () => {
       const panel = popover.current
       if (!panel || !panel.isConnected) return

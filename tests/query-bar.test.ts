@@ -9,7 +9,8 @@ import StandardToolbar from '../src/renderer/src/ShellToolbar'
 import { formatElapsed, lostHint, planButtonState, queryContextModel, toolbarMove, toolbarRescue, toolbarReturn, toolbarStop, type QueryContextInput } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { densities, densityUse } from '../src/shared/theme/metrics'
-import { connectionColorNames } from '../src/shared/theme/connection-colors'
+import { connectionAccent, connectionColorNames } from '../src/shared/theme/connection-colors'
+import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { stylesheetRules } from './fixtures/css-rules'
 import { documentUri } from '../src/renderer/src/services/documents'
 import { EditorStatusService } from '../src/renderer/src/services/editor-status'
@@ -230,6 +231,40 @@ describe('query bar', () => {
     const plainHtml = render(createElement(QueryBar, { tabId: plain.id }))
     expect(plainHtml).not.toContain('data-connection-accent')
     expect(plainHtml).not.toContain('--query-bar-accent')
+  })
+  it('resolves multi-server Production red and Cross-Engine purple fallback accents through real connectionAccent', () => {
+    const value = workbenchFixture({ platform: 'win32' })
+    const registry = new ConnectionTargetService(), targets = new TargetService(value.documents, value.queries, value.connections, value.files, registry)
+    cleanups.push(value.dispose)
+    value.api.push(readyBackend())
+    const activeTheme = resolveBuiltin('dark')
+    const theme = { subscribe: () => () => {}, getSnapshot: () => ({ active: activeTheme }), accent: (color: string | undefined) => connectionAccent(color, activeTheme) }
+    const editorStatus = new EditorStatusService(callback => callback())
+    cleanups.push(() => editorStatus.dispose())
+    const workbench = { ...value, targets, theme, editorStatus } as unknown as Workbench
+    const render = (element: ReactElement) => renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: element }))
+
+    value.connections.add(connectionInfo('sql-prod'), { ...connectionOptions, server: 'prod.example', environment: 'Production' })
+    value.connections.add(connectionInfo('sql-dev'), { ...connectionOptions, server: 'dev.example', environment: 'Development' })
+    value.connections.add({ ...connectionInfo('bq-dev'), providerId: 'bigquery' }, { provider: 'bigquery', projectId: 'bq-dev', defaultDataset: 'ds', environment: 'Development' } as never)
+
+    const prodTab = value.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'sql-prod', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'sql-dev', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    expect(render(createElement(QueryBar, { tabId: prodTab.id }))).toContain('data-connection-accent="" style="--query-bar-accent:var(--varia-connection-red)"')
+
+    const crossTab = value.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { connectionId: 'sql-dev', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'bq-dev', provider: 'bigquery', database: 'ds', enabled: true }
+      ]
+    })
+    expect(render(createElement(QueryBar, { tabId: crossTab.id }))).toContain('data-connection-accent="" style="--query-bar-accent:var(--varia-connection-purple)"')
   })
   it('gives each database its exact name as the option\'s value, spaces and all', () => {
     const { connections, documents, render } = fixture()

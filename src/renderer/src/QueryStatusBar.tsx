@@ -4,6 +4,7 @@ import { documentKind, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useTicker } from './core/useTicker'
 import { environmentPreset, environmentTag } from '../../shared/environments'
+import { connectionPresets } from '../../shared/theme/connection-colors'
 import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import { resolveMultiTargets } from './MultiTargetPopover'
@@ -12,6 +13,9 @@ import type { TabResults } from './results/ResultsService'
 import type { LiveConnection } from './services/connections'
 import { liveQuerySession, type QueryState } from './services/queries'
 import { queryConnectionPresentation } from './query-connection'
+
+const redPresetColor = connectionPresets.find(preset => preset.name === 'red')!.stored
+const purplePresetColor = connectionPresets.find(preset => preset.name === 'purple')!.stored
 
 /** Derives the settled multi-server status so local failures (e.g. refuseReadOnly), backend loss, cancel, and timeout never show stale summaries. */
 export function deriveMultiStatus(
@@ -74,7 +78,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const multiProdTarget = multiEnabled.find(item => environmentPreset(item.environment) === 'Production')
   const multiProdCount = multiEnabled.filter(item => environmentPreset(item.environment) === 'Production').length
   const effectiveColor = isMulti
-    ? (multiProdTarget ? (multiProdTarget.color ?? 'red') : tab.multiMode === 'cross' ? 'purple' : multiEnabled.find(item => item.color)?.color)
+    ? (multiProdTarget ? (multiProdTarget.color ?? redPresetColor) : tab.multiMode === 'cross' ? purplePresetColor : multiEnabled.find(item => item.color)?.color)
     : presentation.color
   const accent = useConnectionAccent(effectiveColor)
 
