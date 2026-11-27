@@ -746,12 +746,13 @@ internal sealed record LanguageLookupResult(string Index, List<LanguageLookupAns
 /// as it resolved. Object is the object a path to one names, when the index holds it. Truncated: more names matched than came back.</summary>
 internal sealed record LanguageLookupAnswer(string State, List<string> Path, List<LanguageLookupItem> Items, bool Truncated, LanguageLookupObject? Object = null, string? Skip = null);
 /// <summary>A name below the path: its kind and subtype as Object Explorer names them, a column's type and nullability, a routine's
-/// signature (Detail), a sharded group, and with Details a column's description.</summary>
+/// signature (Detail), a sharded group, project tier/completeness flags, summary metadata, and with Details a column or object's description.</summary>
 internal sealed record LanguageLookupItem(string Name, string Kind, string? Subtype = null, string? Type = null, bool? Nullable = null, string? Detail = null,
-    string? Description = null, BigQueryShardsDto? Shards = null);
+    string? Description = null, BigQueryShardsDto? Shards = null, string? Tier = null, bool? NamesOnly = null, bool? Partial = null,
+    long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null);
 /// <summary>An object's facts: Detailed is false until the index has read its details (columns, size, layout).</summary>
 internal sealed record LanguageLookupObject(string Name, string Kind, string? Subtype, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null,
-    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null);
+    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null, string? Description = null);
 internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
 internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
 /// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>

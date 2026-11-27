@@ -4,9 +4,9 @@ import { completeFromIndex } from '../src/shared/completion/complete'
 import { definitionFromIndex, IndexUnavailableError } from '../src/shared/completion/definition'
 import { escapeMarkdown, hoverFromIndex } from '../src/shared/completion/hover'
 import { LookupCache, lookupCacheLimits } from '../src/shared/completion/lookup-cache'
-import type { CompletionItem, IndexLookup, ScopeSource } from '../src/shared/completion/model'
+import type { CompletionItem, CompletionSite, IndexLookup, ScopeSource } from '../src/shared/completion/model'
 import { googleSqlDialect, quoteGoogleSqlName } from '../src/shared/googlesql/dialect'
-import { readGoogleSqlCompletion, readGoogleSqlHover } from '../src/shared/googlesql/scope'
+import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../src/shared/googlesql/scope'
 import { languageLookupLimits, languageLookupRequestSchema, languageLookupResultSchema, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath, type LanguageLookupResult } from '../src/shared/language-lookup'
 
 /** `|` marks the caret. */
@@ -93,11 +93,86 @@ describe('GoogleSQL scope reader', () => {
     expect(read('SELECT * FROM a JOIN |').site).toEqual({ kind: 'object', qualifier: [] })
     expect(read('UPDATE |').site.kind).toBe('object')
     expect(read('INSERT INTO sales.|').site).toEqual({ kind: 'object', qualifier: ['sales'] })
-    expect(read('SELECT * FROM sales.orders |').site).toEqual({ kind: 'keyword' })
+    expect(read('SELECT * FROM sales.orders |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM sales.orders o |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('SELECT * FROM sales.orders AS o |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('SELECT * FROM sales.orders a JOIN sales.daily |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: true })
+    expect(read('SELECT * FROM sales.orders a JOIN sales.daily d |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: true })
+    expect(read('SELECT * FROM sales.orders a JOIN sales.daily d ON a.id = d.n, sales.orders |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM (SELECT 1) |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM (SELECT 1) s |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read("SELECT * FROM a.b FOR SYSTEM_TIME AS OF TIMESTAMP '2024-01-01' |").site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read("SELECT * FROM a.b FOR SYSTEM_TIME AS OF '2024-01-01' |").site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read("SELECT * FROM a.b FOR SYSTEM_TIME AS OF TIMESTAMP '2024-01-01' x |").site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('SELECT * FROM a.b FOR |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF TIMESTAMP |').site).toEqual({ kind: 'expression' })
+    const stAliased = read("SELECT * FROM a.b FOR SYSTEM_TIME AS OF TIMESTAMP '2024-01-01' t WHERE t.|")
+    expect(stAliased.site).toEqual({ kind: 'member', qualifier: ['t'] })
+    expect(stAliased.scope.sources[0]?.name).toBe('t')
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CURRENT_TIMESTAMP() - INTERVAL 1 DAY |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CURRENT_TIMESTAMP() - INTERVAL 1 DAY TO |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CURRENT_TIMESTAMP() - INTERVAL 1 DAY TO SECOND |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    const stIntervalRangeAliased = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CURRENT_TIMESTAMP() - INTERVAL 1 DAY TO SECOND t |')
+    expect(stIntervalRangeAliased.site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(stIntervalRangeAliased.scope.sources[0]?.name).toBe('t')
+    const stIntervalAliased = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CURRENT_TIMESTAMP() - INTERVAL 1 DAY t |')
+    expect(stIntervalAliased.site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(stIntervalAliased.scope.sources[0]?.name).toBe('t')
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE x |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE @mode |').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE WHEN TRUE THEN CURRENT_TIMESTAMP() END |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE x WHEN 1 THEN CURRENT_TIMESTAMP() END |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    const stCaseAliased = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE WHEN TRUE THEN CURRENT_TIMESTAMP() END t |')
+    expect(stCaseAliased.site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(stCaseAliased.scope.sources[0]?.name).toBe('t')
+    const stCaseWhere = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE WHEN TRUE THEN CURRENT_TIMESTAMP() END t WHERE t.|')
+    expect(stCaseWhere.site).toEqual({ kind: 'member', qualifier: ['t'] })
+    expect(stCaseWhere.scope.sources[0]?.name).toBe('t')
+    const stSimpleCaseWhere = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE x WHEN 1 THEN CURRENT_TIMESTAMP() END t WHERE t.|')
+    expect(stSimpleCaseWhere.site).toEqual({ kind: 'member', qualifier: ['t'] })
+    expect(stSimpleCaseWhere.scope.sources[0]?.name).toBe('t')
+    const stNestedCaseWhere = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF CASE WHEN TRUE THEN CASE WHEN FALSE THEN CURRENT_TIMESTAMP() ELSE CURRENT_TIMESTAMP() END END t WHERE t.|')
+    expect(stNestedCaseWhere.site).toEqual({ kind: 'member', qualifier: ['t'] })
+    expect(stNestedCaseWhere.scope.sources[0]?.name).toBe('t')
+    expect(read('SELECT * FROM `CASE` |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    const stBeforeJoin = read('SELECT * FROM a.b FOR SYSTEM_TIME AS OF | JOIN c ON a.b.id = c.id')
+    expect(stBeforeJoin.site).toEqual({ kind: 'expression' })
+    expect(names(stBeforeJoin.scope.sources)).toEqual(['b=a.b', 'c=c'])
+    expect(read('SELECT * FROM UNNEST([1]) WITH OFFSET |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM UNNEST([1]) u WITH OFFSET |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM UNNEST([1]) WITH OFFSET pos |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read("SELECT * FROM a.b PIVOT(SUM(x) FOR y IN ('a')) |").site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read("SELECT * FROM a.b PIVOT(SUM(x) FOR y IN ('a')) p |").site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('SELECT * FROM a.b UNPIVOT(v FOR k IN (c1, c2)) |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read("SELECT * FROM a.b PIVOT(SUM(|) FOR y IN ('a'))").site).toEqual({ kind: 'expression' })
+    expect(read('SELECT * FROM a JOIN b USING (id) |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('MERGE target USING source |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false, mergeUsing: true })
+    expect(read('MERGE target USING source s |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false, mergeUsing: true })
+    expect(read('SELECT * FROM my-proj-2 |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM `example.com:my-proj |').site).toEqual({ kind: 'none' })
+    expect(read('SELECT * FROM t FOR SYSTEM_TIME AS OF col1 + col2 |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM t TABLESAMPLE |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    const dashedFirst = read('SELECT * FROM m|y-proj-2')
+    expect(dashedFirst.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedFirst.word).toEqual({ start: 14, end: 23, typed: 'm', quoted: false })
+    const dashedAfterFirstDash = read('SELECT * FROM my-|proj-2')
+    expect(dashedAfterFirstDash.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedAfterFirstDash.word).toEqual({ start: 14, end: 23, typed: 'my-', quoted: false })
+    const dashedAfterSecondDash = read('SELECT * FROM my-proj-|2')
+    expect(dashedAfterSecondDash.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedAfterSecondDash.word).toEqual({ start: 14, end: 23, typed: 'my-proj-', quoted: false })
+    const dashedSpaceAfterDash = read('SELECT * FROM my-| proj')
+    expect(dashedSpaceAfterDash.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(dashedSpaceAfterDash.word).toEqual({ start: 14, end: 17, typed: 'my-', quoted: false })
     expect(read('SELECT * FROM sales.orders AS |').site).toEqual({ kind: 'none' })
     expect(read('SELECT x AS |').site).toEqual({ kind: 'none' })
-    expect(read('SELECT CAST(x AS |').site).toEqual({ kind: 'keyword' })
-    expect(read('|').site).toEqual({ kind: 'keyword' })
+    expect(read('SELECT CAST(x AS |').site).toEqual({ kind: 'castType' })
+    expect(read('SELECT SAFE_CAST(x AS |').site).toEqual({ kind: 'castType' })
+    expect(read('|').site).toEqual({ kind: 'statementStart' })
     for (const text of ['SELECT \'ab|\'', 'SELECT 1 -- note |', 'SELECT 1 # note |', 'SELECT /* a | */ 1', 'SELECT 12|', 'SELECT @par|', 'SELECT """a\n|']) expect(read(text).site, text).toEqual({ kind: 'none' })
   })
 
@@ -236,6 +311,263 @@ describe('GoogleSQL scope reader', () => {
 
   it('reads a dot after a project id that ends in digits', () => {
     expect(read('SELECT * FROM my-project-123456.|').site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+  })
+
+  it('reads unquoted digit-starting dataset and table segments after a dot in object sites without breaking numbers', () => {
+    const numOnly = read('SELECT * FROM my-proj.123|')
+    expect(numOnly.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(numOnly.word).toEqual({ start: 22, end: 25, typed: '123', quoted: false })
+
+    const afterNumDot = read('SELECT * FROM my-proj.456.|')
+    expect(afterNumDot.site).toEqual({ kind: 'object', qualifier: ['my-proj', '456'] })
+    expect(afterNumDot.word).toEqual({ start: 26, end: 26, typed: '', quoted: false })
+
+    const numWord = read('SELECT * FROM my-proj.2024_sales|')
+    expect(numWord.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(numWord.word).toEqual({ start: 22, end: 32, typed: '2024_sales', quoted: false })
+
+    const midNumWord = read('SELECT * FROM my-proj.20|24_sales')
+    expect(midNumWord.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(midNumWord.word).toEqual({ start: 22, end: 32, typed: '20', quoted: false })
+
+    const afterNumWordDot = read('SELECT * FROM my-proj.2024_sales.|')
+    expect(afterNumWordDot.site).toEqual({ kind: 'object', qualifier: ['my-proj', '2024_sales'] })
+    expect(afterNumWordDot.word).toEqual({ start: 33, end: 33, typed: '', quoted: false })
+
+    const twoNumSegments = read('SELECT * FROM my-proj.123.456|')
+    expect(twoNumSegments.site).toEqual({ kind: 'object', qualifier: ['my-proj', '123'] })
+    expect(twoNumSegments.word).toEqual({ start: 26, end: 29, typed: '456', quoted: false })
+
+    const numDashed = read('SELECT * FROM my-proj.123-prod|')
+    expect(numDashed.site).toEqual({ kind: 'object', qualifier: ['my-proj'] })
+    expect(numDashed.word).toEqual({ start: 22, end: 30, typed: '123-prod', quoted: false })
+
+    expect(read('SELECT * FROM my-proj.123 |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM my-proj.2024_sales |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM my-proj.2024_sales d |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    const sourceRead = read('SELECT o.| FROM my-proj.2024_sales.orders o')
+    expect(sourceRead.site).toEqual({ kind: 'member', qualifier: ['o'] })
+    expect(names(sourceRead.scope.sources)).toEqual(['o=my-proj.2024_sales.orders'])
+    const hoverRead = at('SELECT * FROM my-proj.2024_sales.ord|ers')
+    expect(readGoogleSqlHover(hoverRead.text, hoverRead.offset)).toMatchObject({ parts: ['my-proj', '2024_sales', 'orders'], at: 2, object: true })
+
+    // Numeric literals and non-object digit expressions stay non-completable.
+    for (const sql of ['SELECT 1.5|', 'SELECT .5|', 'SELECT 123|', 'WHERE a = 123|', 'SELECT a.123|', 'SELECT a.456.|', 'SELECT a.2024_sales|', 'SELECT a-1.5|', 'SELECT a-1.5| FROM t', 'SELECT a-1.|5', 'SELECT t.x - 1.5| FROM t', 'SELECT 10-2.5|', 'SELECT -1.5|', 'WHERE a = 1-2.5|']) {
+      expect(read(sql).site, sql).toEqual({ kind: 'none' })
+    }
+  })
+
+  it('reads unquoted digit-starting segments after a dashed project ending in digits without breaking subtraction', () => {
+    const typingDataset = read('SELECT * FROM my-project-123456.2024_sales|')
+    expect(typingDataset.site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+    expect(typingDataset.word).toEqual({ start: 32, end: 42, typed: '2024_sales', quoted: false })
+
+    const midDataset = read('SELECT * FROM my-project-123456.20|24_sales')
+    expect(midDataset.site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+    expect(midDataset.word).toEqual({ start: 32, end: 42, typed: '20', quoted: false })
+
+    const digitOnlyDataset = read('SELECT * FROM my-project-123456.2024|')
+    expect(digitOnlyDataset.site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
+    expect(digitOnlyDataset.word).toEqual({ start: 32, end: 36, typed: '2024', quoted: false })
+
+    const afterDatasetDot = read('SELECT * FROM my-project-123456.2024_sales.|')
+    expect(afterDatasetDot.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024_sales'] })
+    expect(afterDatasetDot.word).toEqual({ start: 43, end: 43, typed: '', quoted: false })
+
+    const afterDigitOnlyDot = read('SELECT * FROM my-project-123456.2024.|')
+    expect(afterDigitOnlyDot.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024'] })
+
+    const tableSeg = read('SELECT * FROM my-project-123456.2024_sales.orders|')
+    expect(tableSeg.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024_sales'] })
+    expect(tableSeg.word).toEqual({ start: 43, end: 49, typed: 'orders', quoted: false })
+
+    const threeDigitChain = read('SELECT * FROM my-project-123456.2024.345|')
+    expect(threeDigitChain.site).toEqual({ kind: 'object', qualifier: ['my-project-123456', '2024'] })
+    expect(threeDigitChain.word).toEqual({ start: 37, end: 40, typed: '345', quoted: false })
+
+    const dashedDigitDataset = read('SELECT * FROM my-proj.123-456.789|')
+    expect(dashedDigitDataset.site).toEqual({ kind: 'object', qualifier: ['my-proj', '123-456'] })
+    expect(dashedDigitDataset.word).toEqual({ start: 30, end: 33, typed: '789', quoted: false })
+
+    const memberAfter = read('SELECT o.| FROM my-project-123456.2024_sales.orders o')
+    expect(memberAfter.site).toEqual({ kind: 'member', qualifier: ['o'] })
+    expect(names(memberAfter.scope.sources)).toEqual(['o=my-project-123456.2024_sales.orders'])
+
+    const fullSql = 'SELECT * FROM my-project-123456.2024_sales.orders'
+    expect(readGoogleSqlStatementSources(fullSql, fullSql.length)).toEqual([
+      { kind: 'object', name: 'orders', parts: ['my-project-123456', '2024_sales', 'orders'], span: { start: 14, end: 49 } }
+    ])
+
+    const hoverOrders = at('SELECT * FROM my-project-123456.2024_sales.ord|ers')
+    expect(readGoogleSqlHover(hoverOrders.text, hoverOrders.offset)).toMatchObject({ parts: ['my-project-123456', '2024_sales', 'orders'], at: 2, object: true })
+    const hoverDataset = at('SELECT * FROM my-project-123456.2024_sal|es.orders')
+    expect(readGoogleSqlHover(hoverDataset.text, hoverDataset.offset)).toMatchObject({ parts: ['my-project-123456', '2024_sales', 'orders'], at: 1, object: true })
+
+    // Subtraction `a-1.5` never fabricates hover or spurious statement sources.
+    expect(readGoogleSqlHover('SELECT a-1.5 FROM t', 'SELECT a-'.length)).toBeUndefined()
+    expect(readGoogleSqlHover('SELECT a-1.5 FROM t', 'SELECT a-1.'.length)).toBeUndefined()
+    expect(names(readGoogleSqlStatementSources('SELECT a-1.5 FROM t', 'SELECT a-1.5 FROM t'.length))).toEqual(['t=t'])
+  })
+
+  it('completes dashed identifiers with -<digits><letters> and scientific-like datasets without breaking aliases or arithmetic', async () => {
+    // [Medium 1] -<digits><letters> mid-segment and end-of-segment in object sites.
+    expect(read('SELECT * FROM gcp-123abc|')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 24, typed: 'gcp-123abc', quoted: false }
+    })
+    expect(read('SELECT * FROM gcp-123a|bc')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 24, typed: 'gcp-123a', quoted: false }
+    })
+    expect(read('SELECT * FROM gcp-123a|bc-def')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 28, typed: 'gcp-123a', quoted: false }
+    })
+    expect(read('SELECT * FROM gcp-123-456abc|')).toMatchObject({
+      site: { kind: 'object', qualifier: [] },
+      word: { start: 14, end: 28, typed: 'gcp-123-456abc', quoted: false }
+    })
+    expect(read('SELECT * FROM my-proj.123-456_tbl|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-proj'] },
+      word: { start: 22, end: 33, typed: '123-456_tbl', quoted: false }
+    })
+
+    // End-to-end project completion for `gcp-123a` / `gcp-123abc` returns project item, not afterFromTable keywords.
+    const gcpLookup: IndexLookup = async requests => requests.map(request => request.path.length === 0
+      ? { state: 'ready', path: [], truncated: false, items: [{ name: 'gcp-123abc', kind: 'bqProject' }] }
+      : { state: 'ready', path: [...request.path], truncated: false, items: [] })
+    expect((await complete('SELECT * FROM gcp-123a|', gcpLookup)).labels('container')).toEqual(['gcp-123abc'])
+    expect((await complete('SELECT * FROM gcp-123abc|', gcpLookup)).labels('container')).toEqual(['gcp-123abc'])
+
+    // hasFromAlias after trailing space on dashed -<digits><letters> segments vs real aliases.
+    for (const sql of [
+      'SELECT * FROM gcp-123abc |',
+      'SELECT * FROM my-proj-123_tbl |',
+      'SELECT * FROM my-proj.123-456_tbl |',
+      'SELECT * FROM my-proj-1.2024_01-2b |'
+    ]) {
+      expect(read(sql).site, sql).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+      expect((await complete(sql)).labels('keyword'), sql).toContain('AS')
+    }
+    expect(read('SELECT * FROM gcp-123abc t |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+    expect(read('SELECT * FROM my-proj.tbl AS t |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+
+    // Non-object arithmetic / expression sites must not turn into object or member sites.
+    expect(read('SELECT a-1.|').site).toEqual({ kind: 'none' })
+    expect(read('SELECT a-1.b|').site).toEqual({ kind: 'none' })
+    expect(read('SELECT a-1abc.b| FROM t').site).toEqual({ kind: 'none' })
+    expect(read('SELECT t.x-1abc| FROM t').site).toEqual({ kind: 'expression' })
+    expect(read('SELECT gcp-123abc| FROM t').site).toEqual({ kind: 'expression' })
+
+    // [Low 1] Scientific-notation-like segment after a dashed-digit project (`my-project-123456.2024e1`).
+    expect(read('SELECT * FROM my-project-123456.2024e1|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 38, typed: '2024e1', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.2024e1.|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456', '2024e1'] },
+      word: { start: 39, end: 39, typed: '', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.2024e10|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 39, typed: '2024e10', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.2024E2|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 38, typed: '2024E2', quoted: false }
+    })
+    expect(read('SELECT * FROM my-project-123456.e1|')).toMatchObject({
+      site: { kind: 'object', qualifier: ['my-project-123456'] },
+      word: { start: 32, end: 34, typed: 'e1', quoted: false }
+    })
+    const sciSql = 'SELECT * FROM my-project-123456.2024e1.orders'
+    expect(readGoogleSqlStatementSources(sciSql, sciSql.length)).toEqual([
+      { kind: 'object', name: 'orders', parts: ['my-project-123456', '2024e1', 'orders'], span: { start: 14, end: 45 } }
+    ])
+    const sciHover = at('SELECT * FROM my-project-123456.2024e1.ord|ers')
+    expect(readGoogleSqlHover(sciHover.text, sciHover.offset)).toMatchObject({
+      parts: ['my-project-123456', '2024e1', 'orders'],
+      at: 2,
+      object: true
+    })
+
+    // Scientific-notation arithmetic negatives stay non-completable with no spurious hover or sources.
+    for (const sql of ['SELECT a-1.5e2|', 'SELECT a-1.5e2| FROM t', 'SELECT 10-2.5e1|']) {
+      expect(read(sql).site, sql).toEqual({ kind: 'none' })
+    }
+    expect(readGoogleSqlHover('SELECT a-1.5e2 FROM t', 'SELECT a-1.'.length)).toBeUndefined()
+    expect(names(readGoogleSqlStatementSources('SELECT a-1.5e2 FROM t', 'SELECT a-1.5e2 FROM t'.length))).toEqual(['t=t'])
+  })
+
+  it('reads per-segment backticked dotted paths across FROM, JOIN, DML, WITH, subqueries, completion, and hover', async () => {
+    const mixedPaths = [
+      { sql: 'SELECT t.| FROM my_proj.my_ds.`my-table` t', expectedSource: 't=my_proj.my_ds.my-table', expectedParts: ['my_proj', 'my_ds', 'my-table'] },
+      { sql: 'SELECT t.| FROM `my-proj`.`my_ds`.`my-table` t', expectedSource: 't=my-proj.my_ds.my-table', expectedParts: ['my-proj', 'my_ds', 'my-table'] },
+      { sql: 'SELECT t.| FROM `my-project-123456`.`2024e1`.orders t', expectedSource: 't=my-project-123456.2024e1.orders', expectedParts: ['my-project-123456', '2024e1', 'orders'] },
+      { sql: 'SELECT t.| FROM my_proj.`2024_sales`.orders t', expectedSource: 't=my_proj.2024_sales.orders', expectedParts: ['my_proj', '2024_sales', 'orders'] },
+      { sql: 'SELECT t.| FROM `example.com:my-proj-1`.2024e1.`orders` t', expectedSource: 't=example.com:my-proj-1.2024e1.orders', expectedParts: ['example.com:my-proj-1', '2024e1', 'orders'] },
+      { sql: 'SELECT t.| FROM my_proj.2024.`my-table` t', expectedSource: 't=my_proj.2024.my-table', expectedParts: ['my_proj', '2024', 'my-table'] }
+    ]
+    for (const entry of mixedPaths) {
+      const reading = read(entry.sql)
+      expect(reading.site, entry.sql).toEqual({ kind: 'member', qualifier: ['t'] })
+      expect(names(reading.scope.sources), entry.sql).toEqual([entry.expectedSource])
+      const bareSql = entry.sql.replace('t.|', '*').replace(/ t$/, '')
+      expect(readGoogleSqlStatementSources(bareSql, bareSql.length), bareSql).toMatchObject([{ kind: 'object', parts: entry.expectedParts }])
+    }
+
+    // End-to-end completion & hover on per-segment backticked paths (`varia-alpha`.staging.`raw-events`).
+    const mixedMember = await complete('SELECT t.| FROM `varia-alpha`.staging.`raw-events` t')
+    expect(mixedMember.labels('column')).toEqual(['payload'])
+    const mixedHover = at('SELECT t.pay|load FROM `varia-alpha`.staging.`raw-events` t')
+    expect(await hoverFromIndex(readGoogleSqlHover(mixedHover.text, mixedHover.offset)!, dialect, fakeLookup())).toMatchObject({
+      markdown: expect.stringContaining('payload')
+    })
+
+    // JOIN, UPDATE, DELETE, MERGE, WITH CTE, and subquery variants preserve full per-segment backticked paths and aliases.
+    expect(names(read('SELECT s.| FROM `varia-alpha`.sales.orders o JOIN `varia-alpha`.staging.`raw-events` s ON o.id = s.|').scope.sources))
+      .toEqual(['o=varia-alpha.sales.orders', 's=varia-alpha.staging.raw-events'])
+    expect(names(read('UPDATE my_proj.my_ds.`my-table` t SET t.| = 1').scope.sources)).toEqual(['t=my_proj.my_ds.my-table'])
+    expect(names(read('DELETE FROM my_proj.my_ds.`my-table` t WHERE t.| = 1').scope.sources)).toEqual(['t=my_proj.my_ds.my-table'])
+    expect(names(read('MERGE my_proj.my_ds.`my-table` t USING `varia-alpha`.staging.`raw-events` s ON t.| = s.payload').scope.sources))
+      .toEqual(['t=my_proj.my_ds.my-table', 's=varia-alpha.staging.raw-events'])
+    expect(names(read('WITH c AS (SELECT t.| FROM my_proj.my_ds.`my-table` t) SELECT * FROM c').scope.sources))
+      .toEqual(['t=my_proj.my_ds.my-table'])
+    expect(names(read('SELECT * FROM (SELECT t.| FROM my_proj.my_ds.`my-table` t)').scope.sources))
+      .toEqual(['t=my_proj.my_ds.my-table', ':derived'])
+    expect(read('SELECT * FROM my_proj.my_ds.`my-table` |').site).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+    expect(read('SELECT * FROM my_proj.my_ds.`my-table` t |').site).toEqual({ kind: 'afterFromTable', hasAlias: true, inJoin: false })
+  })
+
+  it('suppresses ON and USING after CROSS JOIN and NATURAL JOIN while keeping them on other joins', async () => {
+    for (const sql of [
+      'SELECT * FROM a CROSS JOIN b |',
+      'SELECT * FROM a NATURAL JOIN b |',
+      'SELECT * FROM a NATURAL LEFT JOIN b |',
+      'SELECT * FROM a NATURAL LEFT OUTER JOIN b |',
+      'SELECT * FROM a JOIN b ON a.id = b.id CROSS JOIN c |'
+    ]) {
+      const reading = read(sql)
+      expect(reading.site, sql).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: false })
+      const labels = (await complete(sql)).labels('keyword')
+      expect(labels, sql).not.toContain('ON')
+      expect(labels, sql).not.toContain('USING')
+      expect(labels, sql).toContain('WHERE')
+    }
+    for (const sql of [
+      'SELECT * FROM a JOIN b |',
+      'SELECT * FROM a INNER JOIN b |',
+      'SELECT * FROM a LEFT JOIN b |',
+      'SELECT * FROM a RIGHT JOIN b |',
+      'SELECT * FROM a FULL OUTER JOIN b |',
+      'SELECT * FROM a CROSS JOIN b JOIN c |'
+    ]) {
+      const reading = read(sql)
+      expect(reading.site, sql).toEqual({ kind: 'afterFromTable', hasAlias: false, inJoin: true })
+      const labels = (await complete(sql)).labels('keyword')
+      expect(labels, sql).toContain('ON')
+      expect(labels, sql).toContain('USING')
+    }
   })
 
   it('reads deeply nested subqueries in bounded time and without overflowing', () => {
@@ -496,6 +828,76 @@ describe('completion from the index', () => {
     expect((await complete('SELECT SAFE.|')).labels()).toContain('ABS')
     expect((await complete('SELECT * FROM sales.orders WHERE |')).labels('keyword')).toContain('AND')
   })
+
+  it('scopes clause keywords for afterFromTable, castType and statementStart without TABLE or ABORT hijack', async () => {
+    const afterTable = await complete('SELECT * FROM sales.orders |')
+    expect(afterTable.labels('keyword')).toEqual(expect.arrayContaining(['AS', 'WHERE', 'JOIN', 'LEFT JOIN', 'TABLESAMPLE', 'ORDER BY']))
+    expect(afterTable.labels('keyword')).not.toEqual(expect.arrayContaining(['TABLE', 'ABORT', 'INT64', 'SELECT', 'ON']))
+    // Typing `t` after a table offers TABLESAMPLE (never TABLE) while keeping `t` safe for alias use.
+    const typingT = await complete('SELECT * FROM `varia-alpha.sales.orders` t|')
+    expect(typingT.labels('keyword')).toContain('TABLESAMPLE')
+    expect(typingT.labels('keyword')).not.toContain('TABLE')
+    // Once an alias is present, AS is omitted; inside JOIN without ON/USING, ON and USING are offered.
+    const aliased = await complete('SELECT * FROM sales.orders o |')
+    expect(aliased.labels('keyword')).not.toContain('AS')
+    const joined = await complete('SELECT * FROM sales.orders o JOIN sales.daily |')
+    expect(joined.labels('keyword')).toEqual(expect.arrayContaining(['AS', 'ON', 'USING', 'WHERE']))
+    const usingDone = await complete('SELECT * FROM sales.orders o JOIN sales.daily USING (id) |')
+    expect(usingDone.labels('keyword')).toEqual(expect.arrayContaining(['WHERE', 'JOIN', 'ORDER BY']))
+    expect(usingDone.labels('keyword')).not.toEqual(expect.arrayContaining(['AS', 'ON', 'USING']))
+    const cast = await complete('SELECT CAST(x AS |')
+    expect(cast.labels('keyword')).toEqual(expect.arrayContaining(['INT64', 'STRING', 'ARRAY', 'STRUCT']))
+    expect(cast.labels('keyword')).not.toContain('WHERE')
+    const start = await complete('|')
+    expect(start.labels('keyword')).toEqual(expect.arrayContaining(['SELECT', 'WITH', 'INSERT', 'CREATE']))
+    expect(start.labels('keyword')).not.toContain('WHERE')
+    const mergeUsing = await complete('MERGE target USING source |')
+    expect(mergeUsing.labels('keyword')).toEqual(['AS', 'ON'])
+    const mergeUsingAliased = await complete('MERGE target USING source s |')
+    expect(mergeUsingAliased.labels('keyword')).toEqual(['ON'])
+  })
+
+  it('preserves domain-scoped projects and escapes backticks/backslashes inside quoted identifiers', async () => {
+    const domain = read('SELECT * FROM `example.com:my-proj.my_ds.my_tbl` |')
+    expect(domain.scope.sources[0]).toMatchObject({ kind: 'object', parts: ['example.com:my-proj', 'my_ds', 'my_tbl'] })
+    expect(read('SELECT * FROM `example.com:my-proj.my_ds.|').site).toEqual({ kind: 'object', qualifier: ['example.com:my-proj', 'my_ds'] })
+    expect(read('SELECT * FROM `example.com:my-proj.|').site).toEqual({ kind: 'object', qualifier: ['example.com:my-proj'] })
+    const colonBoundary = read('SELECT * FROM `example.com:|`')
+    expect(colonBoundary.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(colonBoundary.word.typed).toBe('example.com:')
+    const unclosedSpace = read('SELECT * FROM `example.com:my-| WHERE x = 1')
+    expect(unclosedSpace.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(unclosedSpace.word).toMatchObject({ start: 15, end: 30, typed: 'example.com:my-', quoted: true })
+    const unclosedWithRest = at('SELECT * FROM `example.com:my-|proj WHERE 1=1')
+    const unclosedWithRestRead = readGoogleSqlCompletion(unclosedWithRest.text, unclosedWithRest.offset)
+    expect(unclosedWithRestRead.site).toEqual({ kind: 'object', qualifier: [] })
+    expect(unclosedWithRestRead.word).toMatchObject({ start: 15, end: 34, typed: 'example.com:my-', quoted: true })
+    expect(unclosedWithRest.text.slice(unclosedWithRestRead.word.start, unclosedWithRestRead.word.end)).toBe('example.com:my-proj')
+    const hovered = at('SELECT * FROM `example.com:my-proj.my_ds.my_t|bl`')
+    expect(readGoogleSqlHover(hovered.text, hovered.offset)).toMatchObject({ parts: ['example.com:my-proj', 'my_ds', 'my_tbl'], at: 2, object: true })
+    const hoveredOpen = at('SELECT * FROM `example.com:my-|proj WHERE 1=1')
+    expect(readGoogleSqlHover(hoveredOpen.text, hoveredOpen.offset)).toMatchObject({ parts: ['example.com:my-proj'], at: 0, object: true })
+
+    const quotedLog: LanguageLookupPath[][] = []
+    const quotedLookup: IndexLookup = async requests => {
+      quotedLog.push([...requests])
+      const all = [{ name: 'a`b', kind: 'bqTable' }, { name: 'c\\d', kind: 'bqTable' }]
+      return requests.map(request => ({
+        state: 'ready',
+        path: [...request.path],
+        truncated: false,
+        items: all.filter(item => keeps(request, item.name))
+      }))
+    }
+    const list = await complete('SELECT * FROM `varia-alpha.sales.a|`', quotedLookup)
+    expect(list.item('a`b')?.insertText).toBe('a\\`b')
+    const partialTick = await complete('SELECT * FROM `varia-alpha.sales.a\\`|', quotedLookup)
+    expect(quotedLog.at(-1)?.[0].prefix).toBe('a`')
+    expect(partialTick.item('a`b')?.insertText).toBe('a\\`b')
+    const partialSlash = await complete('SELECT * FROM `varia-alpha.sales.c\\\\|', quotedLookup)
+    expect(quotedLog.at(-1)?.[0].prefix).toBe('c\\')
+    expect(partialSlash.item('c\\d')?.insertText).toBe('c\\\\d')
+  })
 })
 
 describe('hover from the index', () => {
@@ -543,6 +945,20 @@ describe('Go To Definition from the index', () => {
     expect(await definition('SELECT * FROM sales.da|ily d')).toMatchObject(daily)
     expect(await definition('SELECT * FROM `varia-alpha.sales.da|ily`')).toMatchObject(daily)
     expect(await definition('SELECT * FROM varia-alpha.sales.dai|ly')).toMatchObject(daily)
+    const numericProjectLookup: IndexLookup = async requests => requests.map(request => {
+      const key = request.path.join('.')
+      if (key === 'my-project-123456.2024_sales.orders') {
+        return { state: 'ready', path: [...request.path], truncated: false, items: [], object: { name: 'orders', kind: 'bqTable', detailed: false } }
+      }
+      if (key === 'my-project-123456.2024_sales') return { state: 'ready', path: [...request.path], truncated: false, items: [{ name: 'orders', kind: 'bqTable' }] }
+      if (key === 'my-project-123456') return { state: 'ready', path: [...request.path], truncated: false, items: [{ name: '2024_sales', kind: 'bqDataset' }] }
+      return { state: 'ready', path: [...request.path], truncated: false, items: [] }
+    })
+    const numericProj = at('SELECT * FROM my-project-123456.2024_sales.ord|ers')
+    expect(await definitionFromIndex(readGoogleSqlHover(numericProj.text, numericProj.offset)!, dialect, numericProjectLookup)).toMatchObject({
+      path: ['my-project-123456', '2024_sales', 'orders'],
+      kind: 'bqTable'
+    })
     expect(await definition('SELECT * FROM census.peo|ple', googleSqlDialect({ project: 'varia-beta' }))).toMatchObject({ path: ['varia-beta', 'census', 'people'], kind: 'bqTable' })
     // Without a default dataset a bare name names nothing.
     expect(await definition('SELECT * FROM dai|ly', googleSqlDialect({ project: 'varia-alpha' }))).toBeUndefined()
@@ -631,6 +1047,24 @@ describe('language.lookup cache', () => {
     await ready.lookup([{ path: [] }, { path: ['varia-alpha'] }])
     expect(asked.map(requests => requests.map(request => request.path))).toEqual([[[]], [['varia-alpha']]])
   })
+
+  it('drops stale in-flight answers when clear() runs before ask() resolves', async () => {
+    let resolveAsk!: (value: LanguageLookupResult) => void
+    let calls = 0
+    const cache = new LookupCache(async () => {
+      calls++
+      if (calls === 1) return new Promise<LanguageLookupResult>(resolve => { resolveAsk = resolve })
+      return result([answer({ path: ['varia-alpha', 'sales'] })])
+    })
+    const pending = cache.lookup([{ path: ['varia-alpha', 'sales'] }])
+    cache.clear()
+    resolveAsk(result([answer({ path: ['varia-alpha', 'sales'], prefix: '' })]))
+    expect(await pending).toBeDefined()
+    expect(cache.index).toBeUndefined()
+    // Next lookup must hit ask() again rather than serving the pre-clear answer.
+    await cache.lookup([{ path: ['varia-alpha', 'sales'] }])
+    expect(calls).toBe(2)
+  })
 })
 
 describe('language.lookup contract', () => {
@@ -645,6 +1079,60 @@ describe('language.lookup contract', () => {
     expect(languageLookupResultSchema.safeParse({ index: 'ready', answers: [{ state: 'ready', path: [], items: [item], truncated: false }] }).success).toBe(true)
     const many = Array.from({ length: 3 }, () => ({ state: 'ready', path: [], items: Array.from({ length: languageLookupLimits.items }, () => item), truncated: true }))
     expect(languageLookupResultSchema.safeParse({ index: 'ready', answers: many }).success).toBe(false)
+
+    // F2 item and object metadata extensions & strict zod bounds.
+    const projectItem = { name: 'varia-alpha', kind: 'bqProject', tier: 'billing', namesOnly: true, partial: false }
+    const datasetItem = { name: 'sales', kind: 'bqDataset', partial: true }
+    const tableItem = {
+      name: 'orders', kind: 'bqTable', description: 'd'.repeat(4096), partial: false,
+      rows: 0, bytes: 1024, partitioning: 'DAY on placed', clustering: 'customer'
+    }
+    const richObject = {
+      name: 'orders', kind: 'bqTable', detailed: true, rows: 123, bytes: 456,
+      partitioning: 'DAY on placed', clustering: 'customer', signature: '()', description: 'd'.repeat(4096),
+      columnsCut: true, modified: '2026-01-01T00:00:00Z'
+    }
+    expect(languageLookupResultSchema.safeParse({
+      index: 'ready',
+      answers: [{ state: 'ready', path: ['varia-alpha', 'sales', 'orders'], items: [projectItem, datasetItem, tableItem], truncated: false, object: richObject }]
+    }).success).toBe(true)
+
+    const validResult = (items: unknown[], object?: unknown) => languageLookupResultSchema.safeParse({
+      index: 'ready',
+      answers: [{ state: 'ready', path: [], items, truncated: false, ...(object ? { object } : {}) }]
+    }).success
+    expect(validResult([{ name: 'p', kind: 'bqProject', tier: 'public' }])).toBe(false)
+    expect(validResult([{ name: 'p', kind: 'bqProject', namesOnly: 'yes' }])).toBe(false)
+    expect(validResult([{ name: 'p', kind: 'bqProject', partial: 1 }])).toBe(false)
+    expect(validResult([{ name: 't', kind: 'bqTable', rows: -1 }])).toBe(false)
+    expect(validResult([{ name: 't', kind: 'bqTable', bytes: 1.5 }])).toBe(false)
+    expect(validResult([{ name: 't', kind: 'bqTable', partitioning: 'p'.repeat(4097) }])).toBe(false)
+    expect(validResult([{ name: 't', kind: 'bqTable', clustering: 'c'.repeat(4097) }])).toBe(false)
+    expect(validResult([{ name: 't', kind: 'bqTable', extra: true }])).toBe(false)
+    expect(validResult([item], { name: 'orders', kind: 'bqTable', detailed: true, description: 'd'.repeat(4097) })).toBe(false)
+    expect(validResult([item], { name: 'orders', kind: 'bqTable', detailed: true, rows: -1 })).toBe(false)
+    expect(validResult([item], { name: 'orders', kind: 'bqTable', detailed: true, extra: true })).toBe(false)
+  })
+
+  it('handles every CompletionSite contract variant in completeFromIndex', async () => {
+    const emptyScope = { sources: [], ctes: [] }
+    const emptyWord = { start: 0, end: 0, typed: '', quoted: false }
+    const sites: CompletionSite[] = [
+      { kind: 'afterFromTable', hasAlias: false, inJoin: true },
+      { kind: 'statementStart' },
+      { kind: 'castType' },
+      { kind: 'datePart', functionName: 'DATE_TRUNC' },
+      { kind: 'systemVar', qualifier: ['script'] },
+      { kind: 'infoSchema', qualifier: ['varia-alpha', 'sales'] },
+      { kind: 'joinCondition', clause: 'on' },
+      { kind: 'unnestArg' }
+    ]
+    for (const site of sites) {
+      const list = await completeFromIndex({ site, scope: emptyScope, word: emptyWord }, dialect, async () => [])
+      expect(list.incomplete).toBe(false)
+      if (site.kind === 'systemVar' || site.kind === 'infoSchema') expect(list.items).toEqual([])
+      else expect(list.items.some(entry => entry.kind === 'keyword')).toBe(true)
+    }
   })
 
   it('keeps its limits in step with the backend’s EditorLookupLimits', () => {
@@ -652,6 +1140,7 @@ describe('language.lookup contract', () => {
     const declared = /class EditorLookupLimits\s*\{\s*public const int ([^;]+);/.exec(source)![1]
     const limits = Object.fromEntries(declared.split(',').map(entry => entry.split('=').map(part => part.trim())).map(([name, value]) => [name, Number(value)]))
     expect(limits).toEqual({ Requests: languageLookupLimits.requests, Segments: languageLookupLimits.segments, SegmentChars: languageLookupLimits.segmentChars,
-      PrefixChars: languageLookupLimits.prefixChars, Items: languageLookupLimits.items, DefaultItems: languageLookupLimits.defaultItems, TotalItems: languageLookupLimits.totalItems })
+      PrefixChars: languageLookupLimits.prefixChars, Items: languageLookupLimits.items, DefaultItems: languageLookupLimits.defaultItems, TotalItems: languageLookupLimits.totalItems,
+      TotalBytes: languageLookupLimits.totalBytes })
   })
 })

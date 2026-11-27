@@ -488,7 +488,16 @@ try {
   expect(lookups.length).toBeGreaterThan(0)
   expect(lookups.every(call => call.params.connectionId === bigQueryId)).toBe(true)
   expect((await languageCalls('language.complete')).filter(call => call.params.context.connectionId === bigQueryId)).toEqual([])
-  console.log('Language checks: a BigQuery tab completes tables, alias columns and STRUCT fields and hovers a table from the index.')
+  // Ctrl+Shift+R refreshes BigQuery IntelliSense via scoped explorer.index without SQL Server's language.refresh or an error banner.
+  const indexBefore = (await calls()).filter(call => call.method === 'explorer.index').length
+  const refreshBefore = (await languageCalls('language.refresh')).length
+  await editorTextbox(page).focus()
+  await page.keyboard.press(`${mod}+Shift+R`)
+  await expect.poll(async () => (await calls()).filter(call => call.method === 'explorer.index').length).toBeGreaterThan(indexBefore)
+  await expect(page.getByLabel('SQL IntelliSense', { exact: true })).toHaveText('IntelliSense')
+  expect((await languageCalls('language.refresh')).length).toBe(refreshBefore)
+  await expect(errorBanner(page)).toHaveCount(0)
+  console.log('Language checks: a BigQuery tab completes tables, alias columns and STRUCT fields, hovers a table, and refreshes IntelliSense cleanly.')
   expect(failures).toEqual([])
   await close()
   console.log('Language-service suite passed.')

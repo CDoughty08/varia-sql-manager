@@ -747,6 +747,47 @@ describe('ObjectSearchService', () => {
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 0, total: 0, objects: 40, status: status() })
   })
 
+  it('does not settle refreshBigQueryScopes waiters when a superseded build request rejects', async () => {
+    const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], cancel: [] as string[][] }
+    const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
+    const rejectable: ((error: Error) => void)[] = []
+    const bqApi: ObjectSearchOptions['api'] = {
+      explorerIndex: vi.fn(params => {
+        calls.index.push(params)
+        return new Promise<ApiResult<ObjectIndexResult>>((resolve, reject) => {
+          pendingIndex.push(resolve)
+          rejectable.push(reject)
+        })
+      }),
+      explorerSearch: vi.fn(async () => ({ ok: true as const, value: { hits: [], total: 0, partial: false, elapsedMs: 1, index: status({ provider: 'bigquery' }) } })),
+      explorerCancel: vi.fn(async ids => { calls.cancel.push([...ids]); return { ok: true as const, value: { cancelled: ids.length } } }),
+      onExplorerIndexProgress: () => () => {}
+    }
+    const bqConnections = new Connections([bigQueryConnection('bq')])
+    let nextId = 0
+    const search = new ObjectSearchService({
+      api: bqApi,
+      documents: { openCustom: vi.fn(), registerProvider: vi.fn(() => ({ dispose: () => {} })), get: vi.fn(), activate: vi.fn(), getSnapshot: vi.fn() } as unknown as ObjectSearchOptions['documents'],
+      connections: bqConnections,
+      settings: { get: ((key: string) => key === 'objectExplorer.search.indexOnConnect' ? false : key === 'objectExplorer.search.definitions' ? true : undefined) as ObjectSearchOptions['settings']['get'] },
+      events: { subscribe: () => ({ dispose: () => {} }) },
+      newId: () => `bq-req-${++nextId}`
+    })
+    let settled: boolean | undefined
+    const waiter = search.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'sales' }]).then(ok => { settled = ok; return ok })
+    // Supersede the first request with a new build.
+    search.build('bq')
+    expect(search.getSnapshot().indexes.bq?.requestId).toBe('bq-req-2')
+    // Rejecting the superseded req-1 must NOT settle the waiter while req-2 is still active.
+    rejectable[0](new Error('superseded failure'))
+    await settle()
+    expect(settled).toBeUndefined()
+    // Completing the active req-2 settles the waiter with true.
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    expect(await waiter).toBe(true)
+    search.dispose()
+  })
+
   it('reads the index status after a stopped first build, so what it read shows as a stopped index with Build index', async () => {
     const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
     const { service, api, pendingIndex, connections } = harness()
@@ -2004,5 +2045,103 @@ describe('the search pickers in a popout', () => {
       expect(source, file).toMatch(/ownerDocument/)
       expect(source, file).toMatch(/observeResize\(/)
     }
+  })
+})
+
+describe('refreshBigQueryScopes', () => {
+  it('resolves false when an earlier queued scope fails even if a subsequent scope succeeds', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    const batch = service.refreshBigQueryScopes('bq', [
+      { project: 'varia-alpha', dataset: 'ds1' },
+      { project: 'varia-alpha', dataset: 'ds2' }
+    ])
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds1' } })
+
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds2' } })
+
+    // A second caller joining after ds1 already failed still resolves true if remaining scopes succeed.
+    const laterCaller = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    pendingIndex[3]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+
+    expect(await batch).toBe(false)
+    expect(await laterCaller).toBe(true)
+    service.dispose()
+  })
+
+  it('isolates overlapping concurrent scope batches by requested scopes while reflecting shared scope failures', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    // Overlapping unrelated batches: Caller B starts [ds3] BEFORE ds1 settles.
+    const callerA = service.refreshBigQueryScopes('bq', [
+      { project: 'varia-alpha', dataset: 'ds1' },
+      { project: 'varia-alpha', dataset: 'ds2' }
+    ])
+    const callerB = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds1' } })
+
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds2' } })
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    expect(calls.index[3]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds3' } })
+    pendingIndex[3]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+
+    expect(await callerA).toBe(false)
+    expect(await callerB).toBe(true)
+
+    // Overlapping shared scope: [ds1] + [ds1] while ds1 is in flight and fails -> both resolve false.
+    const sharedA = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    const sharedB = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    expect(calls.index).toHaveLength(5)
+    pendingIndex[4]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(6)
+    pendingIndex[5]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+
+    expect(await sharedA).toBe(false)
+    expect(await sharedB).toBe(false)
+    service.dispose()
+  })
+
+  it('distinguishes backend errors from deliberate cancellations in refreshBigQueryScopesOutcome', async () => {
+    const { service, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    const failed = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'Dataset refresh timed out.' })
+    expect(await failed).toEqual({ ok: false, error: 'Dataset refresh timed out.' })
+
+    const stopped = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds2' }])
+    service.stopBuild('bq')
+    pendingIndex[2]({ ok: false, code: 'CANCELLED', error: 'Cancelled.' })
+    expect(await stopped).toEqual({ ok: false, cancelled: true })
+
+    const disconnected = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    connections.set([])
+    expect(await disconnected).toEqual({ ok: false, cancelled: true })
+    service.dispose()
   })
 })
