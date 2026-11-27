@@ -4473,11 +4473,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-target-row .multi-target-db { flex: 0 1 132px; min-width: 84px; height: 22px; font-size: var(--varia-size-xs); }
 .multi-target-offline { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; flex: none; }
 .multi-target-offline-label { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.multi-target-reconnect { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-button-border); background: var(--varia-button-secondaryBackground); color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
+.multi-target-reconnect { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-button-border); background: var(--varia-panel-background); color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
 .multi-target-reconnect:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: none; }
 .multi-target-apply-all { display: flex; align-items: center; justify-content: flex-end; gap: var(--varia-space-1); padding-top: var(--varia-space-1); }
 .multi-target-shared-select { flex: 0 1 150px; min-width: 90px; height: 24px; font-size: var(--varia-size-xs); }
-.multi-target-apply-btn { height: 24px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-button-border); background: var(--varia-button-secondaryBackground); color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
+.multi-target-apply-btn { height: 24px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-button-border); background: var(--varia-panel-background); color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
 .multi-target-apply-btn:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: none; }
 .multi-target-popover-foot { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); background: var(--varia-editorGroupHeader-tabsBackground); border-top: 1px solid var(--varia-panel-border); }
 .multi-target-popover-hint { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
@@ -4518,8 +4518,8 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .cross-engine-guard-icon { flex: none; }
 .cross-engine-guard-text { flex: 1 1 200px; min-width: 0; }
 .cross-engine-guard-actions { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; flex: none; }
-.cross-engine-guard-next, .cross-engine-guard-open { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid color-mix(in srgb, var(--varia-errorForeground) 45%, transparent); background: color-mix(in srgb, var(--varia-errorForeground) 12%, transparent); color: var(--varia-banner-errorForeground); font-size: var(--varia-size-xs); }
-.cross-engine-guard-next:hover:not(:disabled), .cross-engine-guard-open:hover:not(:disabled) { background: color-mix(in srgb, var(--varia-errorForeground) 22%, transparent); transition: none; }
+.cross-engine-guard-next, .cross-engine-guard-open { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-errorForeground); background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); font-size: var(--varia-size-xs); }
+.cross-engine-guard-next:hover:not(:disabled), .cross-engine-guard-open:hover:not(:disabled) { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); transition: none; }
 .server-drop-overlay[data-cross-dialect] { border-radius: var(--varia-radius-sm); }
 
 /* Multi-Server Run Mode Prompt (MultiExecuteDialog) & Multi-Project BigQuery Cost Prompt. */
