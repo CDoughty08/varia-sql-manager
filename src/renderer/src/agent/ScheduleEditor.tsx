@@ -66,6 +66,7 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
   const reason = runs.length ? undefined : noRunsReason(fields, now)
   const unit = subdayUnits.find(item => item.code === fields.freqSubdayType)
   return <div className="agent-schedule-editor">
+    <p className="agent-schedule-sentence" aria-live="polite"><strong>{scheduleSentence(fields)}</strong></p>
     <div className="properties-fields">
       <PropertyField id={id('name')} label="Name" changed={changed('name')} {...name}>
         <input id={id('name')} data-schedule-name className="property-input" type="text" maxLength={agentLimits.nameChars} spellCheck={false} value={fields.name} disabled={disabled}
@@ -176,7 +177,6 @@ export default function ScheduleEditor({ idPrefix, fields, base, onChange, disab
         </span>
       </PropertyField>}
     </div>
-    <p className="agent-schedule-sentence" aria-live="polite"><strong>{scheduleSentence(fields)}</strong></p>
     <div className="agent-schedule-facts">
       <section aria-label="Next 5 runs">
         <h4>Next 5 runs <span className="field-note">server time</span></h4>
