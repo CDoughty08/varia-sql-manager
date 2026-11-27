@@ -390,7 +390,7 @@ function OutputPane({ pane, tabId, query, connected, hint }: Props) {
               : <EmptyState className="output-empty" {...hasSets ? {} : { icon: 'table' as const }} detail={emptyResultsText(tab)} />}
             {profileOpen && shown && tab.sets.length > 0 && (!tabs || !summaryActive) && <ColumnProfilePanel key={'profile:' + tab.queryId} tabId={tabId} tab={tab}
               shown={tabs ? selectedEntry(tab)?.key : profiled?.tabId === tabId ? profiledEntry(tab.sets, profiled.target)?.key : undefined} />}
-            {pivotOpen && shown && tab.sets.length > 0 && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
+            {pivotOpen && shown && tab.sets.length > 0 && (!tabs || !summaryActive) && <PivotPanel key={'pivot:' + tab.queryId} tabId={tabId} tab={tab} />}
             {compareOpen && shown && tab.sets.length > 0 && visible[pane] && <ComparePopover key={'compare:' + tab.queryId} tabId={tabId} tab={tab} />}
           </div>
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}

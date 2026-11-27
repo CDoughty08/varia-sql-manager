@@ -653,7 +653,7 @@ export class CompareService extends SnapshotStore<CompareSnapshot> implements Di
     const shown = this.existing(tabId, from.key, key)
     if (!shown) { await this.comparePair(tabId, from.key, key, { exact, remember: true }); return }
     this.results.focusEntry(tabId, shown.key)
-    if (exact && !this.stateOf(tabId, shown)?.exact) await this.replace(tabId, shown.key, { exact: true })
+    if (o.exact && !this.stateOf(tabId, shown)?.exact) await this.replace(tabId, shown.key, { exact: true })
   }
 
   /**

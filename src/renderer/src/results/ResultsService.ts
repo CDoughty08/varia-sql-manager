@@ -87,7 +87,8 @@ export const resultTitle = (entry: Named): string => {
 export const entryTitle = (entry: Named): string => entry.descriptor?.kind === 'diff' || entry.descriptor?.kind === 'pivot' ? entryName(entry) : resultTitle(entry)
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
-export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
+export const entrySecondary = (entry: Named): string | undefined =>
+  queryName(entry) !== undefined || entry.descriptor?.targetKey !== undefined || entry.descriptor?.kind === 'combined' ? entryNumber(entry) : undefined
 /** A named entry's name with its number ("Totals · Result 2"), an unnamed one's name alone: for places that list results
  *  and must tell two of one name apart without room for secondary text. */
 export const numberedName = (entry: Named): string => {
@@ -140,6 +141,9 @@ export interface SourceRef { readonly key: EntryKey; readonly set: string; reado
  */
 export interface PivotProvenance {
   readonly recipe: { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly { readonly aggregate: string; readonly column?: number }[] }
+  /** Source Table's column names at build time so updating over a replaced source (e.g. a rebuilt Combined view) can
+   *  remap column indices by name instead of sending stale numeric positions. */
+  readonly sourceColumns?: readonly string[]
   readonly filters: readonly ResolvedViewFilter[]
   readonly inputRows: number
   readonly truncated: boolean
@@ -362,8 +366,10 @@ export interface TabResults {
   readonly multiSummary?: QueryMultiResult
   /** True when a multi-server run's virtual Summary tab is active. */
   readonly activeSummary?: true
-  /** Combined result entries whose underlying server results changed (e.g. a server tab was closed) and can be rebuilt or closed. */
+  /** Combined result entries whose underlying server results changed (e.g. closed, loaded into memory, or re-run) and can be rebuilt or closed. */
   readonly staleCombined?: ReadonlySet<EntryKey>
+  /** Combine warnings tracked per Combined entry key so rebuilding one statement slot never wipes another slot's warnings. */
+  readonly combineWarnings?: ReadonlyMap<EntryKey, readonly string[]>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -495,8 +501,12 @@ interface Run {
   activeSummary: boolean
   /** `rolledBackPreview` flags received via `resultSet.meta`, keyed by `setKey`, so out-of-order arrivals still apply. */
   readonly rolledBackIds: Map<string, boolean>
-  /** Combined entries whose underlying per-server result sets were closed, so UI shows Rebuild/Close. */
+  /** Combined entries whose underlying per-server result sets changed, so UI shows Rebuild/Close. */
   staleCombined: ReadonlySet<EntryKey>
+  /** Run-level combine warnings from `multiSummary` when no combined entries were created. */
+  baseCombineWarnings: readonly string[]
+  /** Combine warnings tracked per Combined entry key. Replaced, never mutated in place: snapshots share it. */
+  combineWarnings: ReadonlyMap<EntryKey, readonly string[]>
   /** In-flight `results.combine` rebuilds per combined entry key, aborted on drop or run disposal. */
   readonly combining: Map<EntryKey, AbortController>
 }
@@ -724,7 +734,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
       completedBatches: 0, totalBatches: 0, view: multi ? 'results' : 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
       settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: [], loads: new Map(),
-      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set(), combining: new Map()
+      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set(), baseCombineWarnings: [], combineWarnings: new Map(), combining: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
@@ -841,6 +851,16 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
         this.opened(run, descriptor)
         this.settle(run, descriptor)
         if (descriptor.kind !== 'combined') run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
+      }
+      if (multiSummary.combineWarnings?.length) {
+        const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+        if (combined.length > 0) {
+          run.combineWarnings = new Map(combined.map(entry => [entry.key, [...multiSummary.combineWarnings!]]))
+          run.baseCombineWarnings = []
+        } else {
+          run.baseCombineWarnings = [...multiSummary.combineWarnings]
+        }
+        this.syncCombineWarnings(run)
       }
       this.refreshSorts(tabId, run)
       if (!sameMessages(run.messages, multiSummary.messages)) run.messages = multiSummary.messages.slice(0, resultLimits.messages)
@@ -1214,6 +1234,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.shape = undefined
     this.settle(run, descriptor)
     run.emptied = false
+    run.activeSummary = false
     run.view = 'results'
     this.viewState(tabId).focused = entry.key
     this.schedule(tabId)
@@ -1263,6 +1284,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.entries.set(key, entry)
     if (record) run.slots.set(key, { ...record, revision: record.revision + 1 })
     run.shape = undefined
+    if (carried.residence !== 'remote') this.markCombinedStaleFor(run, [entry])
     const grids = this.views.get(tabId)?.grids, state = grids?.get(key)
     if (grids && state) grids.set(key, carriedState(state, uniqueNames(old.descriptor.columns, descriptor.columns), descriptor.columns.length))
     this.settle(run, descriptor)
@@ -1291,6 +1313,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const revised = (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
       this.client.applySummary({ ...summary, resultSets: [descriptor], planSets: [] })
       if (revised) this.switched(tabId, run, descriptor, false)
+      if (descriptor.residence !== 'remote') this.markCombinedStaleFor(run, [entry])
       this.settle(run, descriptor)
     }
     const lines = summary.messages.map(entry => ({ ...entry, text: entry.text.slice(0, wire.messages.characters) }))
@@ -1310,6 +1333,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.emptied = false
     run.activeSummary = false
     run.staleCombined = new Set()
+    run.baseCombineWarnings = []
+    run.combineWarnings = new Map()
     run.view = 'results'
     this.views.set(tabId, emptyView())
     this.publishNow(tabId)
@@ -1485,11 +1510,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }
       const warnings = (result as { readonly warnings?: readonly string[] }).warnings
       if (run.multi && Array.isArray(warnings)) {
-        if (warnings.length > 0) run.multi = { ...run.multi, combineWarnings: [...warnings] }
-        else {
-          const { combineWarnings: _dropped, ...rest } = run.multi
-          run.multi = rest
-        }
+        const nextWarnings = new Map(run.combineWarnings)
+        nextWarnings.set(combinedKey, [...warnings])
+        run.combineWarnings = nextWarnings
+        this.syncCombineWarnings(run)
       }
       const grids = this.views.get(tabId)?.grids, state = grids?.get(combinedKey)
       if (grids && state) grids.set(combinedKey, carriedState(state, moved, nextDescriptor.columns.length))
@@ -1535,6 +1559,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       stale.add(entry.key)
     }
     if (stale) run.staleCombined = stale
+  }
+
+  private syncCombineWarnings(run: Run): void {
+    if (!run.multi) return
+    const merged: string[] = []
+    const add = (list: readonly string[] | undefined) => {
+      if (!list) return
+      for (const item of list) if (!merged.includes(item)) merged.push(item)
+    }
+    const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+    if (combined.length === 0) add(run.baseCombineWarnings)
+    else for (const entry of combined) add(run.combineWarnings.get(entry.key) ?? run.baseCombineWarnings)
+    if (merged.length > 0) run.multi = { ...run.multi, combineWarnings: merged }
+    else if (run.multi.combineWarnings !== undefined) {
+      const { combineWarnings: _dropped, ...rest } = run.multi
+      run.multi = rest
+    }
   }
 
   /** The view of `entry`'s group that the group last showed (its Pivot while selected and built, else its Table); a
@@ -2930,6 +2971,15 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (view && collapsed) view.collapsed = collapsed
     if (view && weights) view.weights = weights
     if (entries.length) { run.sets = run.sets.filter(entry => !keys.has(entry.key)); run.setsPublished = false }
+    if (run.combineWarnings.size) {
+      let changed = false
+      const remaining = new Map(run.combineWarnings)
+      for (const key of keys) if (remaining.delete(key)) changed = true
+      if (changed) {
+        run.combineWarnings = remaining
+        this.syncCombineWarnings(run)
+      }
+    }
     if (plans.length) run.planSets = run.planSets.filter(entry => !keys.has(entry.key))
     if (this.copying && this.runs.get(this.copying.tabId) === run && keys.has(this.copying.job.entry)) this.cancelRunning(this.copying)
     this.releaseEntries(run, gone)
@@ -3103,7 +3153,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       ...run.messagesOnly ? { messagesOnly: true as const } : {}, ...run.loads.size ? { loads: run.loads } : {},
       ...run.multi ? { multi: run.multi } : {}, ...run.multiSummary ? { multiSummary: run.multiSummary } : {},
       ...run.activeSummary && hasMultiSummary(run) ? { activeSummary: true as const } : {},
-      ...run.staleCombined.size ? { staleCombined: run.staleCombined } : {}
+      ...run.staleCombined.size ? { staleCombined: run.staleCombined } : {},
+      ...run.combineWarnings.size ? { combineWarnings: run.combineWarnings } : {}
     }
   }
 

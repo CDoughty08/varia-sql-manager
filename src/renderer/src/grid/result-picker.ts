@@ -179,20 +179,55 @@ export function selectedItem(tab: Run, items: readonly TopItem[] = topItems(tab)
   }
   return items.findIndex(item => group ? item.group === group : item.key === key)
 }
+/** Ordered navigation targets for Stacked layout (`includeSummary === false`) in multi-server runs: every group in
+ *  stacked order (Combined first, then each target's groups in `tab.multi.targets` order, remaining groups, then
+ *  comparisons) without collapsing multiple statements under one top tab. */
+function stackedItems(tab: Run): { readonly key: EntryKey; readonly group?: ResultGroup; readonly comparison?: ResultSlot }[] {
+  const items: { readonly key: EntryKey; readonly group?: ResultGroup; readonly comparison?: ResultSlot }[] = []
+  const added = new Set<ResultGroup>()
+  const pushGroup = (group: ResultGroup) => {
+    if (added.has(group)) return
+    added.add(group)
+    items.push({ key: group.table.key, group })
+  }
+  for (const group of tab.groups) if (group.table.entry.descriptor.kind === 'combined') pushGroup(group)
+  for (const target of tab.multi!.targets) {
+    for (const group of tab.groups) {
+      if (group.table.entry.descriptor.targetKey === target.targetKey) pushGroup(group)
+    }
+  }
+  for (const group of tab.groups) pushGroup(group)
+  for (const slot of tab.comparisons) items.push({ key: slot.key, comparison: slot })
+  return items
+}
 /** Next Result (`delta` 1) and Previous Result (-1): the view to select in the item that many places along the top row,
  *  wrapping round as the arrow keys do; a group's is the view it last showed, and Summary returns `summaryEntryKey`.
- *  Pass `includeSummary = false` in Stacked layout when result sets exist so stepping wraps across real grids.
- *  Undefined with fewer than two items. */
+ *  Pass `includeSummary = false` in Stacked layout when result sets exist so stepping wraps across every real grid in
+ *  stacked order (including every multi-server statement slot). Undefined with fewer than two items. */
 export function stepResult(tab: Run, delta: number, includeSummary = true): EntryKey | undefined {
+  if (!includeSummary && hasMultiSummary(tab)) {
+    const items = stackedItems(tab)
+    if (items.length < 2) return undefined
+    const group = selectedGroup(tab), key = selectedEntry(tab)?.key
+    const at = Math.max(0, items.findIndex(item => group ? item.group === group : item.key === key))
+    const item = items[(((at + delta) % items.length) + items.length) % items.length]
+    return item.group ? groupView(item.group) : item.key
+  }
   const items = topItems(tab, includeSummary)
   if (items.length < 2) return undefined
   const item = items[(((Math.max(0, selectedItem(tab, items)) + delta) % items.length) + items.length) % items.length]
   return item.summary ? summaryEntryKey : item.group ? groupView(item.group) : item.key
 }
 /** Go to Result 1 to 8 (`place` 1 to 8) and Go to Last Result (`place` 'last'), as a browser's Ctrl+1 to Ctrl+9 pick its
- *  tabs: the view to select in that item of the top row, a group's being the view it last showed. Undefined when the run
- *  has no such item. */
+ *  tabs: the view to select in that item of the top row (or stacked order when `includeSummary === false`), a group's
+ *  being the view it last showed. Undefined when the run has no such item. */
 export function jumpResult(tab: Run, place: number | 'last', includeSummary = true): EntryKey | undefined {
+  if (!includeSummary && hasMultiSummary(tab)) {
+    const items = stackedItems(tab), at = place === 'last' ? items.length - 1 : place - 1
+    const item = items[at]
+    if (!item) return undefined
+    return item.group ? groupView(item.group) : item.key
+  }
   const items = topItems(tab, includeSummary), at = place === 'last' ? items.length - 1 : place - 1
   const item = items[at]
   if (!item) return undefined

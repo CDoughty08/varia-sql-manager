@@ -32,7 +32,7 @@ export interface EntryNotice {
 }
 
 /** Notice strips shown directly above a grid (Rolled-back preview, Stale Combined, Partial-merge / Schema-drift). */
-export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined'>>, entry: ResultSetEntry): EntryNotice[] {
+export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings'>>, entry: ResultSetEntry): EntryNotice[] {
   const notices: EntryNotice[] = []
   if (entry.descriptor.rolledBackPreview || entry.handle?.getSnapshot().rolledBackPreview) {
     notices.push({ kind: 'rolledBack', tone: 'warn', text: 'Rolled back — preview only (not committed).' })
@@ -40,10 +40,10 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
   if (entry.descriptor.kind === 'combined') {
     const stale = !!tab.staleCombined?.has(entry.key)
     if (stale) {
-      notices.push({ kind: 'staleCombined', tone: 'warn', text: 'A source server result was closed. Rebuild Combined from the remaining servers or close this view.' })
+      notices.push({ kind: 'staleCombined', tone: 'warn', text: 'Source server results changed. Rebuild Combined from the current in-memory servers or close this view.' })
     }
     if (hasMultiSummary(tab)) {
-      const warnings = tab.multi!.combineWarnings
+      const warnings = tab.combineWarnings?.has(entry.key) ? tab.combineWarnings.get(entry.key) : tab.multi!.combineWarnings
       if (warnings && warnings.length > 0) {
         notices.push({ kind: 'combineWarning', tone: 'info', text: warnings.join(' ') })
       } else if (!stale) {
@@ -59,7 +59,7 @@ export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 's
 }
 
 /** Exact total height (px) of notice strips rendered above `entry`'s grid (0 for ordinary single-server grids). */
-export function entryNoticesHeight(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined'>>, entry: ResultSetEntry | undefined): number {
+export function entryNoticesHeight(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings'>>, entry: ResultSetEntry | undefined): number {
   return entry ? entryNotices(tab, entry).length * multiNoticeHeight : 0
 }
 
@@ -140,7 +140,7 @@ function orderedMultiSets(tab: TabResults, selectedStmt: number | 'all'): readon
  * transposed (`turned`) is sized by the rows it draws, which are its columns, with the strip it shows past the cap.
  * Multi-server notice strips above a grid are included in its settled height.
  */
-export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>, entries: readonly ResultSetEntry[] = tab.sets): (number | undefined)[] {
+export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>, entries: readonly ResultSetEntry[] = tab.sets): (number | undefined)[] {
   return entries.map(entry => {
     const set = tab.settled.get(setKey(entry.descriptor))
     if (!set) return undefined
@@ -179,7 +179,7 @@ export function weightsOf(sets: readonly ResultSetEntry[], weights: ReadonlyMap<
 }
 /** The room a run's stack needs before it scrolls: every set at its floor (including multi-server summary/statement/notice
  *  strips, so short panes never starve grids). */
-export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
   const multi = hasMultiSummary(tab)
   const count = tab.sets.length
   if (count === 0) return multi ? multiSummaryMinHeight : 0
@@ -354,14 +354,14 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const sorts = tab.sorts
-  const content = useMemo(() => settledContent({ sets: tab.sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined }, narrow, turned, sets), [tab.sets, settled, sorts, tab.multi, tab.staleCombined, narrow, turned, sets])
+  const content = useMemo(() => settledContent({ sets: tab.sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined, combineWarnings: tab.combineWarnings }, narrow, turned, sets), [tab.sets, settled, sorts, tab.multi, tab.staleCombined, tab.combineWarnings, narrow, turned, sets])
   // By place, for the layout: what the stack keeps by entry key, over the entries as they are drawn.
   const weights = useMemo(() => weightsOf(sets, entryWeights), [sets, entryWeights])
   const collapsed = useMemo(() => collapsedPlaces(sets, collapsedEntries), [sets, collapsedEntries])
   // The grid F6 focuses: the one that last had the focus, else the first.
   const focused = focusedEntry !== undefined && sets.some(entry => entry.key === focusedEntry) ? focusedEntry : (tab.focused && sets.some(entry => entry.key === tab.focused) ? tab.focused : sets[0]?.key)
   const extraMin = useMemo(() => multi ? sets.map(entry => entryNoticesHeight(tab, entry)) : undefined, [multi, sets, tab])
-  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {} }), [paneHeight, count, weights, minHeight, content, collapsed, extraMin])
+  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {}, ...multi ? { keepFloor: true } : {} }), [paneHeight, count, weights, minHeight, content, collapsed, extraMin, multi])
   const floors = useMemo(() => setFloors(count, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {} }), [count, minHeight, content, collapsed, extraMin])
   const bare = !multi && count === 1 && !collapsed.has(0) && paneHeight > 0 && paneHeight < minHeight
   const [first, last] = paneHeight > 0 ? mountedRange(layout, scrollTop, paneHeight) : [0, -1]
@@ -476,7 +476,8 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const revealSeq = search?.reveal ?? 0, revealEntry = search?.revealEntry
   const stackReveal = useRef<EntryKey | undefined>(undefined)
   useLayoutEffect(() => {
-    if (revealEntry === undefined || !sets.some(entry => entry.key === revealEntry) || !resultsSearch.pendingReveal(tabId, revealEntry)) return
+    if (revealEntry === undefined || !tab.sets.some(entry => entry.key === revealEntry) || !resultsSearch.pendingReveal(tabId, revealEntry)) return
+    if (!sets.some(entry => entry.key === revealEntry) && effectiveStmt !== 'all') setSelectedStmt('all')
     if (collapsedEntries.has(revealEntry)) toggle(revealEntry)
     stackReveal.current = revealEntry
   }, [revealSeq, revealEntry])
@@ -499,7 +500,8 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   useLayoutEffect(() => {
     const key = revealAsked.current
     revealAsked.current = undefined
-    if (key === undefined || !sets.some(entry => entry.key === key)) return
+    if (key === undefined || !tab.sets.some(entry => entry.key === key)) return
+    if (!sets.some(entry => entry.key === key) && effectiveStmt !== 'all') setSelectedStmt('all')
     if (collapsedEntries.has(key)) toggle(key)
     setFocused(key)
     stackReveal.current = key
@@ -510,7 +512,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const key = commandFocus.current, stack = stackRef.current
     if (key === undefined || !stack) return
     const active = stack.ownerDocument.activeElement
-    if (!sets.some(entry => entry.key === key) || (active && active !== stack.ownerDocument.body && !stack.contains(active))) { commandFocus.current = undefined; return }
+    if (!tab.sets.some(entry => entry.key === key) || (active && active !== stack.ownerDocument.body && !stack.contains(active))) { commandFocus.current = undefined; return }
     const grid = stack.querySelector<HTMLElement>(`[data-result-entry="${CSS.escape(key)}"]`)
     if (!grid) return
     commandFocus.current = undefined
@@ -520,7 +522,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const element = stackRef.current, key = stackReveal.current
     if (key === undefined) return
     const index = sets.findIndex(entry => entry.key === key)
-    if (index < 0) { stackReveal.current = undefined; return }
+    if (index < 0) { if (!tab.sets.some(entry => entry.key === key)) stackReveal.current = undefined; return }
     if (!element || index >= layout.offsets.length || collapsed.has(index) || paneHeight <= 0) return
     stackReveal.current = undefined
     const top = revealScrollTop(layout, index, element.scrollTop, element.clientHeight)

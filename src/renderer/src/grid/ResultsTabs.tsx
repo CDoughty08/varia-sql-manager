@@ -73,6 +73,7 @@ function statementGroupsOf(tab: Pick<TabResults, 'groups'> & Partial<Pick<TabRes
 
 /** Human-readable label for a statement sub-tab inside a multi-server Combined or per-server tab. */
 function statementLabel(group: ResultGroup, index: number): string {
+  if (group.table.entry.sample) return entryName(group.table.entry)
   const name = group.table.entry.descriptor.name
   return name || `Statement ${(group.table.entry.descriptor.statementSlot ?? index) + 1}`
 }
@@ -88,7 +89,7 @@ export function showsViewRow(group: ReturnType<typeof selectedGroup>, sort?: Gri
 
 /** The room the Tabs layout needs before the Messages strip opens by itself: its tab row(s), any multi-server notice
  *  strips, and the selected grid at its minimum height (or its rows' height when settled and shorter). */
-export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons' | 'multi' | 'activeSummary' | 'staleCombined'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+export function tabsNeed(tab: Pick<TabResults, 'sets' | 'settled' | 'focused'> & Partial<Pick<TabResults, 'sorts' | 'groups' | 'comparisons' | 'multi' | 'activeSummary' | 'staleCombined' | 'combineWarnings'>>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
   if (isSummaryActive(tab)) return g.resultTabsHeight + multiSummaryMinHeight
   const entry = selectedEntry(tab)
   if (!entry) return 0
@@ -232,9 +233,10 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
 
   // A short pane folds the rows of tabs (`tabsFold`, accounting for exact notice strip height so grids are never starved).
   const [fold, setFold] = useState<ReturnType<typeof tabsFold>>(undefined)
-  const foldRef = useRef(fold)
-  foldRef.current = fold
-  const collapseStatements = fold === 'one' || statementGroups.length > 3
+  const effectiveFold = summaryActive ? undefined : fold
+  const foldRef = useRef(effectiveFold)
+  foldRef.current = effectiveFold
+  const collapseStatements = effectiveFold === 'one' || statementGroups.length > 3
 
   const gridFocus = useRef(false)
   const tabRow = useRef<string | undefined>(undefined)
@@ -308,6 +310,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     focusResultTab()
   }
   const focusResultTab = () => {
+    if (rootRef.current?.getAttribute('data-fold') === 'none') return
     const key = focusTab.current, target = key === undefined ? null : rootRef.current?.querySelector<HTMLElement>(`[data-tab-row="result"] [data-tab-entry="${key}"] [role="tab"]`)
     if (!target) return
     focusTab.current = undefined
@@ -361,9 +364,9 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   }, [!hasActiveView, summaryActive, showViewRow, noticeHeight])
   useLayoutEffect(() => {
     const root = rootRef.current, active = root?.ownerDocument.activeElement
-    if (fold !== 'none' || !root || !active || ![...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))) return
+    if (effectiveFold !== 'none' || !root || !active || ![...root.querySelectorAll('.rt-results, .rt-views')].some(row => row.contains(active))) return
     root.querySelector<HTMLElement>('.rt-panel [data-result-grid]')?.focus({ preventScroll: true })
-  }, [fold])
+  }, [effectiveFold])
 
   const [picking, setPicking] = useState(false)
   const pickerFrom = useRef<HTMLElement | undefined>(undefined)
@@ -398,7 +401,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
     if (key === summaryEntryKey) {
       select(summaryEntryKey)
       focusTab.current = summaryEntryKey
-      focusResultTab()
+      if (foldRef.current !== 'none') focusResultTab()
       return
     }
     if (foldRef.current === 'none') {
@@ -437,7 +440,7 @@ export default function ResultsTabs({ tabId, tab }: { tabId: string; tab: TabRes
   const cached = tab.summary?.job?.cacheHit === true
   const budget = tab.summary?.budget ?? tab.multiSummary?.budget
 
-  return <div ref={rootRef} className="rt-root" data-fold={fold} data-compact={!showViewRow || undefined} data-summary={summaryActive || undefined} onFocus={trackFocus} onBlur={trackBlur}>
+  return <div ref={rootRef} className="rt-root" data-fold={effectiveFold} data-compact={!showViewRow || undefined} data-summary={summaryActive || undefined} onFocus={trackFocus} onBlur={trackBlur}>
     <div className="rt-results" data-tab-row="result" onKeyDown={resultKey}>
       <div className="rt-strip" ref={stripRef} role="tablist" aria-label="Results and comparisons" onScroll={() => measureStrip(false)} onWheel={wheel}>
         {shown.map((item, place) => {
