@@ -112,7 +112,7 @@ export async function start(root: Root): Promise<void> {
     if (workbench.files.exiting) return
     const refreshed = window.varia.hotExit ? window.varia.refreshReloadPins(workbench.reloadPins) : undefined
     if (refreshed && !refreshed.ok) workbench.commands.reportError(refreshed.error)
-    else if (!workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.live().length) return
+    else if (!workbench.documents.getSnapshot().unsavedFill && !workbench.documents.getSnapshot().documents.some(document => document.dirty) && !workbench.connections.live().length) return
     event.preventDefault()
     event.returnValue = true
   })

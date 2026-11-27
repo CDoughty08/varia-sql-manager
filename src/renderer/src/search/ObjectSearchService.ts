@@ -30,6 +30,12 @@ export interface IndexEntry {
   readonly growing?: true
   /** BigQuery: its rate limit is refusing calls, which retry. */
   readonly throttled?: true
+  /** BigQuery, while building: when the oldest dataset loaded from the saved index that the build has not checked yet was read. */
+  readonly savedAt?: string
+  /** BigQuery, while building: the build is a full one, which checks what was loaded (so no savedAt means all is checked). */
+  readonly full?: true
+  /** The running build is a check (a stale-only build): what is held stays searchable while it verifies part of it. */
+  readonly checking?: true
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -124,7 +130,9 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
 }
 /** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), or only if missing/unindexed, the datasets DDL marked, or everything
  *  (Refresh on the server's node). */
-export type BigQueryRefresh = { readonly scope: BigQueryIndexScope; readonly missingOnly?: true } | { readonly stale: true } | { readonly full: true }
+/** A partial build: BigQuery's scoped re-read or full rebuild, or either engine's check (`stale`), which for SQL Server may name a
+ *  database or every one (Object Explorer's Refresh) to check whatever its age. */
+export type BigQueryRefresh = { readonly scope: BigQueryIndexScope; readonly missingOnly?: true } | { readonly stale: true; readonly database?: string; readonly checkAll?: true } | { readonly full: true }
 
 /** Whether any reported skip covers `scope` (a project-level failure, any dataset failure in a project scope, or the matching dataset). */
 function scopeHasSkip(skipped: readonly ObjectIndexSkip[], scope: BigQueryIndexScope): boolean {
@@ -396,7 +404,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const prompt = previous?.requestId ? this.estimating.get(previous.requestId) : undefined
     if (prompt) prompt.abort()
     else if (bulk && previous?.requestId) void this.o.api.explorerCancel([previous.requestId]).catch(onUnexpectedError)
-    this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...bulk ? { phase: 'estimate' as const } : {}, ...previous?.status ? { status: previous.status } : {} })
+    const checking = !!partial && 'stale' in partial
+    this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...bulk ? { phase: 'estimate' as const } : {}, ...checking ? { checking: true as const } : {}, ...previous?.status ? { status: previous.status } : {} })
     const send = (billed: BigQueryBulkIndex | undefined) => {
       // Re-read current starred projects right before sending (stars may have changed while the async estimate/cost prompt ran).
       const liveStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
@@ -412,7 +421,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       void this.o.api.explorerIndex({
         connectionId, requestId, definitions, memoryLimitMiB,
         ...allProjects !== undefined ? { allProjects } : {}, ...maxProjects !== undefined ? { maxProjects } : {}, ...currentStarred ? { starredProjects: currentStarred } : {},
-        ...bigQuery && partial ? partial : {}, ...finalBulk ? { bulk: finalBulk } : {}
+        ...partial && (bigQuery || 'stale' in partial) ? partial : {}, ...finalBulk ? { bulk: finalBulk } : {}
       }).then(result => {
         const entry = this.getSnapshot().indexes[connectionId]
         const stopped = this.stopping.delete(requestId)
@@ -508,7 +517,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Returns whether the refresh was sent or queued behind the running build. */
   refreshBigQuery(connectionId: string, refresh: BigQueryRefresh): boolean {
     const connection = this.o.connections.get(connectionId)
-    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
+    // SQL Server takes only a check: its other refreshes are BigQuery's.
+    if (this.disposed || !live(connection) || !isBigQueryConnection(connection) && !('stale' in refresh)) return false
     const entry = this.getSnapshot().indexes[connectionId]
     if (entry?.requestId) {
       if ('scope' in refresh && refresh.missingOnly) {
@@ -582,6 +592,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    *  server's node re-reads every project. Other nodes leave the index as it is. */
   refreshNode(connectionId: string, ref: ExplorerNodeRef): void {
     const object = ref.type === 'object' ? ref.object : ref.owner
+    const connection = this.o.connections.get(connectionId)
+    if (live(connection) && !isBigQueryConnection(connection)) {
+      // SQL Server: a check of the node's database (or of every database, on the server), whatever its age: a fingerprint each,
+      // and only what changed is read again.
+      const database = object.kind === 'database' ? object.name : object.database
+      this.refreshBigQuery(connectionId, database ? { stale: true, database } : object.kind === 'server' ? { stale: true, checkAll: true } : { stale: true })
+      return
+    }
     if (object.kind === 'server') { this.refreshBigQuery(connectionId, { full: true }); return }
     if (object.kind === 'bqProject' && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.name } })
     else if (object.kind === 'bqDataset' && object.project && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.project, dataset: object.name } })
@@ -887,7 +905,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
     // A job that ended without its tab (closed, stopped, left running) marked datasets after its run's end: the next search finds them.
-    if (bigQuery) void answer.then(result => { if (result.ok) this.staleHint(connectionId, result.value.index.staleMark) }, () => {})
+    // A SQL Server database or BigQuery dataset the search used that is due for a check (its age, or DDL) names a new mark too.
+    void answer.then(result => { if (result.ok) this.staleHint(connectionId, result.value.index.staleMark) }, () => {})
     return answer
   }
 
@@ -905,7 +924,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private staleHint(connectionId: string, mark: number | undefined): void {
     if (mark === undefined || mark <= (this.staleAsked.get(connectionId) ?? 0)) return
     const connection = this.o.connections.get(connectionId)
-    if (!live(connection) || !isBigQueryConnection(connection)) return
+    if (!live(connection)) return
     // Recorded only once a build is sent or queued: a refresh refused now (a failed whole build) is asked again at the next hint.
     if (this.refreshBigQuery(connectionId, { stale: true })) this.staleAsked.set(connectionId, mark)
   }
@@ -1146,8 +1165,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private progress(progress: ObjectIndexProgress): void {
     const entry = Object.values(this.getSnapshot().indexes).find(value => value.requestId === progress.requestId)
     if (!entry) return
-    const { growing: _growing, throttled: _throttled, ...rest } = entry
-    this.putIndex({ ...rest, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}, ...progress.growing ? { growing: true } : {}, ...progress.throttled ? { throttled: true } : {} })
+    const { growing: _growing, throttled: _throttled, savedAt: _savedAt, full: _full, ...rest } = entry
+    this.putIndex({ ...rest, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}, ...progress.growing ? { growing: true } : {}, ...progress.throttled ? { throttled: true } : {},
+      ...progress.savedAt ? { savedAt: progress.savedAt } : {}, ...progress.full ? { full: true } : {} })
   }
 
   private putIndex(entry: IndexEntry): void {

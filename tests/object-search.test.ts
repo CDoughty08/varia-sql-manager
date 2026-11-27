@@ -20,7 +20,7 @@ import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSe
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, bigQueryIndexSummary, BigQueryScope, DatabaseScope, groupNote, indexGap, indexIncomplete, indexMemoryNote, indexMemoryShort, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, bigQueryIndexSummary, BigQueryScope, DatabaseScope, freshnessText, freshnessTitle, groupNote, indexGap, indexIncomplete, indexMemoryNote, indexMemoryShort, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
 import { indexStatusText } from '../src/renderer/src/search/IndexStatus'
 import { settingDef } from '../src/shared/settings/catalog'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
@@ -191,6 +191,13 @@ describe('object search contracts', () => {
       { done: 1, total: 2, objects: 0, growing: false }, { done: 1, total: 2, objects: 0, throttled: 'yes' }, { done: 1, total: 2, objects: 0, throttled: null }])
       expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', ...bad }).success).toBe(false)
   })
+
+  it('accepts a saved index age only as the backend writes it: UTC to the second', () => {
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 9, phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true }).success).toBe(true)
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, full: false }).success).toBe(false)
+    for (const savedAt of ['2026-11-24', '2026-11-24T08:05:09.123Z', '2026-11-24T08:05:09+01:00', '', 42, null, 'saved yesterday'])
+      expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, savedAt }).success).toBe(false)
+  })
 })
 
 describe('main\'s index progress relay', () => {
@@ -241,6 +248,16 @@ describe('main\'s index progress relay', () => {
     expect(target.pushed).toEqual([
       { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names', growing: true, throttled: true },
       { requestId: 'r', done: 2, total: 10, objects: 200, phase: 'names' }])
+  })
+
+  it('carries a saved index age to the window, and leaves it out once nothing loaded is unchecked', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(0, 0), phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true })
+    vi.advanceTimersByTime(gap)
+    relay.event({ ...event(1), phase: 'names', full: true })
+    expect(target.pushed).toEqual([
+      { requestId: 'r', done: 0, total: 0, objects: 0, phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true },
+      { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names', full: true }])
   })
 })
 
@@ -435,9 +452,13 @@ describe('ObjectSearchService', () => {
     // A later event without the flags clears them: the build stopped being throttled and its total stopped growing.
     emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', growing: true, throttled: true })
     expect(service.getSnapshot().indexes.a).toMatchObject({ growing: true, throttled: true })
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true })
+    expect(service.getSnapshot().indexes.a).toMatchObject({ savedAt: '2026-11-24T08:05:09Z', full: true })
     emit({ requestId: 'req1', done: 1, total: 3, objects: 12 })
     expect(service.getSnapshot().indexes.a).not.toHaveProperty('growing')
     expect(service.getSnapshot().indexes.a).not.toHaveProperty('throttled')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('savedAt')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('full')
     pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 5 } })
     await settle()
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() })
@@ -526,19 +547,36 @@ describe('ObjectSearchService', () => {
     expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: expect.any(String), definitions: true, allProjects: true, maxProjects: 500 })
     pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
-    // SQL Server's nodes re-read nothing (its index has no scoped refresh).
+    // SQL Server's nodes ask a check of their database (or, on the server, of every database), queued behind its running build;
+    // no other SQL Server refresh exists.
     const count = calls.index.length
     service.refreshNode('a', { type: 'object', object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' } })
+    expect(calls.index).toHaveLength(count)
     sql({ ok: true, value: { status: status(), elapsedMs: 1 } })
     await settle()
-    expect(calls.index).toHaveLength(count)
-    // A query tab's run whose result names a stale mark re-reads the datasets DDL marked; one naming none (whatever it ran), or a tab
-    // on another server, re-reads nothing.
+    expect(calls.index).toHaveLength(count + 1)
+    expect(calls.index.at(-1)).toEqual({ connectionId: 'a', requestId: expect.any(String), definitions: true, memoryLimitMiB: undefined, stale: true, database: 'Sales' })
+    expect(service.getSnapshot().indexes.a?.checking).toBe(true)
+    pendingIndex.at(-1)!({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    service.refreshNode('a', { type: 'object', object: { kind: 'server' } })
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'a', stale: true, checkAll: true })
+    pendingIndex.at(-1)!({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(service.refreshBigQuery('a', { scope: { project: 'varia-alpha' } })).toBe(false)
+    // A query tab's run whose result names a stale mark checks what DDL marked; one naming none (whatever it ran) checks nothing.
+    const checked = calls.index.length
     vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: tabId === 'q1' ? 'bq' : 'a' })) as never)
     events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'CREATE_TABLE' } } as never })
+    expect(calls.index).toHaveLength(checked)
     events.emit({ type: 'query.finished', tabId: 'q2', queryId: 'x', summary: { indexStale: 4 } as never })
-    expect(calls.index).toHaveLength(count)
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'a', stale: true })
+    expect(calls.index.at(-1)).not.toHaveProperty('database')
+    pendingIndex.at(-1)!({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    const count2 = calls.index.length
     events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'SELECT' }, indexStale: 4 } as never })
+    expect(calls.index).toHaveLength(count2 + 1)
     expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
     // Two refreshes asked during a build each run once after it, in order, and the same one twice runs once.
     service.refreshBigQuery('bq', { stale: true })
@@ -1472,10 +1510,81 @@ describe('ObjectSearchService', () => {
     expect(searchHitNames({ kind: 'bqDataset', project: 'varia-alpha', name: 'sales' })).toEqual({ name: 'sales', qualified: '`varia-alpha.sales`' })
   })
 
+  it('says how fresh an index is: checked, checking, may have changed and not verified, in the line, the band and All servers', () => {
+    const now = Date.parse('2026-11-26T10:05:09Z')
+    // Checked: how old the oldest read is (saved: it came from the saved index) and when the unit checked longest ago was checked.
+    const checked = status({ readAt: '2026-11-26T08:05:09Z', saved: true, checkedAt: '2026-11-26T10:05:09Z' })
+    expect(freshnessText(undefined, checked, now)).toBe('saved 2 h ago · checked just now')
+    expect(indexSummary(undefined, checked, now)).toBe('Index: 40 objects, 5 definitions in 2 databases · saved 2 h ago · checked just now')
+    // A healthy index's freshness is a click away in the band (the details popover), not kept in view.
+    expect(indexIncomplete({ connectionId: 'a', done: 2, total: 2, objects: 40, status: checked }, checked)).toBe(false)
+    expect(freshnessText(undefined, status({ readAt: '2026-11-26T10:00:09Z', checkedAt: '2026-11-26T10:03:09Z' }), now)).toBe('read 5 min ago · checked 2 min ago')
+    // Checking: from the status, or from a check this window asked (whose progress keeps what is held in the line).
+    const checking = status({ readAt: '2026-11-26T08:05:09Z', saved: true, checkedAt: '2026-11-26T09:05:09Z', checking: true, stale: 1 })
+    expect(freshnessText(undefined, checking, now)).toBe('saved 2 h ago · checking')
+    const asked = { connectionId: 'a', requestId: 'r', done: 0, total: 1, objects: 40, checking: true as const, status: checked }
+    expect(indexSummary(asked, checked, now)).toBe('Index: 40 objects, 5 definitions in 2 databases · saved 2 h ago · checking')
+    expect(indexIncomplete(asked, checking)).toBe(true)
+    // A check with no index yet is a build: it says so.
+    expect(indexSummary({ ...asked, status: undefined }, undefined, now)).toBe('Indexing 0 of 1 database (40 objects so far)…')
+    // May have changed: DDL marked, or a search found due by age, and no check has read it yet; kept in view in the band.
+    const stale = status({ readAt: '2026-11-26T08:05:09Z', checkedAt: '2026-11-26T09:05:09Z', stale: 2 })
+    expect(freshnessText(undefined, stale, now)).toBe('read 2 h ago · 2 databases may have changed')
+    expect(indexIncomplete({ connectionId: 'a', done: 2, total: 2, objects: 40, status: stale }, stale)).toBe(true)
+    expect(indexGap({ connectionId: 'a', done: 2, total: 2, objects: 40, status: stale }, now)).toBe('2 databases may have changed')
+    // Not verified: reads with no fingerprint to check them by.
+    const unverified = status({ readAt: '2026-11-26T09:05:09Z', checkedAt: '2026-11-26T09:05:09Z', unverified: 1 })
+    expect(freshnessText(undefined, unverified, now)).toBe('read 1 h ago · checked 1 h ago · 1 database not verified')
+    expect(indexGap({ connectionId: 'a', done: 2, total: 2, objects: 40, status: unverified }, now)).toBe('1 database not verified')
+    // BigQuery counts datasets; its loaded and unlisted datasets say "not checked" (savedIndexText) rather than "not verified".
+    const bq = status({ provider: 'bigquery', indexed: 4, readAt: '2026-11-26T08:05:09Z', saved: true, savedAt: '2026-11-26T08:05:09Z', unverified: 4, stale: 1 })
+    expect(bigQueryIndexSummary(undefined, bq, now)).toBe('Index: 40 objects, 5 definitions in 4 datasets · saved 2 h ago, not checked · 1 dataset may have changed')
+    // Nothing to say: no index, or a status with no times; a malformed time says nothing rather than "NaN".
+    expect(freshnessText(undefined, status({ state: 'none' }), now)).toBe('')
+    expect(freshnessText(undefined, status({ readAt: 'soon' }), now)).toBe('')
+    // The tooltip gives the times on the local clock.
+    expect(freshnessTitle(checked)).toBe(`Saved ${new Date('2026-11-26T08:05:09Z').toLocaleString()}\nChecked ${new Date('2026-11-26T10:05:09Z').toLocaleString()}`)
+    expect(freshnessTitle(status())).toBeUndefined()
+  })
+
+  it('takes a check database or checkAll only with stale, never both, and a database name an identifier long', () => {
+    const base = { connectionId: '00000000-0000-4000-8000-000000000001', requestId: '00000000-0000-4000-8000-000000000002' }
+    const parse = (extra: object) => requestSchemas['explorer.index'].safeParse(Object.assign({}, base, extra)).success
+    expect(parse({ stale: true, database: 'Sales' })).toBe(true)
+    expect(parse({ stale: true, checkAll: true })).toBe(true)
+    expect(parse({ database: 'Sales' })).toBe(false)
+    expect(parse({ checkAll: true })).toBe(false)
+    expect(parse({ stale: true, database: 'Sales', checkAll: true })).toBe(false)
+    expect(parse({ stale: true, checkAll: false })).toBe(false)
+    expect(parse({ stale: true, database: 'x'.repeat(129) })).toBe(false)
+    expect(parse({ stale: true, database: 'a\u0000b' })).toBe(false)
+    expect(parse({ stale: true, database: '' })).toBe(false)
+  })
+
   it('says what a BigQuery index holds, in datasets, and which pass its build is in', () => {
     const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
     expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
+    // What was loaded from the saved index is searchable while the build checks it: the line says how old it is, and the
+    // band keeps it in view; an index whose build ended without checking it says so.
+    const now = Date.parse('2026-11-26T10:05:09Z')
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects', savedAt: '2026-11-26T08:05:09Z', full: true }, undefined, now))
+      .toBe('Discovering accessible BigQuery projects… Index saved 2 h ago, checking.')
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 3, total: 12, objects: 900, phase: 'names', savedAt: '2026-11-23T10:05:09Z', full: true, throttled: true }, undefined, now))
+      .toBe('Indexing 3 of 12 datasets (900 objects so far)… Index saved 3 d ago, checking. BigQuery is rate limiting the calls, which retry.')
+    const unchecked = status({ provider: 'bigquery', indexed: 4, savedAt: '2026-11-26T10:04:09Z' })
+    expect(bigQueryIndexSummary(undefined, unchecked, now)).toBe('Index: 40 objects, 5 definitions in 4 datasets · saved 1 min ago, not checked')
+    expect(indexIncomplete({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, unchecked)).toBe(true)
+    expect(indexGap({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, now)).toBe('saved 1 min ago, not checked')
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4 }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
+    // A refresh's progress carries no age (it checks none of them): the line keeps the last status's "not checked".
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 1, objects: 40, phase: 'names' }, unchecked, now))
+      .toBe('Indexing 0 of 1 dataset (40 objects so far)… Index saved 1 min ago, not checked.')
+    // A full build whose progress carries no age has checked everything it loaded: the status's older word does not show.
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 40, phase: 'names', full: true }, unchecked, now))
+      .toBe('Indexing 1 of 4 datasets (40 objects so far)…')
+    // A malformed age (never sent: main's schema refuses it) says nothing rather than "NaN".
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4, savedAt: 'soon' }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Discovering BigQuery projects…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, { connectionId: 'a', requestId: 'r2', done: 0, total: 0, objects: 0 }])).toBe('Discovering BigQuery projects on 2 servers…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }])).toBe('Listing BigQuery datasets 2 / 5')

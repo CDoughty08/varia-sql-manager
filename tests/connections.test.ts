@@ -113,6 +113,20 @@ describe('saved connection library', () => {
     expect(profiles.find(profile => profile.id === untouched.id)).toEqual(untouched)
     expect(profiles.every(profile => !('autoReconnect' in profile.options))).toBe(true)
   })
+  it('preserves a saved favorite when connecting to a case-distinct database or explicit zero timeout', async () => {
+    const { store: library, path } = await store()
+    const favoriteOptions = { ...connectionDefaults('win32'), server: 'case-server', database: 'Sales' }
+    const saved = await library.saveEntry({ options: favoriteOptions, favorite: true })
+    await library.rememberEntry({ ...favoriteOptions, database: 'sales' })
+    await library.rememberEntry({ ...favoriteOptions, advanced: { commandTimeout: 0 } })
+    const profiles = (await new ConnectionStore(path).load()).library.profiles
+    expect(profiles).toHaveLength(3)
+    const favorite = profiles.find(profile => profile.id === saved.id)
+    expect(favorite).toMatchObject({ favorite: true, options: { database: 'Sales' } })
+    expect(favorite?.options.advanced?.commandTimeout).toBeUndefined()
+    expect(profiles.some(profile => profile.id !== saved.id && profile.options.database === 'sales')).toBe(true)
+    expect(profiles.some(profile => profile.id !== saved.id && profile.options.database === 'Sales' && profile.options.advanced?.commandTimeout === 0)).toBe(true)
+  })
   it('accepts older profiles without reconnect metadata, defaults new profiles to inherit and bounds explicit choices', async () => {
     const { store: library, path } = await store()
     const options = connectionDefaults('win32'), id = crypto.randomUUID()
@@ -184,6 +198,39 @@ describe('saved connection library', () => {
     expect(second.library.profiles.find(profile => profile.id === second.id)?.options.database).toBe('Sales')
     expect(await readFile(path, 'utf8')).not.toContain('secret-marker')
   })
+  it('evicts the oldest entry rather than a newer one when connects share the same millisecond, without reordering favorites', async () => {
+    const { path } = await store()
+    const fixed = () => new Date('2026-11-26T00:00:00.000Z')
+    const library = new ConnectionStore(path, fixed)
+    const fav1 = { ...connectionDefaults('win32'), server: 'fav-1', database: 'master' }
+    const fav2 = { ...connectionDefaults('win32'), server: 'fav-2', database: 'master' }
+    await library.save({ options: fav1, favorite: true })
+    await library.save({ options: fav2, favorite: true })
+    await library.rememberEntry(fav1)
+    expect((await library.load()).library.profiles.filter(profile => profile.favorite).map(profile => profile.options.server)).toEqual(['fav-1', 'fav-2'])
+    const base = { ...connectionDefaults('win32'), server: 'sql01', database: 'base' }
+    await library.setEnvironment({ options: base, environment: 'Production' })
+    for (let index = 0; index < 30; index++) await library.rememberEntry({ ...base, database: `db${index}` })
+    let profiles = (await library.load()).library.profiles
+    expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.database === 'base')).toBe(false)
+    // Re-connecting the oldest remaining entry moves its recency ahead without reordering favorites; relabelling base keeps base and evicts the next oldest.
+    await library.rememberEntry({ ...base, database: 'db0' })
+    await library.setEnvironment({ options: base, environment: 'Staging' })
+    profiles = (await library.load()).library.profiles
+    expect(profiles.filter(profile => profile.lastConnected)).toHaveLength(30)
+    expect(profiles.filter(profile => profile.favorite).map(profile => profile.options.server)).toEqual(['fav-1', 'fav-2'])
+    expect(profiles.some(profile => profile.options.database === 'base' && profile.options.environment === 'Staging')).toBe(true)
+    expect(profiles.some(profile => profile.options.database === 'db0')).toBe(true)
+    expect(profiles.some(profile => profile.options.database === 'db1')).toBe(false)
+    // Existing entries right at the 60 s forward cap still tie cleanly without falling back to `now()` and dropping the new entry.
+    const cappedAt = new Date('2026-11-26T00:01:00.000Z').toISOString()
+    await writeFile(path, JSON.stringify({ version: 1, profiles: Array.from({ length: 30 }, (_, index) => ({ id: crypto.randomUUID(), options: { ...base, database: `cap${index}` }, favorite: false, registered: false, lastConnected: cappedAt })) }))
+    await library.setEnvironment({ options: base, environment: 'Production' })
+    profiles = (await library.load()).library.profiles
+    expect(profiles).toHaveLength(30)
+    expect(profiles.some(profile => profile.options.database === 'base' && profile.options.environment === 'Production' && profile.lastConnected === cappedAt)).toBe(true)
+  })
   it('refuses to replace a directory found at the library path', async () => {
     const { directory } = await store()
     await expect(new ConnectionStore(directory).load()).rejects.toThrow('regular file')
@@ -206,10 +253,12 @@ describe('Advanced Properties OK', () => {
     expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(['commandTimeout']))).toEqual({ commandTimeout: 0 })
     expect(advancedToStore(draft(), new Set(['commandTimeout']))).toEqual({})
   })
-  it('keeps a command timeout the profile already stored, and the profile\'s identity', () => {
+  it('keeps a command timeout the profile already stored, and distinguishes inherited timeout from explicit zero', () => {
     expect(advancedToStore(draft({ commandTimeout: 0 }), new Set(), { commandTimeout: 0 })).toEqual({ commandTimeout: 0 })
     const options = { ...connectionDefaults('win32'), server: 'db' }
-    expect(connectionKey({ ...options, advanced: advancedToStore(draft(), new Set()) })).toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+    expect(connectionKey({ ...options, advanced: advancedToStore(draft({ commandTimeout: 0 }), new Set(), { commandTimeout: 0 }) })).toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+    expect(connectionKey({ ...options, advanced: advancedToStore(draft(), new Set()) })).not.toBe(connectionKey({ ...options, advanced: advancedDefaults }))
+    expect(connectionKey({ ...options, advanced: {} })).toBe(connectionKey({ ...options, advanced: { connectTimeout: advancedDefaults.connectTimeout } }))
   })
 })
 

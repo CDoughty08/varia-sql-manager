@@ -141,10 +141,13 @@ internal sealed class BigQueryDetailAdmission(int permits)
 }
 
 /// <summary>A BigQuery build's explorer.index.progress EVENT: <c>Growing</c> while projects still being listed may add datasets to
-/// the total, <c>Throttled</c> while BigQuery refuses the principal for its rate; both are left out when false.</summary>
+/// the total, <c>Throttled</c> while BigQuery refuses the principal for its rate; both are left out when false. <c>SavedAt</c>
+/// (UTC): when the oldest dataset loaded from the saved index that the build has not checked yet was read.</summary>
 internal sealed record BigQueryIndexProgress(int Done, int Total, int Objects, string Phase,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Growing = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Throttled = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Throttled = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SavedAt = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? Full = null)
 {
     public string Type => "explorer.index.progress";
 }
@@ -520,6 +523,41 @@ internal static partial class BigQueryEntries
             if (model.ModelReference?.ModelId is { } name && Varia.Backend.BigQuery.BqNames.IsModel(name))
                 entries.Add(new("bqModel", "bqModels", null, name, model.CreationTime ?? 0, model.LastModifiedTime));
         return entries;
+    }
+
+    /// <summary>A digest of what a listing says of a dataset (each entry's kind, subtype, name, creation time, last change and
+    /// shard group, in key order, and whether the listing was cut): two listings with the same digest make the same names.
+    /// What pass 2 reads is compared object by object (<see cref="Known"/>), not here. 16 bytes of SHA-256, as lower-case hex.</summary>
+    public static string ListingDigest(IReadOnlyList<BigQueryEntry> listed, bool cut)
+    {
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        var number = new byte[8];
+        void Long(long value)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(number, value);
+            hash.AppendData(number);
+        }
+        void Text(string? value)
+        {
+            // Length-prefixed (-1 for none), so no two lists of fields run together.
+            Long(value?.Length ?? -1);
+            if (value is not null) hash.AppendData(System.Text.Encoding.UTF8.GetBytes(value));
+        }
+        Long(cut ? 1 : 0);
+        Long(listed.Count);
+        foreach (var entry in listed.OrderBy(entry => entry.Kind, StringComparer.Ordinal).ThenBy(entry => entry.Name, StringComparer.Ordinal))
+        {
+            Text(entry.Kind);
+            Text(entry.Subtype);
+            Text(entry.Name);
+            Long(entry.Created);
+            Long(entry.Modified ?? long.MinValue);
+            Text(entry.Shards?.Prefix);
+            Long(entry.Shards?.Count ?? -1);
+            Text(entry.Shards?.First);
+            Text(entry.Shards?.Last);
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset().AsSpan(0, 16));
     }
 
     private static bool IsDate(string text) => DateTime.TryParseExact(text, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) && date.Year >= 1900;

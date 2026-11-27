@@ -5,7 +5,7 @@
 import { z } from 'zod'
 import { ident } from '../explorer/schema.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
-import { serverPathProblem } from './files.ts'
+import { serverPathKey, serverPathProblem } from './files.ts'
 import {
   restoreFilesSetTypes, restoreLimits, restoreRecoveryStates, restoreSetIdPattern, restoreTargetProblem, restoreTimePattern, plannedSetTypes, type RestoreFilesOptions, type RestoreOptions,
   type RestoreSource
@@ -31,6 +31,12 @@ const setSchema = z.object({
 }).strict()
 const moveSchema = z.object({ logical: ident, physical: path }).strict()
 
+/** Canonical path identity for duplicate MOVE checks: normalizes Windows slashes, dots, trailing spaces and case, and Linux segments. */
+const movePathKey = (physical: string): string => {
+  const separator = physical.startsWith('/') && !physical.startsWith('//') && !physical.startsWith('/\\') ? '/' : '\\'
+  return serverPathKey(physical, separator) ?? (separator === '\\' ? physical.toLowerCase() : physical)
+}
+
 /** Why restore options cannot be scripted (or run): the plan's shape, STOPAT, the moves and the recovery state's own rules. */
 export function restoreOptionsProblems(options: RestoreOptions): { readonly path: string; readonly message: string }[] {
   const problems: { path: string; message: string }[] = []
@@ -42,7 +48,7 @@ export function restoreOptionsProblems(options: RestoreOptions): { readonly path
   })
   if (new Set(sets.map(set => set.id)).size !== sets.length) problems.push({ path: 'sets', message: 'A backup set is listed twice.' })
   if (options.stopAt !== undefined && sets.at(-1)?.type !== 'log') problems.push({ path: 'stopAt', message: 'Only a log backup restores to a point in time.' })
-  const logical = new Set(options.relocate.map(move => move.logical)), physical = new Set(options.relocate.map(move => move.physical.toLowerCase()))
+  const logical = new Set(options.relocate.map(move => move.logical)), physical = new Set(options.relocate.map(move => movePathKey(move.physical)))
   if (logical.size !== options.relocate.length) problems.push({ path: 'relocate', message: 'A file is moved twice.' })
   if (physical.size !== options.relocate.length) problems.push({ path: 'relocate', message: 'Two files would restore to one path.' })
   if ((options.recovery === 'standby') !== (options.standbyFile !== undefined)) problems.push({ path: 'standbyFile', message: 'RESTORE WITH STANDBY needs a standby file, and only it takes one.' })
@@ -102,7 +108,7 @@ export function restoreFilesOptionsProblems(options: RestoreFilesOptions): { rea
   if (new Set(options.files).size !== options.files.length) problems.push({ path: 'files', message: 'A file is named twice.' })
   if (new Set(options.filegroups).size !== options.filegroups.length) problems.push({ path: 'filegroups', message: 'A filegroup is named twice.' })
   if (restoreFilesParameters(options) > restoreLimits.parameters) problems.push({ path: 'relocate', message: `One RESTORE takes at most ${restoreLimits.parameters.toLocaleString('en-US')} parameters: restore fewer files, or move fewer.` })
-  const logical = new Set(options.relocate.map(move => move.logical)), physical = new Set(options.relocate.map(move => move.physical.toLowerCase()))
+  const logical = new Set(options.relocate.map(move => move.logical)), physical = new Set(options.relocate.map(move => movePathKey(move.physical)))
   if (logical.size !== options.relocate.length) problems.push({ path: 'relocate', message: 'A file is moved twice.' })
   if (physical.size !== options.relocate.length) problems.push({ path: 'relocate', message: 'Two files would restore to one path.' })
   if ((options.recovery === 'standby') !== (options.standbyFile !== undefined)) problems.push({ path: 'standbyFile', message: 'RESTORE WITH STANDBY needs a standby file, and only it takes one.' })

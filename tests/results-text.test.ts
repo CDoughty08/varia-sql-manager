@@ -63,6 +63,13 @@ describe('fake backend Copy and Save text', () => {
     const saved = await exportText({ columns, pageAt, rows: count, format: 'csv', headers: true, nullText: 'empty', transposed: true })
     expect({ rows: saved.rows, capped: saved.capped, lines: saved.columnsWritten }).toEqual({ rows: MAX_TRANSPOSED_ROWS, capped: 5, lines: 1 })
   })
+  it('quotes non-finite JSON numbers like overflowing G15 double bounds instead of emitting Infinity', async () => {
+    const columns: Column[] = [{ name: 'v', dataType: 'float', wire: 'text' }]
+    const page = decodePage(encodePage({ resultId: 1, firstRow: 0, columns, rows: [['1.79769313486232E+308'], ['-1.79769313486232E+308'], ['42.5']] }), columns)
+    const writer = await exportText({ columns, pageAt: () => page, rows: 3, format: 'json', headers: true, nullText: 'empty' })
+    const parsed = JSON.parse(new TextDecoder().decode(writer.out.bytes())) as { v: unknown }[]
+    expect(parsed).toEqual([{ v: '1.79769313486232E+308' }, { v: '-1.79769313486232E+308' }, { v: 42.5 }])
+  })
   it('takes a header column only with transposed, and only a column of the result', () => {
     expect([validTurn(undefined, undefined, 2), validTurn(true, undefined, 2), validTurn(true, 1, 2), validTurn(false, undefined, 2)]).toEqual([true, true, true, true])
     expect([validTurn(undefined, 0, 2), validTurn(false, 0, 2), validTurn(true, 2, 2), validTurn(true, -1, 2), validTurn(true, 0.5, 2), validTurn('yes', undefined, 2)]).toEqual([false, false, false, false, false, false])

@@ -2842,21 +2842,37 @@ try {
   await expect(diff.getByRole('rowheader').first()).toHaveAccessibleName(/^Changed; row 1 in Result 1, row 1 in Result 2$/)
   await cell(0, 2, diff).click()
   await expect(cell(0, 2, diff)).toHaveAttribute('aria-label', 'Price, changed from 1.50 to 1.75')
-  await expect(diffTools.getByRole('button', { name: 'One row', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  // Exact text is the first control ComparisonToolbar folds into ⋯ on a narrow pane (Linux 1024x768 has wider fonts).
+  // Exact text and Layout are the first controls ComparisonToolbar folds into ⋯ on a narrow pane (Linux 1024x768 has wider fonts).
+  const oneRowButton = diffTools.getByRole('button', { name: 'One row', exact: true })
   const exactButton = diffTools.getByRole('button', { name: 'Exact text', exact: true })
-  if (await exactButton.isVisible()) {
-    await expect(exactButton).toHaveAttribute('aria-pressed', 'false')
-  } else {
+  const layoutFolded = !(await oneRowButton.isVisible())
+  const exactFolded = !(await exactButton.isVisible())
+  if (!layoutFolded) await expect(oneRowButton).toHaveAttribute('aria-pressed', 'true')
+  if (!exactFolded) await expect(exactButton).toHaveAttribute('aria-pressed', 'false')
+  if (layoutFolded || exactFolded) {
     await moreResultsTools(page).click()
-    await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Exact Text', exact: true })).toHaveAttribute('aria-checked', 'false')
+    if (layoutFolded) await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'One Row per Entry', exact: true })).toHaveAttribute('aria-checked', 'true')
+    if (exactFolded) await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'Exact Text', exact: true })).toHaveAttribute('aria-checked', 'false')
     await page.keyboard.press('Escape')
     await expect(resultsToolsMenu(page)).toHaveCount(0)
   }
   await expect(diffTools.getByRole('status')).toContainText('Comparison ready: matched by ItemId, 1 changed, 1 added, 1 removed.')
-  await diffTools.getByRole('button', { name: 'Two rows', exact: true }).click()
+  if (!layoutFolded) {
+    await diffTools.getByRole('button', { name: 'Two rows', exact: true }).click()
+  } else {
+    await moreResultsTools(page).click()
+    await resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'One Row per Entry', exact: true }).click()
+  }
   await expect(cell(5, 0, diff)).toHaveText('5')
-  await expect(diffTools.getByRole('button', { name: 'Two rows', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  const twoRowsButton = diffTools.getByRole('button', { name: 'Two rows', exact: true })
+  if (await twoRowsButton.isVisible()) {
+    await expect(twoRowsButton).toHaveAttribute('aria-pressed', 'true')
+  } else {
+    await moreResultsTools(page).click()
+    await expect(resultsToolsMenu(page).getByRole('menuitemcheckbox', { name: 'One Row per Entry', exact: true })).toHaveAttribute('aria-checked', 'false')
+    await page.keyboard.press('Escape')
+    await expect(resultsToolsMenu(page)).toHaveCount(0)
+  }
   await expect(diffTools.getByRole('status')).toContainText('Comparison updated: matched by ItemId, 1 changed, 1 added, 1 removed.')
   for (const name of ['ItemId', 'Name', 'Price']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(1)
   for (const name of ['Change', 'R1', 'R2', 'Old row', 'New row']) await expect(diff.getByRole('columnheader', { name: new RegExp(`^${name}`) })).toHaveCount(0)
