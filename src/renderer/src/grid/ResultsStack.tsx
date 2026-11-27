@@ -5,7 +5,7 @@ import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import MultiRunSummary, { environmentTone, multiModeLabel, multiOutcomeInfo } from '../results/MultiRunSummary'
-import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, hasMultiSummary, pivotOutOfDate, setKey, slotNamed, targetOfEntry, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, hasMultiSummary, pivotOutOfDate, setKey, slotNamed, summaryEntryKey, targetOfEntry, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
@@ -184,23 +184,9 @@ export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pi
   const count = tab.sets.length
   if (count === 0) return multi ? multiSummaryMinHeight : 0
   const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab, undefined, grids && turnedEntries(tab.sets, grids)), places = collapsedPlaces(tab.sets, collapsed)
+  const extraMin = multi ? tab.sets.map(entry => entryNoticesHeight(tab, entry)) : undefined
   const multiChrome = multi ? multiStackHeaderHeight + (distinctStatementSlots(tab.sets).length > 1 ? multiStmtBarHeight : 0) : 0
-  if (count === 1) {
-    const notice = entryNoticesHeight(tab, tab.sets[0])
-    const floor = minHeight + notice
-    return multiChrome + (places.has(0) ? g.captionHeight : Math.min(floor, content[0] ?? floor))
-  }
-  let extraNotice = 0
-  for (let index = 0; index < count; index++) {
-    if (places.has(index)) continue
-    const notice = entryNoticesHeight(tab, tab.sets[index])
-    if (notice <= 0) continue
-    // stackMinimum caps each open item's floor at minHeight; add the notice strip height when the content exceeds minHeight or is still streaming.
-    const itemContent = content[index]
-    if (itemContent === undefined) extraNotice += notice
-    else if (itemContent > minHeight) extraNotice += Math.min(notice, itemContent - minHeight)
-  }
-  return multiChrome + stackMinimum(count, minHeight, { content, collapsed: places }) + extraNotice
+  return multiChrome + stackMinimum(count, minHeight, { content, collapsed: places, ...extraMin ? { extraMin } : {} })
 }
 
 /** "Batch 2 of 3", with the repetition of a batch run with GO n; '' for a script of one batch run once. */
@@ -330,11 +316,12 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const view = results.viewState(tabId)
   const search = useServiceSnapshot(resultsSearch)[tabId]
   const multi = hasMultiSummary(tab)
+  const summaryOnly = multi && tab.sets.length === 0
   const statementSlots = useMemo(() => multi ? distinctStatementSlots(tab.sets) : [], [multi, tab.sets])
   const [selectedStmt, setSelectedStmt] = useState<number | 'all'>('all')
   const effectiveStmt = selectedStmt !== 'all' && !statementSlots.some(item => item.slot === selectedStmt) ? 'all' : selectedStmt
-  const hasNonOkTarget = !!tab.multi?.targets.some(target => target.phase !== 'committed' && target.phase !== 'succeeded')
-  const [summaryOpen, setSummaryOpen] = useState(() => multi && (tab.sets.length === 0 || hasNonOkTarget))
+  // Compact summary band defaults collapsed once sets exist (pure-DDL/DML renders full MultiRunSummary above).
+  const [summaryOpen, setSummaryOpen] = useState(false)
   const sets = useMemo(() => multi ? orderedMultiSets(tab, effectiveStmt) : tab.sets, [multi, tab, effectiveStmt])
   const count = sets.length, closable = !tab.bare
   // What each entry shows of its group, for its grid's attributes and its caption.
@@ -373,8 +360,9 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const collapsed = useMemo(() => collapsedPlaces(sets, collapsedEntries), [sets, collapsedEntries])
   // The grid F6 focuses: the one that last had the focus, else the first.
   const focused = focusedEntry !== undefined && sets.some(entry => entry.key === focusedEntry) ? focusedEntry : (tab.focused && sets.some(entry => entry.key === tab.focused) ? tab.focused : sets[0]?.key)
-  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed }), [paneHeight, count, weights, minHeight, content, collapsed])
-  const floors = useMemo(() => setFloors(count, minHeight, { content, collapsed }), [count, minHeight, content, collapsed])
+  const extraMin = useMemo(() => multi ? sets.map(entry => entryNoticesHeight(tab, entry)) : undefined, [multi, sets, tab])
+  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {} }), [paneHeight, count, weights, minHeight, content, collapsed, extraMin])
+  const floors = useMemo(() => setFloors(count, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {} }), [count, minHeight, content, collapsed, extraMin])
   const bare = !multi && count === 1 && !collapsed.has(0) && paneHeight > 0 && paneHeight < minHeight
   const [first, last] = paneHeight > 0 ? mountedRange(layout, scrollTop, paneHeight) : [0, -1]
   const drag = useRef<{ index: number; pointerId: number; startY: number; heights: readonly number[]; floors: readonly number[]; frame?: () => void; y: number } | undefined>(undefined)
@@ -384,13 +372,23 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     setWeightsState(byEntry)
   }
 
+  // Stacked layout displays grids immediately when sets exist: clear virtual Summary focus so Transpose / Save Results As act on the first grid right away.
+  const firstEntryKey = sets[0]?.key
+  useLayoutEffect(() => {
+    if (!multi || firstEntryKey === undefined) return
+    if (tab.activeSummary || tab.focused === summaryEntryKey) {
+      results.focusEntry(tabId, firstEntryKey)
+      setFocused(firstEntryKey)
+    }
+  }, [multi, firstEntryKey, tab.activeSummary, tab.focused, results, tabId])
+
   useLayoutEffect(() => {
     const element = stackRef.current
     if (!element) return
     const observer = observeResize(element, () => setPaneHeight(element.clientHeight))
     setPaneHeight(element.clientHeight)
     return () => observer.dispose()
-  }, [])
+  }, [summaryOnly])
   // The saved scroll position, once the content is tall enough to take it.
   useLayoutEffect(() => {
     const element = stackRef.current
@@ -563,7 +561,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   }
 
   // Pure-DDL/DML multi-server run (0 result sets): render full MultiRunSummary so Stacked layout is never blank.
-  if (multi && tab.sets.length === 0) {
+  if (summaryOnly) {
     return <div ref={stackRef} className="rs-stack rs-stack-summary">
       <MultiRunSummary tabId={tabId} tab={tab} active />
     </div>
@@ -598,15 +596,23 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const entry = sets.find(item => item.descriptor.targetKey === targetKey) ?? tab.sets.find(item => item.descriptor.targetKey === targetKey)
     if (!entry) return
     if (effectiveStmt !== 'all' && (entry.descriptor.statementSlot ?? 0) !== effectiveStmt) setSelectedStmt('all')
+    if (collapsedEntries.has(entry.key)) toggle(entry.key)
     focus(entry.key)
     stackReveal.current = entry.key
+    setRevealTick(tick => tick + 1)
   }
 
   const multiOutcome = multi ? multiOutcomeInfo(tab) : undefined
   const okCount = multi ? tab.multi!.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length : 0
 
-  return <div ref={stackRef} className="rs-stack" onFocus={trackFocus} onBlur={trackBlur} onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
-    {multi && multiOutcome && <div className="rs-multi-summary-band" data-open={summaryOpen || undefined}>
+  const stackEl = <div ref={stackRef} className="rs-stack" onFocus={trackFocus} onBlur={trackBlur} onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
+    <div className="rs-content" style={{ height: layout.total }}>{items}</div>
+  </div>
+
+  if (!multi) return stackEl
+
+  return <div className="rs-multi-root">
+    {multiOutcome && <div className="rs-multi-summary-band" data-open={summaryOpen || undefined}>
       <button type="button" className="rs-multi-summary-toggle" aria-expanded={summaryOpen} onClick={() => setSummaryOpen(open => !open)}>
         <Icon name={summaryOpen ? 'chevron-down' : 'chevron-right'} />
         <span className="multi-mode-pill" data-mode={tab.multi!.mode}>{multiModeLabel(tab.multi!.mode)}</span>
@@ -617,7 +623,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
       </button>
       {summaryOpen && <MultiRunSummary tabId={tabId} tab={tab} compact onSelectTarget={jumpToTarget} />}
     </div>}
-    {multi && statementSlots.length > 1 && <div className="rs-stmt-strip" role="region" aria-label="Filter stacked results by statement">
+    {statementSlots.length > 1 && <div className="rs-stmt-strip" role="region" aria-label="Filter stacked results by statement">
       {statementSlots.length > 5
         ? <select className="rs-stmt-select" aria-label="Statement" value={String(effectiveStmt)} onChange={event => setSelectedStmt(event.target.value === 'all' ? 'all' : Number(event.target.value))}>
             <option value="all">All statements ({formatCount(statementSlots.length)})</option>
@@ -628,6 +634,6 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
             {statementSlots.map(item => <button key={item.slot} type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === item.slot} onClick={() => setSelectedStmt(item.slot)}>{item.label}</button>)}
           </div>}
     </div>}
-    <div className="rs-content" style={{ height: layout.total }}>{items}</div>
+    {stackEl}
   </div>
 }

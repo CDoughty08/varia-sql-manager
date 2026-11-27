@@ -1348,6 +1348,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .rt-root[data-fold="none"] > .rt-results, .rt-root[data-fold="none"] > .rt-views { display: none; }
 @media (forced-colors: active) {
   .rt-tab[data-selected], .rt-view[data-selected] { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
+  .rt-tab[data-selected] .rt-server-status { color: HighlightText; }
+  .rt-tab[data-selected] .rt-stmt-count { background: HighlightText; color: Highlight; }
   .rt-picker-row[data-active] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .rt-picker-row[aria-current="true"]:not([data-active]) { outline: 1px solid CanvasText; outline-offset: -1px; }
   .rt-tab[data-selected] > [role="tab"]:focus-visible, .rt-view[data-selected] > [role="tab"]:focus-visible, .rt-tab[data-selected] .rt-close:focus-visible { outline-color: HighlightText; }
@@ -3628,13 +3630,13 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .compare-head h2 span { color: var(--varia-descriptionForeground); font-weight: 400; }
 .compare-body { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--varia-space-2); min-height: 0; overflow: auto; padding: var(--varia-space-1) var(--varia-space-3) var(--varia-space-3); }
 .compare-targets { display: flex; flex-direction: column; gap: 1px; margin: 0; padding: 0; border: 0; min-width: 0; }
-.compare-target { display: flex; align-items: center; gap: var(--varia-space-2); height: var(--varia-row); padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-sm); }
+.compare-target { display: flex; align-items: center; gap: var(--varia-space-2); min-height: var(--varia-row); padding: var(--varia-space-0) var(--varia-space-2); border-radius: var(--varia-radius-sm); }
 .compare-target:hover { background: var(--varia-list-hoverBackground); }
 .compare-target.picked { background: var(--varia-list-inactiveSelectionBackground); }
 .compare-target input { margin: 0; flex: none; }
-.compare-target-body { display: flex; align-items: center; gap: var(--varia-space-2); flex: 1 1 auto; min-width: 0; }
+.compare-target-body { display: flex; flex-direction: column; align-items: stretch; gap: 1px; flex: 1 1 auto; min-width: 0; }
 .compare-target-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.compare-target-meta { display: inline-flex; align-items: center; gap: var(--varia-space-1); flex-shrink: 0; }
+.compare-target-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
 .compare-target small { margin-left: auto; flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; }
 .compare-cross-collation { padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
 /* A named result's number, beside its name; its rows stay at the row's end. */
@@ -4577,7 +4579,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 
 .multi-summary { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; gap: var(--varia-space-2); padding: var(--varia-space-3); background: var(--varia-panel-background); color: var(--varia-foreground); }
 .multi-summary:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.multi-summary-compact { flex: none; padding: var(--varia-space-2) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); }
+.multi-summary-compact { flex: none; max-height: 180px; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-3); border-bottom: 1px solid var(--varia-panel-border); }
 .multi-summary-banner { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); }
 .multi-summary-banner[data-tone="ok"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
 .multi-summary-banner[data-tone="warn"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
@@ -4630,6 +4632,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-grid-notice-btn { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 20px; padding: 0 var(--varia-space-2); border: 1px solid currentColor; border-radius: var(--varia-radius-sm); background: transparent; color: inherit; font-size: var(--varia-size-xs); font-weight: 600; }
 
 /* Multi-server Stacked layout summary band & statement selector. */
+.rs-multi-root { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .rs-stack-summary { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .rs-multi-summary-band { display: flex; flex-direction: column; flex: none; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
 .rs-multi-summary-toggle { display: flex; align-items: center; gap: var(--varia-space-2); width: 100%; height: 26px; padding: 0 var(--varia-space-2); border: 0; border-radius: 0; background: transparent; color: var(--varia-foreground); font-size: var(--varia-size-xs); font-weight: 600; text-align: left; }
