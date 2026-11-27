@@ -33,8 +33,8 @@ export class TargetService {
   update(tabId: string, patch: TargetPatch): void {
     const current = this.documents.get(tabId)
     if (current && Object.entries(patch).every(([key, value]) => current[key as keyof TargetPatch] === value)) return
-    // A value opened from the results (XML, JSON, plan) never has a server or database.
-    if (current && !isQueryDocument(current)) return
+    // A value opened from the results (XML, JSON, plan) never has a server or database; multi-server tabs manage targets via multiTargets[].
+    if (current && (!isQueryDocument(current) || current.multiMode)) return
     // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them. A query moved
     // to another connection (or disconnected) starts afresh, so a notice about its old session no longer applies.
     const moved = current && 'connectionId' in patch && patch.connectionId !== current.connectionId
@@ -53,7 +53,7 @@ export class TargetService {
    */
   async changeConnection(tabId: string, connectionId?: string): Promise<void> {
     const document = this.documents.get(tabId)
-    if (!document || !isQueryDocument(document)) return
+    if (!document || !isQueryDocument(document) || document.multiMode) return
     const candidate = connectionId === undefined ? undefined : this.connections.get(connectionId)
     if (connectionId !== undefined && !isLiveConnection(candidate)) { this.files.reportError('The selected connection is not connected. Choose its connection again.'); return }
     const next = candidate
@@ -79,12 +79,14 @@ export class TargetService {
   /** Moves a query to another database, or a BigQuery query to another dataset. A dataset in another location than the
    *  query's session ends the session (a session lives in one location): `switchLocation` asks first, and Don't Switch keeps the dataset. */
   changeDatabase(tabId: string, database: string): void {
-    const document = this.documents.get(tabId), connectionId = document?.connectionId
+    const document = this.documents.get(tabId)
+    if (!document || document.multiMode) return
+    const connectionId = document.connectionId
     // A connection with a fixed location runs every session there (TabLocationAsync), so only Automatic ones switch.
     const options = connectionId ? this.connections.get(connectionId)?.options : undefined, fixed = options?.provider === 'bigquery' && !!options.location
     const from = this.queries.sessionLocation?.(tabId), to = connectionId && !fixed ? this.datasetLocation?.(connectionId, database) : undefined
     // Choosing the same dataset again still switches, as LOCATION_MISMATCH's advice says.
-    if (!document || !connectionId || !from || !to || from.toLowerCase() === to.toLowerCase()) { this.update(tabId, { database }); return }
+    if (!connectionId || !from || !to || from.toLowerCase() === to.toLowerCase()) { this.update(tabId, { database }); return }
     // The switch is a document task, so it cannot start beside another one; say so rather than drop the choice.
     if (this.documents.getSnapshot().busy) { this.files.reportError(`The dataset was not changed: wait for the current task to finish, then choose ${database} again.`); return }
     void this.switchLocation(tabId, connectionId, database, from, to)

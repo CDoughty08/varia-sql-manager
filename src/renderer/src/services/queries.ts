@@ -1,4 +1,4 @@
-import type { ConnectionInfo, MessageEntry, MultiQueryMode, MultiQueryOptions, MultiQueryTarget, QueryEvent, QueryMultiResult, QueryResult, VariaApi } from '../../../shared/contracts'
+import { multiQueryTargetStatuses, type ConnectionInfo, type MessageEntry, type MultiQueryMode, type MultiQueryOptions, type MultiQueryTarget, type QueryEvent, type QueryMultiResult, type QueryResult, type VariaApi } from '../../../shared/contracts'
 import type { JobsWithoutTabReview, RestoredJob } from '../../../shared/bigquery/jobs'
 import type { BigQueryPreviewTarget } from '../../../shared/bigquery/objects'
 import { estimatedPlanCacheCharacters, type EstimatedPlanMode, type EstimatedPlanResult } from '../../../shared/estimated-plans'
@@ -111,6 +111,11 @@ export const sessionRequests = 8
 export const stateBudgetMs = 5_000
 const nothingOpen: TransactionState = { transactions: 0 }
 const mayBeOpen: TransactionState = { transactions: 0, unchecked: true }
+const terminalMultiPhases: ReadonlySet<string> = new Set<string>(multiQueryTargetStatuses)
+const multiControlChars = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu
+const maxMultiTargets = 32
+const cleanMultiLabel = (value: string | undefined): string => (value ?? '').replace(multiControlChars, '').trim().slice(0, 128).trim() || 'Server'
+const cleanSqlServerDatabase = (value: string | undefined, fallback?: string): string => value?.trim().slice(0, 128) || fallback?.trim().slice(0, 128) || 'master'
 
 const backendGone: ReadonlySet<ErrorCode | undefined> = new Set<ErrorCode | undefined>(['BACKEND_LOST', 'CONNECTION_LOST', 'NOT_CONNECTED'])
 // A re-attach's failures that say nothing about its job: it is kept and tried again on the next connection.
@@ -609,7 +614,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /** Refuses a Cross-Engine execution locally (zero IPC), logging clickable READ_ONLY_VIOLATION lines and focusing the first violation. */
   refuseReadOnly(tabId: string, violations: readonly ReadOnlyRefusalItem[]): void {
-    if (this.disposed || !violations.length || !this.documents.get(tabId)) return
+    if (this.disposed || !violations.length || !this.documents.get(tabId) || this.isRunning(tabId) || this.documents.getSnapshot().busy) return
     const queryId = crypto.randomUUID()
     const revision = this.documents.revision(tabId)
     this.sources.set(tabId, { queryId, revision })
@@ -644,22 +649,35 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const identities: MultiTargetIdentity[] = []
     let hasSqlServer = false, hasBigQuery = false
     let maxCommandTimeout: number | undefined
+    const reportLocalError = async (message: string, code?: ErrorCode): Promise<void> => {
+      const errorQueryId = crypto.randomUUID()
+      this.results.begin(tabId, errorQueryId)
+      await this.results.finish(tabId, errorQueryId, { error: message, ...code ? { code } : {} })
+      if (this.disposed || !this.documents.get(tabId)) return
+      this.update(tabId, { error: message })
+      this.events.emit({ type: 'query.outputSelected', tabId, view: 'messages' })
+    }
     if (request.targets?.length) {
       for (const target of request.targets) {
         const connection = this.getConnection(target.connectionId)
-        if (!isLiveConnection(connection)) return
+        if (!isLiveConnection(connection)) {
+          await reportLocalError(`Target "${cleanMultiLabel(target.label)}" is no longer connected. Reconnect or update targets before executing.`, 'NOT_CONNECTED')
+          return
+        }
         const provider: ProviderId = connection.providerId === 'bigquery' ? 'bigquery' : 'sqlserver'
         if (provider === 'bigquery') hasBigQuery = true; else hasSqlServer = true
         const timeout = connection.options?.advanced?.commandTimeout
         if (timeout !== undefined) maxCommandTimeout = maxCommandTimeout === undefined ? timeout : Math.max(maxCommandTimeout, timeout)
-        resolvedTargets.push({ ...target })
+        const label = cleanMultiLabel(target.label)
+        const database = provider === 'sqlserver' && target.database !== undefined ? cleanSqlServerDatabase(target.database) : undefined
+        resolvedTargets.push({ ...target, label, ...database !== undefined ? { database } : {} })
         identities.push({
           targetKey: target.targetKey,
           connectionId: target.connectionId,
           provider,
-          label: target.label,
+          label,
           ...target.environment ? { environment: target.environment } : {},
-          ...target.database !== undefined ? { database: target.database } : target.dataset !== undefined ? { database: target.dataset } : {}
+          ...database !== undefined ? { database } : target.dataset !== undefined ? { database: target.dataset } : {}
         })
       }
     } else {
@@ -676,8 +694,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         let targetKey = target.targetId ?? connection.id
         if (seenKeys.has(targetKey)) targetKey = connection.id
         seenKeys.add(targetKey)
-        const label = connection.displayName || connection.server
-        const database = provider === 'sqlserver' ? (target.database || connection.database || 'master') : undefined
+        const label = cleanMultiLabel(connection.displayName || connection.server)
+        const database = provider === 'sqlserver' ? cleanSqlServerDatabase(target.database, connection.database) : undefined
         const dataset = provider === 'bigquery' && /^\w{1,1024}$/.test(target.database) ? target.database : undefined
         const cap = provider === 'bigquery' ? (connection.options?.maximumBytesBilled ?? defaultMaxBytes) : undefined
         resolvedTargets.push({
@@ -695,11 +713,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
           provider,
           label,
           ...connection.environment ? { environment: connection.environment } : {},
-          database: target.database
+          database: database ?? target.database
         })
       }
     }
     if (!resolvedTargets.length) return
+    if (resolvedTargets.length > maxMultiTargets) {
+      await reportLocalError(`Multi-server queries support at most ${maxMultiTargets} targets per execution. Disable some targets and try again.`, 'INVALID_PARAMS')
+      return
+    }
     if (request.mode === 'crossEngineReadOnly' && (!hasSqlServer || !hasBigQuery)) return
 
     let payload: Pick<MultiQueryOptions, 'sql' | 'startLine' | 'startColumn' | 'scripts' | 'startLines'>
@@ -791,7 +813,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     await this.results.finish(tabId, queryId, { multiSummary, error, code })
     if (this.disposed || !this.documents.get(tabId) || this.getSnapshot()[tabId]?.running?.queryId !== queryId) return
     const currentTargets = this.getSnapshot()[tabId]?.multiTargets ?? initialTargets
-    const finalTargets = multiSummary ? applyMultiOutcomes(currentTargets, multiSummary.targets) : currentTargets
+    const finalTargets = multiSummary
+      ? applyMultiOutcomes(currentTargets, multiSummary.targets)
+      : error
+        ? currentTargets.map(target => terminalMultiPhases.has(target.phase)
+          ? target
+          : { ...target, phase: 'failed' as const, ...code ? { errorCode: code } : {}, errorMessage: error })
+        : currentTargets
     this.update(tabId, { multiSummary, multiTargets: finalTargets, error })
     this.events.emit({ type: 'query.finished', tabId, queryId, error })
   }
@@ -799,7 +827,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
    *  (free, no job, so no cost prompt) instead of running the text, which is the SELECT it stands for. `rerunOf`: the
    *  BigQuery job Job History's Re-run runs again, which the cost prompts name. */
   execute(tabId = this.documents.getSnapshot().activeId, preview?: BigQueryPreviewTarget, rerunOf?: string): Promise<void> {
-    if (!this.canExecute(tabId)) return Promise.resolve()
+    if (!this.canExecute(tabId) || this.documents.get(tabId)?.multiMode) return Promise.resolve()
     this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
     const run = this.run(tabId, preview, undefined, true, rerunOf)
     this.runs.set(tabId, run)
@@ -807,7 +835,8 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   }
   /** Shares only the tab's busy/cancel lifecycle. Estimates neither begin result streaming nor replace stored grids. */
   estimate(tabId = this.documents.getSnapshot().activeId, mode: EstimatedPlanMode = 'isolated'): Promise<void> {
-    if (!this.canExecute(tabId) || !isQueryDocument(this.documents.get(tabId))) return Promise.resolve()
+    const document = this.documents.get(tabId)
+    if (!this.canExecute(tabId) || !document || !isQueryDocument(document) || document.multiMode) return Promise.resolve()
     this.executionVersions.set(tabId, (this.executionVersions.get(tabId) ?? 0) + 1)
     const run = this.runEstimate(tabId, mode)
     this.runs.set(tabId, run)
@@ -858,8 +887,10 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
   /** Runs the tab's text, or re-attaches it to one of its BigQuery jobs (`attach`, query.attach): the same lifecycle, events
    *  and results, without the text, its cost gate or plans. */
   private async run(tabId: string, preview?: BigQueryPreviewTarget, attach?: TabJob, follow = true, rerunOf?: string): Promise<void> {
-    const document = this.documents.get(tabId)!
-    const connection = this.getConnection(document.connectionId!)!
+    const document = this.documents.get(tabId)
+    if (!document || document.multiMode || !document.connectionId) return
+    const connection = this.getConnection(document.connectionId)
+    if (!connection) return
     if ((preview || attach) && connection.providerId !== 'bigquery') return
     const { sql, startLine, startColumn } = attach ? { sql: '', startLine: 1, startColumn: 1 } : this.documents.getExecuteText(tabId)
     if (!attach && !sql.trim()) return
@@ -1097,7 +1128,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
       // running multi-target tabs are always prompted as ordinary executing queries and cancelled via query.cancel.
       const connection = !multi && document?.connectionId ? this.getConnection(document.connectionId) : undefined
       const multiHandles = multi
-        ? [...new Set([...operation?.connectionIds ?? [], ...(document?.multiTargets ?? []).flatMap(target => target.connectionId ? [target.connectionId] : [])])]
+        ? [...new Set(operation?.connectionIds ?? [])]
           .map(connectionId => ({ connectionId, generation: this.getConnection(connectionId)?.generation }))
         : []
       // A BigQuery query holding a job is asked only about it, in the first box (docs/bigquery.md, The prompt): its query
@@ -1190,7 +1221,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
         if (tab.multi) {
           return !!document.multiMode && tab.multiHandles.every(handle => {
             const conn = this.getConnection(handle.connectionId)
-            return conn?.generation === handle.generation && !conn?.lost
+            return handle.generation !== undefined && conn !== undefined && conn.generation === handle.generation && !conn.lost
           })
         }
         const connection = tab.connectionId ? this.getConnection(tab.connectionId) : undefined

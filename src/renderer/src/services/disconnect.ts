@@ -27,6 +27,7 @@ export interface DisconnectDocument {
   readonly running: boolean
   readonly multiMode?: 'same' | 'cross'
   readonly multiTargets?: readonly DisconnectMultiTarget[]
+  readonly runningConnectionIds?: readonly string[]
   /** Monotonic per-tab execution start counter (`QueryService.executionVersion`); stays constant across cancel/completion. */
   readonly executionVersion?: number
 }
@@ -74,7 +75,7 @@ const sameDocuments = (a: readonly DisconnectDocument[], b: readonly DisconnectD
   const current = new Map(b.map(document => [document.id, document]))
   return a.every(document => {
     const next = current.get(document.id)
-    // Compare executionVersion (never `running`, which cancelSessions intentionally flips from true -> false before validate).
+    // Compare executionVersion (never `running` or `runningConnectionIds`, which cancelSessions intentionally clears before validate).
     return !!next && document.targetId === next.targetId && document.connectionId === next.connectionId && document.database === next.database &&
       document.name === next.name && document.revision === next.revision && document.dirty === next.dirty && document.query === next.query &&
       document.multiMode === next.multiMode && sameMultiTargets(document.multiTargets, next.multiTargets) &&
@@ -124,10 +125,13 @@ export class DisconnectCoordinator {
     if (host.busy()) return { status: 'busy' }
     const handle = target.lifecycle.handle
     const isMulti = (document: DisconnectDocument) => !!document.multiMode || !!document.multiTargets
+    const cancelledMulti = new Set<string>()
     const attached = () => host.documents().filter(document =>
       document.targetId === targetId
       || (!document.targetId && document.connectionId === handle.id)
       || (document.multiTargets?.some(item => item.targetId === targetId || (!item.targetId && item.connectionId === handle.id)) ?? false)
+      || (document.runningConnectionIds?.includes(handle.id) ?? false)
+      || cancelledMulti.has(document.id)
     )
     const live = () => {
       const current = host.targets.get(targetId)
@@ -153,8 +157,11 @@ export class DisconnectCoordinator {
         // Single-server queries attached to this transport (never multi-target tabs, which stay open and only detach this target).
         const queries = approved.filter(document => document.query && !isMulti(document) && document.connectionId === handle.id)
         // Running multi-target tabs referencing this transport: cancelled via prepareSessions/cancelSessions, never closed or endSession'd.
-        const runningMulti = approved.filter(document => document.query && isMulti(document) && document.running &&
-          (document.multiTargets?.some(item => item.connectionId === handle.id && (item.targetId === undefined || item.targetId === targetId)) ?? false))
+        const runningMulti = approved.filter(document => document.query && isMulti(document) && document.running && (
+          document.runningConnectionIds
+            ? document.runningConnectionIds.includes(handle.id)
+            : (document.multiTargets?.some(item => item.connectionId === handle.id && (item.targetId === undefined || item.targetId === targetId)) ?? false)
+        ))
         const choice = queries.length ? await host.confirm({ targetId, name: target.details.displayName ?? targetServerName(target.options), tabs: queries.map(({ id, name, dirty, running }) => ({ id, name, dirty, running })) }) : 'keep-tabs'
         if (choice === 'cancel') { result = { status: 'cancelled' }; return }
         validate()
@@ -177,6 +184,7 @@ export class DisconnectCoordinator {
         if (close) host.validateClose(close)
         // From here choices are final. Failed cancellation/commit still leaves every tab open.
         await host.cancelSessions(sessions)
+        for (const document of runningMulti) cancelledMulti.add(document.id)
         validate(sessions)
         const multiIds = new Set(runningMulti.map(document => document.id))
         for (const [id, transaction] of sessions.plan) {
