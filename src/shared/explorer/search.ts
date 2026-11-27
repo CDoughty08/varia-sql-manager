@@ -384,11 +384,13 @@ export const objectIndexProgressEventSchema = z.object({
   /** BigQuery: its rate limit is refusing the principal's calls, which retry. */
   throttled: z.literal(true).optional(),
   /** BigQuery, UTC to the second: when the oldest dataset loaded from the saved index that the build has not checked yet was read. */
-  savedAt: savedAtSchema.optional()
+  savedAt: savedAtSchema.optional(),
+  /** BigQuery: a full build, which checks what was loaded from the saved index (its savedAt absent once all is checked). */
+  full: z.literal(true).optional()
 }).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
 export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
 /** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
-export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true; readonly savedAt?: string }
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true; readonly savedAt?: string; readonly full?: true }
 
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)

@@ -30,6 +30,7 @@ internal static class BigQueryReloadChecks
         await Unchecked(check);
         await Rewritten(check);
         await Vanished(check);
+        await Replaced(check);
         await Damaged(check);
         await Budget(check);
     }
@@ -198,7 +199,7 @@ internal static class BigQueryReloadChecks
                 "a saved BigQuery index is searchable before the build has listed anything");
             check(during is { State: "building", SavedAt: { Length: 20 } at } && at.EndsWith('Z') && DateTime.TryParse(at, System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var when) && DateTime.UtcNow - when < TimeSpan.FromHours(1)
-                && events.OfType<BigQueryIndexProgress>().Any(item => item.SavedAt == at),
+                && events.OfType<BigQueryIndexProgress>().Any(item => item.SavedAt == at) && events.OfType<BigQueryIndexProgress>().All(item => item.Full == true),
                 "while it checks, the status and the progress say when the saved index was read (UTC, invariant)");
             release.SetResult();
             source.OnDatasets = null;
@@ -414,7 +415,7 @@ internal static class BigQueryReloadChecks
         source.OnDatasets = null;
         var events = new ConcurrentQueue<object>();
         await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new(Billing, "sales")), source, CancellationToken.None, events.Enqueue);
-        check(events.OfType<BigQueryIndexProgress>().Any() && events.OfType<BigQueryIndexProgress>().All(item => item.SavedAt is null),
+        check(events.OfType<BigQueryIndexProgress>().Any() && events.OfType<BigQueryIndexProgress>().All(item => item.SavedAt is null && item.Full is null),
             "a refresh of another dataset does not say it is checking the saved index");
         await search.Store.Idle();
     }
@@ -478,6 +479,30 @@ internal static class BigQueryReloadChecks
         await search.Store.Idle();
         check(search.SavedLoads is { Loaded: 3, Stale: 1, Refused: 0 } && source.TablesOf.GetValueOrDefault(Billing + ".ops") == 2 && Hits(search, id, "events") == 1,
             "a file deleted after it was listed counts as gone, not unreadable, and its dataset is read again");
+    }
+
+    // ---- A loaded read a new read replaces is forgotten at once ----
+
+    private static async Task Replaced(Action<bool, string> check)
+    {
+        using var folder = new Folder();
+        var source = World();
+        using (var first = Session(folder))
+        {
+            await Build(first, source, Guid.NewGuid().ToString());
+            await first.Store.Idle();
+        }
+        // The billing project's listing fails, so its two (older) datasets stay unchecked; proj-b's ds2 changed and is read anew.
+        source.Reset();
+        source.Projects["proj-b"]["ds2"] = [new Item("TABLE", "t3", 1_700_000_000_001)];
+        using var search = Session(folder);
+        var id = Guid.NewGuid().ToString();
+        source.OnDatasets = (project, _) => project == Billing ? Task.FromException(new RequestException("BIGQUERY_ERROR", "unavailable")) : Task.CompletedTask;
+        var done = await Build(search, source, id);
+        source.OnDatasets = null;
+        check(done.Status.SavedAt is not null && source.TablesOf.GetValueOrDefault("proj-b.ds2") == 1 && search.SavedEntries(id) == 2,
+            "a loaded read that a new read replaces is forgotten at once, even behind an older unchecked one");
+        await search.Store.Idle();
     }
 
     // ---- Corrupt files and another key's file ----

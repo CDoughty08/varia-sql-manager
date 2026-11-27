@@ -103,7 +103,7 @@ const api: VariaApi = {
     const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({
       requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {},
       ...progress.growing === true ? { growing: true as const } : {}, ...progress.throttled === true ? { throttled: true as const } : {},
-      ...typeof progress.savedAt === 'string' ? { savedAt: progress.savedAt } : {}
+      ...typeof progress.savedAt === 'string' ? { savedAt: progress.savedAt } : {}, ...progress.full === true ? { full: true as const } : {}
     })
     ipcRenderer.on('varia:explorer-index-progress', listener)
     return () => { ipcRenderer.removeListener('varia:explorer-index-progress', listener) }

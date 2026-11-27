@@ -674,7 +674,8 @@ Searching and hits:
 ## Protocol
 
 `explorer.index` (no deadline, cancellable, droppable `explorer.index.progress` EVENTs with `{ done, total, objects }`, and
-BigQuery's `phase` — `projects`, `names` or `details` — and `savedAt` while datasets loaded from the saved index are unchecked,
+BigQuery's `phase` — `projects`, `names` or `details` — and, from a full build (`full`), `savedAt` while datasets loaded from
+the saved index are unchecked,
 relayed only to the requesting window, at most 4 a second) and `explorer.search` (15 s) run on the explorer lane and are
 cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Failures are values: an invalid pattern
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`

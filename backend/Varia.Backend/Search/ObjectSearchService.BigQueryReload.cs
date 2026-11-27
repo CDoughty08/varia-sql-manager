@@ -18,6 +18,13 @@ internal sealed partial class ObjectSearchService
 {
     private long savedLoaded, savedRefused, savedBudget, savedStale, savedUnchanged, savedPruned;
 
+    /// <summary>Checks: how many loaded reads the connection still remembers as unchecked.</summary>
+    internal int SavedEntries(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return 0;
+        lock (state.Gate) return state.Saved.Count;
+    }
+
     /// <summary>Checks: called with a saved dataset's project and name just before it is loaded.</summary>
     internal Action<string, string>? SavedLoading { get; set; }
 
@@ -63,7 +70,8 @@ internal sealed partial class ObjectSearchService
             lock (state.Gate)
             {
                 if (ReferenceEquals(state.SavedLoader, owner)) state.SavedLoader = null;
-                if (done) state.SavedLoaded = true;
+                // A build replaced after its last load (that load left on disk) leaves the reload to the build that replaced it.
+                if (done && ReferenceEquals(state.Build, owner)) state.SavedLoaded = true;
             }
         }
     }
@@ -144,8 +152,9 @@ internal sealed partial class ObjectSearchService
                 if (Standing())
                 {
                     state.Index.Put(read);
-                    state.Saved[key] = (read, unit);
-                    state.SavedOrder.Add((Utc(read.ReadAt).Ticks, key));
+                    var ticks = Utc(read.ReadAt).Ticks;
+                    state.Saved[key] = (new WeakReference<DatabaseIndex>(read), unit, ticks);
+                    state.SavedOrder.Add((ticks, key));
                     SavedAtLocked(state);
                     held = true;
                 }
@@ -174,7 +183,7 @@ internal sealed partial class ObjectSearchService
             || state.Index.Sink?.Scope is not { } scope) return false;
         var key = project + "\u0001" + dataset;
         SavedUnit? unit;
-        lock (state.Gate) unit = state.Saved.TryGetValue(key, out var saved) && ReferenceEquals(saved.Read, earlier) ? saved.Unit : null;
+        lock (state.Gate) unit = state.Saved.TryGetValue(key, out var saved) && saved.Read.TryGetTarget(out var loaded) && ReferenceEquals(loaded, earlier) ? saved.Unit : null;
         // A read this session made: its file, if it is the one that read wrote.
         unit ??= Store.Find(scope, IndexUnitKind.Dataset, project, dataset) is { } found && BigQuerySync.From(found.Sync) == sync ? found : null;
         if (unit is null || !Store.MarkUsed(unit)) return false;
@@ -183,7 +192,7 @@ internal sealed partial class ObjectSearchService
             if (!ReferenceEquals(state.Build, owner) || !ReferenceEquals(state.Index.Get(key), earlier)) return false;
             if (state.Saved.Remove(key, out var checkedRead))
             {
-                state.SavedOrder.Remove((Utc(checkedRead.Read.ReadAt).Ticks, key));
+                state.SavedOrder.Remove((checkedRead.Ticks, key));
                 SavedAtLocked(state);
             }
         }
@@ -214,8 +223,8 @@ internal sealed partial class ObjectSearchService
         while (state.SavedOrder.Count > 0)
         {
             var (ticks, key) = state.SavedOrder.Min;
-            var entry = state.Saved.TryGetValue(key, out var saved) && Utc(saved.Read.ReadAt).Ticks == ticks;
-            if (entry && ReferenceEquals(state.Index.Get(key), saved.Read))
+            var entry = state.Saved.TryGetValue(key, out var saved) && saved.Ticks == ticks;
+            if (entry && saved.Read.TryGetTarget(out var read) && ReferenceEquals(state.Index.Get(key), read))
             {
                 oldest = new DateTime(ticks, DateTimeKind.Utc);
                 break;

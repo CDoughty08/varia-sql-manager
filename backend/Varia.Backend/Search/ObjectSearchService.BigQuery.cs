@@ -357,7 +357,7 @@ internal sealed partial class ObjectSearchService
             sentThrottled = throttled;
             var growing = lastPhase == "names" && Volatile.Read(ref listingProjects) != 0;
             progress!(new BigQueryIndexProgress(lastDone, Math.Max(lastDone, lastTotal), state.Index.Objects, lastPhase!, growing ? true : null, throttled ? true : null,
-                scope is null && !staleOnly ? state.SavedAtText : null));
+                scope is null && !staleOnly ? state.SavedAtText : null, scope is null && !staleOnly ? true : null));
         }
         // BigQuery's rate limit can stall every call at once, so no read finishes to report it: a change in throttling is sent by itself.
         // Progress EVENTs are droppable, so the watcher sends a change again on its next few ticks, in case main missed it.
@@ -1570,7 +1570,11 @@ internal sealed partial class ObjectSearchService
                         built.Sync = new BigQuerySync(saved.Cut, childrenLeftOut ? 0 : saved.Pending, saved.Failed, detailsLeftOut, saved.Listing).ToBytes();
                         state.Index.Put(built);
                         // A loaded read it replaces has been checked.
-                        if (state.Saved.Count > 0) SavedAtLocked(state);
+                        if (state.Saved.Remove(built.Database + "\u0001" + built.Dataset, out var replaced))
+                        {
+                            state.SavedOrder.Remove((replaced.Ticks, built.Database + "\u0001" + built.Dataset));
+                            SavedAtLocked(state);
+                        }
                     }
                     else superseded = true;
                 }
