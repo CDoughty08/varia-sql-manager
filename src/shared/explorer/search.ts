@@ -253,6 +253,8 @@ export interface ObjectIndexStatus {
    *  datasets) they belong to (the server's own and the system objects are in none); each absent when zero. */
   readonly leftOut?: number
   readonly leftOutIn?: number
+  /** BigQuery, UTC: when the oldest dataset loaded from the saved index that no listing has checked yet was read (absent when none is). */
+  readonly savedAt?: string
 }
 export interface ObjectIndexResult { readonly status: ObjectIndexStatus; readonly elapsedMs: number }
 /** explorer.indexStatus: what a connection's index holds now, without building or searching. */
@@ -370,6 +372,9 @@ export interface ObjectSearchResult {
   readonly problem?: string
 }
 
+/** A saved index's age as the backend states it (ObjectSearchService.SavedAtText): UTC to the second, nothing else. */
+export const savedAtSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+
 /** A build's progress EVENT, as the backend sends it. */
 export const objectIndexProgressEventSchema = z.object({
   type: z.literal('explorer.index.progress'), done: z.number().int().min(0), total: z.number().int().min(0), objects: z.number().int().min(0),
@@ -377,11 +382,13 @@ export const objectIndexProgressEventSchema = z.object({
   /** BigQuery names pass: projects still being listed may add datasets to the total. */
   growing: z.literal(true).optional(),
   /** BigQuery: its rate limit is refusing the principal's calls, which retry. */
-  throttled: z.literal(true).optional()
+  throttled: z.literal(true).optional(),
+  /** BigQuery, UTC to the second: when the oldest dataset loaded from the saved index that the build has not checked yet was read. */
+  savedAt: savedAtSchema.optional()
 }).strict().refine(value => value.done <= value.total, 'A build cannot have read more databases than it lists.')
 export type ObjectIndexProgressEvent = z.infer<typeof objectIndexProgressEventSchema>
 /** What main pushes on `varia:explorer-index-progress` to the window that started the build. */
-export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true }
+export interface ObjectIndexProgress { readonly requestId: string; readonly done: number; readonly total: number; readonly objects: number; readonly phase?: 'projects' | 'names' | 'details'; readonly growing?: true; readonly throttled?: true; readonly savedAt?: string }
 
 // zod's max() counts code points; the backend counts UTF-16 code units.
 const units = (max: number) => z.string().min(1).refine(value => value.length <= max, `At most ${max} UTF-16 code units.`)

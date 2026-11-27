@@ -191,6 +191,12 @@ describe('object search contracts', () => {
       { done: 1, total: 2, objects: 0, growing: false }, { done: 1, total: 2, objects: 0, throttled: 'yes' }, { done: 1, total: 2, objects: 0, throttled: null }])
       expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', ...bad }).success).toBe(false)
   })
+
+  it('accepts a saved index age only as the backend writes it: UTC to the second', () => {
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 9, phase: 'names', savedAt: '2026-11-24T08:05:09Z' }).success).toBe(true)
+    for (const savedAt of ['2026-11-24', '2026-11-24T08:05:09.123Z', '2026-11-24T08:05:09+01:00', '', 42, null, 'saved yesterday'])
+      expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, savedAt }).success).toBe(false)
+  })
 })
 
 describe('main\'s index progress relay', () => {
@@ -241,6 +247,16 @@ describe('main\'s index progress relay', () => {
     expect(target.pushed).toEqual([
       { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names', growing: true, throttled: true },
       { requestId: 'r', done: 2, total: 10, objects: 200, phase: 'names' }])
+  })
+
+  it('carries a saved index age to the window, and leaves it out once nothing loaded is unchecked', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(0, 0), phase: 'names', savedAt: '2026-11-24T08:05:09Z' })
+    vi.advanceTimersByTime(gap)
+    relay.event({ ...event(1), phase: 'names' })
+    expect(target.pushed).toEqual([
+      { requestId: 'r', done: 0, total: 0, objects: 0, phase: 'names', savedAt: '2026-11-24T08:05:09Z' },
+      { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names' }])
   })
 })
 
@@ -435,9 +451,12 @@ describe('ObjectSearchService', () => {
     // A later event without the flags clears them: the build stopped being throttled and its total stopped growing.
     emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', growing: true, throttled: true })
     expect(service.getSnapshot().indexes.a).toMatchObject({ growing: true, throttled: true })
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', savedAt: '2026-11-24T08:05:09Z' })
+    expect(service.getSnapshot().indexes.a).toMatchObject({ savedAt: '2026-11-24T08:05:09Z' })
     emit({ requestId: 'req1', done: 1, total: 3, objects: 12 })
     expect(service.getSnapshot().indexes.a).not.toHaveProperty('growing')
     expect(service.getSnapshot().indexes.a).not.toHaveProperty('throttled')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('savedAt')
     pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 5 } })
     await settle()
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() })
@@ -1476,6 +1495,20 @@ describe('ObjectSearchService', () => {
     const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
     expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
+    // What was loaded from the saved index is searchable while the build checks it: the line says how old it is, and the
+    // band keeps it in view; an index whose build ended without checking it says so.
+    const now = Date.parse('2026-11-26T10:05:09Z')
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects', savedAt: '2026-11-26T08:05:09Z' }, undefined, now))
+      .toBe('Discovering accessible BigQuery projects… Index saved 2 h ago, checking.')
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 3, total: 12, objects: 900, phase: 'names', savedAt: '2026-11-23T10:05:09Z', throttled: true }, undefined, now))
+      .toBe('Indexing 3 of 12 datasets (900 objects so far)… Index saved 3 d ago, checking. BigQuery is rate limiting the calls, which retry.')
+    const unchecked = status({ provider: 'bigquery', indexed: 4, savedAt: '2026-11-26T10:04:09Z' })
+    expect(bigQueryIndexSummary(undefined, unchecked, now)).toBe('Index: 40 objects, 5 definitions in 4 datasets · saved 1 min ago, not checked')
+    expect(indexIncomplete({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, unchecked)).toBe(true)
+    expect(indexGap({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, now)).toBe('saved 1 min ago, not checked')
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4 }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
+    // A malformed age (never sent: main's schema refuses it) says nothing rather than "NaN".
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4, savedAt: 'soon' }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Discovering BigQuery projects…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, { connectionId: 'a', requestId: 'r2', done: 0, total: 0, objects: 0 }])).toBe('Discovering BigQuery projects on 2 servers…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }])).toBe('Listing BigQuery datasets 2 / 5')

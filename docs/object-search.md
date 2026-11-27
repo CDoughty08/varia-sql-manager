@@ -45,7 +45,8 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
 
 - **Lifetime.** Held in backend memory, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
   Rebuild Search Index, dropped on disconnect or backend exit. What a build reads is also saved to disk
-  ([Saved index](#saved-index)), though a new session does not read it back yet. With the setting off nothing else builds one: the search
+  ([Saved index](#saved-index)); a BigQuery connection's first build reads its saved datasets back before anything else, and
+  a SQL Server connection does not read its saved index back yet. With the setting off nothing else builds one: the search
   says "This server has no index yet." with **Build index** (**Build indexes** on All servers).
 - **Progress.** The status bar shows "Indexing objects N / M" and Stop (a BigQuery build names its pass instead; see
   BigQuery below). A newer build of the same connection stops the older one.
@@ -258,9 +259,9 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 ## Saved index
 
 Every part of an index is saved to disk as soon as it has been read, so that an index need not be read from its server
-again after a restart. **A saved index is not read back yet**: this version saves, bounds and sweeps the files, and a
-connection still builds its index from the server each time. Reading a saved index back (at once for BigQuery, after a
-check against the server for SQL Server) comes with later changes.
+again after a restart. A BigQuery connection reads its saved index back at once ([Reloading a BigQuery
+index](#reloading-a-bigquery-index)); a SQL Server connection still builds its index from the server each time, and
+reading it back after a check against the server comes with a later change.
 
 - **What a file is.** One unit of an index: a SQL Server database's read, a server's own objects, SQL Server Agent's
   objects, a BigQuery dataset's read, or a shared set of system objects. Each is a file of its own
@@ -306,7 +307,8 @@ check against the server for SQL Server) comes with later changes.
   | A BigQuery dataset after its names are listed (pass 1) | Yes; the file says how many objects' details are still to read |
   | The same dataset once its details are read (pass 2) | Yes, in its place; it counts details that failed or were left out for memory, and whether the listing was cut. Each object's own facts say whether its details are whole |
   | A dataset DDL marked stale | Its file is deleted at once, and saved again by the build that reads it afterwards. A read begun before the DDL is not saved by any connection of the principal, whichever of them ran it and whether or not it indexes the project; DDL that may have touched any dataset of a project does the same for all of them |
-  | A dataset its project no longer lists, while its index holds it | Its file is deleted |
+  | A dataset its project no longer lists | Its file is deleted, whether the index holds it or its file was not loaded |
+  | A dataset a listing finds as its file was made, with nothing left to read | Nothing new; the file is marked used |
   | A project that left what this connection indexes (no longer starred, or filtered) | Its files stay for the principal's other connections |
 
 - **Saving never waits on anything else.** One background thread writes one file at a time at low priority. A unit read
@@ -339,6 +341,42 @@ check against the server for SQL Server) comes with later changes.
 - **Where it shows.** The Memory panel's Search Indexer row has a **Saved on disk** line: the files and their size
   against the limit, and Encrypted, Not encrypted (your choice in Options), Off in Options, Off: this system has no key
   store, or Unavailable when the folder cannot be used ([status-bar-memory.md](status-bar-memory.md)).
+
+### Reloading a BigQuery index
+
+A BigQuery project can hold thousands of datasets and hundreds of thousands of objects, whose details cost one
+`tables.get` or `routines.get` each. So a BigQuery connection's first full build loads what its principal saved before it
+makes any call, and its listings then check it:
+
+- **Searchable at once.** The saved datasets of the billing project, then of the starred projects, then (with all
+  accessible projects indexed) of every other project are loaded one by one and searchable as each lands, before the
+  first listing. Discovery then drops the projects it no longer finds, as it drops ones read this session (their files
+  stay). While the build checks them, the index line, in the Search Objects tab and in Object Explorer's band, ends with
+  "Index saved 2 h ago, checking." (the oldest dataset loaded that no listing has checked yet). A build that ends
+  without checking some of them (a project whose listing failed) says "saved 2 h ago, not checked", and the line stays
+  in view.
+- **What a listing costs.** Each dataset is listed again (`tables.list`, `routines.list`, `models.list`), as every build
+  lists it. Only an object that is new, created again (its creation time changed), or a routine or model whose last
+  change moved, has its details read; the rest keep the details the file held. A dataset whose file says details were
+  still to read, failed or were left out for memory reads those objects' details alone. A listing that finds the dataset
+  as its file was made (the same objects, creation times and changes, and nothing left to read) leaves the loaded read
+  as it is and only marks the file used, so an unchanged dataset is never written again; a changed one is saved in its
+  place. A dataset its project no longer lists has its file deleted, loaded or not.
+- **Memory.** A loaded dataset is charged as a read of it is, under BigQuery's part of the index's memory (its
+  [floors](#memory)); one that does not fit whole is loaded with its names only, and one that does not fit even so stays
+  on disk and is read as if nothing were saved. Once a discovered project's dataset does not fit, no other discovered one
+  is loaded, as the names pass stops reading new discovered datasets.
+- **Stale marks win.** A dataset DDL from any of the principal's connections marked stale is never loaded: its file is
+  being deleted, and the build reads it whole. Nor is one whose newer save or deletion is still queued. A loaded dataset
+  DDL marks stale afterwards is read whole again, as any held one is.
+- **Failures are values.** A file that does not open (damaged, another key, another version's format), or does not load
+  (memory), is counted and its dataset read from BigQuery as if nothing were saved; the build never fails for a file.
+- **In-place changes.** A change that keeps an object's creation time, such as `ALTER TABLE ... ADD COLUMN` run outside
+  Varia or a view's text patched in place, is not seen until the dataset is refreshed (Object Explorer's Refresh),
+  as within a session. DDL run from Varia's query tabs marks the dataset stale and is seen.
+- **When.** Once per connection, at its first full build while the saved index can be read. A build that starts before
+  the app has told the backend where the saved index lives (just after start) loads nothing; the connection's next full
+  build does.
 
 | Limit | Value |
 |---|---|
@@ -635,7 +673,7 @@ Searching and hits:
 ## Protocol
 
 `explorer.index` (no deadline, cancellable, droppable `explorer.index.progress` EVENTs with `{ done, total, objects }`, and
-BigQuery's `phase` — `projects`, `names` or `details` —
+BigQuery's `phase` — `projects`, `names` or `details` — and `savedAt` while datasets loaded from the saved index are unchecked,
 relayed only to the requesting window, at most 4 a second) and `explorer.search` (15 s) run on the explorer lane and are
 cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Failures are values: an invalid pattern
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
@@ -643,5 +681,6 @@ takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a pro
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).
 On either engine `explorer.index` takes `memoryLimitMiB` (64 to 16,384, checked in zod and in C#), the limit every
 connection's index shares from that build on; a status carries `leftOut` and `leftOutIn` when definitions were left out
-for memory. The saved index has two methods of its own that only main sends, `explorer.indexStore.configure` and
+for memory, and a BigQuery status `savedAt` (UTC, to the second) while some of what it holds was loaded from the saved index and
+not yet checked. The saved index has two methods of its own that only main sends, `explorer.indexStore.configure` and
 `explorer.indexStore.clear` ([ipc.md](ipc.md#methods)); its figures reach the window on `explorer.index.memory`.
