@@ -29,7 +29,7 @@ import type { BeginRunOptions, MultiResultsSink, MultiRunEnd } from '../src/rend
 import { SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
 import { SqlDiagnosticsService } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { IndexCompletionService } from '../src/renderer/src/languages/IndexCompletionService'
-import { documentFixture, TestEditor, TestModel } from './fixtures/documents'
+import { documentFixture, deferred, TestEditor, TestModel } from './fixtures/documents'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -887,6 +887,7 @@ describe('Wave 2a: Language services via languageContext & Cross-Engine File dia
       connectionTargets: registry,
       documents: f.documents,
       queries: {
+        getSnapshot: () => ({}),
         isRunning: () => false,
         executionVersion: () => execVersion,
         prepareSessions: vi.fn(async () => ({ plan: new Map(), stopping: [], current: () => true })),
@@ -903,5 +904,423 @@ describe('Wave 2a: Language services via languageContext & Cross-Engine File dia
     expect(doc.multiMode).toBe('same')
     expect(await coordinator.disconnect(uuid(1))).toEqual({ status: 'disconnected', closed: [], removed: false })
     expect(execVersion).toBe(0)
+  })
+})
+
+describe('Wave 2 Domain 1 Round 1 adversarial regression checks', () => {
+  it('Finding 1: PreparedSessions.current() tracks only participating operation handles and rejects undefined generation', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'Sales', enabled: false, provider: 'sqlserver', attachWanted: true }
+      ],
+      sql: 'SELECT 1'
+    })
+    const conns = new Map<string, { id: string; server: string; database: string; serverVersion: string; generation: number; providerId: 'sqlserver'; targetId: string; lost?: true }>([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver', targetId: uuid(1) }],
+      [uuid(11), { id: uuid(11), server: 'sql-2', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver', targetId: uuid(2), lost: true }]
+    ])
+    const execDeferred = deferred<{ ok: true; value: QueryMultiResult }>()
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute: vi.fn(),
+        executeMulti: vi.fn(() => execDeferred.promise),
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => conns.get(id),
+      events,
+      { begin: vi.fn(), finish: vi.fn() }
+    )
+
+    const runPromise = queries.executeMulti(doc.id, { mode: 'fireAndForget' })
+    // Non-participating target uuid(11) is lost, yet prepared.current() must stay true.
+    const prepared = await queries.prepareSessions('disconnect', [doc.id])
+    expect(prepared?.current()).toBe(true)
+    conns.set(uuid(11), { ...conns.get(uuid(11))!, generation: 99, lost: true })
+    expect(prepared?.current()).toBe(true)
+
+    // Participating target uuid(10) lost or deleted must invalidate current().
+    conns.set(uuid(10), { ...conns.get(uuid(10))!, lost: true })
+    expect(prepared?.current()).toBe(false)
+    conns.delete(uuid(10))
+    expect(prepared?.current()).toBe(false)
+
+    // If participating handle was already missing at prepare time (generation === undefined), current() must never be vacuously true.
+    const stalePrepared = await queries.prepareSessions('disconnect', [doc.id])
+    expect(stalePrepared?.current()).toBe(false)
+
+    execDeferred.resolve({
+      ok: true,
+      value: {
+        status: 'cancelled', mode: 'fireAndForget', targets: [], resultSets: [], discardedResultSets: 0,
+        messages: [], messagesTruncated: false, elapsedMs: 1,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T00:00:00.0000000Z'
+      }
+    })
+    await runPromise
+    queries.dispose()
+  })
+
+  it('Finding 2: disconnect-workbench populates runningConnectionIds from queries.getSnapshot()', async () => {
+    const f = documentFixture()
+    const registry = new ConnectionTargetService()
+    registry.markLostBefore(1)
+    registry.add({ id: uuid(1), options: connectionTargetOptions({ server: 'sql-1', database: 'Sales', authentication: 'sql', username: 'u', trustServerCertificate: false }), details: { autoReconnect: 'inherit' }, inExplorer: true, resumeWanted: true })
+    registry.completeConnect(registry.beginConnect(uuid(1), 1, uuid(50))!, { id: uuid(10), generation: 1 }, { principal: { provider: 'sqlserver', authentication: 'sql', id: 'u' } })
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      // Target 1 was already removed from multiTargets while the query is still running on uuid(10).
+      targets: [{ targetId: uuid(2), connectionId: uuid(11), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }]
+    })
+    let running = true
+    const prepareSessions = vi.fn(async () => ({ plan: new Map(), stopping: [{ id: doc.id, queryId: 'q1' }], current: () => true }))
+    const cancelPreparedSessions = vi.fn(async () => { running = false })
+    const coordinator = createDisconnectCoordinator({
+      connectionTargets: registry,
+      documents: f.documents,
+      queries: {
+        getSnapshot: () => running ? { [doc.id]: { running: { queryId: 'q1', connectionId: uuid(10), connectionIds: [uuid(10), uuid(11)], multi: true, startedAt: 1 } } } : {},
+        isRunning: () => running,
+        executionVersion: () => 1,
+        prepareSessions,
+        cancelPreparedSessions,
+        sessionNote: vi.fn()
+      },
+      files: { prepareQueryClose: vi.fn(), validateQueryClose: vi.fn() },
+      longRuns: { disconnectRefusal: () => undefined },
+      prompts: { request: vi.fn(async () => 'keep-tabs' as const) } as never,
+      api: { disconnect: vi.fn(async () => ({ ok: true as const, value: { disconnected: true } })) },
+      detached: vi.fn(),
+      closeQueries: vi.fn()
+    })
+    expect(await coordinator.disconnect(uuid(1))).toEqual({ status: 'disconnected', closed: [], removed: false })
+    expect(prepareSessions).toHaveBeenCalledWith('disconnect', [doc.id])
+    expect(cancelPreparedSessions).toHaveBeenCalledTimes(1)
+  })
+
+  it('Finding 3: guards setCrossView while busy and keeps document dirty if view changes during save()', async () => {
+    const f = documentFixture()
+    const doc = f.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [],
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2',
+      unsaved: true
+    })
+
+    // 1. setCrossView refuses while busy.
+    await f.documents.runTask(async () => {
+      expect(f.documents.setCrossView(doc.id, 'file')).toEqual({
+        ok: false,
+        reason: 'Wait for the current document operation to finish before switching views.'
+      })
+    })
+    expect(f.documents.get(doc.id)?.crossView).toBe('split')
+
+    // 2. If view changes while saveSqlFile is in flight (e.g. Split -> File -> Split), save() leaves savedVersionId null and dirty true.
+    const saveGate = deferred<{ ok: true; value: { id: string; name: string; path: string; encoding: 'utf8'; readOnly: false } }>()
+    f.api.saveSqlFile.mockReturnValueOnce(saveGate.promise)
+    const saving = f.documents.save(doc.id)
+    expect(f.documents.setCrossView(doc.id, 'file')).toEqual({ ok: true })
+    expect(f.documents.setCrossView(doc.id, 'split')).toEqual({ ok: true })
+    saveGate.resolve({ ok: true, value: { id: uuid(90), name: 'cross.sql', path: 'cross.sql', encoding: 'utf8', readOnly: false } })
+    expect(await saving).toBe(true)
+    expect(f.documents.get(doc.id)?.savedVersionId).toBeNull()
+    expect(f.documents.get(doc.id)?.dirty).toBe(true)
+    // Secondary model must also remain dirty even if edited back.
+    const sec = f.documents.getSecondaryModel(doc.id) as unknown as TestModel
+    sec.edit('SELECT 20')
+    expect(f.documents.get(doc.id)?.dirty).toBe(true)
+  })
+
+  it('Finding 4: QueryService.execute() and estimate() return cleanly on multiMode tabs without crashing', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: [{ targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }],
+      sql: 'SELECT 1'
+    })
+    const execute = vi.fn()
+    const estimatePlan = vi.fn()
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute,
+        estimatePlan,
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => id === uuid(10) ? { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const } : undefined,
+      events,
+      { begin: vi.fn(), finish: vi.fn() }
+    )
+    expect(queries.canExecute(doc.id)).toBe(true)
+    await expect(queries.execute(doc.id)).resolves.toBeUndefined()
+    await expect(queries.estimate(doc.id)).resolves.toBeUndefined()
+    expect(execute).not.toHaveBeenCalled()
+    expect(estimatePlan).not.toHaveBeenCalled()
+    expect(queries.executionVersion(doc.id)).toBe(0)
+    queries.dispose()
+  })
+
+  it('Finding 5: runMulti sanitizes labels and SQL Server databases, rejects >32 targets, and reports stale request.targets explicitly', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const executeMulti = vi.fn(async (_opts: MultiQueryOptions) => ({
+      ok: true as const,
+      value: {
+        status: 'completed' as const, mode: 'fireAndForget' as const, targets: [], resultSets: [], discardedResultSets: 0,
+        messages: [], messagesTruncated: false, elapsedMs: 1,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T00:00:00.0000000Z'
+      }
+    }))
+    const finishes: MultiRunEnd[] = []
+    const results: MultiResultsSink = {
+      begin: vi.fn(),
+      finish: vi.fn((_tabId, _queryId, end) => { finishes.push(end) })
+    }
+    const conns = new Map<string, { id: string; server: string; displayName?: string; database: string; serverVersion: string; generation: number; providerId: 'sqlserver' }>()
+    for (let i = 1; i <= 33; i++) {
+      conns.set(uuid(100 + i), { id: uuid(100 + i), server: `srv-${i}`, database: 'master', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' })
+    }
+    conns.set(uuid(201), { id: uuid(201), server: '\u0000\u200B  \t\u2028', displayName: '\u200B\r\n   ', database: '   ', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' })
+    conns.set(uuid(202), { id: uuid(202), server: 'A'.repeat(150), database: `  ${'D'.repeat(150)}  `, serverVersion: '16.0', generation: 1, providerId: 'sqlserver' })
+
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute: vi.fn(),
+        executeMulti,
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => conns.get(id),
+      events,
+      results
+    )
+
+    // 1. Label sanitization (control chars stripped, fallback to 'Server', capped at 128) & SQL Server database sanitization (trimmed, capped at 128, fallback to 'master').
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(201), database: '   ', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(2), connectionId: uuid(202), database: `  ${'D'.repeat(150)}  `, enabled: true, provider: 'sqlserver', attachWanted: true }
+      ],
+      sql: 'SELECT 1'
+    })
+    await queries.executeMulti(doc.id, { mode: 'fireAndForget' })
+    expect(executeMulti).toHaveBeenCalledTimes(1)
+    const sentTargets = executeMulti.mock.calls[0]![0].targets
+    expect(sentTargets[0]).toMatchObject({ label: 'Server', database: 'master' })
+    expect(sentTargets[1]).toMatchObject({ label: 'A'.repeat(128), database: 'D'.repeat(128) })
+
+    // 2. Reject > 32 targets locally with an explicit error and zero IPC.
+    executeMulti.mockClear()
+    finishes.length = 0
+    const tooManyDoc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: Array.from({ length: 33 }, (_, i) => ({
+        targetId: uuid(100 + i + 1), connectionId: uuid(100 + i + 1), database: 'master', enabled: true, provider: 'sqlserver' as const, attachWanted: true
+      })),
+      sql: 'SELECT 1'
+    })
+    await queries.executeMulti(tooManyDoc.id, { mode: 'fireAndForget' })
+    expect(executeMulti).not.toHaveBeenCalled()
+    expect(finishes[0]).toMatchObject({ code: 'INVALID_PARAMS', error: expect.stringContaining('32') })
+    expect(queries.getSnapshot()[tooManyDoc.id]?.error).toContain('32')
+
+    // 3. Stale target in request.targets reports explicit NOT_CONNECTED error instead of silent undefined.
+    finishes.length = 0
+    await queries.executeMulti(doc.id, {
+      mode: 'fireAndForget',
+      targets: [{ targetKey: uuid(99), connectionId: uuid(999), label: 'OfflineSrv', database: 'Sales' }]
+    })
+    expect(executeMulti).not.toHaveBeenCalled()
+    expect(finishes[0]).toMatchObject({ code: 'NOT_CONNECTED', error: expect.stringContaining('OfflineSrv') })
+    expect(queries.getSnapshot()[doc.id]?.error).toContain('OfflineSrv')
+    queries.dispose()
+  })
+
+  it('Finding 6: transitions non-terminal targets to failed on IPC error without multiSummary and falls back to endedStatus in query-status', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }
+      ],
+      sql: 'SELECT 1'
+    })
+    const conns = new Map([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const, targetId: uuid(1) }],
+      [uuid(11), { id: uuid(11), server: 'sql-2', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const, targetId: uuid(2) }]
+    ])
+    let beginOpts: BeginRunOptions | undefined
+    const execDeferred = deferred<{ ok: false; error: string; code: 'BACKEND_LOST' }>()
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute: vi.fn(),
+        executeMulti: vi.fn(() => execDeferred.promise),
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => conns.get(id),
+      events,
+      { begin: vi.fn((_t, _q, _s, opts) => { beginOpts = opts }), finish: vi.fn() }
+    )
+
+    const runPromise = queries.executeMulti(doc.id, { mode: 'fireAndForget' })
+    beginOpts?.onTargetState?.({ type: 'multiQuery.targetState', targetKey: uuid(1), phase: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 1, resultSetCount: 1, elapsedMs: 10 })
+    beginOpts?.onTargetState?.({ type: 'multiQuery.targetState', targetKey: uuid(2), phase: 'running', batchesCompleted: 0, batchesTotal: 1, rowsAffected: 0, resultSetCount: 0, elapsedMs: 12 })
+    execDeferred.resolve({ ok: false, error: 'Backend disconnected unexpectedly.', code: 'BACKEND_LOST' })
+    await runPromise
+
+    const targets = queries.getSnapshot()[doc.id]?.multiTargets
+    expect(targets?.[0]).toMatchObject({ targetKey: uuid(1), phase: 'succeeded' })
+    expect(targets?.[1]).toMatchObject({ targetKey: uuid(2), phase: 'failed', errorCode: 'BACKEND_LOST', errorMessage: 'Backend disconnected unexpectedly.' })
+
+    // queryStatusModel uses endedStatus when multiStatus is absent and run ended (instead of showing multi.ready).
+    const failedStatus = queryStatusModel({
+      database: '',
+      running: false,
+      multiMode: 'same',
+      multiTargets: [{ provider: 'sqlserver', connected: true, enabled: true }],
+      run: { status: 'failed', startedAt: 100, endedAt: 200, rowsRead: 0 },
+      now: 500,
+      settings: statusSettings
+    })
+    expect(failedStatus.tone).toBe('error')
+    expect(failedStatus.icon).toBe('error')
+    expect(failedStatus.text).not.toContain('Ready')
+
+    const closedCancelled = queryStatusModel({
+      database: '',
+      running: false,
+      multiMode: 'same',
+      multiTargets: [{ provider: 'sqlserver', connected: true, enabled: true }],
+      run: { status: 'closed', closedFrom: 'cancelled', startedAt: 100, endedAt: 200, rowsRead: 0 },
+      now: 500,
+      settings: statusSettings
+    })
+    expect(closedCancelled.tone).toBe('error')
+    expect(closedCancelled.icon).toBe('debug-stop')
+    queries.dispose()
+  })
+
+  it('Finding 7: refuseReadOnly is ignored while running or while documents are busy', async () => {
+    const f = documentFixture()
+    const events = new EventBus()
+    const doc = f.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true },
+        { targetId: uuid(2), connectionId: uuid(11), database: 'ds', enabled: true, provider: 'bigquery', attachWanted: true }
+      ],
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2'
+    })
+    const conns = new Map([
+      [uuid(10), { id: uuid(10), server: 'sql-1', database: 'Sales', serverVersion: '16.0', generation: 1, providerId: 'sqlserver' as const }],
+      [uuid(11), { id: uuid(11), server: 'bq-1', database: 'ds', serverVersion: '', generation: 1, providerId: 'bigquery' as const }]
+    ])
+    const begin = vi.fn()
+    const finish = vi.fn()
+    const execDeferred = deferred<{ ok: true; value: QueryMultiResult }>()
+    const queries = new QueryService(
+      f.documents,
+      {
+        execute: vi.fn(),
+        executeMulti: vi.fn(() => execDeferred.promise),
+        cancel: vi.fn(async () => ({ ok: true as const, value: { cancelled: true } })),
+        confirmSessions: vi.fn(async () => ({ ok: true as const, value: 'proceed' as const })),
+        querySessionState: vi.fn(async () => ({ ok: true as const, value: { transactionCount: 0, checked: true } }))
+      },
+      id => conns.get(id),
+      events,
+      { begin, finish }
+    )
+
+    // 1. Busy document task guards refuseReadOnly.
+    await f.documents.runTask(async () => {
+      queries.refuseReadOnly(doc.id, [{ line: 1, message: 'DELETE blocked', dialect: 'sqlserver' }])
+    })
+    expect(begin).not.toHaveBeenCalled()
+
+    // 2. Running query guards refuseReadOnly.
+    const runPromise = queries.executeMulti(doc.id, { mode: 'crossEngineReadOnly' })
+    expect(begin).toHaveBeenCalledTimes(1)
+    queries.refuseReadOnly(doc.id, [{ line: 1, message: 'DELETE blocked', dialect: 'sqlserver' }])
+    expect(begin).toHaveBeenCalledTimes(1)
+    expect(finish).not.toHaveBeenCalled()
+
+    execDeferred.resolve({
+      ok: true,
+      value: {
+        status: 'completed', mode: 'crossEngineReadOnly', targets: [], resultSets: [], discardedResultSets: 0,
+        messages: [], messagesTruncated: false, elapsedMs: 1,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T00:00:00.0000000Z'
+      }
+    })
+    await runPromise
+    queries.dispose()
+  })
+
+  it('Finding 8: openMultiQuery preserves bigQuerySql when crossView is file and sql is non-empty', () => {
+    const f = documentFixture()
+    const doc = f.documents.openMultiQuery({
+      mode: 'cross',
+      crossView: 'file',
+      targets: [],
+      sql: 'SELECT 1',
+      bigQuerySql: 'SELECT 2',
+      eol: 'crlf'
+    })
+    expect(doc.crossView).toBe('file')
+    expect(f.documents.getSecondaryModel(doc.id)).toBeUndefined()
+    expect(f.documents.getModel(doc.id)?.getValue()).toBe(serializeCrossEngineSql('SELECT 1', 'SELECT 2', '\r\n'))
+  })
+
+  it('Finding 9: TargetService single-server mutators return early on multiMode tabs', async () => {
+    const f = documentFixture()
+    const confirmSessions = vi.fn(async () => new Map())
+    const reportError = vi.fn()
+    const targets = new TargetService(
+      f.documents,
+      { isRunning: () => false, mayHaveTransaction: async () => false, confirmSessions },
+      { get: id => id === uuid(10) ? { id: uuid(10), server: 'sql-1', database: 'Sales', generation: 1 } as never : undefined },
+      { clearError: () => {}, reportError }
+    )
+    const doc = f.documents.openMultiQuery({
+      mode: 'same',
+      targets: [{ targetId: uuid(1), connectionId: uuid(10), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }]
+    })
+
+    targets.update(doc.id, { connectionId: uuid(10), database: 'OtherDb', targetId: uuid(1), attachWanted: true })
+    await targets.changeConnection(doc.id, uuid(10))
+    targets.changeDatabase(doc.id, 'OtherDb')
+
+    const after = f.documents.get(doc.id)!
+    expect(after.connectionId).toBeUndefined()
+    expect(after.targetId).toBeUndefined()
+    expect(after.database).toBe('')
+    expect(after.attachWanted).toBeUndefined()
+    expect(confirmSessions).not.toHaveBeenCalled()
+    expect(reportError).not.toHaveBeenCalled()
+    expect(f.api.closeQuerySession).not.toHaveBeenCalled()
   })
 })

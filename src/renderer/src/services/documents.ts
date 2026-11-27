@@ -294,6 +294,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   setCrossView(id: string, view: 'split' | 'file'): CrossViewSwitchResult {
     const document = this.get(id), entry = this.entries.get(id)
     if (this.disposed || !document || !entry || document.multiMode !== 'cross') return { ok: false, reason: 'Not a Cross-Engine query tab.' }
+    if (this.getSnapshot().busy) return { ok: false, reason: 'Wait for the current document operation to finish before switching views.' }
     const currentView = document.crossView ?? 'split'
     if (currentView === view) return { ok: true }
     const wasDirty = document.dirty
@@ -636,8 +637,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
           secondaryText = ''
         }
       }
-    } else if (secondaryText !== undefined && !primaryText) {
-      primaryText = serializeCrossEngineSql('', secondaryText, eol === 'crlf' ? '\r\n' : '\n')
+    } else if (secondaryText !== undefined) {
+      primaryText = serializeCrossEngineSql(primaryText, secondaryText, eol === 'crlf' ? '\r\n' : '\n')
     }
     const model = this.createModel(primaryText, documentUri(id), queryLanguages.sqlserver)
     if (this.options.modelOptions) model.updateOptions(this.options.modelOptions())
@@ -1088,16 +1089,19 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (!document || !entry || !model) return false
     model.pushStackElement()
     entry.secondaryModel?.pushStackElement()
-    const content = this.getText(id), savedVersionId = model.getAlternativeVersionId(), savedSecondaryVersionId = entry.secondaryModel?.getAlternativeVersionId() ?? null
+    const secondaryModel = entry.secondaryModel, crossView = document.crossView
+    const content = this.getText(id), savedVersionId = model.getAlternativeVersionId(), savedSecondaryVersionId = secondaryModel?.getAlternativeVersionId() ?? null
     const kind = isCustomKind(document.kind) ? undefined : document.kind
     const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs, ...kind ? { kind } : {} })
     if (!result.ok) throw new Error(result.error)
     if (!result.value || this.disposed || this.entries.get(id)?.model !== model) return false
     model.pushStackElement()
     entry.secondaryModel?.pushStackElement()
-    if (entry.secondaryModel) entry.savedSecondaryVersionId = savedSecondaryVersionId
-    const dirty = model.getAlternativeVersionId() !== savedVersionId || (!!entry.secondaryModel && entry.secondaryModel.getAlternativeVersionId() !== savedSecondaryVersionId)
-    this.replace(id, { file: result.value, ...this.named(id, result.value.name), savedVersionId, dirty })
+    const sameView = this.get(id)?.crossView === crossView && entry.secondaryModel === secondaryModel
+    if (entry.secondaryModel) entry.savedSecondaryVersionId = sameView ? savedSecondaryVersionId : null
+    const nextSavedVersionId = sameView ? savedVersionId : null
+    const dirty = !sameView || model.getAlternativeVersionId() !== savedVersionId || (!!entry.secondaryModel && entry.secondaryModel.getAlternativeVersionId() !== savedSecondaryVersionId)
+    this.replace(id, { file: result.value, ...this.named(id, result.value.name), savedVersionId: nextSavedVersionId, dirty })
     return true
   }
   /**

@@ -259,6 +259,41 @@ describe('server disconnect coordinator', () => {
     expect(await g.coordinator.disconnect(id(1))).toMatchObject({ status: 'failed' })
     expect(g.host.disconnect).not.toHaveBeenCalled()
   })
+  it('matches runningConnectionIds when a target was removed from multiTargets mid-run and skips unrelated running multi tabs', async () => {
+    // 1. Target 1 was removed from multiTargets while the multi-server query is still executing on handle 1.
+    const f = fixture()
+    f.state.docs = [{
+      id: 'multi-removed-target', name: 'MultiRemoved.sql', database: '', revision: 1, dirty: false, query: true, running: true,
+      multiMode: 'same', executionVersion: 1,
+      multiTargets: [
+        { targetId: id(2), connectionId: id(51), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }
+      ],
+      runningConnectionIds: [f.handle.id, id(51)]
+    }]
+    f.host.prepareSessions.mockResolvedValueOnce({ plan: new Map(), stopping: [{ id: 'multi-removed-target', queryId: 'q1' }], current: () => true })
+    f.host.cancelSessions.mockImplementationOnce(async () => {
+      f.state.docs = f.state.docs.map(doc => ({ ...doc, running: false, runningConnectionIds: undefined }))
+    })
+    expect(await f.coordinator.disconnect(id(1))).toEqual({ status: 'disconnected', closed: [], removed: false })
+    expect(f.host.prepareSessions).toHaveBeenCalledWith(['multi-removed-target'])
+    expect(f.host.cancelSessions).toHaveBeenCalledTimes(1)
+    expect(f.host.endSession).not.toHaveBeenCalled()
+
+    // 2. Target 1 is still listed in multiTargets (e.g. disabled), but the active run only executes on handle 2.
+    const g = fixture()
+    g.state.docs = [{
+      id: 'multi-other-handle', name: 'MultiOther.sql', database: '', revision: 1, dirty: false, query: true, running: true,
+      multiMode: 'same', executionVersion: 1,
+      multiTargets: [
+        { targetId: id(1), connectionId: g.handle.id, database: 'Sales', enabled: false, provider: 'sqlserver', attachWanted: true },
+        { targetId: id(2), connectionId: id(51), database: 'Sales', enabled: true, provider: 'sqlserver', attachWanted: true }
+      ],
+      runningConnectionIds: [id(51)]
+    }]
+    g.host.prepareSessions.mockResolvedValueOnce({ plan: new Map(), stopping: [], current: () => true })
+    expect(await g.coordinator.disconnect(id(1))).toEqual({ status: 'disconnected', closed: [], removed: false })
+    expect(g.host.prepareSessions).toHaveBeenCalledWith([])
+  })
   it('disconnectMany disconnects selected targets in sequence and stops early if cancelled', async () => {
     const f = fixture()
     const handle2 = { id: id(52), generation: 1 }

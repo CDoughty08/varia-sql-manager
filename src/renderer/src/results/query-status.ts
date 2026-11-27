@@ -148,6 +148,7 @@ export function queryStatusModel(input: QueryStatusInput): QueryStatusModel {
     const targets = input.multiTargets ?? []
     const multi = multiTargetSummaryText(input.multiMode, targets)
     const enabled = targets.filter(target => target.enabled)
+    const ended = bar && run && !input.running ? endedStatus(run.status, run.closedFrom ?? run.summary?.status) : undefined
     let tone: QueryStatusTone, icon: QueryStatusIcon, text: string
     if (input.running && bar) {
       tone = 'executing'
@@ -160,6 +161,10 @@ export function queryStatusModel(input: QueryStatusInput): QueryStatusModel {
       tone = outcome.tone
       icon = outcome.icon
       text = outcome.text
+    } else if (ended && ended !== 'running') {
+      tone = failed.has(ended) ? 'error' : 'ready'
+      icon = ended === 'lost' ? 'error' : icons[ended]
+      text = ended === 'lost' ? statusLeads.failed : statusLeads[ended]
     } else if (multi.ready) {
       tone = 'ready'
       icon = 'plug'
