@@ -1,4 +1,7 @@
+// @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import {
   alertsCheck, failedCheck, historyCheck, historyShortfalls, mailCheck, detailParts, namesText, needsAttention, notifyCheck, overviewChecks, overviewStatus, overviewTiles, ownerCheck, schedulesCheck,
   serviceCheck, serviceWords, spanText, stampMs, unreadText, overviewTruncatedText, type OverviewFacts, type OverviewJob, type OverviewReadState
@@ -8,13 +11,18 @@ import { commandDescriptor } from '../src/shared/commands/catalog'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 import { liveProbes, liveSources } from '../src/shared/live/catalog'
 import { limits } from '../src/shared/ipc/wire/protocol'
+import AgentOverview from '../src/renderer/src/agent/AgentOverview'
 import { factsOfRows } from '../src/renderer/src/agent/AgentOverviewService'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { Workbench } from '../src/renderer/src/core/workbench'
 import type { LiveTable } from '../src/renderer/src/live/LiveService'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
 import type { FakeLiveHandle } from './fixtures/live-handle'
 import { agentOverviewFixText, createAgentOverviewFixes } from '../src/renderer/src/agent/agent-overview-fixes'
 import { jobSections } from '../src/renderer/src/agent/JobDocumentService'
 import { selectSection } from '../src/renderer/src/kit/document-frame'
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const cleanups: (() => void)[] = []
@@ -217,10 +225,10 @@ describe("the Agent overview's tiles and header", () => {
       alerts: [{ name: 'Severity 017', enabled: true, messageId: 0, severity: 17, notifies: true, lastOccurred: '2026-11-20T10:00:00' }, { name: 'Old', enabled: true, messageId: 823, severity: 0, notifies: true, lastOccurred: '2026-10-01T00:00:00' }]
     }))
     expect(tiles).toEqual([
-      { id: 'jobs', label: 'Jobs', value: '3', detail: '2 enabled' },
-      { id: 'failed', label: 'Failed, last 24 h', value: '1', detail: 'ETL', tone: 'error' },
-      { id: 'running', label: 'Running', value: '1', detail: 'Index', tone: 'accent' },
-      { id: 'alerts', label: 'Alerts', value: '2', detail: '1 fired this week' }
+      { id: 'jobs', label: 'Total jobs', value: '3', detail: '2 enabled' },
+      { id: 'failed', label: 'Failed (24 h)', value: '1', detail: 'ETL', tone: 'error' },
+      { id: 'running', label: 'Running now', value: '1', detail: 'Index', tone: 'accent' },
+      { id: 'alerts', label: 'Alerts (7 d)', value: '2', detail: '1 fired this week' }
     ])
     const unreadTiles = overviewTiles(facts({ reads: { ...allRead, jobs: { state: 'PERMISSION_DENIED' }, alerts: { state: 'platform' } } }))
     expect(unreadTiles.map(tile => tile.value)).toEqual(['—', '—', '—', '—'])
@@ -337,6 +345,19 @@ describe("the Agent overview's fixes", () => {
     return { fixture, fixes: createAgentOverviewFixes({ ...fixture, explorer, commands: commands ?? (() => fixture.commands) }) }
   }
 
+  it('opens Job Activity Monitor on All, Running, Failed, and Operators and Notifications for Alerts', async () => {
+    const { fixture, fixes: run } = fixes()
+    run.jobsView!('c1', 'all')
+    const id = fixture.documents.active!.id
+    expect(fixture.jobActivity.get(id)!.view).toBe('all')
+    run.jobsView!('c1', 'running')
+    expect(fixture.jobActivity.get(id)!.view).toBe('running')
+    run.failedJobs('c1')
+    expect(fixture.jobActivity.get(id)!.view).toBe('failed')
+    run.alerts!('c1')
+    expect(fixture.documents.active).toMatchObject({ connectionId: 'c1', kind: 'agentOperators' })
+  })
+
   it('opens Job Activity Monitor on Failed, and Change owner for at most the bulk limit, saying so', async () => {
     const { fixture, fixes: run } = fixes()
     run.failedJobs('c1')
@@ -374,5 +395,169 @@ describe("the Agent overview's fixes", () => {
     const started = { isEnabled: () => true, unavailableReason: () => undefined, execute: vi.fn(async () => true) }
     await fixes(() => started, true).fixes.startAgent('c1')
     expect(started.execute).toHaveBeenCalledWith('explorer.startAgent', { target: { kind: 'explorer', node: expect.objectContaining({ kind: 'agent' }) } }, 'toolbar')
+  })
+})
+
+describe('AgentOverview UI (AP-3)', () => {
+  it('hoists service StatusPill and Properties into DocumentHeader, renders FactLine, clickable KPI tiles, grouped checks, and object chips', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.agentOverview.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.source === 'agent.overview')!
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => { root.render(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(AgentOverview, { documentId: id }) })) })
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+
+    const makeTable = (rows: string[][]): LiveTable => ({
+      handle: { getWindow: async (first: number, count: number) => { const slice = rows.slice(first, first + count); const columns = slice[0]?.length ?? 0; return { first, count: slice.length, colStart: 0, colEnd: columns, text: slice.flat(), flags: new Uint8Array(slice.length * columns) } } },
+      descriptor: { rowsAvailable: rows.length }
+    }) as unknown as LiveTable
+    handle.tables.set('agent.overview.read:0', makeTable([
+      ['J1', 'Nightly', '1', 'sa', '', '0', '2026-11-23T11:00:00', '4', '2', '0', '0', '1', '0', '10', '5', '2026-10-01T00:00:00', '2026-01-02T03:04:05'],
+      ['J2', 'Backup', '1', 'sa', '', '1', '2026-11-23T03:00:00', '4', '0', '0', '0', '1', '0', '10', '5', '2026-10-01T00:00:00', '2026-01-02T03:04:05']
+    ]))
+    handle.tables.set('agent.overview.read:1', makeTable([]))
+    handle.tables.set('agent.overview.read:2', makeTable([['9', 'Quarter end', '1', '0']]))
+    handle.tables.set('agent.overview.read:3', makeTable([
+      ['facts', 'ok', '', '0'], ['state', 'ok', '', '0'], ['clock', 'ok', '', '0'],
+      ['jobs', 'ok', '', '0'], ['properties', 'ok', '', '0'], ['owners', 'ok', '', '0'], ['alerts', 'platform', '', '0'],
+      ['profiles', 'ok', '', '0'], ['history', 'ok', '', '0'], ['schedules', 'ok', '', '0'], ['mail', 'ok', '', '0'], ['service', 'ok', '', '0']
+    ]))
+    await act(async () => {
+      handle.deliver({
+        type: 'live.tick', seq: 1, sampledAt: Date.UTC(2026, 10, 23, 12, 0, 0),
+        samples: [{
+          probe: 'agent.overview.read',
+          status: [
+            { id: 'platform', value: 'windows' }, { id: 'productVersion', value: '17.0.1000.7' },
+            { id: 'isSysadmin', value: 1 }, { id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }, { id: 'startupType', value: 2 },
+            { id: 'serverNow', value: '2026-11-23T12:00:00' }, { id: 'serviceAccount', value: 'NT SERVICE\\SQLSERVERAGENT' },
+            { id: 'mailXps', value: 1 }, { id: 'mailProfiles', value: 1 }, { id: 'useDatabaseMail', value: 1 }, { id: 'agentProfile', value: 'Ops' }, { id: 'agentProfileFound', value: 1 },
+            { id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }
+          ]
+        }]
+      } as never)
+      await settled()
+    })
+
+    // No legacy .agent-overview-head; StatusPill + Properties hoisted into DocumentHeader; FactLine rendered.
+    expect(host.querySelector('.agent-overview-head')).toBeNull()
+    const status = host.querySelector('[role="status"][aria-label="SQL Server Agent: Running"]')!
+    expect(status.textContent).toContain('Running · Automatic')
+    const propsBtn = Array.from(host.querySelectorAll<HTMLButtonElement>('.document-actions button')).find(btn => btn.textContent?.includes('Properties'))!
+    expect(propsBtn.classList.contains('document-verb')).toBe(true)
+    expect(propsBtn.querySelector(':scope > .codicon[data-icon="settings-gear"]')).not.toBeNull()
+    const factsText = host.querySelector('.document-facts')!.textContent!
+    expect(factsText).toContain('Service Account')
+    expect(factsText).toContain('NT SERVICE\\SQLSERVERAGENT')
+    expect(factsText).toContain('17.0.1000.7')
+    expect(factsText).toContain('Checked')
+
+    // Clickable KPI tiles open filtered JAM / Operators & Notifications.
+    const tileButtons = Array.from(host.querySelectorAll<HTMLButtonElement>('.agent-overview-tile'))
+    expect(tileButtons).toHaveLength(4)
+    expect(tileButtons.map(b => b.getAttribute('aria-label'))).toEqual([
+      expect.stringContaining('Total jobs: 2'),
+      expect.stringContaining('Failed (24 h): 1'),
+      expect.stringContaining('Running now: 0'),
+      expect.stringContaining('Alerts (7 d): —')
+    ])
+    const openSpy = vi.spyOn(fixture.agentOverview, 'openTile')
+    await act(async () => { tileButtons[0]!.click(); tileButtons[1]!.click(); tileButtons[2]!.click(); tileButtons[3]!.click() })
+    expect(openSpy.mock.calls.map(c => c[1])).toEqual(['jobs', 'failed', 'running', 'alerts'])
+    expect(fixture.overviewFixes.jobsView).toHaveBeenNthCalledWith(1, 'c1', 'all')
+    expect(fixture.overviewFixes.failedJobs).toHaveBeenCalledWith('c1')
+    expect(fixture.overviewFixes.jobsView).toHaveBeenNthCalledWith(2, 'c1', 'running')
+    expect(fixture.overviewFixes.alerts).toHaveBeenCalledWith('c1')
+
+    // Grouped sections: Needs attention, Notes, Passing (compact), Not checked.
+    const headings = Array.from(host.querySelectorAll('.ov-group-head h3')).map(h => h.textContent)
+    expect(headings).toEqual(['Needs attention', 'Notes', 'Passing', 'Not checked'])
+    expect(host.querySelector('.ov-check-list.is-compact')).not.toBeNull()
+
+    // Object chips navigate to job / schedules.
+    const jobChip = Array.from(host.querySelectorAll<HTMLButtonElement>('.ov-obj-chip')).find(btn => btn.textContent === 'Nightly')!
+    await act(async () => { jobChip.click() })
+    expect(fixture.overviewFixes.openJob).toHaveBeenCalledWith('c1', 'Nightly')
+  })
+
+  it('restores focus in priority order: check action button, KPI tile, header Properties, and Retry on error', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connect(connectionInfo('c1'))
+    const id = fixture.agentOverview.open('c1')
+    const handle = (fixture.live.handles as FakeLiveHandle[]).find(item => item.spec.source === 'agent.overview')!
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    await act(async () => { root.render(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(AgentOverview, { documentId: id }) })) })
+    cleanups.unshift(() => { act(() => root.unmount()); host.remove() })
+
+    const makeTable = (rows: string[][]): LiveTable => ({
+      handle: { getWindow: async (first: number, count: number) => { const slice = rows.slice(first, first + count); const columns = slice[0]?.length ?? 0; return { first, count: slice.length, colStart: 0, colEnd: columns, text: slice.flat(), flags: new Uint8Array(slice.length * columns) } } },
+      descriptor: { rowsAvailable: rows.length }
+    }) as unknown as LiveTable
+    const deliverSample = async (jobsRows: string[][], alertRows: string[][], scheduleRows: string[][]) => {
+      handle.tables.set('agent.overview.read:0', makeTable(jobsRows))
+      handle.tables.set('agent.overview.read:1', makeTable(alertRows))
+      handle.tables.set('agent.overview.read:2', makeTable(scheduleRows))
+      handle.tables.set('agent.overview.read:3', makeTable([
+        ['facts', 'ok', '', '0'], ['state', 'ok', '', '0'], ['clock', 'ok', '', '0'],
+        ['jobs', 'ok', '', '0'], ['properties', 'ok', '', '0'], ['owners', 'ok', '', '0'], ['alerts', 'ok', '', '0'],
+        ['profiles', 'ok', '', '0'], ['history', 'ok', '', '0'], ['schedules', 'ok', '', '0'], ['mail', 'ok', '', '0'], ['service', 'ok', '', '0']
+      ]))
+      await act(async () => {
+        handle.deliver({
+          type: 'live.tick', seq: 1, sampledAt: Date.UTC(2026, 10, 23, 12, 0, 0),
+          samples: [{
+            probe: 'agent.overview.read',
+            status: [
+              { id: 'platform', value: 'windows' }, { id: 'productVersion', value: '17.0.1000.7' },
+              { id: 'isSysadmin', value: 1 }, { id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }, { id: 'startupType', value: 2 },
+              { id: 'serverNow', value: '2026-11-23T12:00:00' }, { id: 'serviceAccount', value: 'NT SERVICE\\SQLSERVERAGENT' },
+              { id: 'mailXps', value: 1 }, { id: 'mailProfiles', value: 1 }, { id: 'useDatabaseMail', value: 1 }, { id: 'agentProfile', value: 'Ops' }, { id: 'agentProfileFound', value: 1 },
+              { id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }
+            ]
+          }]
+        } as never)
+        await settled()
+      })
+    }
+
+    // 1. Loading state (!facts): falls back to .document-actions button (Properties).
+    fixture.agentOverview.focus(id)
+    expect(document.activeElement?.closest('.document-actions')).not.toBeNull()
+
+    // 2. Problem state (.ov-check button present): focuses .ov-check button ahead of .document-actions and KPI tiles.
+    await deliverSample(
+      [['J1', 'Nightly', '1', 'sa', '', '0', '2026-11-23T11:00:00', '4', '2', '0', '0', '1', '0', '10', '5', '2026-10-01T00:00:00', '2026-01-02T03:04:05']],
+      [],
+      []
+    )
+    fixture.agentOverview.focus(id)
+    expect(document.activeElement?.closest('.ov-check')).not.toBeNull()
+
+    // 3. Passing-only state (0 .ov-check buttons, 4 KPI tiles): focuses first .agent-overview-tile ahead of .document-actions.
+    await deliverSample(
+      [['J1', 'Nightly', '1', 'sa', '', '1', '2026-11-23T03:00:00', '4', '2', '0', '0', '1', '0', '10', '5', '2026-10-01T00:00:00', '2026-01-02T03:04:05']],
+      recommendedAlerts.map(alert => [alert.name, '1', String(alert.messageId), String(alert.severity), '', '1']),
+      [['1', 'Nightly 02:30', '1', '1']]
+    )
+    expect(host.querySelectorAll('.ov-check button')).toHaveLength(0)
+    fixture.agentOverview.focus(id)
+    expect(document.activeElement?.classList.contains('agent-overview-tile')).toBe(true)
+
+    // 4. Error state (ended: 'failed'): falls back to .document-actions button.
+    await act(async () => {
+      handle.set({ status: 'ended', ended: { ended: 'failed', code: 'TIMEOUT', message: 'Timed out.', ticks: 1, elapsedMs: 10 }, probes: {} } as never)
+      await settled()
+    })
+    fixture.agentOverview.focus(id)
+    expect(document.activeElement?.closest('.document-actions')).not.toBeNull()
   })
 })

@@ -1192,3 +1192,18 @@ export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('li
 export const chartTable = box => box.getByRole('grid', { name: / table(?:, |$)/ })
 /** The line above it: how many of the window's samples it lists. */
 export const chartTableCaption = box => box.locator(part.chartTableCaption)
+
+// Job Activity Monitor (AP-3): slim KPI tiles, single grouped toolbar, and portal action menus.
+export const jamTile = (frame, name) => frame.getByRole('group', { name: 'Job counts', exact: true }).getByRole('button', { name: new RegExp(`^${escaped(name)}: `) })
+export const jamToolbar = frame => frame.getByRole('toolbar', { name: 'Job actions', exact: true })
+export const jamMenu = (page, name) => page.getByRole('menu', named(name))
+export async function chooseJamEnableAction(page, frame, name) {
+  const trigger = jamToolbar(frame).getByRole('button', { name: 'Enable / Disable', exact: true })
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await jamMenu(page, 'Enable / Disable').getByRole('menuitem', named(name)).click()
+}
+export async function chooseJamMoreAction(page, frame, name) {
+  const trigger = jamToolbar(frame).getByRole('button', { name: 'More actions', exact: true })
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await jamMenu(page, 'More actions').getByRole('menuitem', named(name)).click()
+}

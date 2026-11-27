@@ -37,6 +37,8 @@ export function createAgentOverviewFixes(deps: AgentOverviewFixDeps): AgentOverv
   }
   return {
     failedJobs: connectionId => { const id = jobActivity.open(connectionId); jobActivity.setView(id, 'failed') },
+    jobsView: (connectionId, view) => { const id = jobActivity.open(connectionId); jobActivity.setView(id, view) },
+    alerts: connectionId => { operatorsDocuments.open(connectionId, { kind: 'agent' }) },
     changeOwner: async (connectionId, jobs) => {
       const id = jobActivity.open(connectionId), first = jobs.slice(0, agentLimits.startJobs)
       const refused = await jobActivity.openForm(id, 'changeOwner', first.map(job => ({ id: job.id, name: job.name, status: '', lastRun: '', owner: job.owner })))
