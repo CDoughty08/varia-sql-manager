@@ -188,6 +188,39 @@ internal static class BigQueryResultNameChecks
             && !sameLine.UniqueSlotByLine.ContainsKey(1)
             && sameLine.SlotByPosition.ContainsKey((1, 37)),
             "same-line statements match only by exact (line, column), never by line alone");
+
+        // Control-flow / dynamic statement sharing or spanning into the line of a named SELECT must NOT populate UniqueSlotByLine.
+        var inlineIf = BigQueryResultNamePlan.Build("IF TRUE THEN SELECT 1; END IF; /* #Name=\"Second\" */ SELECT 2;");
+        check(inlineIf is { Slots: [{ Name: "Second", StartLine: 1, StartColumn: 53 }] }
+            && !inlineIf.UniqueSlotByLine.ContainsKey(1)
+            && inlineIf.SlotByPosition.ContainsKey((1, 53)),
+            "single-line IF sharing a line with a named SELECT disables UniqueSlotByLine for that line");
+        var multilineIf = BigQueryResultNamePlan.Build("IF TRUE THEN\n  SELECT 1; END IF; /* #Name=\"Second\" */ SELECT 2;");
+        check(multilineIf is { Slots: [{ Name: "Second", StartLine: 2, StartColumn: 42 }] }
+            && !multilineIf.UniqueSlotByLine.ContainsKey(2)
+            && multilineIf.SlotByPosition.ContainsKey((2, 42)),
+            "multi-line IF ending on the same line as a named SELECT disables UniqueSlotByLine for that line");
+
+        // CASE expression followed by non-reserved aliases (loop, while, repeat) must stay balanced.
+        var caseAliases = BigQueryResultNamePlan.Build("#Name=\"Orders\"\nSELECT CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END loop, CASE WHEN status = 'HOLD' THEN 1 ELSE 0 END while, CASE WHEN status = 'NEW' THEN 1 ELSE 0 END repeat FROM orders;");
+        check(caseAliases is { SingleQuery: true, Slots: [{ Name: "Orders", StartLine: 2, StartColumn: 1 }], Notes.Count: 0 },
+            "CASE expression followed by non-reserved aliases (loop, while, repeat) does not mark the script unbalanced");
+
+        // CREATE VIEW/TABLE named 'procedure' referencing 'begin' must not falsely trigger CREATE PROCEDURE BEGIN...END.
+        var viewProc = BigQueryResultNamePlan.Build("CREATE VIEW procedure AS SELECT begin FROM t;\n#Name=\"AfterView\"\nSELECT 1 AS ok;");
+        check(viewProc is { Slots: [{ Name: "AfterView", QueryIndex: 0, StartLine: 3, BlockerBefore: null }], Notes.Count: 0 },
+            "CREATE VIEW procedure referencing begin does not trigger CREATE PROCEDURE block tracking");
+        var tableProc = BigQueryResultNamePlan.Build("CREATE TABLE procedure (begin INT64);\n#Name=\"AfterTable\"\nSELECT 1 AS ok;");
+        check(tableProc is { Slots: [{ Name: "AfterTable", QueryIndex: 0, StartLine: 3, BlockerBefore: null }], Notes.Count: 0 },
+            "CREATE TABLE procedure with column begin does not trigger CREATE PROCEDURE block tracking");
+
+        // EXPRESSION child without stackFrames must not consume or shift positional matching.
+        var exprPlan = BigQueryResultNamePlan.Build("#Name=\"First\"\nSELECT 1 AS a;")!;
+        var exprBinder = new BigQueryResultNameBinder(exprPlan);
+        var exprName = exprBinder.TakeChild(new("expr_1", null, 1, true, "SELECT", null, null, null, ScriptEvaluationKind: "EXPRESSION"), incompleteListing: false);
+        var realName = exprBinder.TakeChild(new("stmt_1", null, 2, true, "SELECT", null, null, null), incompleteListing: false);
+        check(exprName is null && realName == "First",
+            "EXPRESSION child without stackFrames returns null and does not shift positional matching");
     }
 
     static void BoundsAndNotes(Action<bool, string> check)
@@ -698,6 +731,90 @@ internal static class BigQueryResultNameChecks
                 check(discarded.Status == "completed" && discarded.ResultSets.Count == 0
                     && !discarded.Messages.Any(m => m.Text.Contains("Result name", StringComparison.Ordinal)),
                     "DiscardResults on a named script emits no spurious unused-name notes");
+            }
+        }
+
+        // 12. Regression: IF / EXECUTE IMMEDIATE sharing or ending on the line of a named SELECT never steals its name.
+        {
+            var sql = "IF TRUE THEN SELECT 1; END IF; /* #Name=\"Second\" */ SELECT 2;";
+            var script = new ScriptFake
+            {
+                StatementType = "SCRIPT",
+                Children =
+                [
+                    new("c1", "SELECT", ScriptFake.Frame(1, 14)),
+                    new("c2", "SELECT", ScriptFake.Frame(1, 53))
+                ]
+            };
+            var (service, info) = await ConnectAsync(script.Build());
+            using (service)
+            {
+                var res = await ExecuteAsync(service, info, sql);
+                check(res.Status == "completed" && res.ResultSets.Select(s => s.Name).SequenceEqual([null, "Second"])
+                    && !res.Messages.Any(m => m.Text.Contains("Result name", StringComparison.Ordinal)),
+                    "single-line IF sharing a line with a named SELECT does not steal its name");
+            }
+        }
+        {
+            var sql = "IF TRUE THEN\n  SELECT 1; END IF; /* #Name=\"Second\" */ SELECT 2;";
+            var script = new ScriptFake
+            {
+                StatementType = "SCRIPT",
+                Children =
+                [
+                    new("c1", "SELECT", ScriptFake.Frame(2, 3)),
+                    new("c2", "SELECT", ScriptFake.Frame(2, 42))
+                ]
+            };
+            var (service, info) = await ConnectAsync(script.Build());
+            using (service)
+            {
+                var res = await ExecuteAsync(service, info, sql);
+                check(res.Status == "completed" && res.ResultSets.Select(s => s.Name).SequenceEqual([null, "Second"])
+                    && !res.Messages.Any(m => m.Text.Contains("Result name", StringComparison.Ordinal)),
+                    "multi-line IF ending on the line of a named SELECT does not steal its name");
+            }
+        }
+        {
+            var sql = "EXECUTE IMMEDIATE 'SELECT 1'; /* #Name=\"Second\" */ SELECT 2;";
+            var script = new ScriptFake
+            {
+                StatementType = "SCRIPT",
+                Children =
+                [
+                    new("c1", "SELECT", ScriptFake.Frame(1, 1)),
+                    new("c2", "SELECT", ScriptFake.Frame(1, 52))
+                ]
+            };
+            var (service, info) = await ConnectAsync(script.Build());
+            using (service)
+            {
+                var res = await ExecuteAsync(service, info, sql);
+                check(res.Status == "completed" && res.ResultSets.Select(s => s.Name).SequenceEqual([null, "Second"])
+                    && !res.Messages.Any(m => m.Text.Contains("Result name", StringComparison.Ordinal)),
+                    "EXECUTE IMMEDIATE sharing a line with a named SELECT does not steal its name");
+            }
+        }
+
+        // 13. Regression: schema-less SELECT child without stackFrames stops positional matching instead of mis-naming later sets.
+        {
+            var sql = "SELECT 1 AS a;\n#Name=\"Second\"\nSELECT 2 AS b;";
+            var script = new ScriptFake
+            {
+                StatementType = "SCRIPT",
+                Children =
+                [
+                    new("c1", "SELECT", Schema: new JsonObject { ["fields"] = new JsonArray() }),
+                    new("c2", "SELECT")
+                ]
+            };
+            var (service, info) = await ConnectAsync(script.Build());
+            using (service)
+            {
+                var res = await ExecuteAsync(service, info, sql);
+                check(res.Status == "completed" && res.ResultSets is [{ Name: null }]
+                    && res.Messages.Any(m => m.Text.Contains("\"Second\" (line 2) was not applied: a SELECT statement returned no columns", StringComparison.Ordinal)),
+                    "schema-less SELECT child in positional mode stops positional naming rather than shifting names");
             }
         }
     }

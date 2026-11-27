@@ -1,9 +1,9 @@
 namespace Varia.Backend.BigQuery;
 
-/// <summary>A top-level GoogleSQL statement's span (in the submitted SQL text), its 1-based start line and column in the
-/// submitted SQL text (matching BigQuery's <c>statistics.scriptStatistics.stackFrames</c>), its 1-based editor line, its
-/// result-set class and the label Messages names it by.</summary>
-internal sealed record GoogleSqlStatement(int StartOffset, int EndOffset, int StartLine, int StartColumn, int EditorLine, StatementClass Class, string Kind);
+/// <summary>A top-level GoogleSQL statement's span (in the submitted SQL text), its 1-based start line, start column and
+/// end line in the submitted SQL text (matching BigQuery's <c>statistics.scriptStatistics.stackFrames</c>), its 1-based
+/// editor line, its result-set class and the label Messages names it by.</summary>
+internal sealed record GoogleSqlStatement(int StartOffset, int EndOffset, int StartLine, int StartColumn, int EndLine, int EditorLine, StatementClass Class, string Kind);
 
 /// <summary>The result of scanning a GoogleSQL script for <c>#Name</c> markers and top-level statements.</summary>
 internal sealed record GoogleSqlScan(IReadOnlyList<ResultMarker> Markers, IReadOnlyList<GoogleSqlStatement> Statements, bool Unbalanced);
@@ -393,7 +393,7 @@ internal static class GoogleSqlScanner
                     if (parenDepth > 0) unbalanced = true;
                     else if (blocks.Count == 0)
                     {
-                        AddStatement(token.End);
+                        AddStatement(token.End, token.Line);
                         atStatementStart = true;
                     }
                     else
@@ -424,7 +424,7 @@ internal static class GoogleSqlScanner
                         atStatementStart = false;
                         break;
                     }
-                    if (blocks.Count == 0 && stmtFirstTokenIndex >= 0 && IsWord(sql, tokens[stmtFirstTokenIndex], "CREATE") && IsWord(sql, token, "PROCEDURE"))
+                    if (blocks.Count == 0 && IsWord(sql, token, "PROCEDURE") && IsCreateProcedureHeader(sql, tokens, stmtFirstTokenIndex, t))
                         stmtIsCreateProcedure = true;
                     if (IsWord(sql, token, "BEGIN"))
                     {
@@ -460,13 +460,18 @@ internal static class GoogleSqlScanner
                     }
                     else if (IsWord(sql, token, "END"))
                     {
-                        if (t + 1 < tokens.Count && tokens[t + 1].Kind == ScanKind.Word && EndBlock(sql, tokens[t + 1]) is { } expected)
+                        // A CASE expression always closes with bare END, even when followed by a non-reserved column alias (e.g. "END loop").
+                        if (blocks.TryPeek(out var top) && top == BlockKind.CaseExpr)
                         {
-                            if (blocks.TryPeek(out var top) && top == expected) blocks.Pop();
+                            blocks.Pop();
+                        }
+                        else if (t + 1 < tokens.Count && tokens[t + 1].Kind == ScanKind.Word && EndBlock(sql, tokens[t + 1]) is { } expected)
+                        {
+                            if (blocks.TryPeek(out top) && top == expected) blocks.Pop();
                             else unbalanced = true;
                             t++;
                         }
-                        else if (blocks.TryPeek(out var top) && top is BlockKind.CaseExpr or BlockKind.Begin) blocks.Pop();
+                        else if (blocks.TryPeek(out top) && top == BlockKind.Begin) blocks.Pop();
                         else unbalanced = true;
                         atStatementStart = false;
                     }
@@ -480,19 +485,35 @@ internal static class GoogleSqlScanner
         }
 
         if (parenDepth != 0 || blocks.Count != 0) unbalanced = true;
-        if (stmtStartIndex >= 0) AddStatement(tokens[^1].End);
+        if (stmtStartIndex >= 0)
+        {
+            var last = tokens[^1];
+            AddStatement(last.End, last.Line + LineBreaks(sql.AsSpan(last.Start, last.End - last.Start)));
+        }
         return (statements, unbalanced);
 
-        void AddStatement(int endOffset)
+        void AddStatement(int endOffset, int endLine)
         {
             var start = tokens[stmtStartIndex];
             var (cls, kind) = ClassifyTopLevel(sql, tokens, stmtFirstTokenIndex, stmtHasLeadingOpen);
-            statements.Add(new(start.Start, endOffset, start.Line, start.Column, sourceStartLine + start.Line - 1, cls, kind));
+            statements.Add(new(start.Start, endOffset, start.Line, start.Column, endLine, sourceStartLine + start.Line - 1, cls, kind));
             stmtStartIndex = -1;
             stmtFirstTokenIndex = -1;
             stmtHasLeadingOpen = false;
             stmtIsCreateProcedure = false;
         }
+    }
+
+    static bool IsCreateProcedureHeader(string sql, List<ScanToken> tokens, int createIndex, int procedureIndex)
+    {
+        if (createIndex < 0 || procedureIndex <= createIndex || !IsWord(sql, tokens[createIndex], "CREATE")) return false;
+        for (var i = createIndex + 1; i < procedureIndex; i++)
+        {
+            var token = tokens[i];
+            if (token.Kind != ScanKind.Word || !(IsWord(sql, token, "OR") || IsWord(sql, token, "REPLACE") || IsWord(sql, token, "TEMP") || IsWord(sql, token, "TEMPORARY")))
+                return false;
+        }
+        return true;
     }
 
     static BlockKind? EndBlock(string sql, ScanToken next) =>

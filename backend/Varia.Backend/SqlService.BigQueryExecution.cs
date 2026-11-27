@@ -223,7 +223,12 @@ internal sealed partial class SqlService
                 var first = await bigQuery.QueryResultsAsync(connection, project, child.Id, child.Location ?? location, null, BigQueryFirstPageRows, 0, token);
                 var childPlan = BigQueryColumnPlan.From(first.Schema);
                 var rows = first.TotalRows ?? 0;
-                if (childPlan is null) { first.Dispose(); return; }
+                if (childPlan is null)
+                {
+                    nameBinder?.StopPositional("a SELECT statement returned no columns, so the place of later result sets is unknown");
+                    first.Dispose();
+                    return;
+                }
                 if (childPlan.TruncatedColumns)
                     messages.Add("The result has " + childPlan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
                 var childName = nameBinder?.TakeChild(child, incompleteListing);

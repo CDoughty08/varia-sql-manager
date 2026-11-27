@@ -35,8 +35,8 @@ internal sealed class BigQueryResultNamePlan
     /// <summary>Whether the submitted text is one top-level query statement with a planned name.</summary>
     public bool SingleQuery => StatementCount == 1 && Slots.Count == 1;
     public IReadOnlyDictionary<(int Line, int Column), int> SlotByPosition { get; }
-    /// <summary>Maps a 1-based submitted script line to its slot index only when exactly one top-level query statement
-    /// (named or unnamed) starts on that line.</summary>
+    /// <summary>Maps a 1-based submitted script line to its slot index only when no other top-level statement of any
+    /// class overlaps that line.</summary>
     public IReadOnlyDictionary<int, int> UniqueSlotByLine { get; }
     /// <summary>Maps a 0-based top-level query index to its slot index only for statements with no control-flow or dynamic
     /// statement before them.</summary>
@@ -75,13 +75,6 @@ internal sealed class BigQueryResultNamePlan
             else (named[next] ??= []).Add(marker);
         }
 
-        // Count every top-level query statement (named or unnamed) per start line so line-only fallback never matches a
-        // line shared by two queries (e.g. "SELECT 1; SELECT 2;").
-        var queriesOnLine = new Dictionary<int, int>();
-        foreach (var statement in statements)
-            if (statement.Class == StatementClass.One)
-                queriesOnLine[statement.StartLine] = queriesOnLine.GetValueOrDefault(statement.StartLine) + 1;
-
         var slots = new List<BigQueryResultNameSlot>();
         var byPosition = new Dictionary<(int Line, int Column), int>();
         var uniqueByLine = new Dictionary<int, int>();
@@ -118,7 +111,11 @@ internal sealed class BigQueryResultNamePlan
                 var slotIndex = slots.Count;
                 slots.Add(new(queryIndex, statement.StartLine, statement.StartColumn, statement.EditorLine, winner.Name!, winner.Line, blocker));
                 byPosition.TryAdd((statement.StartLine, statement.StartColumn), slotIndex);
-                if (queriesOnLine.GetValueOrDefault(statement.StartLine) == 1) uniqueByLine[statement.StartLine] = slotIndex;
+                // Line-only fallback is allowed only when no other top-level statement of any class overlaps this line
+                // (so an inner SELECT of an IF/LOOP/EXECUTE IMMEDIATE sharing or ending on this line can never steal it).
+                var uniqueLine = (i == 0 || statements[i - 1].EndLine < statement.StartLine)
+                    && (i + 1 == statements.Count || statements[i + 1].StartLine > statement.StartLine);
+                if (uniqueLine) uniqueByLine[statement.StartLine] = slotIndex;
                 if (blocker is null) byQueryIndex[queryIndex] = slotIndex;
             }
             queryIndex++;
@@ -190,11 +187,13 @@ internal sealed class BigQueryResultNameBinder(BigQueryResultNamePlan plan)
     public string? TakeChild(BigQueryChild child, bool incompleteListing, bool discarded = false)
     {
         lastSlot = -1;
+        if (child.ScriptFrameCount > 0) sawStackFrames = true;
+        // Expression evaluations (e.g. IF/WHILE conditions, SET expressions) never produce a top-level query result set.
+        if (string.Equals(child.ScriptEvaluationKind, "EXPRESSION", StringComparison.OrdinalIgnoreCase)) return null;
         if (child.ScriptFrameCount > 0)
         {
-            sawStackFrames = true;
-            // Nested frames (stored procedures, EXECUTE IMMEDIATE) and expression evaluations are not direct top-level queries.
-            if (child.ScriptFrameCount > 1 || child.InProcedure || string.Equals(child.ScriptEvaluationKind, "EXPRESSION", StringComparison.OrdinalIgnoreCase))
+            // Nested frames (stored procedures, EXECUTE IMMEDIATE) are not direct top-level queries.
+            if (child.ScriptFrameCount > 1 || child.InProcedure)
                 return null;
             if (child.ScriptStartLine is not { } line) return null;
             int slotIndex;
