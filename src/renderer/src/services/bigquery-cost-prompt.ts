@@ -170,6 +170,20 @@ export class CostPromptService extends SnapshotStore<CostPromptSnapshot> {
     const active = snapshot.pending?.id === id ? this.queue[0] : snapshot.pendingMulti?.id === id ? this.queue[0] : undefined
     if (active?.id === id) this.settle(active, answer)
   }
+  /** True while the published head prompt still satisfies its `stillAsks` predicate (e.g. before mounting after waiting on `PromptTurnLock`). */
+  headStillValid(): boolean {
+    const head = this.queue[0]
+    return !!head && (!head.stillAsks || safe(head.stillAsks))
+  }
+  /** Re-checks the head prompt's `stillAsks` predicate (e.g. when `PromptTurnLock` grants the turn after another modal closed),
+   *  resolving moot prompts and advancing the queue without flashing them on screen. */
+  revalidate(): void {
+    const head = this.queue[0]
+    if (!head || !head.stillAsks || safe(head.stillAsks)) return
+    this.queue.shift()
+    head.resolve({ run: true, moot: true })
+    this.show()
+  }
   private settle(item: QueueItem, answer: CostPromptAnswer): void {
     const index = this.queue.indexOf(item)
     if (index < 0) return

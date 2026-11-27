@@ -1402,4 +1402,58 @@ describe('executeMultiTab: pre-dispatch revalidation and queued cost prompt moot
     expect(await executeMultiTab(crossTab.id, h.deps)).toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly', targetCount: 2 })
     expect(h.executeMultiCalls[2]?.request.targets?.find(t => t.connectionId === b1.id)?.maximumBytesBilled).toBe(1 * GiB)
   })
+
+  it('R10 D3 #3: single-target and cross-engine BigQuery cost prompts invalidate on showCost/costThreshold changes and refresh prices on moot retry', async () => {
+    const s1 = sqlConnection(1)
+    const b1 = bqConnection(1)
+    const h = createHarness({
+      connections: [s1, b1],
+      settings: { 'queryExecution.bigQuery.showCost': 'onDemand', 'queryExecution.bigQuery.costThreshold': 1 },
+      dryRuns: { [b1.id]: { ok: true, value: { bytesProcessed: 25 * GiB } } }
+    })
+
+    const singlePrices: boolean[] = []
+    h.singleAskSpy.mockImplementation(async (req, _sig, stillAsks) => {
+      singlePrices.push(req.prices)
+      if (singlePrices.length === 1) {
+        expect(stillAsks?.()).toBe(true)
+        h.setSetting('queryExecution.bigQuery.costThreshold', 2)
+        expect(stillAsks?.()).toBe(false)
+        h.setSetting('queryExecution.bigQuery.showCost', 'bytes')
+        return { run: true, moot: true }
+      }
+      return { run: true }
+    })
+    const sameOne = h.docs.documents.openMultiQuery({
+      mode: 'same',
+      provider: 'bigquery',
+      sql: 'SELECT * FROM analytics.events;',
+      targets: [{ targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }]
+    })
+    expect(await executeMultiTab(sameOne.id, h.deps)).toMatchObject({ status: 'executed', targetCount: 1 })
+    expect(singlePrices).toEqual([true, false])
+
+    const multiPrices: boolean[] = []
+    h.multiAskSpy.mockImplementation(async (req, _sig, stillAsks) => {
+      multiPrices.push(req.prices)
+      if (multiPrices.length === 1) {
+        expect(stillAsks?.()).toBe(true)
+        h.setSetting('queryExecution.bigQuery.showCost', 'onDemand')
+        expect(stillAsks?.()).toBe(false)
+        return { run: true, moot: true }
+      }
+      return { run: true }
+    })
+    const crossTab = h.docs.documents.openMultiQuery({
+      mode: 'cross',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT * FROM analytics.events;',
+      targets: [
+        { targetId: s1.targetId, connectionId: s1.id, database: 'Sales', enabled: true, provider: 'sqlserver' },
+        { targetId: b1.targetId, connectionId: b1.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    expect(await executeMultiTab(crossTab.id, h.deps)).toMatchObject({ status: 'executed', mode: 'crossEngineReadOnly' })
+    expect(multiPrices).toEqual([false, true])
+  })
 })

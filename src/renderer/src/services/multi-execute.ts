@@ -417,15 +417,20 @@ async function executeSameEngine(tabId: string, deps: MultiExecuteDeps, signal?:
           const threshold = thresholdBytes()
           const ownThreshold = deps.optOut.threshold(only.connection) !== undefined
           const cap = liveBigQueryCap(only.connection, deps.settings)
+          const showPrices = deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes'
           let applied: Promise<unknown> | undefined
           const answer = await deps.costPrompts.ask({
             prompt,
             connection: only.item.label,
             thresholdBytes: threshold,
             ...ownThreshold ? { ownThreshold: true as const } : {},
-            prices,
+            prices: showPrices,
             ...cap !== undefined ? { cap } : {}
-          }, signal, () => currentPrompt()?.kind === kind && liveBigQueryCap(only.connection, deps.settings) === cap,
+          }, signal, () => currentPrompt()?.kind === kind
+            && thresholdBytes() === threshold
+            && (deps.optOut.threshold(only.connection) !== undefined) === ownThreshold
+            && liveBigQueryCap(only.connection, deps.settings) === cap
+            && (deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes') === showPrices,
           given => {
             if (signal?.aborted || !given.dontAskAgain) return
             if (kind === 'threshold') applied = deps.optOut.dontAsk(only.connection)
@@ -558,8 +563,6 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
     return { status: 'refused', reason: 'missingCrossEngineTarget' }
   }
 
-  const prices = deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes'
-
   const estimates = await runBoundedPool(bqTargets, dryRunConcurrency, target => dryRunTarget(deps.api, target, parsed.bigquery), signal)
   const plannedTargets = [...sqlTargets, ...bqTargets]
   const afterDryRun = validateBeforeDispatch(tabId, 'cross', plannedTargets, deps, { signal, capturedRevision })
@@ -603,15 +606,17 @@ async function executeCrossEngine(tabId: string, deps: MultiExecuteDeps, signal?
   let flagged = buildFlagged()
   for (let turns = 0; flagged.length > 0 && turns < 16; turns++) {
     const snapshotFlagged = flagged
+    const showPrices = deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes'
     const totalBytes = snapshotFlagged.reduce((sum, item) => sum + item.entry.prompt.bytes, 0)
     let applied: Promise<unknown> | undefined
     const answer = await deps.costPrompts.askMulti({
       kind: 'multi',
       projects: snapshotFlagged.map(item => item.entry),
-      prices,
+      prices: showPrices,
       totalBytes,
       totalProjectCount: bqTargets.length
     }, signal, () => {
+      if ((deps.settings.get('queryExecution.bigQuery.showCost') !== 'bytes') !== showPrices) return false
       const latest = buildFlagged()
       return latest.length === snapshotFlagged.length && latest.every((item, index) => {
         const snapshot = snapshotFlagged[index]!

@@ -1139,4 +1139,65 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     contrib.dispose()
     wb.dispose()
   })
+
+  it('R10 D3 #4 & #5: edit.refreshIntelliSense and explorer multi-select commands report accurate unavailable reasons when connected', () => {
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    wb.api.explorerChildren.mockImplementation(async () => ({ ok: true as const, value: { nodes: [], elapsedMs: 1, total: 0 } }))
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const sql2 = connectSql(wb, 'prod-sql-02', 'SalesDB')
+    const bq1 = connectBq(wb, 'prod-bq-01', 'analytics')
+    wb.explorer.settle()
+
+    const crossDoc = wb.documents.openMultiQuery({
+      mode: 'cross',
+      name: 'CrossSplit.sql',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT 2;',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+        { targetId: bq1.targetId, connectionId: bq1.info.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    wb.documents.activate(crossDoc.id)
+    wb.documents.setActivePane(crossDoc.id, 'secondary')
+    const bqDoc = wb.documents.create('SoloBq.sql', 'SELECT 1;', 'analytics', bq1.info.id)
+
+    const commands = new CommandService({ state: () => wb.context.getState() })
+    const langContrib = languagesContribution({
+      commands,
+      documents: wb.documents,
+      connections: wb.connections,
+      sqlLanguage: { refreshCache: vi.fn(async () => true) }
+    })
+    const expContrib = explorerContribution(
+      { commands, documents: wb.documents, connections: wb.connections, explorer: wb.explorer },
+      wb.api
+    )
+
+    // R10 D3 #4: GoogleSQL pane of Cross-Engine Split & solo BigQuery tab report accurate SQL-Server-only reasons.
+    expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: crossDoc.id }))
+      .toBe('Focus the Transact-SQL pane to refresh SQL Server IntelliSense cache.')
+    expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: bqDoc.id }))
+      .toBe('Refresh Local Cache is available for SQL Server queries only.')
+
+    // R10 D3 #5: Explorer multi-select commands report selection/provider-count reasons when servers are already connected.
+    expect(commands.unavailableReason('explorer.newMultiServerQuery'))
+      .toBe('Select two or more servers of the same engine in Object Explorer.')
+    expect(commands.unavailableReason('explorer.refreshSelected'))
+      .toBe('Select two or more servers in Object Explorer to refresh together.')
+    expect(commands.unavailableReason('explorer.clearMultiSelect'))
+      .toBe('No servers are currently selected in Object Explorer.')
+    expect(commands.unavailableReason('explorer.disconnectSelected'))
+      .toBe('Select two or more servers in Object Explorer to disconnect together.')
+    expect(commands.unavailableReason('explorer.selectAllBigQueryProjects'))
+      .toBe('Connect two or more BigQuery projects to select all.')
+    // sql1 & sql2 connected -> selectAllSqlServers is enabled!
+    expect(commands.isEnabled('explorer.selectAllSqlServers')).toBe(true)
+    void sql2
+
+    expContrib.dispose()
+    langContrib.dispose()
+    wb.dispose()
+  })
 })

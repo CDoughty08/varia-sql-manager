@@ -1427,4 +1427,90 @@ describe('BigQueryCostPrompt (single + multi-project Cross-Engine)', () => {
     await act(async () => { cancelBtn.click() })
     await expect(p2).resolves.toEqual({ run: false })
   })
+
+  it('R10 D3 #1 & #2: MultiExecuteDialog reflects live Options cap/price updates and BigQueryCostPrompt revalidates moot queued prompts on turn handoff', async () => {
+    // #1: MultiExecuteDialog live settings subscription updates cap warning & stray-Enter guard without re-running dry runs.
+    const listeners = new Set<() => void>()
+    let values = {
+      'queryExecution.bigQuery.showCost': 'onDemand' as 'onDemand' | 'bytes',
+      'queryExecution.bigQuery.maximumBytesBilled': 100 as number | null,
+      'queryExecution.bigQuery.costPrompt': true,
+      'queryExecution.bigQuery.costThreshold': 100,
+      'queryExecution.bigQuery.incompleteEstimateWarning': true
+    }
+    let settingsSnap = { values }
+    const settingsStub = {
+      subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } },
+      getSnapshot: () => settingsSnap,
+      get: <K extends keyof typeof values>(k: K) => values[k]
+    }
+    const publishSettings = (patch: Partial<typeof values>) => {
+      values = { ...values, ...patch }
+      settingsSnap = { values }
+      for (const l of listeners) l()
+    }
+    const multiService = new MultiExecutePromptService()
+    const costPrompts = new CostPromptService()
+    const wb = { settings: settingsStub, costPrompts, commands: { execute: vi.fn(async () => {}) } } as unknown as Workbench
+    const estimateBigQuery = vi.fn(async () => ({ ok: true as const, value: { bytesProcessed: 20 * GiB } }))
+    const host = document.body.appendChild(document.createElement('div'))
+    const root = createRoot(host)
+    cleanups.push(() => { act(() => root.unmount()); host.remove(); multiService.dispose(); costPrompts.dispose() })
+
+    let multiPromise!: ReturnType<MultiExecutePromptService['ask']>
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, {
+        workbench: wb,
+        children: [
+          createElement(MultiExecuteDialog, { key: 'multi', service: multiService, estimateBigQuery }),
+          createElement(BigQueryCostPrompt, { key: 'cost' })
+        ]
+      }))
+      multiPromise = multiService.ask({
+        tabId: 'q-live-cap',
+        provider: 'bigquery',
+        sql: 'SELECT * FROM ds.t;',
+        targets: [bqTarget(1), bqTarget(2)],
+        prices: true
+      })
+    })
+    await act(async () => { await Promise.resolve() })
+    expect(estimateBigQuery).toHaveBeenCalledTimes(2)
+    const form = document.body.querySelector<HTMLFormElement>('form.multi-execute-dialog')!
+    expect(form.textContent).not.toContain('Exceeds maximum bytes billed')
+
+    // Enqueue a BigQueryCostPrompt behind the open MultiExecuteDialog whose stillAsks depends on costPrompt === true.
+    let stillValid = true
+    let queuedCost!: ReturnType<CostPromptService['ask']>
+    act(() => {
+      queuedCost = costPrompts.ask(
+        { prompt: { kind: 'threshold', bytes: 25 * GiB }, connection: 'bg-bq', thresholdBytes: 10 * GiB, prices: true },
+        undefined,
+        () => stillValid
+      )
+    })
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).toBeNull()
+
+    // While MultiExecuteDialog is open: lower maximumBytesBilled to 5 GiB -> warning appears immediately & stray Enter is blocked;
+    // dry runs are NOT re-invoked. Also mark the queued BigQueryCostPrompt moot!
+    act(() => {
+      stillValid = false
+      publishSettings({ 'queryExecution.bigQuery.maximumBytesBilled': 5, 'queryExecution.bigQuery.showCost': 'bytes' })
+    })
+    expect(estimateBigQuery).toHaveBeenCalledTimes(2)
+    expect(form.textContent).toContain('Exceeds maximum bytes billed')
+    expect(form.textContent).not.toContain('on demand')
+    const radio = form.querySelector<HTMLInputElement>('input[type="radio"]:checked')!
+    radio.focus()
+    const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    act(() => { radio.dispatchEvent(enterEvent) })
+    expect(enterEvent.defaultPrevented).toBe(true)
+
+    // #2: Close MultiExecuteDialog -> PromptTurnLock hands turn to BigQueryCostPrompt -> revalidates moot prompt without mounting it!
+    const cancelBtn = [...form.querySelectorAll<HTMLButtonElement>('button')].find(btn => btn.textContent?.trim() === 'Cancel')!
+    await act(async () => { cancelBtn.click() })
+    await expect(multiPromise).resolves.toBeUndefined()
+    await expect(queuedCost).resolves.toEqual({ run: true, moot: true })
+    expect(document.body.querySelector('form.bigquery-cost-prompt')).toBeNull()
+  })
 })

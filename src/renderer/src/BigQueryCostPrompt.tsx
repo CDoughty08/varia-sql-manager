@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { focusToReturn, returnFocusTo } from './core/focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
@@ -32,15 +32,20 @@ export default function BigQueryCostPrompt() {
       ? { kind: 'multi', id: pendingMulti.id, request: pendingMulti.request }
       : undefined
   const hasPending = !!active
-  const isOpen = hasPending && turnOwner === 'cost'
   const returnFocus = useRef<HTMLElement | null>(null)
   const wasOpen = useRef(false)
+  const needsRevalidate = !wasOpen.current && hasPending && turnOwner === 'cost' && !costPrompts.headStillValid()
+  const isOpen = hasPending && turnOwner === 'cost' && !needsRevalidate
   if (isOpen && !wasOpen.current) {
     // Ignore elements inside a closing modal (e.g. MultiExecuteDialog unmounting in the same render);
     // ActivePrompt re-captures focus via onBeforeInitialFocus once the closing modal's cleanup restores it.
     returnFocus.current = focusCandidate()
   }
   wasOpen.current = isOpen
+
+  useLayoutEffect(() => {
+    if (needsRevalidate) costPrompts.revalidate()
+  }, [costPrompts, needsRevalidate, active?.id])
 
   useEffect(() => {
     if (!isOpen) return

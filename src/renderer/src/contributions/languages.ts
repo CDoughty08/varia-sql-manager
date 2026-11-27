@@ -36,9 +36,20 @@ export function languagesContribution({ commands, documents, connections, sqlLan
     },
     unavailable: args => {
       const document = target(args?.tabId)
-      const model = document && isQueryDocument(document) ? documents.getModel(document.id) : undefined
-      if (model && documents.languageContext?.(model, id => connections.isLive(id))?.suspended) {
-        return 'Switch to Split view for per-dialect IntelliSense and syntax checking.'
+      if (document && isQueryDocument(document)) {
+        const model = documents.getModel(document.id)
+        if (model && documents.languageContext?.(model, id => connections.isLive(id))?.suspended) {
+          return 'Switch to Split view for per-dialect IntelliSense and syntax checking.'
+        }
+        if (document.multiMode === 'cross' && document.crossView !== 'file' && document.activePane === 'secondary') {
+          return 'Focus the Transact-SQL pane to refresh SQL Server IntelliSense cache.'
+        }
+        const isBq = document.multiMode === 'same'
+          ? (document.provider === 'bigquery' || document.multiTargets?.some(t => t.enabled && t.provider === 'bigquery'))
+          : (document.provider === 'bigquery' || (document.connectionId ? connections.get(document.connectionId)?.providerId === 'bigquery' : false))
+        if (isBq) {
+          return 'Refresh Local Cache is available for SQL Server queries only.'
+        }
       }
       return 'Connect this query before refreshing its IntelliSense cache.'
     },

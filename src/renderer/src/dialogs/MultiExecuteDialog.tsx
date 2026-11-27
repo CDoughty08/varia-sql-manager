@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { formatBytes, formatDollars } from '../../../shared/bigquery/cost'
-import { dryRunLimits, incompleteText, pricedBytes, type BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
+import { dryRunLimits, gibibytes, incompleteText, pricedBytes, type BigQueryDryRunResult } from '../../../shared/bigquery/dry-run'
 import { environmentPreset } from '../../../shared/environments'
 import { classifyStatements, type StatementClassification } from '../../../shared/multi-query'
 import type { ProviderId } from '../../../shared/providers'
@@ -12,7 +12,7 @@ import Icon from '../Icon'
 import DialogFooter from '../kit/DialogFooter'
 import StatusPill from '../kit/StatusPill'
 import { useDialogWindow } from '../popouts/DialogWindow'
-import { promptTurnLockFor } from '../services/bigquery-cost-prompt'
+import { isIncompleteWarningEnabled, promptTurnLockFor } from '../services/bigquery-cost-prompt'
 import {
   runBoundedPool,
   type BigQueryDryRunEstimator,
@@ -189,6 +189,22 @@ export function MultiExecuteDialogModal({
   onBeforeInitialFocus
 }: MultiExecuteDialogModalProps) {
   const { ownerDocument } = useDialogWindow()
+  const workbench = useOptionalWorkbench()
+  const settingsSnap = useSyncExternalStore(
+    workbench?.settings?.subscribe ?? noopSubscribe,
+    workbench?.settings ? () => workbench.settings.getSnapshot() : noopSnapshot,
+    workbench?.settings ? () => workbench.settings.getSnapshot() : noopSnapshot
+  )
+  const connectionsSnap = useSyncExternalStore(
+    workbench?.connections?.subscribe ?? noopSubscribe,
+    workbench?.connections ? () => workbench.connections.getSnapshot() : noopSnapshot,
+    workbench?.connections ? () => workbench.connections.getSnapshot() : noopSnapshot
+  )
+  const costSnap = useSyncExternalStore(
+    workbench?.bigQueryCost?.subscribe ?? noopSubscribe,
+    workbench?.bigQueryCost ? () => workbench.bigQueryCost.getSnapshot() : noopSnapshot,
+    workbench?.bigQueryCost ? () => workbench.bigQueryCost.getSnapshot() : noopSnapshot
+  )
   const titleId = useId()
   const descId = useId()
   const formRef = useRef<HTMLFormElement>(null)
@@ -301,6 +317,32 @@ export function MultiExecuteDialogModal({
     return () => { abort.abort() }
   }, [isBigQuery, request.sql, request.targets, estimateBigQuery])
 
+  const livePrices = settingsSnap ? settingsSnap.values['queryExecution.bigQuery.showCost'] !== 'bytes' : request.prices
+  const liveWarnIncomplete = workbench?.settings
+    ? isIncompleteWarningEnabled(workbench.settings)
+    : (request.warnIncomplete !== false)
+  const liveTargets = useMemo(() => {
+    if (!isBigQuery || !settingsSnap) return request.targets
+    const defaultCap = gibibytes(settingsSnap.values['queryExecution.bigQuery.maximumBytesBilled'])
+    const globalCostPrompt = settingsSnap.values['queryExecution.bigQuery.costPrompt']
+    const globalThresholdGiB = settingsSnap.values['queryExecution.bigQuery.costThreshold']
+    return request.targets.map(target => {
+      const connection = workbench?.connections?.get(target.connectionId)
+      const ownCap = connection?.options.provider === 'bigquery' ? connection.options.maximumBytesBilled : undefined
+      const cap = ownCap ?? defaultCap
+      const ownThresholdGiB = connection && workbench?.costOptOut ? workbench.costOptOut.threshold(connection) : undefined
+      const costThresholdBytes = gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0
+      const asks = connection && workbench?.costOptOut ? (globalCostPrompt && workbench.costOptOut.asks(connection)) : globalCostPrompt
+      return {
+        ...target,
+        costPrompt: asks,
+        costThresholdBytes,
+        ownCostThreshold: ownThresholdGiB !== undefined,
+        ...cap !== undefined ? { maximumBytesBilled: cap } : { maximumBytesBilled: undefined }
+      }
+    })
+  }, [isBigQuery, request.targets, settingsSnap, connectionsSnap, costSnap, workbench?.connections, workbench?.costOptOut])
+
   const costSummary = useMemo(() => {
     if (!isBigQuery) return undefined
     let estimating = 0
@@ -311,7 +353,7 @@ export function MultiExecuteDialogModal({
     let thresholdWarnings = 0
     let capWarnings = 0
     let incompleteWarnings = 0
-    for (const target of request.targets) {
+    for (const target of liveTargets) {
       const state = estimates[target.targetKey]
       if (!state || state.status === 'estimating') { estimating++; continue }
       if (state.status === 'error') { errorCount++; continue }
@@ -321,10 +363,10 @@ export function MultiExecuteDialogModal({
       totalBytes += state.result.bytesProcessed
       if (target.maximumBytesBilled !== undefined && state.result.bytesProcessed > target.maximumBytesBilled) capWarnings++
       if (target.costPrompt !== false && target.costThresholdBytes !== undefined && state.result.bytesProcessed > target.costThresholdBytes) thresholdWarnings++
-      if (request.warnIncomplete !== false && state.result.incomplete !== undefined) incompleteWarnings++
+      if (liveWarnIncomplete && state.result.incomplete !== undefined) incompleteWarnings++
     }
     return { estimating, doneCount, fakedCount, errorCount, totalBytes, thresholdWarnings, capWarnings, incompleteWarnings }
-  }, [isBigQuery, request.targets, request.warnIncomplete, estimates])
+  }, [isBigQuery, liveTargets, liveWarnIncomplete, estimates])
 
   const estimatingBigQuery = isBigQuery && (costSummary?.estimating ?? 0) > 0
   const hasCostWarning = (costSummary?.thresholdWarnings ?? 0) > 0
@@ -553,7 +595,7 @@ export function MultiExecuteDialogModal({
                   {costSummary.estimating > 0
                     ? `Estimating ${request.targets.length - costSummary.estimating} of ${request.targets.length} projects…`
                     : costSummary.doneCount > 0
-                      ? `${costSummary.doneCount < request.targets.length ? `Total (${costSummary.doneCount} of ${request.targets.length} estimated)` : 'Total'}: ${formatBytes(costSummary.totalBytes)}${request.prices ? ` (about ${formatDollars(costSummary.totalBytes)} on demand)` : ''}`
+                      ? `${costSummary.doneCount < liveTargets.length ? `Total (${costSummary.doneCount} of ${liveTargets.length} estimated)` : 'Total'}: ${formatBytes(costSummary.totalBytes)}${livePrices ? ` (about ${formatDollars(costSummary.totalBytes)} on demand)` : ''}`
                       : costSummary.fakedCount > 0
                         ? 'Emulator (estimates unavailable)'
                         : 'Estimates unavailable'}
@@ -561,19 +603,19 @@ export function MultiExecuteDialogModal({
               </div>
 
               <ul className="multi-exec-cost-list">
-                {request.targets.map(target => (
+                {liveTargets.map(target => (
                   <CostTargetRow
                     key={target.targetKey}
                     target={target}
                     state={estimates[target.targetKey] ?? { status: 'estimating' }}
-                    prices={request.prices}
-                    warnIncomplete={request.warnIncomplete !== false}
+                    prices={livePrices}
+                    warnIncomplete={liveWarnIncomplete}
                   />
                 ))}
               </ul>
 
               <p className="field-note multi-exec-cost-note">
-                Free dry runs bill $0.{request.prices ? ' Projects using reserved capacity are not billed per byte.' : ''}
+                Free dry runs bill $0.{livePrices ? ' Projects using reserved capacity are not billed per byte.' : ''}
               </p>
             </section>
           )}

@@ -373,6 +373,9 @@ export function explorerContribution({ commands, documents, connections, explore
     }),
     commands.register('explorer.newMultiServerQuery', {
       when: () => explorer.multiSelectedTargets().length >= 2,
+      unavailable: () => connections.live().length < 2
+        ? 'Connect two or more servers of the same engine first.'
+        : 'Select two or more servers of the same engine in Object Explorer.',
       run: () => {
         const selected = explorer.multiSelectedTargets()
         if (selected.length < 2) return
@@ -459,6 +462,9 @@ export function explorerContribution({ commands, documents, connections, explore
     }),
     commands.register('explorer.refreshSelected', {
       when: () => explorer.multiSelectedTargets().length >= 2,
+      unavailable: () => connections.live().length === 0
+        ? 'Connect to a server first.'
+        : 'Select two or more servers in Object Explorer to refresh together.',
       run: () => {
         for (const target of explorer.multiSelectedTargets()) {
           explorer.refresh(target.rowId)
@@ -469,6 +475,9 @@ export function explorerContribution({ commands, documents, connections, explore
     }),
     commands.register('explorer.clearMultiSelect', {
       when: () => explorer.getSnapshot().multiSelected.length > 0,
+      unavailable: () => connections.live().length === 0
+        ? 'Connect to a server first.'
+        : 'No servers are currently selected in Object Explorer.',
       run: () => explorer.clearMultiSelect()
     }),
     commands.register('explorer.disconnectSelected', {
@@ -477,6 +486,9 @@ export function explorerContribution({ commands, documents, connections, explore
         const selected = explorer.multiSelectedTargets()
         return selected.length >= 2 && selected.some(target => !!target.targetId)
       },
+      unavailable: () => connections.live().length === 0
+        ? 'Connect to a server first.'
+        : 'Select two or more servers in Object Explorer to disconnect together.',
       run: async () => {
         const selected = explorer.multiSelectedTargets()
         if (selected.length < 2 || !disconnectCoordinator) return
@@ -495,6 +507,7 @@ export function explorerContribution({ commands, documents, connections, explore
     }),
     commands.register('explorer.selectAllSqlServers', {
       when: () => explorer.rootIds.filter(id => explorer.serverProvider(id) === 'sqlserver' && !explorer.node(id)?.lost && connections.isLive(explorer.node(id)?.connectionId ?? '')).length >= 2,
+      unavailable: () => 'Connect two or more SQL Servers to select all.',
       run: () => {
         explorer.selectAllServersByProvider('sqlserver', { silentNotice: !!notifications })
         const notice = explorer.getSnapshot().multiSelectNotice
@@ -503,6 +516,7 @@ export function explorerContribution({ commands, documents, connections, explore
     }),
     commands.register('explorer.selectAllBigQueryProjects', {
       when: () => explorer.rootIds.filter(id => explorer.serverProvider(id) === 'bigquery' && !explorer.node(id)?.lost && connections.isLive(explorer.node(id)?.connectionId ?? '')).length >= 2,
+      unavailable: () => 'Connect two or more BigQuery projects to select all.',
       run: () => {
         explorer.selectAllServersByProvider('bigquery', { silentNotice: !!notifications })
         const notice = explorer.getSnapshot().multiSelectNotice
