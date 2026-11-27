@@ -158,7 +158,7 @@ function AlertsSection(props: SectionProps) {
   const own = fieldText('alerts', props)
   if (!model.job) return <p className="field-note">{agentJobText.alertsNewJob}</p>
   return <div className="agent-job-alerts">
-    {alerts.length === 0 ? <p className="field-note">{agentJobText.alertsNone}</p> : <table className="properties-table" aria-label="Alerts that run this job">
+    {alerts.length === 0 ? <p className="field-note">{agentJobText.alertsNone}</p> : <table className="agent-table" aria-label="Alerts that run this job">
       <thead><tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Enabled</th>{model.alertsEditable && <th scope="col"><span className="visually-hidden">Remove</span></th>}</tr></thead>
       <tbody>{alerts.map(alert => {
         const removed = draft.removeAlerts.includes(alert.id)
@@ -215,7 +215,7 @@ function StaleCompare({ state, service }: { readonly state: JobDocumentState; re
   return <div className="agent-job-stale" role="alert">
     <p><Icon name="warning" />{agentJobText.stale(state.changes)}</p>
     <p className="field-note">{agentJobText.staleHint} {conflicts ? agentJobText.staleConflict : agentJobText.staleNoConflict}</p>
-    <table className="properties-table" aria-label="What changed since you opened the job">
+    <table className="agent-table" aria-label="What changed since you opened the job">
       <thead><tr><th scope="col">Field</th><th scope="col">On the server now</th><th scope="col">Yours</th></tr></thead>
       <tbody>{stale.rows.map(row => {
         const server = stale.keepServer.includes(row.field)

@@ -614,13 +614,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     openSsisExecution: (connectionId, executionId) => { operations.openExecution(connectionId, executionId); documents.focusActive() },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
-      ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+      ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"], .inspector-tab[tabindex="0"]'))?.focus()
     })
   })
   // The alert and operator documents and the grid (AG-7): the first field of a new one, otherwise the section list.
   const agentObjectFocus = (attribute: string) => (id: string) => focusLater(() => {
     const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
-    ;(root?.querySelector<HTMLElement>('[data-agent-object-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    ;(root?.querySelector<HTMLElement>('[data-agent-object-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"], .inspector-tab[tabindex="0"]'))?.focus()
   })
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-alert') })
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operator') })
@@ -633,7 +633,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
   const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
     const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
-    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"], .inspector-tab[tabindex="0"]'))?.focus()
   })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
@@ -644,7 +644,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const logViewer = new LogViewerService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-lfv="${CSS.escape(id)}"] [role="grid"]`)?.focus()),
     // A Recycle renames every Agent error log: Object Explorer's Error Logs folder of that server, if listed, reloads.
     recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
