@@ -78,6 +78,30 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal void EndSessionRun(string sessionId, string queryId) => activeSessions.TryRemove(new KeyValuePair<string, string>(sessionId, queryId));
     internal IMultiQueryCoordinator? MultiQueryCoordinator { get; set; }
     internal IResultCombiner? ResultCombiner { get; set; }
+    private int activeEphemeralSqlConnections;
+    internal int ActiveEphemeralSqlConnections { get { lock (sessionGate) return activeEphemeralSqlConnections; } }
+    internal void AcquireEphemeralSqlSlot(int maxEphemeral)
+    {
+        lock (sessionGate)
+        {
+            if (activeEphemeralSqlConnections >= maxEphemeral)
+                throw new RequestException("SESSION_LIMIT",
+                    $"This multi-server query was not executed: {maxEphemeral.ToString("N0", CultureInfo.InvariantCulture)} ephemeral SQL Server connections are already active.");
+            if (sessions.Count + activeEphemeralSqlConnections >= SessionLimit)
+                throw new RequestException("SESSION_LIMIT",
+                    "This query was not executed: " + SessionLimit.ToString("N0", CultureInfo.InvariantCulture)
+                    + " SQL sessions are already open, the most Varia SQL Manager keeps open.");
+            activeEphemeralSqlConnections++;
+        }
+    }
+    internal void ReleaseEphemeralSqlSlot()
+    {
+        lock (sessionGate)
+        {
+            if (activeEphemeralSqlConnections > 0) activeEphemeralSqlConnections--;
+        }
+    }
+    internal string? LiveProvider(string id) => bigQuery.Find(id) is not null ? Providers.BigQuery : connections.ContainsKey(id) ? Providers.SqlServer : null;
     internal void UnregisterQuery(string queryId, RunningQuery running) => queries.TryRemove(new(queryId, running));
     internal bool IsQueryRegistered(string queryId) => queries.ContainsKey(queryId);
     internal Task OpenConnectionAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
@@ -219,7 +243,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     internal const string TransactionCountSql = "SELECT @@TRANCOUNT;";
     /// <summary>The options that compile a batch without executing it, turned off before a commit. Each SHOWPLAN option must
     /// be alone in its batch, and one that is not ON is only shown, not run, under another.</summary>
-    internal static readonly string[] ExecuteAgainSql = ["SET SHOWPLAN_XML OFF", "SET SHOWPLAN_TEXT OFF", "SET SHOWPLAN_ALL OFF", "SET NOEXEC OFF; SET PARSEONLY OFF; SET FMTONLY OFF;"];
+    internal static readonly string[] ExecuteAgainSql = ["SET PARSEONLY OFF", "SET SHOWPLAN_XML OFF", "SET SHOWPLAN_TEXT OFF", "SET SHOWPLAN_ALL OFF", "SET NOEXEC OFF; SET FMTONLY OFF;"];
 
     /// <summary>What a tab's session runs when it opens: <see cref="SessionPrologue"/>. Only the live checks change it, to
     /// make it fail.</summary>
@@ -308,6 +332,20 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         ssisActions = new SsisActionService(this, ssis);
         live = new LiveService(this);
         sessionActions = new SessionActions(this, live);
+        var readOnlyValidator = new ReadOnlySqlValidator();
+        var crossEngineRunner = new CrossEngineRunner(this, readOnlyValidator);
+        var combiner = new ResultCombiner();
+        ResultCombiner = combiner;
+        MultiQueryCoordinator = new MultiQueryCoordinator(
+            this,
+            new Dictionary<string, IMultiTargetRunner>(StringComparer.Ordinal)
+            {
+                [Providers.SqlServer] = new SqlServerMultiRunner(this, sqlValidator: readOnlyValidator),
+                [Providers.BigQuery] = new BigQueryMultiRunner(this, crossEngineRunner),
+            },
+            combiner: combiner,
+            sqlValidator: readOnlyValidator,
+            providerOf: LiveProvider);
         if (publish is not null) memoryTimer = new Timer(_ => { ReportMemory(); ReportIndexMemory(wait: false); this.store.Rooms.Trim(Environment.TickCount64); }, null, 1000, 1000);
     }
 
@@ -2959,38 +2997,50 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         var sources = new List<ResultSetBuffer>(args.ResultIds.Length);
         foreach (var id in args.ResultIds) sources.Add(Stored(store.Find(id) ?? throw Unavailable(id)));
         var first = sources[0];
-        foreach (var set in sources)
+        for (var i = 0; i < sources.Count; i++)
         {
+            var set = sources[i];
             if (!ReferenceEquals(first.Budget, set.Budget))
                 throw new RequestException("INVALID_PARAMS", "Only result sets of the same query can be combined.");
             if (set.Kind != "rows")
                 throw new RequestException("INVALID_PARAMS", "Only table result sets can be combined.");
-            if (set.IsReleased)
-                throw Unavailable(set.ResultId);
-            if (!set.IsComplete)
-                throw new RequestException("RESULT_OPEN", "Combine results after they finish loading.");
             if (set.TargetKey is null)
                 throw new RequestException("INVALID_PARAMS", "Only multi-server result sets can be combined.");
         }
-        if (first.Budget.Executing) throw new RequestException("BUSY", "Cannot combine results while the query is still executing.");
+        if (first.Budget.Executing)
+            throw new RequestException("BUSY", "Cannot combine results while the query is still executing.");
+        if (first.Budget.Loading)
+            throw new RequestException("BUSY", "Cannot combine results while another result of this query is loading into memory.");
+        var token = Token(context);
+        var revisions = new long[sources.Count];
+        var tokens = new CancellationToken[sources.Count + 1];
+        tokens[0] = token;
+        for (var i = 0; i < sources.Count; i++)
+        {
+            var set = sources[i];
+            revisions[i] = set.Revision;
+            tokens[i + 1] = set.Released;
+            if (set.IsReleased)
+                throw Unavailable(set.ResultId);
+            if (set.IsRemote)
+                throw RemoteRefused();
+            if (!set.IsComplete)
+                throw new RequestException("RESULT_OPEN", "Combine results after they finish loading.");
+        }
         ThrowIfStopped(first.Budget);
         if (ResultCombiner is { } combiner)
         {
-            var token = Token(context);
-            var revisions = new long[sources.Count];
-            var tokens = new CancellationToken[sources.Count + 1];
-            tokens[0] = token;
-            for (var i = 0; i < sources.Count; i++)
-            {
-                revisions[i] = sources[i].Revision;
-                tokens[i + 1] = sources[i].Released;
-            }
             void ThrowIfSourceGone()
             {
+                if (first.Budget.Executing)
+                    throw new RequestException("BUSY", "Cannot combine results while the query is still executing.");
+                if (first.Budget.Loading)
+                    throw new RequestException("BUSY", "Cannot combine results while another result of this query is loading into memory.");
                 for (var i = 0; i < sources.Count; i++)
                 {
                     if (sources[i].IsReleased) throw Unavailable(sources[i].ResultId);
                     if (sources[i].IsRemote || sources[i].Revision != revisions[i]) throw RemoteRefused();
+                    if (!sources[i].IsComplete) throw new RequestException("RESULT_OPEN", "Combine results after they finish loading.");
                 }
             }
             CombineOutput output;
@@ -3009,7 +3059,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 {
                     ThrowIfSourceGone();
                     ThrowIfStopped(first.Budget);
-                    throw;
+                    throw TooLarge(error.Message);
                 }
             }
             var buffer = output.Buffer;
@@ -3616,7 +3666,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 if (existing.ConnectionId != args.ConnectionId) throw new RequestException("SESSION_TARGET", "Close this query session before selecting another server.");
                 return existing;
             }
-            if (sessions.Count >= SessionLimit)
+            if (sessions.Count + activeEphemeralSqlConnections >= SessionLimit)
                 throw new RequestException("SESSION_LIMIT", "This query was not executed: " + SessionLimit.ToString("N0", CultureInfo.InvariantCulture) + " query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. "
                     + "Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again.");
             var session = new QuerySession(args.ConnectionId, CreateConnection(args.ConnectionId, args.Database, stateful: true));

@@ -248,6 +248,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .object-search-pane .object-search-query { gap: 0; padding: 0; }
 .object-search-pane .object-search-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .explorer-tools-bar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.oe-multi-bar { height: 26px; flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); padding: 0 var(--varia-space-2); background: var(--varia-list-inactiveSelectionBackground); border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); color: var(--varia-list-inactiveSelectionForeground); }
+.oe-multi-bar-label { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); font-weight: 600; }
+.oe-multi-bar-action { height: 20px; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); line-height: 1; }
+.oe-multi-bar-clear { width: 20px; height: 20px; padding: 0; }
+.oe-multi-bar-clear .codicon { font-size: var(--varia-glyph-sm); }
+.oe-multi-bar button:focus-visible { outline-offset: -2px; }
 .object-search-pane .object-search-field { flex: 1 1 0; min-width: 0; max-width: none; }
 .object-search-pane .object-search-field .icon-button { width: 20px; height: 20px; }
 .object-search-pane .object-search-pane-filters, .object-search-pane .object-search-pane-status, .object-search-pane > .object-search-query > .object-search-index { padding: var(--varia-space-1) var(--varia-space-2) 0; }
@@ -285,6 +291,11 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 :root[data-theme-type="light"] .explorer-row.server[data-accent]::after { opacity: 0.32; }
 .oe-server-top { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-md); min-width: 0; }
 .oe-server-sub { position: relative; z-index: 1; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-line-xs); padding-left: 44px; min-width: 0; }
+.explorer-row.server[data-has-check] .oe-server-sub { padding-left: 62px; }
+.oe-server-check { width: 14px; height: 14px; flex: none; display: inline-grid; place-items: center; box-sizing: border-box; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); cursor: pointer; }
+.oe-server-check[data-checked] { background: var(--varia-button-background); border-color: var(--varia-button-background); color: var(--varia-button-foreground); }
+.oe-server-check .codicon { font-size: var(--varia-glyph-sm); line-height: 1; }
+.oe-icon-muted { opacity: 0.55; display: inline-flex; flex: none; }
 .oe-server-sub .oe-sublabel { font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
 .oe-server-sub-end { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; margin-left: auto; }
 .oe-server-sub-end:empty { display: none; }
@@ -292,7 +303,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
-.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
+.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
+.explorer-tree:focus .explorer-row[data-focused] { outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; }
 /* Pinned shortcuts overlay a fixed scroll window, stopping before its native scrollbars. */
 .explorer-pin-band { position: absolute; left: 0; z-index: 1; width: var(--explorer-tree-width); overflow: clip; background: var(--varia-sideBar-background); }
 .explorer-pin-band[data-edge="top"] { top: 0; anchor-name: --explorer-pins-top; }
@@ -309,6 +321,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .explorer-pin-band > .explorer-pinned-server[data-current-section] { background: var(--varia-list-inactiveSelectionBackground); box-shadow: inset 0 1px 0 var(--varia-sideBarSectionHeader-border), inset 0 -1px 0 var(--varia-sideBarSectionHeader-border); transition: none; }
 .explorer-pin-more { display: flex; align-items: center; justify-content: space-between; height: var(--varia-row); padding-inline-start: var(--varia-space-2); color: var(--varia-descriptionForeground); }
 .explorer-pinned-server.explorer-row:hover, .explorer-pin-more:hover:not(:disabled) { background: var(--varia-list-hoverBackground); color: inherit; }
+.explorer-pin-band > .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-pinned-server.explorer-row[data-multi-selected]:hover { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.explorer-tree-frame:focus-within .explorer-pin-band > .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-tree-frame:focus-within .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-tree-frame:focus-within .explorer-pinned-server.explorer-row[data-multi-selected]:hover { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); transition: none; }
 .explorer-pinned-server:focus-visible, .explorer-pin-more:focus-visible { outline-offset: -2px; }
 .explorer-pin-menu { position: fixed; inset: auto; margin: 0; width: anchor-size(width); max-height: var(--explorer-tree-height); padding: 2px 0; overflow: auto; overscroll-behavior: contain; color: var(--varia-menu-foreground); background: var(--varia-menu-background); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .explorer-pin-band[data-edge="top"] .explorer-pin-menu { position-anchor: --explorer-pins-top; position-area: bottom; }
@@ -326,8 +340,8 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
    the active server's, a hovered or a selected row. The order and states follow the row's own rules above. */
 .explorer-row.active-connection .oe-badge { background: linear-gradient(var(--varia-objectExplorer-activeConnectionBackground), var(--varia-objectExplorer-activeConnectionBackground)) var(--varia-sideBar-background); }
 .explorer-row:hover .oe-badge { background: linear-gradient(var(--varia-list-hoverBackground), var(--varia-list-hoverBackground)) var(--varia-sideBar-background); }
-.explorer-row[aria-selected="true"] .oe-badge { background: linear-gradient(var(--varia-list-inactiveSelectionBackground), var(--varia-list-inactiveSelectionBackground)) var(--varia-sideBar-background); }
-.explorer-tree:focus .explorer-row[aria-selected="true"] .oe-badge { background: linear-gradient(var(--varia-list-activeSelectionBackground), var(--varia-list-activeSelectionBackground)) var(--varia-sideBar-background); }
+.explorer-row[aria-selected="true"] .oe-badge, .explorer-pinned-server[data-multi-selected] .oe-badge { background: linear-gradient(var(--varia-list-inactiveSelectionBackground), var(--varia-list-inactiveSelectionBackground)) var(--varia-sideBar-background); }
+.explorer-tree:focus .explorer-row[aria-selected="true"] .oe-badge, .explorer-tree-frame:focus-within .explorer-pinned-server[data-multi-selected] .oe-badge { background: linear-gradient(var(--varia-list-activeSelectionBackground), var(--varia-list-activeSelectionBackground)) var(--varia-sideBar-background); }
 .oe-badge[data-badge="loading"] { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @keyframes oe-spin { to { transform: rotate(360deg); } }
 :root.varia-reduced-motion .oe-badge[data-badge="loading"] { animation: none; }
@@ -342,7 +356,7 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .explorer-row.system-folder .oe-label { color: var(--varia-objectExplorer-sublabelForeground); }
 .explorer-row.system-folder .oe-icon.folder { opacity: 0.72; }
 .explorer-row.server .oe-label { font-weight: 600; }
-.explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
+.explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: var(--varia-disabledForeground); }
 /* Column rows prioritize column names ahead of SQL type sublabels so names stay legible before types truncate. */
 .explorer-row.column .oe-label { flex: 0 1 auto; width: auto; max-width: max-content; min-width: 0; }
 .explorer-row.column .oe-sublabel { flex: 1 1000 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
@@ -793,8 +807,24 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
   .explorer-row[aria-selected="true"] .oe-count, .explorer-row[aria-selected="true"] .oe-active { color: HighlightText; }
   /* Offline, inaccessible and disabled rows stay dimmed, as disabled menu items are. */
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
-  /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
-  .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .oe-icon-muted { opacity: 1; }
+  .oe-icon-muted .oe-icon { color: GrayText; }
+  .oe-multi-bar { background: Canvas; color: CanvasText; border-bottom-color: CanvasText; }
+  .oe-multi-bar-action { border-color: ButtonText; }
+  .oe-multi-bar-action:disabled { border-color: GrayText; color: GrayText; opacity: 1; }
+  .oe-server-check { forced-color-adjust: none; background: Canvas; border-color: CanvasText; color: CanvasText; }
+  .oe-server-check[data-checked] { background: Highlight; border-color: HighlightText; color: HighlightText; }
+  .explorer-pin-band > .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-pinned-server.explorer-row[data-multi-selected]:hover,
+  .explorer-tree-frame:focus-within .explorer-pin-band > .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-tree-frame:focus-within .explorer-pinned-server.explorer-row[data-multi-selected], .explorer-tree-frame:focus-within .explorer-pinned-server.explorer-row[data-multi-selected]:hover { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .explorer-pinned-server[data-multi-selected]:focus-visible { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .explorer-pinned-server[data-multi-selected] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
+  .explorer-pinned-server[data-multi-selected] .oe-sublabel, .explorer-pinned-server[data-multi-selected] .oe-icon, .explorer-pinned-server[data-multi-selected] .oe-twistie, .explorer-pinned-server[data-multi-selected] .oe-active { color: HighlightText; }
+  .explorer-pinned-server[data-multi-selected] .oe-icon .oe-badge { color: HighlightText; background: Highlight; }
+  .explorer-pinned-server[data-multi-selected] .oe-dot { border-color: HighlightText; background: HighlightText; }
+  .explorer-pinned-server[data-multi-selected] .oe-dot[data-state="error"], .explorer-pinned-server[data-multi-selected] .oe-dot[data-state="lost"] { border-color: HighlightText; background: Highlight; }
+  /* The theme's outline can vanish on the system's selection colour; the focused row gets a 2 px outline in CanvasText, or HighlightText when selected. */
+  .explorer-tree:focus .explorer-row[data-focused] { outline: 2px solid CanvasText; outline-offset: -2px; }
+  .explorer-tree:focus .explorer-row[data-focused][aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
   .oe-indent { background-image: none; }
   .explorer-row.server[data-accent]::before { display: none; }
   .explorer-row.server[data-accent]::after { border-color: CanvasText; opacity: 1; }

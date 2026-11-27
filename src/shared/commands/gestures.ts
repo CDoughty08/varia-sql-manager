@@ -82,8 +82,8 @@ export const gestureCatalog = {
     locked: 'Shift extends a selection everywhere, as in SSMS and the operating system.'
   },
   'grid.secondaryClick': {
-    title: 'Context Menu Click', description: 'Control+click is a right-click on macOS: it opens the context menu and keeps a selected block.',
-    kind: 'fixed', scope: 'resultsGrid', alsoIn: ['tableDesigner', 'objectExplorer'], action: 'click', target: 'a cell or header', modifiers: ['ctrl'], platforms: ['darwin'],
+    title: 'Context Menu Click', description: 'Control+click is a right-click on macOS: it opens the context menu and keeps the current selection.',
+    kind: 'fixed', scope: 'resultsGrid', alsoIn: ['tableDesigner', 'objectExplorer'], action: 'click', target: 'a cell, header or server', modifiers: ['ctrl'], platforms: ['darwin'],
     locked: 'macOS treats Control+click as a right-click.'
   },
   'grid.addSortKey': {
@@ -121,6 +121,12 @@ export const gestureCatalog = {
     title: 'Open Peek as Tab', description: 'Opens Peek on the object (a table, procedure, index, login and so on) in a document tab.',
     kind: 'pointerCommand', scope: 'objectExplorer', action: 'click', target: 'an object', modifiers: ['mod'],
     choices: [['mod'], ['shift']], keyboard: ['explorer.openPeekTab']
+  },
+  'explorer.addToSelection': {
+    title: 'Add Server to Selection', description: 'Adds or removes a connected top-level server in the multi-server selection.',
+    kind: 'fixed', scope: 'objectExplorer', place: 'serverRow', action: 'click', target: 'a connection', modifiers: ['mod'],
+    locked: 'Standard multi-selection gesture on top-level connections; Space (and Ctrl+Space on Windows/Linux) toggles from the keyboard.',
+    keyboard: ['explorer.toggleMultiSelect']
   },
   // The column profile's peek: while held over the panel, it shows the other list (only the selected columns, or every column
   // when Selected Columns Only is on). Scoped to the panel: over the grid the same Ctrl is Add to Selection and Ctrl+C.

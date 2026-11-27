@@ -134,7 +134,10 @@ internal sealed record MultiTargetContext(
     Func<bool> IsAbandoned,
     QueryBudget Budget,
     QueryMessages Messages,
-    QueryEventSink Events);
+    QueryEventSink Events,
+    Func<bool>? IsUserCancelled = null,
+    Func<bool>? IsTimedOut = null,
+    bool ReadOnlyValidated = false);
 
 internal sealed record MultiTargetPhase1Result(
     MultiTargetOutcome Outcome,

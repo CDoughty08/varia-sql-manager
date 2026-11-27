@@ -194,7 +194,8 @@ internal static class ResultPivoter
         if (!reserve(bytes)) throw new PivotTooLargeException();
 
         var figures = spec.Values.Select(value => value.Column >= 0 && ViewSorter.KindOf(set.Columns[value.Column], set.Wires[value.Column]) == ViewSorter.Kind.Exact
-            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column]), set.Columns[value.Column].BigQueryDecimal) : new PivotFigures(value, cells, false)).ToArray();
+            ? new PivotFigures(value, cells, true, Scale(set.Columns[value.Column]), set.Columns[value.Column].BigQueryDecimal)
+            : new PivotFigures(value, cells, false)).ToArray();
         // A row outside the view (no row group) counts nowhere; every other row counts in its cell and its row group's total.
         int CellOf(int row, out int total)
         {
@@ -600,7 +601,19 @@ internal static class PivotOutput
         var column = source.Columns[value.Column];
         if (value.Aggregate is PivotAggregate.Min or PivotAggregate.Max) return column with { Name = name, Nullable = true };
         if (ViewSorter.KindOf(column, source.Wires[value.Column]) != ViewSorter.Kind.Exact) return new ResultColumn(name, "float", "text", Precision: 53);
-        if (column.BigQueryDecimal == BigQueryDecimalKind.BigNumeric) return new ResultColumn(name, "BIGNUMERIC", "text", Precision: 77, Scale: 38) { SortKind = ColumnTypes.Decimal, BigQueryDecimal = column.BigQueryDecimal };
+        if (column.BigQueryDecimal == BigQueryDecimalKind.BigNumeric)
+            return new ResultColumn(name, "BIGNUMERIC", "text", Precision: 77, Scale: 38) { SortKind = ColumnTypes.Decimal, BigQueryDecimal = column.BigQueryDecimal };
+        if (column.BigQueryDecimal == BigQueryDecimalKind.WideDecimal)
+        {
+            var wideScale = ResultPivoter.Scale(column);
+            if (value.Aggregate == PivotAggregate.Avg) wideScale = Math.Max(wideScale, 6);
+            var widePrec = Math.Clamp(Math.Max(column.Precision ?? 77, wideScale + 38), 1, 77);
+            return new ResultColumn(name, "decimal(" + widePrec.ToString(CultureInfo.InvariantCulture) + "," + wideScale.ToString(CultureInfo.InvariantCulture) + ")", "text", Precision: widePrec, Scale: wideScale)
+            {
+                SortKind = ColumnTypes.Decimal,
+                BigQueryDecimal = column.BigQueryDecimal
+            };
+        }
         var scale = ResultPivoter.Scale(column);
         if (value.Aggregate == PivotAggregate.Avg) scale = Math.Max(scale, 6);
         else if (ResultPivoter.IsInteger(column)) return new ResultColumn(name, "bigint", "text");
@@ -735,11 +748,17 @@ internal static class PivotOutput
             var average = value.Aggregate == PivotAggregate.Avg;
             var shown = average ? Math.Max(figures.Scale, 6) : figures.Scale;
             var units = average ? RoundedAverage(wide[cell], count, figures.Scale, shown) : wide[cell];
-            if (figures.DecimalKind == BigQueryDecimalKind.BigNumeric)
+            if (figures.DecimalKind is BigQueryDecimalKind.BigNumeric or BigQueryDecimalKind.WideDecimal)
             {
                 if (units.GetBitLength() > 255) { builder.AppendNull(error: true); return 0; }
-                var digits = BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture).PadLeft(39, '0');
-                builder.AppendText((units.Sign < 0 ? "-" : "") + digits[..^38] + "." + digits[^38..]);
+                var frac = figures.DecimalKind == BigQueryDecimalKind.BigNumeric ? 38 : shown;
+                if (frac == 0)
+                    builder.AppendText((units.Sign < 0 ? "-" : "") + BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture));
+                else
+                {
+                    var digits = BigInteger.Abs(units).ToString(CultureInfo.InvariantCulture).PadLeft(frac + 1, '0');
+                    builder.AppendText((units.Sign < 0 ? "-" : "") + digits[..^frac] + "." + digits[^frac..]);
+                }
             }
             // NUMERIC holds 29 whole digits whatever a column's declared scale, so test the result at NUMERIC's own scale of nine.
             else if (BigInteger.Abs(units) * BigInteger.Pow(10, 9 - shown) >= (BigInteger)ResultPivoter.Decimal38) builder.AppendNull(error: true);

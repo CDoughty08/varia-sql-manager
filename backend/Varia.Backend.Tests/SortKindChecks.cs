@@ -140,8 +140,11 @@ internal static class SortKindChecks
                 kinds[c] = type switch
                 {
                     "bit" or "tinyint" or "smallint" or "int" or "bigint" or "decimal" or "numeric" or "money" or "smallmoney" => CellHasher.Kind.Exact,
+                    "real" or "float" => CellHasher.Kind.Float,
                     "uniqueidentifier" => CellHasher.Kind.Guid,
                     "datetimeoffset" => CellHasher.Kind.Ticks,
+                    "date" or "datetime" or "datetime2" or "smalldatetime" => CellHasher.Kind.DateTime,
+                    "time" => CellHasher.Kind.Time,
                     _ => CellHasher.Kind.Bytes
                 };
             }

@@ -1,5 +1,8 @@
 namespace Varia.Backend.BigQuery;
 
+/// <summary>A GoogleSQL statement that cannot execute inside a coordinated BigQuery multi-statement transaction.</summary>
+internal sealed record BigQueryTransactionBlocker(int Line, string Keyword, string Message);
+
 /// <summary>
 /// The backend's own GoogleSQL scanner (docs/bigquery.md, Storage Read): whether a statement orders its rows at the top
 /// level, so its result is read through one Storage Read stream and keeps that order. It knows GoogleSQL's comments
@@ -98,6 +101,792 @@ internal static class GoogleSqlScanner
     /// changed no object, so the index marks nothing for it.</summary>
     public static bool MayChangeObjects(string sql) => Tokens(sql).Any(token => token.Kind == Kind.Word && ObjectWords.Contains(sql.Substring(token.Start, token.Length)));
 
+    /// <summary>Whether <paramref name="sql"/> is a single read-only <c>SELECT</c> or <c>WITH ... SELECT</c> statement
+    /// (allowing parenthesized queries and trailing semicolons, rejecting multi-statement scripts and non-SELECT/WITH statements).</summary>
+    public static bool IsReadOnlySelect(string sql) => InspectReadOnlySelect(sql).Allowed;
+
+    /// <summary>Checks <paramref name="sql"/> against the Cross-Engine single-statement SELECT/WITH allowlist and returns
+    /// the 1-based line and reason of the first violation, if any.</summary>
+    internal static (bool Allowed, int Line, string Message) InspectReadOnlySelect(string sql)
+    {
+        var tokens = Tokens(sql);
+        var statements = SplitStatements(tokens);
+        if (statements.Count == 0)
+            return (false, 1, "Cross-Engine BigQuery requires a single SELECT or WITH statement.");
+        var firstStmt = statements[0];
+        var firstIdx = 0;
+        while (firstIdx < firstStmt.Count && firstStmt[firstIdx].Kind == Kind.Open) firstIdx++;
+        if (firstIdx >= firstStmt.Count)
+        {
+            var openTok = firstStmt[0];
+            return (false, LineOf(sql, openTok.Start), "Only a single SELECT or WITH statement is allowed in Cross-Engine BigQuery mode.");
+        }
+        var first = firstStmt[firstIdx];
+        if (first.Kind != Kind.Word || !(Is(sql, first, "SELECT") || Is(sql, first, "WITH")))
+        {
+            var kw = first.Kind == Kind.Word ? sql.Substring(first.Start, first.Length).ToUpperInvariant() : sql.Substring(first.Start, first.Length);
+            return (false, LineOf(sql, first.Start), $"Only a single SELECT or WITH statement is allowed in Cross-Engine BigQuery mode (found {kw}).");
+        }
+        if (Is(sql, first, "WITH"))
+        {
+            var (verb, verbIndex) = ResolveWithMain(sql, firstStmt, firstIdx);
+            if (!string.Equals(verb, "SELECT", StringComparison.OrdinalIgnoreCase))
+            {
+                var targetTok = verbIndex >= 0 && verbIndex < firstStmt.Count ? firstStmt[verbIndex] : first;
+                return (false, LineOf(sql, targetTok.Start), $"Only a single SELECT or WITH ... SELECT statement is allowed in Cross-Engine BigQuery mode (found {verb}).");
+            }
+        }
+        if (statements.Count > 1)
+        {
+            var extra = statements[1][0];
+            return (false, LineOf(sql, extra.Start), "Cross-Engine BigQuery supports a single SELECT or WITH statement only.");
+        }
+        return (true, 1, "");
+    }
+
+    static readonly HashSet<string> ScriptStarterWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "DECLARE", "SET", "BEGIN", "IF", "CASE", "LOOP", "WHILE", "FOR", "REPEAT", "ASSERT", "RAISE", "CALL", "EXECUTE", "RETURN", "LEAVE", "ITERATE", "BREAK", "CONTINUE"
+    };
+
+    /// <summary>Whether <paramref name="sql"/> is a multi-statement BigQuery script (multiple statements separated by
+    /// semicolons, or a scripting control-flow/procedural statement) whose free dry-run defaults to US when no dataset or
+    /// connection location is set.</summary>
+    static bool IsLabelToken(string text, Token tok) =>
+        tok.Kind == Kind.Word || (tok.Kind == Kind.Other && tok.Length > 0 && text[tok.Start] == '`');
+
+    public static bool IsMultiStatementScript(string sql)
+    {
+        var tokens = Tokens(sql);
+        var statements = SplitStatements(tokens);
+        if (statements.Count > 1) return true;
+        if (statements.Count == 0) return false;
+        var stmt = statements[0];
+        var i = 0;
+        while (i < stmt.Count && stmt[i].Kind == Kind.Open) i++;
+        if (i + 1 < stmt.Count && IsLabelToken(sql, stmt[i]) && IsChar(sql, stmt[i + 1], ':')) return true;
+        if (i < stmt.Count && stmt[i].Kind == Kind.Word && ScriptStarterWords.Contains(sql.Substring(stmt[i].Start, stmt[i].Length))) return true;
+        return false;
+    }
+
+    static readonly HashSet<string> BlockEnders = new(StringComparer.OrdinalIgnoreCase) { "IF", "WHILE", "FOR", "LOOP", "REPEAT", "CASE" };
+    static readonly HashSet<string> SimpleStmtStarters = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SELECT", "WITH", "INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE",
+        "CREATE", "ALTER", "DROP", "UNDROP", "COMMIT", "ROLLBACK",
+        "EXECUTE", "CALL", "EXPORT", "LOAD", "DECLARE", "SET", "ASSERT", "RAISE",
+        "RETURN", "LEAVE", "ITERATE", "BREAK", "CONTINUE", "GRANT", "REVOKE",
+        "EXPLAIN", "DESCRIBE", "ANALYZE"
+    };
+    static readonly HashSet<string> WhilePrevContWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AND", "OR", "NOT", "IN", "IS", "AS", "LIKE", "BETWEEN", "CASE", "WHEN", "THEN", "ELSE", "SELECT", "FROM", "WHERE", "BY", "HAVING", "OVER", "CAST", "EXISTS"
+    };
+    static readonly HashSet<string> WhileNextInfixWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "AND", "OR", "NOT", "IS", "IN", "LIKE", "BETWEEN", "THEN", "ELSE", "END", "AS", "WHERE"
+    };
+    static readonly HashSet<string> IntervalDateParts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "YEAR", "YEARS", "QUARTER", "QUARTERS", "MONTH", "MONTHS", "WEEK", "WEEKS", "DAY", "DAYS",
+        "HOUR", "HOURS", "MINUTE", "MINUTES", "SECOND", "SECONDS", "MILLISECOND", "MILLISECONDS", "MICROSECOND", "MICROSECONDS"
+    };
+
+    /// <summary>Finds statements in <paramref name="sql"/> that cannot run inside a coordinated BigQuery transaction:
+    /// permanent DDL, explicit BEGIN/COMMIT/ROLLBACK [TRANSACTION], EXECUTE IMMEDIATE, CALL, EXPORT DATA,
+    /// EXPORT TABLE METADATA, EXPORT MODEL, LOAD DATA, GRANT, and REVOKE. Allows CREATE/DROP TEMP TABLE,
+    /// DROP TABLE _SESSION.*, and DML.</summary>
+    public static IReadOnlyList<BigQueryTransactionBlocker> FindTransactionBlockers(string sql)
+    {
+        var tokens = Tokens(sql);
+        var blockers = new List<BigQueryTransactionBlocker>();
+        var i = 0;
+
+        void ConsumeToSemicolon()
+        {
+            var depth = 0;
+            while (i < tokens.Count)
+            {
+                var t = tokens[i];
+                if (t.Kind == Kind.Open) depth++;
+                else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
+                else if (t.Kind == Kind.Semicolon && depth == 0) { i++; break; }
+                i++;
+            }
+        }
+
+        void ConsumeUntilKeyword(string stop1, string? stop2, bool consumeStop)
+        {
+            var depth = 0;
+            var caseDepth = 0;
+            while (i < tokens.Count)
+            {
+                var t = tokens[i];
+                if (t.Kind == Kind.Open) depth++;
+                else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
+                else if (depth == 0 && t.Kind == Kind.Semicolon)
+                {
+                    // Never allow a header scan (IF/ELSEIF/WHEN/EXCEPTION/CASE) to cross a statement boundary.
+                    i++;
+                    break;
+                }
+                else if (depth == 0 && t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
+                {
+                    if (Is(sql, t, "CASE")) caseDepth++;
+                    else if (Is(sql, t, "END") && caseDepth > 0) caseDepth--;
+                    else if (caseDepth == 0 && (Is(sql, t, stop1) || (stop2 is not null && Is(sql, t, stop2))))
+                    {
+                        if (consumeStop) i++;
+                        break;
+                    }
+                }
+                i++;
+            }
+        }
+
+        void ConsumeProcedureBeginEnd()
+        {
+            var stack = new Stack<string>();
+            var parenDepth = 0;
+            var bracketDepth = 0;
+            var atBlockBoundary = true;
+            string? headerKind = null;
+            var inSimpleStmt = false;
+            var inProcHeader = false;
+            var seenProcParams = false;
+            while (i < tokens.Count)
+            {
+                var t = tokens[i];
+                var top = stack.Count > 0 ? stack.Peek() : null;
+                if (t.Kind == Kind.Open)
+                {
+                    if (atBlockBoundary && !inSimpleStmt && parenDepth == 0 && top != "exprCase")
+                    {
+                        inSimpleStmt = true;
+                        atBlockBoundary = false;
+                        headerKind = null;
+                    }
+                    parenDepth++;
+                }
+                else if (t.Kind == Kind.Close)
+                {
+                    if (parenDepth == 1 && inProcHeader) seenProcParams = true;
+                    if (parenDepth > 0) parenDepth--;
+                }
+                else if (IsChar(sql, t, '[')) bracketDepth++;
+                else if (IsChar(sql, t, ']')) { if (bracketDepth > 0) bracketDepth--; }
+                else if (t.Kind == Kind.Semicolon && parenDepth == 0)
+                {
+                    inSimpleStmt = false;
+                    inProcHeader = false;
+                    seenProcParams = false;
+                    atBlockBoundary = true;
+                    headerKind = null;
+                }
+                else if (t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
+                {
+                    var atBoundary = atBlockBoundary && !inSimpleStmt && parenDepth == 0 && top != "exprCase";
+                    var atNestedProcBegin = inProcHeader && seenProcParams && parenDepth == 0 && top != "exprCase";
+                    if (atBoundary && i + 1 < tokens.Count && IsChar(sql, tokens[i + 1], ':'))
+                    {
+                        i += 2;
+                        continue;
+                    }
+                    if (Is(sql, t, "BEGIN") && (atBoundary || atNestedProcBegin))
+                    {
+                        var hasNext = i + 1 < tokens.Count;
+                        if (!hasNext || tokens[i + 1].Kind == Kind.Semicolon
+                            || (tokens[i + 1].Kind == Kind.Word && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"))
+                                && !(i + 2 < tokens.Count && IsChar(sql, tokens[i + 2], ':'))))
+                        {
+                            inSimpleStmt = true;
+                            atBlockBoundary = false;
+                            headerKind = null;
+                        }
+                        else
+                        {
+                            stack.Push("begin");
+                            atBlockBoundary = true;
+                            headerKind = null;
+                            if (atNestedProcBegin)
+                            {
+                                inSimpleStmt = false;
+                                inProcHeader = false;
+                                seenProcParams = false;
+                            }
+                        }
+                    }
+                    else if (Is(sql, t, "CASE"))
+                    {
+                        if (atBoundary)
+                        {
+                            stack.Push("stmtCase");
+                            atBlockBoundary = false;
+                            headerKind = "then";
+                        }
+                        else stack.Push("exprCase");
+                    }
+                    else if (Is(sql, t, "END"))
+                    {
+                        var nextIsWord = i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word;
+                        var afterNextEnds = i + 2 >= tokens.Count || tokens[i + 2].Kind == Kind.Semicolon;
+                        var afterNextHasLabel = i + 2 < tokens.Count && IsLabelToken(sql, tokens[i + 2])
+                            && (i + 3 >= tokens.Count || tokens[i + 3].Kind == Kind.Semicolon);
+                        if (top == "exprCase") stack.Pop();
+                        else if (top == "stmtCase" && parenDepth == 0)
+                        {
+                            stack.Pop();
+                            atBlockBoundary = false;
+                            headerKind = null;
+                            if (nextIsWord && Is(sql, tokens[i + 1], "CASE") && afterNextEnds) i++;
+                        }
+                        else if (parenDepth == 0)
+                        {
+                            if (nextIsWord && BlockEnders.Contains(sql.Substring(tokens[i + 1].Start, tokens[i + 1].Length)) && (afterNextEnds || afterNextHasLabel))
+                            {
+                                atBlockBoundary = false;
+                                headerKind = null;
+                                i += afterNextHasLabel ? 3 : 2;
+                                continue;
+                            }
+                            if (stack.Count > 0) stack.Pop();
+                            atBlockBoundary = false;
+                            headerKind = null;
+                            if (i + 1 < tokens.Count && IsLabelToken(sql, tokens[i + 1]) && afterNextEnds) i++;
+                        }
+                        if (stack.Count == 0)
+                        {
+                            i++;
+                            if (i < tokens.Count && tokens[i].Kind == Kind.Semicolon) i++;
+                            break;
+                        }
+                    }
+                    else if (atBoundary)
+                    {
+                        if (Is(sql, t, "IF") || Is(sql, t, "ELSEIF") || Is(sql, t, "WHEN") || Is(sql, t, "EXCEPTION"))
+                        {
+                            atBlockBoundary = false;
+                            headerKind = "then";
+                        }
+                        else if (Is(sql, t, "WHILE") || Is(sql, t, "FOR"))
+                        {
+                            atBlockBoundary = false;
+                            headerKind = "do";
+                        }
+                        else if (Is(sql, t, "UNTIL"))
+                        {
+                            atBlockBoundary = false;
+                            headerKind = "until";
+                        }
+                        else if (Is(sql, t, "ELSE") || Is(sql, t, "LOOP") || Is(sql, t, "REPEAT"))
+                        {
+                            atBlockBoundary = true;
+                            headerKind = null;
+                        }
+                        else if (SimpleStmtStarters.Contains(sql.Substring(t.Start, t.Length)))
+                        {
+                            inSimpleStmt = true;
+                            atBlockBoundary = false;
+                            headerKind = null;
+                            if (Is(sql, t, "CREATE") && IsCreateProcedureAt(sql, tokens, i))
+                            {
+                                inProcHeader = true;
+                                seenProcParams = false;
+                            }
+                        }
+                    }
+                    else if (!inSimpleStmt && parenDepth == 0 && bracketDepth == 0 && top != "exprCase")
+                    {
+                        if (headerKind == "then" && Is(sql, t, "THEN"))
+                        {
+                            atBlockBoundary = true;
+                            headerKind = null;
+                        }
+                        else if (headerKind == "do" && Is(sql, t, "DO") && IsWhileDoTerminator(sql, tokens, i, rejectAfterWhileOrFor: true))
+                        {
+                            atBlockBoundary = true;
+                            headerKind = null;
+                        }
+                    }
+                }
+                i++;
+            }
+        }
+
+        while (i < tokens.Count)
+        {
+            var cur = tokens[i];
+            if (cur.Kind == Kind.Semicolon) { i++; continue; }
+            if (cur.Kind != Kind.Word)
+            {
+                if (cur.Kind == Kind.Open) ConsumeToSemicolon();
+                else i++;
+                continue;
+            }
+            // Labeled block or loop (`lbl: BEGIN ...`, `lbl: LOOP ...`).
+            if (i + 1 < tokens.Count && IsChar(sql, tokens[i + 1], ':'))
+            {
+                i += 2;
+                continue;
+            }
+            if (Is(sql, cur, "EXCEPTION"))
+            {
+                i++;
+                ConsumeUntilKeyword("THEN", null, consumeStop: true);
+                continue;
+            }
+            if (Is(sql, cur, "IF") || Is(sql, cur, "ELSEIF"))
+            {
+                i++;
+                ConsumeUntilKeyword("THEN", null, consumeStop: true);
+                continue;
+            }
+            if (Is(sql, cur, "ELSE") || Is(sql, cur, "LOOP") || Is(sql, cur, "REPEAT"))
+            {
+                i++;
+                continue;
+            }
+            if (Is(sql, cur, "FOR"))
+            {
+                i++;
+                if (i < tokens.Count && tokens[i].Kind == Kind.Word) i++;
+                var depth = 0;
+                while (i < tokens.Count)
+                {
+                    var t = tokens[i];
+                    if (t.Kind == Kind.Open) depth++;
+                    else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
+                    else if (depth == 0 && t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i) && Is(sql, t, "IN")) { i++; break; }
+                    i++;
+                }
+                ConsumeUntilKeyword("DO", null, consumeStop: true);
+                continue;
+            }
+            if (Is(sql, cur, "WHILE"))
+            {
+                i++;
+                var depth = 0;
+                var bracketDepth = 0;
+                var caseDepth = 0;
+                var sawExpr = false;
+                while (i < tokens.Count)
+                {
+                    var t = tokens[i];
+                    if (t.Kind == Kind.Open) depth++;
+                    else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
+                    else if (IsChar(sql, t, '[')) bracketDepth++;
+                    else if (IsChar(sql, t, ']')) { if (bracketDepth > 0) bracketDepth--; }
+                    else if (depth == 0 && bracketDepth == 0 && t.Kind == Kind.Semicolon) { i++; break; }
+                    else if (depth == 0 && bracketDepth == 0 && t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
+                    {
+                        if (Is(sql, t, "CASE")) caseDepth++;
+                        else if (Is(sql, t, "END") && caseDepth > 0) caseDepth--;
+                        else if (caseDepth == 0 && Is(sql, t, "DO") && sawExpr && IsWhileDoTerminator(sql, tokens, i, rejectAfterWhileOrFor: false)) { i++; break; }
+                    }
+                    sawExpr = true;
+                    i++;
+                }
+                continue;
+            }
+            if (Is(sql, cur, "UNTIL"))
+            {
+                i++;
+                var depth = 0;
+                var caseDepth = 0;
+                while (i < tokens.Count)
+                {
+                    var t = tokens[i];
+                    if (t.Kind == Kind.Open) depth++;
+                    else if (t.Kind == Kind.Close) { if (depth > 0) depth--; }
+                    else if (depth == 0)
+                    {
+                        if (t.Kind == Kind.Semicolon) { i++; break; }
+                        if (t.Kind == Kind.Word && !IsQualifiedWord(sql, tokens, i))
+                        {
+                            if (Is(sql, t, "CASE")) caseDepth++;
+                            else if (Is(sql, t, "END") && caseDepth > 0) caseDepth--;
+                            else if (caseDepth == 0 && Is(sql, t, "END"))
+                            {
+                                i++;
+                                if (i < tokens.Count && tokens[i].Kind == Kind.Word && Is(sql, tokens[i], "REPEAT")) i++;
+                                if (i < tokens.Count && IsLabelToken(sql, tokens[i]) && (i + 1 >= tokens.Count || tokens[i + 1].Kind == Kind.Semicolon)) i++;
+                                if (i < tokens.Count && tokens[i].Kind == Kind.Semicolon) i++;
+                                break;
+                            }
+                        }
+                    }
+                    i++;
+                }
+                continue;
+            }
+            if (Is(sql, cur, "CASE"))
+            {
+                i++;
+                ConsumeUntilKeyword("WHEN", "ELSE", consumeStop: false);
+                continue;
+            }
+            if (Is(sql, cur, "WHEN"))
+            {
+                i++;
+                ConsumeUntilKeyword("THEN", null, consumeStop: true);
+                continue;
+            }
+            if (Is(sql, cur, "END"))
+            {
+                if (i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word && BlockEnders.Contains(sql.Substring(tokens[i + 1].Start, tokens[i + 1].Length))) i += 2;
+                else i++;
+                if (i < tokens.Count && IsLabelToken(sql, tokens[i]) && (i + 1 >= tokens.Count || tokens[i + 1].Kind == Kind.Semicolon)) i++;
+                if (i < tokens.Count && tokens[i].Kind == Kind.Semicolon) i++;
+                continue;
+            }
+            if (Is(sql, cur, "BEGIN"))
+            {
+                var hasNext = i + 1 < tokens.Count;
+                var nextIsTx = hasNext && tokens[i + 1].Kind == Kind.Word
+                    && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"))
+                    && !(i + 2 < tokens.Count && IsChar(sql, tokens[i + 2], ':'));
+                if (nextIsTx || !hasNext || tokens[i + 1].Kind == Kind.Semicolon)
+                {
+                    var keyword = nextIsTx ? "BEGIN TRANSACTION" : "BEGIN";
+                    blockers.Add(new(LineOf(sql, cur.Start), keyword, $"Explicit {keyword} is not allowed in BigQuery Transaction mode (Varia manages the transaction automatically)."));
+                    ConsumeToSemicolon();
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            var line = LineOf(sql, cur.Start);
+            var mainUpper = sql.Substring(cur.Start, cur.Length).ToUpperInvariant();
+            if (mainUpper == "WITH")
+            {
+                var (verb, verbIndex) = ResolveWithMain(sql, tokens, i);
+                mainUpper = verb;
+                if (verbIndex > i) i = verbIndex;
+            }
+
+            if (mainUpper is "COMMIT" or "ROLLBACK")
+            {
+                var hasTx = i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word && (Is(sql, tokens[i + 1], "TRANSACTION") || Is(sql, tokens[i + 1], "TRAN"));
+                var keyword = hasTx ? mainUpper + " TRANSACTION" : mainUpper;
+                blockers.Add(new(line, keyword, $"Explicit {keyword} is not allowed in BigQuery Transaction mode (Varia coordinates commit and rollback across targets)."));
+                ConsumeToSemicolon();
+                continue;
+            }
+
+            if (mainUpper == "EXECUTE" && i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word && Is(sql, tokens[i + 1], "IMMEDIATE"))
+            {
+                blockers.Add(new(line, "EXECUTE IMMEDIATE", "EXECUTE IMMEDIATE is not allowed in BigQuery Transaction mode because dynamic SQL can bypass transaction safety checks."));
+                ConsumeToSemicolon();
+                continue;
+            }
+
+            if (mainUpper == "CALL")
+            {
+                blockers.Add(new(line, "CALL", "CALL is not allowed in BigQuery Transaction mode because stored procedures can run permanent DDL or commit transactions."));
+                ConsumeToSemicolon();
+                continue;
+            }
+
+            if (mainUpper == "EXPORT" && i + 2 < tokens.Count && tokens[i + 1].Kind == Kind.Word && Is(sql, tokens[i + 1], "TABLE")
+                && tokens[i + 2].Kind == Kind.Word && Is(sql, tokens[i + 2], "METADATA"))
+            {
+                blockers.Add(new(line, "EXPORT TABLE METADATA", "EXPORT TABLE METADATA cannot be rolled back and is not allowed in BigQuery Transaction mode."));
+                ConsumeToSemicolon();
+                continue;
+            }
+
+            if ((mainUpper == "EXPORT" && i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word && (Is(sql, tokens[i + 1], "DATA") || Is(sql, tokens[i + 1], "MODEL")))
+                || (mainUpper == "LOAD" && i + 1 < tokens.Count && tokens[i + 1].Kind == Kind.Word && Is(sql, tokens[i + 1], "DATA")))
+            {
+                var keyword = mainUpper + " " + sql.Substring(tokens[i + 1].Start, tokens[i + 1].Length).ToUpperInvariant();
+                blockers.Add(new(line, keyword, $"{keyword} cannot be rolled back and is not allowed in BigQuery Transaction mode."));
+                ConsumeToSemicolon();
+                continue;
+            }
+
+            if (mainUpper is "GRANT" or "REVOKE")
+            {
+                blockers.Add(new(line, mainUpper, $"{mainUpper} is not allowed in BigQuery Transaction mode."));
+                ConsumeToSemicolon();
+                continue;
+            }
+
+            if (mainUpper is "CREATE" or "ALTER" or "DROP" or "UNDROP")
+            {
+                var probe = i + 1;
+                var isTemp = false;
+                if (probe + 1 < tokens.Count && tokens[probe].Kind == Kind.Word && Is(sql, tokens[probe], "OR")
+                    && tokens[probe + 1].Kind == Kind.Word && Is(sql, tokens[probe + 1], "REPLACE"))
+                    probe += 2;
+                if (probe < tokens.Count && tokens[probe].Kind == Kind.Word && (Is(sql, tokens[probe], "TEMP") || Is(sql, tokens[probe], "TEMPORARY")))
+                {
+                    isTemp = true;
+                    probe++;
+                }
+                if (probe < tokens.Count && tokens[probe].Kind == Kind.Word && (Is(sql, tokens[probe], "PUBLIC") || Is(sql, tokens[probe], "PRIVATE")))
+                    probe++;
+                var objWord = probe < tokens.Count && tokens[probe].Kind == Kind.Word ? sql.Substring(tokens[probe].Start, tokens[probe].Length).ToUpperInvariant() : "";
+                var secondObj = probe + 1 < tokens.Count && tokens[probe + 1].Kind == Kind.Word ? sql.Substring(tokens[probe + 1].Start, tokens[probe + 1].Length).ToUpperInvariant() : "";
+                var isTableFunction = IsTableFunction(sql, tokens, probe, mainUpper, objWord, secondObj);
+                var kindLabel = objWord == "MATERIALIZED" && secondObj == "VIEW" ? "MATERIALIZED VIEW"
+                    : objWord == "EXTERNAL" && secondObj == "TABLE" ? "EXTERNAL TABLE"
+                    : isTableFunction ? "TABLE FUNCTION"
+                    : objWord == "AGGREGATE" && secondObj == "FUNCTION" ? "AGGREGATE FUNCTION"
+                    : objWord;
+                var keyword = string.IsNullOrEmpty(kindLabel) ? mainUpper : $"{mainUpper}{(isTemp ? " TEMP" : "")} {kindLabel}";
+
+                var allowed = false;
+                if (mainUpper == "CREATE" && isTemp && kindLabel == "TABLE")
+                {
+                    allowed = true;
+                }
+                else if (mainUpper == "DROP" && kindLabel == "TABLE")
+                {
+                    var targetIdx = probe + 1;
+                    if (targetIdx + 1 < tokens.Count && tokens[targetIdx].Kind == Kind.Word && Is(sql, tokens[targetIdx], "IF")
+                        && tokens[targetIdx + 1].Kind == Kind.Word && Is(sql, tokens[targetIdx + 1], "EXISTS"))
+                        targetIdx += 2;
+                    var isSession = IsSessionTarget(sql, tokens, targetIdx);
+                    allowed = isTemp || isSession;
+                }
+
+                if (!allowed)
+                {
+                    blockers.Add(new(line, keyword, $"{keyword} is not supported inside a BigQuery multi-statement transaction."));
+                }
+
+                if (mainUpper == "CREATE" && objWord == "PROCEDURE")
+                {
+                    var depth = 0;
+                    var seenParams = false;
+                    while (i < tokens.Count)
+                    {
+                        var t = tokens[i];
+                        if (t.Kind == Kind.Open) depth++;
+                        else if (t.Kind == Kind.Close)
+                        {
+                            if (depth == 1) seenParams = true;
+                            if (depth > 0) depth--;
+                        }
+                        else if (depth == 0)
+                        {
+                            if (t.Kind == Kind.Semicolon) { i++; break; }
+                            if (t.Kind == Kind.Word && Is(sql, t, "BEGIN") && seenParams && !IsQualifiedWord(sql, tokens, i))
+                            {
+                                ConsumeProcedureBeginEnd();
+                                break;
+                            }
+                        }
+                        i++;
+                    }
+                }
+                else
+                {
+                    ConsumeToSemicolon();
+                }
+                continue;
+            }
+
+            ConsumeToSemicolon();
+        }
+        return blockers;
+    }
+
+    static bool IsTableFunction(string sql, List<Token> tokens, int probe, string mainUpper, string objWord, string secondObj)
+    {
+        if (objWord != "TABLE" || secondObj != "FUNCTION") return false;
+        if (probe + 2 >= tokens.Count) return false;
+        var third = tokens[probe + 2];
+        if (third.Kind is Kind.Semicolon or Kind.Open) return false;
+        if (mainUpper == "DROP") return true;
+        if (third.Kind != Kind.Word) return true;
+        if (Is(sql, third, "AS") || Is(sql, third, "LIKE") || Is(sql, third, "DEFAULT") || Is(sql, third, "FOR")) return false;
+        var hasFourth = probe + 3 < tokens.Count;
+        if (Is(sql, third, "CLONE") || Is(sql, third, "COPY") || Is(sql, third, "PARTITION") || Is(sql, third, "CLUSTER"))
+            return hasFourth && (tokens[probe + 3].Kind == Kind.Open || IsChar(sql, tokens[probe + 3], '.'));
+        if (Is(sql, third, "OPTIONS"))
+        {
+            if (hasFourth && IsChar(sql, tokens[probe + 3], '.')) return true;
+            if (!hasFourth || tokens[probe + 3].Kind != Kind.Open) return true;
+            var depth = 1;
+            var p = probe + 4;
+            while (p < tokens.Count && depth > 0)
+            {
+                var tok = tokens[p];
+                if (tok.Kind == Kind.Open) depth++;
+                else if (tok.Kind == Kind.Close) depth--;
+                else if (depth == 1 && IsChar(sql, tok, '=')) return false;
+                p++;
+            }
+            return true;
+        }
+        return true;
+    }
+
+    static bool IsSessionTarget(string sql, List<Token> tokens, int targetIdx)
+    {
+        if (targetIdx >= tokens.Count) return false;
+        var tok = tokens[targetIdx];
+        var raw = sql.Substring(tok.Start, tok.Length).Replace("`", "", StringComparison.Ordinal);
+        if (string.Equals(raw, "_SESSION", StringComparison.OrdinalIgnoreCase)
+            && targetIdx + 1 < tokens.Count && IsChar(sql, tokens[targetIdx + 1], '.'))
+            return true;
+        return raw.StartsWith("_SESSION.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static bool IsCreateProcedureAt(string sql, List<Token> tokens, int idx)
+    {
+        var p = idx + 1;
+        if (p + 1 < tokens.Count && tokens[p].Kind == Kind.Word && Is(sql, tokens[p], "OR")
+            && tokens[p + 1].Kind == Kind.Word && Is(sql, tokens[p + 1], "REPLACE"))
+            p += 2;
+        if (p < tokens.Count && tokens[p].Kind == Kind.Word && (Is(sql, tokens[p], "TEMP") || Is(sql, tokens[p], "TEMPORARY"))) p++;
+        if (p < tokens.Count && tokens[p].Kind == Kind.Word && (Is(sql, tokens[p], "PUBLIC") || Is(sql, tokens[p], "PRIVATE"))) p++;
+        return p < tokens.Count && tokens[p].Kind == Kind.Word && Is(sql, tokens[p], "PROCEDURE");
+    }
+
+    static bool IsQualifiedWord(string sql, List<Token> tokens, int idx) =>
+        idx > 0 && (IsChar(sql, tokens[idx - 1], '.') || IsChar(sql, tokens[idx - 1], '@'));
+
+    static bool IsWhileDoTerminator(string sql, List<Token> tokens, int idx, bool rejectAfterWhileOrFor)
+    {
+        var hasPrev = idx > 0;
+        var hasNext = idx + 1 < tokens.Count;
+        var prevIsWord = hasPrev && tokens[idx - 1].Kind == Kind.Word && !IsQualifiedWord(sql, tokens, idx - 1);
+        var prevUpper = prevIsWord ? sql.Substring(tokens[idx - 1].Start, tokens[idx - 1].Length).ToUpperInvariant() : "";
+        var prevCont = hasPrev && (
+            (prevIsWord && ((rejectAfterWhileOrFor && prevUpper is "WHILE" or "FOR") || WhilePrevContWords.Contains(prevUpper)))
+            || tokens[idx - 1].Kind == Kind.Open
+            || (tokens[idx - 1].Kind == Kind.Other && tokens[idx - 1].Length == 1 && sql[tokens[idx - 1].Start] is ',' or '=' or '<' or '>' or '!' or '+' or '-' or '*' or '/' or '%' or '|' or '&' or '^' or '~' or '.' or '[' or '@')
+        );
+        var nextCont = hasNext && (
+            (tokens[idx + 1].Kind == Kind.Word && WhileNextInfixWords.Contains(sql.Substring(tokens[idx + 1].Start, tokens[idx + 1].Length)))
+            || (tokens[idx + 1].Kind == Kind.Other && tokens[idx + 1].Length == 1 && sql[tokens[idx + 1].Start] is ',' or '=' or '<' or '>' or '!' or '+' or '-' or '*' or '/' or '%' or '|' or '&' or '^' or '.' or '[' or ']')
+        );
+        var isIntervalExpr = prevIsWord && prevUpper == "INTERVAL" && hasNext && tokens[idx + 1].Kind == Kind.Word
+            && IntervalDateParts.Contains(sql.Substring(tokens[idx + 1].Start, tokens[idx + 1].Length));
+        return !prevCont && !nextCont && !isIntervalExpr;
+    }
+
+    static List<List<Token>> SplitStatements(List<Token> tokens)
+    {
+        var statements = new List<List<Token>>();
+        var current = new List<Token>();
+        foreach (var token in tokens)
+        {
+            if (token.Kind == Kind.Semicolon && token.Depth == 0)
+            {
+                if (current.Count > 0)
+                {
+                    statements.Add(current);
+                    current = [];
+                }
+            }
+            else
+            {
+                current.Add(token);
+            }
+        }
+        if (current.Count > 0) statements.Add(current);
+        return statements;
+    }
+
+    static (string Verb, int Index) ResolveWithMain(string sql, List<Token> tokens, int startIdx)
+    {
+        var cursor = startIdx;
+        while (cursor < tokens.Count)
+        {
+            var scan = cursor + 1;
+            if (scan < tokens.Count && tokens[scan].Kind == Kind.Word && Is(sql, tokens[scan], "RECURSIVE")) scan++;
+            var depth = 0;
+            var seenCteBody = false;
+            var prevZeroUpper = "";
+            var prevZeroChar = '\0';
+            var prevZeroIsWord = false;
+            var descended = false;
+            while (scan < tokens.Count)
+            {
+                var t = tokens[scan];
+                if (t.Kind == Kind.Open)
+                {
+                    if (depth == 0 && seenCteBody && prevZeroChar != ',' && prevZeroUpper != "AS" && !prevZeroIsWord)
+                    {
+                        var peek = scan + 1;
+                        while (peek < tokens.Count && tokens[peek].Kind == Kind.Open) peek++;
+                        if (peek < tokens.Count)
+                        {
+                            var inner = tokens[peek];
+                            if (inner.Kind == Kind.Word && Is(sql, inner, "SELECT")) return ("SELECT", peek);
+                            if (inner.Kind == Kind.Word && Is(sql, inner, "WITH"))
+                            {
+                                cursor = peek;
+                                descended = true;
+                                break;
+                            }
+                            return (inner.Kind == Kind.Word ? sql.Substring(inner.Start, inner.Length).ToUpperInvariant() : sql.Substring(inner.Start, inner.Length), peek);
+                        }
+                    }
+                    depth++;
+                }
+                else if (t.Kind == Kind.Close)
+                {
+                    if (depth > 0)
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            seenCteBody = true;
+                            prevZeroChar = ')';
+                            prevZeroUpper = "";
+                            prevZeroIsWord = false;
+                        }
+                    }
+                }
+                else if (depth == 0 && !IsQualifiedWord(sql, tokens, scan))
+                {
+                    if (t.Kind == Kind.Semicolon) break;
+                    if (seenCteBody && prevZeroChar != ',' && !IsChar(sql, t, ','))
+                    {
+                        var word = t.Kind == Kind.Word ? sql.Substring(t.Start, t.Length).ToUpperInvariant() : sql.Substring(t.Start, t.Length);
+                        return (word, scan);
+                    }
+                    // Skip CTE name before AS (e.g. `WITH update AS (...) SELECT ...`).
+                    if (scan + 2 < tokens.Count && tokens[scan + 1].Kind == Kind.Word && Is(sql, tokens[scan + 1], "AS") && tokens[scan + 2].Kind == Kind.Open)
+                    {
+                        scan += 2;
+                        prevZeroUpper = "AS";
+                        prevZeroChar = '\0';
+                        prevZeroIsWord = true;
+                        continue;
+                    }
+                    if (t.Kind == Kind.Word && (Is(sql, t, "SELECT") || Is(sql, t, "INSERT") || Is(sql, t, "UPDATE") || Is(sql, t, "DELETE") || Is(sql, t, "MERGE")))
+                        return (sql.Substring(t.Start, t.Length).ToUpperInvariant(), scan);
+                    prevZeroIsWord = t.Kind == Kind.Word;
+                    prevZeroUpper = prevZeroIsWord ? sql.Substring(t.Start, t.Length).ToUpperInvariant() : "";
+                    prevZeroChar = t.Kind == Kind.Other && t.Length == 1 ? sql[t.Start] : '\0';
+                }
+                scan++;
+            }
+            if (!descended) break;
+        }
+        return ("WITH", startIdx);
+    }
+
+    static bool IsChar(string sql, Token token, char c) => token.Kind == Kind.Other && token.Length == 1 && sql[token.Start] == c;
+
+    static int LineOf(string sql, int offset)
+    {
+        var line = 1;
+        var limit = Math.Min(offset, sql.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            if (sql[i] == '\n') line++;
+            else if (sql[i] == '\r' && (i + 1 >= limit || sql[i + 1] != '\n')) line++;
+        }
+        return line;
+    }
+
     static bool Is(string sql, Token token, string word) => token.Length == word.Length && string.Compare(sql, token.Start, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0;
 
     /// <summary>Words and parentheses with their depth; strings, identifiers in backticks and comments are skipped, and
@@ -114,7 +903,7 @@ internal static class GoogleSqlScanner
             if (char.IsWhiteSpace(c)) { i++; continue; }
             if (c == '#' || c == '-' && i + 1 < n && sql[i + 1] == '-')
             {
-                while (i < n && sql[i] != '\n') i++;
+                while (i < n && sql[i] != '\n' && sql[i] != '\r') i++;
                 continue;
             }
             if (c == '/' && i + 1 < n && sql[i + 1] == '*')
@@ -149,6 +938,46 @@ internal static class GoogleSqlScanner
                     continue;
                 }
                 tokens.Add(new(Kind.Word, depth, start, i - start));
+                continue;
+            }
+            if (c == '0' && i + 1 < n && sql[i + 1] is 'x' or 'X' && i + 2 < n && char.IsAsciiHexDigit(sql[i + 2]))
+            {
+                var start = i;
+                i += 2;
+                while (i < n && char.IsAsciiHexDigit(sql[i])) i++;
+                tokens.Add(new(Kind.Other, depth, start, i - start));
+                continue;
+            }
+            if (char.IsAsciiDigit(c) || (c == '.' && i + 1 < n && char.IsAsciiDigit(sql[i + 1])))
+            {
+                // Tokenize GoogleSQL numeric literals (including trailing-decimal floats like `1.`) as a single Kind.Other token
+                // so trailing `.` is never mistaken for a struct-member dot before THEN / DO / WHEN / END.
+                var start = i;
+                if (c == '.')
+                {
+                    i++;
+                    while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                }
+                else
+                {
+                    while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                    if (i < n && sql[i] == '.')
+                    {
+                        i++;
+                        while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                    }
+                }
+                if (i < n && sql[i] is 'e' or 'E')
+                {
+                    var exp = i + 1;
+                    if (exp < n && sql[exp] is '+' or '-') exp++;
+                    if (exp < n && char.IsAsciiDigit(sql[exp]))
+                    {
+                        i = exp;
+                        while (i < n && char.IsAsciiDigit(sql[i])) i++;
+                    }
+                }
+                tokens.Add(new(Kind.Other, depth, start, i - start));
                 continue;
             }
             if (c == '(') { tokens.Add(new(Kind.Open, depth, i, 1)); depth++; i++; continue; }
@@ -189,7 +1018,7 @@ internal static class GoogleSqlScanner
                 if (i + 2 < sql.Length && sql[i + 1] == quote && sql[i + 2] == quote) return i + 3;
             }
             // A single-quoted string ends at its line (GoogleSQL refuses the rest); the scan goes on from there.
-            if (!triple && quote != '`' && c == '\n') return i;
+            if (!triple && quote != '`' && c is '\n' or '\r') return i;
             i++;
         }
         return sql.Length;

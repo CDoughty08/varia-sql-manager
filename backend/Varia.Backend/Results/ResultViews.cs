@@ -826,9 +826,9 @@ internal static partial class ViewSorter
             _ => new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null)
         };
         // The date and time types' text is fixed-width, so its byte order is its instants': read as ticks, 8 bytes are the
-        // whole value. A cell written any other way (or of another width than the first) gives the key back to its bytes.
+        // whole value. Any unparseable cell falls back to byte comparison for that row only so valid cross-dialect instants stay chronologically ordered.
         if (kind == Kind.Ordinal && wire == WireKind.Text && IsInstant(meta))
-            key = new InstantKey(capacity, meta.SortKind == ColumnTypes.Time);
+            key = new InstantKey(capacity, kept, source, column, meta.SortKind == ColumnTypes.Time);
         var lengths = set.Lengths[column];
         // Each page's rows in the key: its own, or the kept rows that fall in it (kept is in base row order).
         int[]? starts = null;
@@ -847,65 +847,55 @@ internal static partial class ViewSorter
         // Pages are independent: each is read once, in order, on whichever thread takes it. A key that gave up ranking its
         // values asks for the pages again.
         var inexact = 0;
-        bool again;
-        do
-        {
-        again = false;
         key.Begin(token);
         // The lease is taken after the sample and let go before an extract: those read a packed result on leases of their
         // own, which a lease held here, idle, would leave one thread.
         var threads = Gate.Take(Math.Min(Workers, source.Count));
         try
         {
-        do
-            threads.For(source.Count, () => new Scratch(source), (index, scratch) =>
-            {
-                var page = source.Page(index);
-                var first = (int)page.FirstRow;
-                var (start, stop) = starts is null ? (first, first + page.Rows) : (starts[index], starts[index + 1]);
-                if (start == stop) return;
-                var view = source.Read(index, scratch.Room(index));
-                key.BeginPage(scratch, index);
-                for (var row = start; row < stop; row++)
+            do
+                threads.For(source.Count, () => new Scratch(source), (index, scratch) =>
                 {
-                    var r = (kept is null ? row : kept[row]) - first;
-                    if (view.IsNull(column, r))
+                    var page = source.Page(index);
+                    var first = (int)page.FirstRow;
+                    var (start, stop) = starts is null ? (first, first + page.Rows) : (starts[index], starts[index + 1]);
+                    if (start == stop) return;
+                    var view = source.Read(index, scratch.Room(index));
+                    key.BeginPage(scratch, index);
+                    for (var row = start; row < stop; row++)
                     {
-                        key.SetNull(row);
-                        key.Skip(row, scratch);
-                        continue;
-                    }
-                    var span = view.Span(column, r);
-                    var truncated = view.IsTruncated(column, r);
-                    if (kind is Kind.Chars or Kind.Bytes)
-                    {
-                        CellSize size;
-                        if (page.Lengths.TryCell(r, column, out var cell)) size = new CellSize(cell.Chars, cell.Bytes, cell.Exact && !lengths.Estimated);
-                        else
+                        var r = (kept is null ? row : kept[row]) - first;
+                        if (view.IsNull(column, r))
                         {
-                            size = lengths.Derive(span, wire);
-                            if (truncated || lengths.Rule == LengthRule.Recorded) size = size with { Exact = false };
+                            key.SetNull(row);
+                            key.Skip(row, scratch);
+                            continue;
                         }
-                        if (!size.Exact) Volatile.Write(ref inexact, 1);
-                        ((LengthKey)key).Values[row] = kind == Kind.Chars ? size.Chars : size.Bytes;
-                        continue;
+                        var span = view.Span(column, r);
+                        var truncated = view.IsTruncated(column, r);
+                        if (kind is Kind.Chars or Kind.Bytes)
+                        {
+                            CellSize size;
+                            if (page.Lengths.TryCell(r, column, out var cell)) size = new CellSize(cell.Chars, cell.Bytes, cell.Exact && !lengths.Estimated);
+                            else
+                            {
+                                size = lengths.Derive(span, wire);
+                                if (truncated || lengths.Rule == LengthRule.Recorded) size = size with { Exact = false };
+                            }
+                            if (!size.Exact) Volatile.Write(ref inexact, 1);
+                            ((LengthKey)key).Values[row] = kind == Kind.Chars ? size.Chars : size.Bytes;
+                            continue;
+                        }
+                        if (truncated) Volatile.Write(ref inexact, 1);
+                        // A float or real whose display text reads back as another value sorts by its exact value.
+                        if (kind == Kind.Approximate && view.TryExact(column, r, out var exact)) ((NumberKey)key).SetExact(row, exact);
+                        else key.Set(row, span, scratch);
                     }
-                    if (truncated) Volatile.Write(ref inexact, 1);
-                    // A float or real whose display text reads back as another value sorts by its exact value.
-                    if (kind == Kind.Approximate && view.TryExact(column, r, out var exact)) ((NumberKey)key).SetExact(row, exact);
-                    else key.Set(row, span, scratch);
-                }
-                key.EndPage(scratch, index);
-            }, token);
-        while (key.Finish());
+                    key.EndPage(scratch, index);
+                }, token);
+            while (key.Finish());
         }
         finally { threads.Dispose(); }
-        if (key is InstantKey { Declined: true })
-        {
-            key = new OrdinalKey(capacity, kept, source, column, memory, trim: meta.Collation is not null);
-            again = true;
-        }
-        } while (again);
         if (inexact != 0) approximate = true;
         // Comparisons that go back to cells (ties of long numbers, equal 8 bytes of text) read a packed result's from a copy
         // of the column, made once here, not by unpacking a page for every comparison.
@@ -1000,8 +990,9 @@ internal static partial class ViewSorter
 
     /// <summary>Reads the date and time types' display text as the backend writes it, without the general parser (which
     /// is several times slower and allocates for every cell): <c>yyyy-MM-dd</c>, <c>HH:mm:ss</c> with up to seven
-    /// fraction digits, both with a space between, and a <c>+hh:mm</c> or <c>-hh:mm</c> offset after a space. False for
-    /// anything else, which the general parser then reads. <paramref name="ticks"/> is the date and time as written.</summary>
+    /// fraction digits, both with a space or <c>T</c> between, and a <c>+hh:mm</c>, <c>-hh:mm</c>, or <c>UTC</c> offset
+    /// after a space. False for anything else, which the general parser then reads. <paramref name="ticks"/> is the date
+    /// and time as written.</summary>
     internal static bool TryInstant(ReadOnlySpan<byte> text, out long ticks, out long offset, out bool dated, out bool zoned)
     {
         ticks = 0;
@@ -1027,7 +1018,7 @@ internal static partial class ViewSorter
             dated = true;
             at = 10;
             if (at == text.Length) return true;
-            if (text[at++] != (byte)' ') return false;
+            if (text[at++] is not ((byte)' ' or (byte)'T')) return false;
         }
         if (text.Length - at < 8 || text[at + 2] != (byte)':' || text[at + 5] != (byte)':') return false;
         if (!Number(text.Slice(at, 2), out var hour) || !Number(text.Slice(at + 3, 2), out var minute) || !Number(text.Slice(at + 6, 2), out var second)) return false;
@@ -1486,29 +1477,97 @@ internal static partial class ViewSorter
         private readonly double[] values = new double[rows];
         // Set by the first cell whose double may not be the whole value (too long, or not a number).
         private bool textTies;
+        private byte[]? unparsed;
+        private int anyUnparsed;
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
             if (boolean) cell = ColumnTypes.BooleanNumber(cell);
             var parsed = double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var value);
             values[row] = parsed ? value : double.NaN;
             if (!parsed || cell.Length > DoubleDigits) textTies = true;
+            if (!exact && !parsed)
+            {
+                var marks = Volatile.Read(ref unparsed);
+                if (marks is null)
+                {
+                    Interlocked.CompareExchange(ref unparsed, new byte[values.Length], null);
+                    marks = Volatile.Read(ref unparsed)!;
+                }
+                marks[row] = 1;
+                Volatile.Write(ref anyUnparsed, 1);
+            }
         }
         /// <summary>A float or real cell's exact value, kept beside its page because its text reads back as another value.</summary>
         public void SetExact(int row, double value) => values[row] = value;
         public override int Compare(int a, int b)
         {
+            if (!exact && anyUnparsed != 0)
+            {
+                var marks = unparsed!;
+                var ua = marks[a] != 0;
+                var ub = marks[b] != 0;
+                if (ua != ub) return ua ? 1 : -1;
+                if (ua) return source.Cell(Row(a), column).SequenceCompareTo(source.Cell(Row(b), column));
+            }
             var compared = values[a].CompareTo(values[b]);
             if (compared != 0 || !exact || !textTies) return compared;
-            return CompareNumericText(source.Cell(Row(a), column), source.Cell(Row(b), column));
+            var left = source.Cell(Row(a), column);
+            var right = source.Cell(Row(b), column);
+            if (boolean)
+            {
+                left = ColumnTypes.BooleanNumber(left);
+                right = ColumnTypes.BooleanNumber(right);
+            }
+            return CompareNumericText(left, right);
         }
-        public override bool Coded => !exact || !textTies;
-        public override bool ReadsCells => exact && textTies;
+        public override bool Coded => exact ? !textTies : anyUnparsed == 0;
+        public override bool ReadsCells => exact ? textTies : anyUnparsed != 0;
         /// <summary>The double's bits, with the two zeros as one and every NaN as one, as they compare.</summary>
         public override ulong Code(int row)
         {
             var value = values[row];
             return BitConverter.DoubleToUInt64Bits(value == 0 ? 0 : double.IsNaN(value) ? double.NaN : value);
         }
+    }
+
+    /// <summary>Whether non-ISO timestamp text carries both a date component and an explicit timezone (Z, UTC, GMT, or a
+    /// numeric offset following a time component), preventing <see cref="DateTimeOffset.TryParse"/> from silently injecting
+    /// <see cref="TimeZoneInfo.Local"/> on unzoned dates or <see cref="DateTime.Today"/> on time-only offsets.</summary>
+    internal static bool HasExplicitZone(ReadOnlySpan<char> text)
+    {
+        text = text.Trim();
+        if (text.IsEmpty) return false;
+        // Require a date+time separator (' ', 'T', or 't') before any time component so time-only values like "10:00:00+02:00"
+        // or "08:00:00Z" cannot match and inject DateTime.Today.
+        var sep = text.IndexOfAny(' ', 'T', 't');
+        if (sep <= 0) return false;
+        var last = text[^1];
+        if (last is 'Z' or 'z') return text.Length >= 2 && (char.IsAsciiDigit(text[^2]) || text[^2] == ' ');
+        if (text.EndsWith("UTC", StringComparison.OrdinalIgnoreCase) || text.EndsWith("GMT", StringComparison.OrdinalIgnoreCase))
+            return text.Length >= 4 && (text[^4] == ' ' || char.IsAsciiDigit(text[^4]));
+        // Numeric offset (+HH:MM, -HH:MM, +HHMM, -HHMM, +HH, -HH) must follow a time component (':' followed only by digits/'.'/optional AM|PM).
+        var signIndex = -1;
+        if (text.Length >= 6 && text[^6] is '+' or '-' && char.IsAsciiDigit(text[^5]) && char.IsAsciiDigit(text[^4])
+            && text[^3] == ':' && char.IsAsciiDigit(text[^2]) && char.IsAsciiDigit(text[^1]))
+            signIndex = text.Length - 6;
+        else if (text.Length >= 5 && text[^5] is '+' or '-' && char.IsAsciiDigit(text[^4]) && char.IsAsciiDigit(text[^3])
+            && char.IsAsciiDigit(text[^2]) && char.IsAsciiDigit(text[^1]))
+            signIndex = text.Length - 5;
+        else if (text.Length >= 4 && text[^3] is '+' or '-' && char.IsAsciiDigit(text[^2]) && char.IsAsciiDigit(text[^1])
+            && (text[^4] == ' ' || char.IsAsciiDigit(text[^4])))
+            signIndex = text.Length - 3;
+        if (signIndex <= sep) return false;
+        var prefix = text[..signIndex].TrimEnd();
+        if (prefix.EndsWith("AM", StringComparison.OrdinalIgnoreCase) || prefix.EndsWith("PM", StringComparison.OrdinalIgnoreCase))
+            prefix = prefix[..^2].TrimEnd();
+        var lastColon = prefix.LastIndexOf(':');
+        if (lastColon <= sep) return false;
+        for (var i = lastColon + 1; i < prefix.Length; i++)
+        {
+            var ch = prefix[i];
+            if (!char.IsAsciiDigit(ch) && ch != '.') return false;
+        }
+        return lastColon + 1 < prefix.Length;
     }
 
     private sealed class TicksKey(int rows) : Key(rows)
@@ -1519,6 +1578,7 @@ internal static partial class ViewSorter
             if (UtcTicks(cell) is { } instant) { values[row] = instant; return; }
             Span<char> chars = stackalloc char[64];
             var length = Encoding.UTF8.GetChars(cell[..Math.Min(cell.Length, 64)], chars);
+            // TicksKey intentionally preserves DateTimeOffset.TryParse fallback for datetimeoffset columns holding unzoned cells (pinned by ViewChecks.Instants).
             values[row] = DateTimeOffset.TryParse(chars[..length], CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : long.MinValue;
         }
         public override int Compare(int a, int b) => values[a].CompareTo(values[b]);
@@ -1526,27 +1586,35 @@ internal static partial class ViewSorter
         public override ulong Code(int row) => (ulong)values[row];
     }
 
-    /// <summary>A date or time by its ticks, read from its fixed-width text (<see cref="TryInstant"/>): the order its bytes
-    /// give, in 8 bytes that are the whole value. <see cref="Declined"/> once a cell is written another way, or is not as
-    /// long as the first: its bytes order it then.</summary>
-    private sealed class InstantKey(int rows, bool timeOnly) : Key(rows)
+    /// <summary>A date or time by its ticks, read from its text (<see cref="TryInstant"/>): 8 bytes that are the whole
+    /// value, ordering cross-dialect widths and <c>' '</c>/<c>'T'</c> separators chronologically. Unparseable cells are marked
+    /// <see cref="long.MinValue"/> and ordered after valid instants by raw UTF-8 bytes, matching <see cref="ColumnProfiler"/> and <see cref="CellHasher"/>.</summary>
+    private sealed class InstantKey(int rows, int[]? map, PageSource source, int column, bool timeOnly) : Key(rows, map)
     {
         private readonly long[] values = new long[rows];
-        private int width, declined;
-        public bool Declined => declined != 0;
-        public override string Layout => "ticks";
+        private int anyUnparsed;
+        public override string Layout => anyUnparsed == 0 ? "ticks" : "ticks+bytes";
         public override void Set(int row, ReadOnlySpan<byte> cell, Scratch scratch)
         {
-            var first = Interlocked.CompareExchange(ref width, cell.Length, 0);
-            if ((first != 0 && first != cell.Length) || !TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
+            if (!TryInstant(cell, out var ticks, out _, out var dated, out var zoned) || zoned || dated == timeOnly)
             {
-                Volatile.Write(ref declined, 1);
+                values[row] = long.MinValue;
+                Volatile.Write(ref anyUnparsed, 1);
                 return;
             }
             values[row] = ticks;
         }
-        public override int Compare(int a, int b) => values[a].CompareTo(values[b]);
-        public override bool Coded => true;
+        public override int Compare(int a, int b)
+        {
+            var va = values[a];
+            var vb = values[b];
+            if (va >= 0 && vb >= 0) return va.CompareTo(vb);
+            if (va >= 0) return -1;
+            if (vb >= 0) return 1;
+            return source.Cell(Row(a), column).SequenceCompareTo(source.Cell(Row(b), column));
+        }
+        public override bool Coded => anyUnparsed == 0;
+        public override bool ReadsCells => anyUnparsed != 0;
         public override ulong Code(int row) => (ulong)values[row];
     }
 

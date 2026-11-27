@@ -109,6 +109,8 @@ describe('GestureService', () => {
       'explorer.peekHover': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // New with the catalogue: Ctrl+click (⌘-click) on a row opens it in a Peek tab.
       'explorer.openPeekTab': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
+      // Multi-server selection: Ctrl+click (⌘-click) toggles a connected top-level server in Object Explorer.
+      'explorer.addToSelection': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // New with Go to Definition: Ctrl+click (⌘-click) on a name in a SQL editor, now a Peek tab as on an explorer row.
       'editor.goToDefinition': (event, platform) => !!(platform === 'darwin' ? event.metaKey : event.ctrlKey),
       // New with the editor's Peek: Ctrl+hover (⌘+hover) on a name opens Peek's card there, as on an explorer row.
