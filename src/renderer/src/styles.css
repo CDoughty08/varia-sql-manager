@@ -4473,10 +4473,12 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .multi-target-row .multi-target-db { flex: 0 1 132px; min-width: 84px; height: 22px; font-size: var(--varia-size-xs); }
 .multi-target-offline { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; flex: none; }
 .multi-target-offline-label { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.multi-target-reconnect { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); }
+.multi-target-reconnect { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-button-border); background: var(--varia-button-secondaryBackground); color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
+.multi-target-reconnect:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: none; }
 .multi-target-apply-all { display: flex; align-items: center; justify-content: flex-end; gap: var(--varia-space-1); padding-top: var(--varia-space-1); }
 .multi-target-shared-select { flex: 0 1 150px; min-width: 90px; height: 24px; font-size: var(--varia-size-xs); }
-.multi-target-apply-btn { height: 24px; min-height: 0; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); }
+.multi-target-apply-btn { height: 24px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid var(--varia-button-border); background: var(--varia-button-secondaryBackground); color: var(--varia-button-secondaryForeground); font-size: var(--varia-size-xs); }
+.multi-target-apply-btn:hover:not(:disabled) { border-color: var(--varia-descriptionForeground); background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: none; }
 .multi-target-popover-foot { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); background: var(--varia-editorGroupHeader-tabsBackground); border-top: 1px solid var(--varia-panel-border); }
 .multi-target-popover-hint { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
 
@@ -4493,7 +4495,7 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .cross-engine-pane { position: relative; display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
 .cross-engine-panes[data-layout="horizontal"] > .cross-engine-pane + .cross-engine-pane { border-left: 1px solid var(--varia-editorGroup-border); }
 .cross-engine-panes[data-layout="vertical"] > .cross-engine-pane + .cross-engine-pane { border-top: 1px solid var(--varia-editorGroup-border); }
-.cross-engine-pane-header { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-height: 28px; padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-editorGroupHeader-tabsBackground); border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); }
+.cross-engine-pane-header { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: var(--varia-space-1); min-height: 28px; padding: var(--varia-space-1) var(--varia-space-2); background: var(--varia-editorGroupHeader-tabsBackground); border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); }
 .cross-engine-pane.is-active > .cross-engine-pane-header { box-shadow: inset 0 -1px 0 var(--varia-focusBorder); }
 .cross-engine-chips { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); min-width: 0; }
 .cross-engine-chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 240px; height: 20px; padding: 0 var(--varia-space-1) 0 var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
@@ -4516,7 +4518,8 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .cross-engine-guard-icon { flex: none; }
 .cross-engine-guard-text { flex: 1 1 200px; min-width: 0; }
 .cross-engine-guard-actions { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin-left: auto; flex: none; }
-.cross-engine-guard-next, .cross-engine-guard-open { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); }
+.cross-engine-guard-next, .cross-engine-guard-open { height: 22px; min-height: 0; padding: 0 var(--varia-space-2); border: 1px solid color-mix(in srgb, var(--varia-errorForeground) 45%, transparent); background: color-mix(in srgb, var(--varia-errorForeground) 12%, transparent); color: var(--varia-banner-errorForeground); font-size: var(--varia-size-xs); }
+.cross-engine-guard-next:hover:not(:disabled), .cross-engine-guard-open:hover:not(:disabled) { background: color-mix(in srgb, var(--varia-errorForeground) 22%, transparent); transition: none; }
 .server-drop-overlay[data-cross-dialect] { border-radius: var(--varia-radius-sm); }
 
 /* Multi-Server Run Mode Prompt (MultiExecuteDialog) & Multi-Project BigQuery Cost Prompt. */
@@ -4545,7 +4548,9 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .multi-exec-mode-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--varia-space-2); }
 .multi-exec-mode-desc { margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .multi-exec-mode-caveat { margin: 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
-.multi-exec-options { display: flex; flex-direction: column; gap: var(--varia-space-1); padding-top: var(--varia-space-1); }
+.multi-exec-options { display: flex; flex-direction: column; gap: var(--varia-space-2); padding-top: var(--varia-space-1); }
+.multi-exec-options .checkbox-label { display: inline-flex; align-items: center; gap: var(--varia-space-2); font-size: var(--varia-size-sm); color: var(--varia-foreground); cursor: pointer; }
+.multi-exec-options .checkbox-label input[type="checkbox"] { margin: 0; flex: none; accent-color: var(--varia-button-background); }
 .multi-exec-cost { display: flex; flex-direction: column; gap: var(--varia-space-2); padding: var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); background: var(--varia-panel-background); }
 .multi-exec-cost-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--varia-space-2); }
 .multi-exec-cost-summary { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
@@ -4559,7 +4564,7 @@ button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cr
 .multi-exec-cost-warning[data-tone="warning"] { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .multi-exec-cost-warning[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
 .multi-exec-cost-note { margin: 0; }
-.multi-exec-submit-prod { box-shadow: 0 0 0 1px var(--varia-errorForeground); }
+.multi-execute-dialog .dialog-footer button[type="submit"] { display: inline-flex; align-items: center; gap: var(--varia-space-2); }
 
 .connection-modal.sub-dialog.bigquery-cost-prompt-multi { width: min(500px, calc(100vw - 48px)); }
 .bigquery-cost-project-list { display: flex; flex-direction: column; gap: var(--varia-space-2); list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; }
@@ -4680,7 +4685,7 @@ button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[ar
 .rs-stmt-btn:focus-visible, .rs-stmt-select:focus-visible, .messages-filter-pill:focus-visible, .messages-filter-select:focus-visible, .multi-grid-notice-btn:focus-visible, .multi-target-link:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 
 @media (forced-colors: active) {
-  .multi-target-trigger, .multi-target-popover, .multi-target-row, .cross-engine-chip, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-phase-pill { border-color: CanvasText; }
+  .multi-target-trigger, .multi-target-popover, .multi-target-row, .multi-target-apply-btn, .multi-target-reconnect, .cross-engine-chip, .cross-engine-guard-next, .cross-engine-guard-open, .multi-exec-mode-card, .multi-target-card, .multi-summary-banner, .multi-notice, .multi-grid-notice, .messages-filter-pill, .multi-phase-pill { border-color: CanvasText; }
   .multi-target-trigger[data-open], .multi-exec-mode-card.is-picked { border-color: Highlight; }
   button.ui-button.cross-engine-view-btn[aria-pressed="true"], button.ui-button.cross-engine-stack-btn[aria-pressed="true"], button.ui-button.cross-engine-view-btn[aria-pressed="true"]:hover:not(:disabled), button.ui-button.cross-engine-stack-btn[aria-pressed="true"]:hover:not(:disabled), button.rs-stmt-btn[aria-pressed="true"], button.rs-stmt-btn[aria-pressed="true"]:hover:not(:disabled), button.rt-stmt-tab[aria-selected="true"], button.rt-stmt-tab[aria-selected="true"]:hover:not(:disabled), button.messages-filter-pill[aria-pressed="true"], button.messages-filter-pill[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
   button.messages-filter-pill[aria-pressed="true"] .messages-filter-err { background: HighlightText; color: Highlight; }
