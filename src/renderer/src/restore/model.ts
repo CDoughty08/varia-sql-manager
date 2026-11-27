@@ -7,7 +7,7 @@ import {
 } from '../../../shared/actions/restore.ts'
 import { dependants, lastBackupTaken, logCoverage, orderSelection, planRestore, pointAllowed, selectionCoverage, selectionProblem, selectionReaches, usableSet, type Coverage } from '../../../shared/actions/restore-plan.ts'
 import { restoreOptionsProblems, type RestoreRequest } from '../../../shared/actions/restore-schema.ts'
-import { folderPath, sameServerPath, serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
+import { folderPath, serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
 import type { RestoreFilesDraft } from './files'
 
 export type RestoreSourceKind = 'database' | 'device'
@@ -92,19 +92,20 @@ export function sourceSets(draft: RestoreDraft, facts: RestoreFacts): readonly B
  * Whether the destination is the database the backups are of: the same name and, where both are known, the same backup family
  * (a database of that name from another server, or one dropped and created again, has another, and its changes are not in them).
  */
-export function sameDatabase(draft: RestoreDraft, facts: RestoreFacts): boolean {
+export function sameDatabase(draft: RestoreDraft, facts: RestoreFacts, plan?: DraftPlan): boolean {
   const destination = destinationOf(facts, draft.destination)
   if (!destination || destination.name.toLowerCase() !== sourceDatabase(draft, facts).toLowerCase()) return false
-  const full = sourceSets(draft, facts).find(set => set.id === draftPlan(draft, facts).ids[0])
+  const fullId = (plan ?? draftPlan(draft, facts)).ids[0]
+  const full = fullId ? sourceSets(draft, facts).find(set => set.id === fullId) : undefined
   return !destination.familyGuid || !full?.familyGuid || destination.familyGuid.toLowerCase() === full.familyGuid.toLowerCase()
 }
 /**
  * Whether a tail-log backup can be taken (SSMS offers it, checked, in this case): the destination is the source database,
  * it exists online, and its recovery model keeps a log (FULL or BULK_LOGGED).
  */
-export function tailLogPossible(draft: RestoreDraft, facts: RestoreFacts): boolean {
+export function tailLogPossible(draft: RestoreDraft, facts: RestoreFacts, plan?: DraftPlan): boolean {
   const destination = destinationOf(facts, draft.destination)
-  return !!destination && sameDatabase(draft, facts) && destination.state === 'ONLINE' && destination.recoveryModel !== 'SIMPLE'
+  return !!destination && sameDatabase(draft, facts, plan) && destination.state === 'ONLINE' && destination.recoveryModel !== 'SIMPLE'
 }
 /** Whether Close existing connections applies: it is checked, and the destination exists online (one a stopped restore left RESTORING has no connections, and SET SINGLE_USER fails on it). */
 export function closesConnections(draft: RestoreDraft, facts: RestoreFacts): boolean {
@@ -172,11 +173,15 @@ export function destinationNote(draft: RestoreDraft, facts: RestoreFacts): strin
   return facts.server && valid && !destinationOf(facts, name) ? `${name} does not exist yet: the restore creates it.` : undefined
 }
 
-/** "The last backup taken (date)", or the point (SSMS's Restore to:, recalled). */
+/** "The last backup taken (date)", or the point (SSMS's Restore to:, recalled). When a newer copy-only log is skipped by
+ *  Varia's policy, name the latest supported recovery point and the skipped log rather than calling an older set the last backup. */
 export function restoreToText(draft: RestoreDraft, facts: RestoreFacts, plan: DraftPlan): string {
   if (draft.stopAt) return draft.stopAt.replace('T', ' ')
-  const last = lastBackupTaken(sourceSets(draft, facts), plan.ids)
-  return last ? `The last backup taken (${last.replace('T', ' ')})` : 'The last backup taken'
+  const sets = sourceSets(draft, facts)
+  const last = lastBackupTaken(sets, plan.ids)
+  if (!last) return 'The last backup taken'
+  const skippedCopyOnly = !draft.manual && sets.some(set => set.type === 'log' && set.copyOnly && !set.problem && !set.damaged && set.finish > last)
+  return skippedCopyOnly ? `Latest supported recovery point (${last.replace('T', ' ')}; skips later copy-only log)` : `The last backup taken (${last.replace('T', ' ')})`
 }
 
 /** One row of the Files page: where the file goes, by default or as typed. */
@@ -188,20 +193,23 @@ export function fileRows(draft: RestoreDraft, facts: RestoreFacts): FileRow[] {
   // separators resolved, and on Windows without case.
   const key = (path: string) => serverPathKey(path, separator) ?? path
   for (const file of server?.files ?? []) if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(key(file.path), file.database)
+  const counts = new Map<string, number>()
   const rows = facts.files.map(file => {
-    const typed = draft.restoreAs[file.logical]
+    const typed = Object.hasOwn(draft.restoreAs, file.logical) ? draft.restoreAs[file.logical] : undefined
     const destination = draft.destination || source
     // Relocate all files to folder keeps each file's default name and changes only its folder.
     const relocated = draft.relocate ? (file.type === 'log' ? draft.logFolder : draft.dataFolder) : ''
     const restoreAs = typed ?? (relocated
       ? folderPath(relocated, separator) + pathFileName(restoreAsPath(file, source, destination, folderPath(relocated, separator), separator))
       : restoreAsPath(file, source, destination, file.type === 'log' ? server?.logPath : server?.dataPath, separator))
-    const other = taken.get(key(restoreAs))
+    const targetKey = key(restoreAs)
+    counts.set(targetKey, (counts.get(targetKey) ?? 0) + 1)
+    const other = taken.get(targetKey)
     const problem = serverPathProblem(restoreAs) ?? (other ? `The file is in use by the database ${other}.` : undefined)
-    return { file, restoreAs, typed: typed !== undefined, ...problem ? { problem } : {} }
+    return { file, restoreAs, typed: typed !== undefined, targetKey, ...problem ? { problem } : {} }
   })
   // Two files restored to one path.
-  return rows.map(row => !row.problem && rows.some(other => other !== row && sameServerPath(other.restoreAs, row.restoreAs, separator)) ? { ...row, problem: 'Another file is restored to this path.' } : row)
+  return rows.map(({ targetKey, ...row }) => !row.problem && (counts.get(targetKey) ?? 0) > 1 ? { ...row, problem: 'Another file is restored to this path.' } : row)
 }
 
 /** Why the standby file or the tail-log backup cannot be written where the draft says: a bad path, a database's file (STANDBY
@@ -238,7 +246,7 @@ export function draftProblems(draft: RestoreDraft, facts: RestoreFacts, plan = d
   }
   if (draft.recovery === 'standby') { const problem = draft.standbyFile ? writtenFileProblem(draft.standbyFile, facts) : 'Choose a standby file.'; if (problem) options.push(`Standby file: ${problem}`) }
   if (draft.keepReplication && draft.recovery === 'norecovery') options.push('Preserve the replication settings cannot be used with RESTORE WITH NORECOVERY.')
-  if (draft.tailLog && tailLogPossible(draft, facts)) { const problem = draft.tailLogFile ? writtenFileProblem(draft.tailLogFile, facts) : 'Choose the tail-log backup file.'; if (problem) options.push(`Backup file: ${problem}`) }
+  if (draft.tailLog && tailLogPossible(draft, facts, plan)) { const problem = draft.tailLogFile ? writtenFileProblem(draft.tailLogFile, facts) : 'Choose the tail-log backup file.'; if (problem) options.push(`Backup file: ${problem}`) }
   return { general, files, options }
 }
 
@@ -255,9 +263,11 @@ export function restoreRequest(draft: RestoreDraft, facts: RestoreFacts, ids: { 
     const set = byId.get(id)!
     return { id: set.id, devices: set.devices, file: set.position, type: set.type as RestorePlanSet['type'], ...set.name ? { name: set.name.slice(0, restoreLimits.setName) } : {}, ...set.backupSetGuid ? { guid: set.backupSetGuid } : {} }
   })
-  const relocate: RestoreMove[] = fileRows(draft, facts).filter(row => !sameServerPath(row.restoreAs, row.file.physical, facts.server?.separator ?? '\\')).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
+  const separator = facts.server?.separator ?? '\\'
+  const pathKey = (path: string) => serverPathKey(path, separator) ?? path
+  const relocate: RestoreMove[] = fileRows(draft, facts).filter(row => pathKey(row.restoreAs) !== pathKey(row.file.physical)).map(row => ({ logical: row.file.logical, physical: row.restoreAs }))
   const destination = destinationOf(facts, draft.destination)
-  const tail = draft.tailLog && tailLogPossible(draft, facts)
+  const tail = draft.tailLog && tailLogPossible(draft, facts, plan)
   const options: RestoreOptions = {
     sets, relocate, replace: draft.replace, keepReplication: draft.keepReplication, restrictedUser: draft.restrictedUser, recovery: draft.recovery,
     ...plan.stopAt ? { stopAt: plan.stopAt } : {}, ...draft.recovery === 'standby' ? { standbyFile: draft.standbyFile } : {},

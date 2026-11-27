@@ -146,6 +146,45 @@ internal static class ProfileChecks
         var each = set.RowBytes(0, count);
         check(sizes.Columns.Length == 0 && sizes.Rows == count && sizes.RowBytes is { } bytes && bytes.Min == each.Min() && bytes.Max == each.Max() && bytes == result.RowBytes,
             "a profile of no columns sizes every row of every page, as one with columns does");
+        // Wide float distribution [-double.MaxValue, 0, double.MaxValue] must not overflow (to - from) into one bar or drop endpoints.
+        var wide = store.Open(store.BeginQuery("wide-hist"), 0, 1, 1, "rows", [new ResultColumn("v", "float", "text")], [WireKind.Text])
+            ?? throw new InvalidOperationException("The result set was not kept.");
+        foreach (var value in new[] { -double.MaxValue, 0.0, double.MaxValue })
+        {
+            wide.CountRow();
+            wide.BeginRow()!.AppendFloat(value);
+            wide.TryCommitRow();
+        }
+        wide.Complete();
+        var wideHist = Profile(wide, null, 0).Columns[0].Histogram;
+        check(wideHist is not null && wideHist.Counts.Length == 20 && wideHist.Counts.Sum() == 3
+            && wideHist.Counts[0] == 1 && wideHist.Counts[10] == 1 && wideHist.Counts[19] == 1,
+            "wide float distribution [-double.MaxValue, 0, double.MaxValue] bins across endpoints and midpoint without overflow: " + (wideHist is null ? "null" : string.Join(",", wideHist.Counts)));
+        // NaN stored in PageLengths.Exacts must not land in bin 0; it is excluded from histogram bins.
+        var nanSet = store.Open(store.BeginQuery("nan-hist"), 0, 1, 1, "rows", [new ResultColumn("v", "float", "text")], [WireKind.Text])
+            ?? throw new InvalidOperationException("The result set was not kept.");
+        foreach (var value in new[] { 0.0, double.NaN, 10.0 })
+        {
+            nanSet.CountRow();
+            nanSet.BeginRow()!.AppendFloat(value);
+            nanSet.TryCommitRow();
+        }
+        nanSet.Complete();
+        var nanHist = Profile(nanSet, null, 0).Columns[0].Histogram;
+        check(nanHist is not null && nanHist.Counts.Sum() == 2 && nanHist.Counts[0] == 1 && nanHist.Counts[19] == 1,
+            "NaN float exact values are excluded from histogram bins rather than landing in bin 0: " + (nanHist is null ? "null" : string.Join(",", nanHist.Counts)));
+        // Column Profile Min/Max agrees with Grid Sort on word-sort (nvarchar ab < a-c) and legacy Unicode _BIN (a\u0100 < a\u0001).
+        var sqlCiAs = new ResultCollation(1033, 52, 1252, false, 1 | 8 | 16);
+        var legacyBin = new ResultCollation(1033, 0, 1252, false, 32768);
+        var textParity = Fill(store,
+            [new("vc", "varchar(20)", "text", Collation: sqlCiAs), new("nvc", "nvarchar(20)", "text", Collation: sqlCiAs), new("bin", "nvarchar(20)", "text", Collation: legacyBin)],
+            [["ab", "ab", "a\u0001"], ["a-c", "a-c", "a\u0100"]]);
+        var parity = Profile(textParity, null, 0, 1, 2);
+        check(parity.Columns[0] is { Min: "a-c", Max: "ab" }
+            && parity.Columns[1] is { Min: "ab", Max: "a-c" }
+            && parity.Columns[2] is { Min: "a\u0100", Max: "a\u0001" },
+            "Column Profile Min/Max agrees with ViewSorter on SQL_* varchar string sort, nvarchar word sort, and legacy Unicode _BIN: "
+            + string.Join(" | ", parity.Columns.Select(Describe)));
     }
 
     /// <summary>Pages with no set (a view read's, holding their own bytes) profile as the result's own, alone and beside

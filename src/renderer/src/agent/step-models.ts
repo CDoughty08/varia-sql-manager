@@ -4,13 +4,23 @@
 import type { editor } from 'monaco-editor'
 
 export interface StepModel { readonly model: editor.ITextModel; readonly documentId: string }
+export interface FlowCameraState { readonly x: number; readonly y: number; readonly scale: number }
 const byDocument = new Map<string, Map<string, StepModel>>()
+const flowCameras = new Map<string, FlowCameraState>()
 
 /** The document's models, created on first use. */
 export function stepModels(documentId: string): Map<string, StepModel> {
   let models = byDocument.get(documentId)
   if (!models) byDocument.set(documentId, models = new Map())
   return models
+}
+
+/** Keeps the Flow view's pan/zoom across tab switches for the life of the document. */
+export function flowCamera(documentId: string): FlowCameraState | undefined {
+  return flowCameras.get(documentId)
+}
+export function setFlowCamera(documentId: string, camera: FlowCameraState): void {
+  flowCameras.set(documentId, camera)
 }
 
 /** Drops the models of reads before `epoch` (their keys no longer name the same steps). */
@@ -22,6 +32,7 @@ export function pruneStepModels(documentId: string, epoch: string): void {
 
 /** The document closed: its models go. */
 export function disposeStepModels(documentId: string): void {
+  flowCameras.delete(documentId)
   const models = byDocument.get(documentId)
   if (!models) return
   for (const entry of models.values()) entry.model.dispose()

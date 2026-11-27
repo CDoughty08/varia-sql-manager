@@ -10,6 +10,7 @@ import {
   agentNextRun, formatRun, linkAnchor, freeSlotCheck, freeSlotText, freq, nextRuns, noRunsReason, sameTiming, scheduleMatches, scheduleProblems, scheduleSentence, scheduleText, scheduleWhen, type AgentMoment, type ScheduledJob
 } from '../../../shared/agent/schedule.ts'
 import Icon from '../Icon'
+import ResizableSplit from '../kit/ResizableSplit'
 import ScheduleEditor from './ScheduleEditor'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
 
@@ -188,37 +189,55 @@ export default function JobSchedules(props: Props) {
   const entryErrors = new Map<string, string>()
   for (const item of allProblems) if (item.key && item.problem.severity === 'error' && !entryErrors.has(item.key)) entryErrors.set(item.key, item.problem.message)
   const searchId = `agent-schedule-search-${state.id}`
-  return <div className="agent-schedules">
-    <div className="agent-schedule-list">
-      <h4 id={`${searchId}-on`}>On this job</h4>
-      {draft.schedules.length ? <ul aria-labelledby={`${searchId}-on`}>
-        {draft.schedules.map(item => <EntryRow key={item.key} entry={item} selected={item.key === selected} record={service.scheduleRecord(state.id, item)} invalid={entryErrors.has(item.key)} onSelect={() => service.selectSchedule(state.id, item.key)} />)}
-      </ul> : <p className="field-note">{jobScheduleText.noneYet}</p>}
-      {state.error?.field === 'schedules' && <p className="property-field-error" role="alert"><Icon name="error" />{state.error.message}</p>}
-      {listProblems.map(item => <p key={item.problem.message} className="property-field-error" role="alert"><Icon name="error" />{item.problem.message}</p>)}
-      {draft.schedules.filter(item => entryErrors.has(item.key)).map(item => <p key={item.key} className="property-field-error"><Icon name="error" />{item.fields.name || '(no name)'}: {entryErrors.get(item.key)}</p>)}
-      <h4>Add</h4>
-      <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} value={search}
-        disabled={!editable} onChange={event => service.setScheduleSearch(state.id, event.target.value)} />
-      <p className="field-note">{sharedState?.state === 'failed' ? jobScheduleText.listFailed : sharedState?.state === 'loading' && search ? 'Reading the shared schedules…' : search ? jobScheduleText.pickHint : jobScheduleText.searchHint}</p>
-      {search.trim() && sharedState?.state === 'ready' && (matches.length ? <ul aria-label="Shared schedules">
-        {matches.slice(0, pickRows).map(item => <li key={item.id}>
-          <button type="button" className="agent-schedule-item" aria-current={selected === `pick:${item.id}` || undefined} onClick={() => service.selectSchedule(state.id, `pick:${item.id}`)}>
-            <Icon name="agent-schedule" />
-            <span className="agent-schedule-item-text">
-              <span className="agent-schedule-item-name">{item.name}{item.freqType === freq.idle && sharedState.model?.idleDefined === false && <span className="agent-schedule-tag"> · never runs</span>}</span>
-              <span className="field-note">{scheduleWhen(item)} · {item.jobCount} {item.jobCount === 1 ? 'job' : 'jobs'}</span>
-            </span>
-          </button>
-        </li>)}
-      </ul> : <p className="field-note">{jobScheduleText.noMatch}</p>)}
-      <button type="button" className="agent-schedule-add" disabled={!editable} onClick={() => service.newSchedule(state.id, search)}><Icon name="add" />{search.trim() ? `New schedule “${search.trim()}”` : 'New schedule'}</button>
-    </div>
+  return <ResizableSplit
+    className="agent-job-schedules agent-job-schedules-fill"
+    railClassName="agent-job-schedules-rail"
+    mainClassName="agent-job-schedules-main"
+    side="left"
+    storageKey="agent.job.schedules"
+    defaultWidth={284}
+    minWidth={236}
+    maxWidth={460}
+    minOtherWidth={360}
+    label="Resize attached schedules list"
+    railLabel="Job schedules"
+    rail={<>
+      <div className="agent-job-schedules-head">
+        <span id={`${searchId}-on`} className="agent-eyebrow">On this job</span>
+        <button type="button" className="agent-schedule-add" disabled={!editable} onClick={() => service.newSchedule(state.id, search)}><Icon name="add" />{search.trim() ? `New schedule “${search.trim()}”` : 'New schedule'}</button>
+      </div>
+      <div className="agent-job-schedules-search">
+        <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} value={search}
+          disabled={!editable} onChange={event => service.setScheduleSearch(state.id, event.target.value)} />
+      </div>
+      <div className="agent-job-schedules-scroll">
+        {draft.schedules.length ? <ul aria-labelledby={`${searchId}-on`}>
+          {draft.schedules.map(item => <EntryRow key={item.key} entry={item} selected={item.key === selected} record={service.scheduleRecord(state.id, item)} invalid={entryErrors.has(item.key)} onSelect={() => service.selectSchedule(state.id, item.key)} />)}
+        </ul> : <p className="field-note">{jobScheduleText.noneYet}</p>}
+        {state.error?.field === 'schedules' && <p className="property-field-error" role="alert"><Icon name="error" />{state.error.message}</p>}
+        {listProblems.map(item => <p key={item.problem.message} className="property-field-error" role="alert"><Icon name="error" />{item.problem.message}</p>)}
+        {draft.schedules.filter(item => entryErrors.has(item.key)).map(item => <p key={item.key} className="property-field-error"><Icon name="error" />{item.fields.name || '(no name)'}: {entryErrors.get(item.key)}</p>)}
+        <div className="agent-eyebrow agent-job-schedules-add-head">Add shared schedule</div>
+        <p className="field-note">{sharedState?.state === 'failed' ? jobScheduleText.listFailed : sharedState?.state === 'loading' && search ? 'Reading the shared schedules…' : search ? jobScheduleText.pickHint : jobScheduleText.searchHint}</p>
+        {search.trim() && sharedState?.state === 'ready' && (matches.length ? <ul aria-label="Shared schedules">
+          {matches.slice(0, pickRows).map(item => <li key={item.id}>
+            <button type="button" className="agent-schedule-item" aria-current={selected === `pick:${item.id}` || undefined} onClick={() => service.selectSchedule(state.id, `pick:${item.id}`)}>
+              <Icon name="agent-schedule" />
+              <span className="agent-schedule-item-text">
+                <span className="agent-schedule-item-name">{item.name}{item.freqType === freq.idle && sharedState.model?.idleDefined === false && <span className="agent-schedule-tag"> · never runs</span>}</span>
+                <span className="field-note">{scheduleWhen(item)} · {item.jobCount} {item.jobCount === 1 ? 'job' : 'jobs'}</span>
+              </span>
+            </button>
+          </li>)}
+        </ul> : <p className="field-note">{jobScheduleText.noMatch}</p>)}
+      </div>
+    </>}
+  >
     <div className="agent-schedule-detail">
       {picked ? <PickPreview {...props} record={picked} />
         : entry?.remove ? <RemovedPanel {...props} entry={entry} {...record ? { record } : {}} />
         : entry ? <EntryEditor {...props} entry={entry} {...record ? { record } : {}} />
         : <p className="field-note">{draft.schedules.length ? 'Choose a schedule to edit it here.' : jobScheduleText.noneYet}</p>}
     </div>
-  </div>
+  </ResizableSplit>
 }

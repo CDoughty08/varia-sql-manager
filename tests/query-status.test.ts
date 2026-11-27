@@ -181,6 +181,12 @@ describe('grouped calm status bar and condensed SQL status chip', () => {
       { label: 'SQL analysis unavailable', detail: 'Provider crashed.' }
     )!
     expect(unavailable).toMatchObject({ label: 'SQL: Unavailable', icon: 'warning', tone: 'warning' })
+
+    const refreshing = sqlStatusChip(
+      { label: 'IntelliSense refreshing', detail: 'Refreshing' },
+      undefined
+    )!
+    expect(refreshing).toMatchObject({ label: 'SQL: Refreshing', icon: 'sync', tone: 'normal' })
   })
 
   it('renders EditorStatus as calm groups with one clickable SQL chip and intact aria-live status regions', () => {

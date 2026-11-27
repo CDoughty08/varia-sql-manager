@@ -6,8 +6,8 @@ SQL Server Agent ships in 0.10.0 ([docs/agent-plan.md](agent-plan.md), UI in
 Start Job at Step…, Stop Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and
 Properties; Search Objects finds jobs, alerts and operators, Script As scripts jobs, alerts, operators and proxies, Job
 Activity Monitor follows the jobs live, the Log File Viewer reads and deletes job history and reads Agent's error logs, the
-job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job and shows its
-History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
+job document edits a job's General (including Targets), Steps, Schedules, Notifications & Alerts, and History tabs or
+creates a job and shows its History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
 notifications grid edit and create alerts, operators and who is notified, and the proxy and credential documents edit and
 create proxies and credentials. Help › Getting Started has a guide, Schedule work with SQL Server Agent, with a fictional
 schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
@@ -84,10 +84,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Job Activity Monitor node, and the palette's SQL Server Agent: Job Activity Monitor open one document per connection
   ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
   (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
-  and a tone per row (last run failed, running, disabled). Tiles count Running, Last run failed, Between retries and
-  Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box (the
-  job's own columns, never the last run) and the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
-  shows the selected job's last run below the list (`args.expand`: the job outcome and step rows from the newest
+  and a tone per row (last run failed, running, disabled). Slim KPI tiles count Running, Last run failed, Between retries and
+  Disabled, and pressing one filters to those jobs; a single grouped toolbar holds the filter box (matching the
+  job's own columns, never the last run), Clear filters, selection count, Start, Stop, Enable / Disable ▾, More actions ▾
+  (Change owner…, Attach schedule…, View history, Create Job Like This…) and the right-pinned Last run drawer toggle. The Last run drawer
+  shows the selected job's last run in a resizable split pane (`agent.jam.lastRunMessage`, persisted in localStorage) with the steps grid beside an inline step message preview (fetching full truncated messages via `agent.historyMessage`, with Copy, Open Job, and Log File Viewer shortcuts; `args.expand` reads the job outcome and step rows from the newest
   `lastRunRows` rows of `sp_help_jobhistory`; when that read stops inside the run, the panel says only its newest steps
   show, or that no finished run is among those rows; a job that left the list says so).
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
@@ -116,9 +117,10 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Agent overview** (AG-15; `agent.overview`, docs/live.md; the rules in `src/shared/agent/overview.ts`, `AgentOverviewService`
   and `AgentOverview.tsx` in the renderer). Agent Overview on the Agent node's menu, or the palette's SQL Server Agent: Agent
   Overview (Ctrl+Q finds it as a command), opens one document per connection ("Agent Overview - server"). Its header shows
-  Agent's state, startup type, service account and the server's version, with Check again and Properties; tiles count jobs,
-  jobs failed in the last 24 hours (by the server's clock), running jobs and alerts (those fired this week); then the health
-  checks, each with a severity, the jobs or schedules it names (each name a link in its sentence that opens it) and a fix that opens the usual editor
+  Agent's state and startup type pill with Properties and Check again, above a compact fact line with Service Account,
+  the server's version and last-checked timestamp; clickable KPI tiles count Total jobs, Failed (24 h), Running now and
+  Alerts (7 d) (opening Job Activity Monitor or Operators and Notifications); then grouped health checks (**Needs attention**,
+  **Notes**, **Passing**, **Not checked**), each with a severity, clickable object chips for named jobs or schedules and a fixed-width right-aligned fix button that opens the usual editor
   or confirmation. Nothing is written by the overview itself:
   - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
   - **Failed jobs**: a job whose last run failed and started within 24 hours ("(retrying)" while it retries); Show
@@ -159,14 +161,18 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the
-  server's jobs). The header shows the job's live state from `agent.jobs.watched` (running and its step, or idle with the last
-  outcome), Start with a step menu (Start once at step, which leaves the job's start step alone), Stop while it runs, Reload
-  and Save. Sections: **General** (name, owner, category, description, enabled; only sysadmin changes the owner),
-  **Notifications** (e-mail, page, net send, Windows event log and delete, each a level and an operator; whether Database Mail
-  can send, read through `sysmail_help_profile_sp` where the login may, and an operator's missing address or pager duty hours
-  as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
-  Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New alert for this job… opens New Alert with the job as its response).
-  **Steps** is a master/detail page: the list shows each step's number, type and where it goes on success and on failure, marks
+  server's jobs). The `ObjectInspectorFrame` header shows breadcrumbs, live status from `agent.jobs.watched` (running and
+  its step, or idle with the last outcome), Start with a step menu (Start once at step, which leaves the job's start step
+  alone), Stop while it runs, a toggleable Vitals right rail (`Live Status`, `Identity`, `Problems`), Reload and Save, above
+  a Hero KPI strip (`Last Run`, `Duration`, `Next Run`, `Owner`). Tabs (`Ctrl+1`..`6`): **General** (name, owner, category,
+  description, enabled, and **Targets**—this server only; multi-server targets come later; only sysadmin changes the owner),
+  **Steps**, **Schedules**, **Notifications & Alerts** (e-mail, page, net send, Windows event log and delete, each a level
+  and an operator; whether Database Mail can send, read through `sysmail_help_profile_sp` where the login may, and an
+  operator's missing address or pager duty hours as warnings, plus the alerts that run the job with Remove for sysadmin only,
+  since msdb grants `sp_update_alert` to no Agent role, and `+ New alert for this job…` opening New Alert with the job as
+  its response), and **History**.
+  **Steps** is a persisted resizable master/detail page (`ResizableSplit`): the list shows each step's number, compact type
+  badge (`TSQL`, `SSIS`, `PS`, `Cmd`, `SSAS`, `Repl`) and equal-width columns for where it goes on success and on failure, marks
   the Start step, and reorders by drag, Move up and Move down, or Alt+Up and Alt+Down (Move Step Up and Move Step Down, in the
   Steps section but not in a field or the step's command editor, where the keys open a list or move lines); moving the step shown
   keeps it shown. Go-to targets follow the step they name, since the draft keys

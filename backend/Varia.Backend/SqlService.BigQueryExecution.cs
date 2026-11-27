@@ -76,7 +76,9 @@ internal sealed partial class SqlService
         // SQL Server's options have no BigQuery meaning; main refuses them first (methods.ts, providerOptionsAllow).
         if (args.StopOnError || args.IncludeActualPlan || args.IncludeLivePlan || args.IncludeClientStatistics)
             throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error, actual and live plans and client statistics are not available for BigQuery connections.");
-        var dataset = args.Dataset ?? connection.Options.Dataset;
+        if (args.NoDefaultDataset && args.Dataset is not null)
+            throw new RequestException("INVALID_PARAMS", "A query cannot name both a dataset and no default dataset.");
+        var dataset = args.NoDefaultDataset ? null : args.Dataset ?? connection.Options.Dataset;
         if (dataset is not null && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (args.JobKey is not null && !BigQueryLimits.Uuid().IsMatch(args.JobKey)) throw new RequestException("INVALID_PARAMS", "The job key is not valid.");

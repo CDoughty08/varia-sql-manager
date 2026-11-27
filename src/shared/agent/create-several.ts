@@ -130,7 +130,9 @@ const levelOptions: readonly SeveralOption[] = notifyLevels.map(level => ({ valu
 const asLevel = (value: string): AgentNotifyLevel | undefined => ['0', '1', '2', '3'].includes(value) ? Number(value) as AgentNotifyLevel : undefined
 const byLabel = (options: readonly SeveralOption[]) => (value: string) => options.find(option => option.value === value)?.label ?? value
 /** A typed select value: an option's value, or its label typed or pasted (case ignored). */
-const optionOf = (options: readonly SeveralOption[], value: string) => options.find(option => option.value === value) ?? options.find(option => option.label.toLowerCase() === value.trim().toLowerCase())
+export const severalSelectOption = (options: readonly SeveralOption[], value: string): SeveralOption | undefined =>
+  options.find(option => option.value === value) ?? options.find(option => option.label.trim().toLowerCase() === value.trim().toLowerCase())
+const optionOf = severalSelectOption
 
 function textColumn(id: string, label: string, group: string, get: (draft: AgentJobDraft) => string | undefined, put: (draft: AgentJobDraft, value: string) => AgentJobDraft | string, limit: number, kind: 'text' | 'command' = 'text'): SeveralColumn {
   return { id, label, group, kind, get, set: (draft, value) => noNul(value) ?? max(limit)(value) ?? put(draft, value), text: value => value }
@@ -333,8 +335,11 @@ export function severalEditorDraft(context: SeveralContext, row: SeveralRow): Se
 export function severalCell(context: SeveralContext, row: SeveralRow, column: SeveralColumn): { readonly value: string; readonly inherited: boolean; readonly changed: boolean } {
   const typed = row.cells[column.id]
   const base = column.get(row.edited ?? context.template) ?? ''
-  const value = typed ?? base
-  return { value, inherited: typed === undefined, changed: value !== (column.get(context.template) ?? '') }
+  const raw = typed ?? base
+  const value = typed !== undefined && column.kind === 'select' && column.options
+    ? optionOf(column.options, raw)?.value ?? raw
+    : raw
+  return { value, inherited: typed === undefined || value === base, changed: value !== (column.get(context.template) ?? '') }
 }
 
 function putRow(table: SeveralTable, key: string, change: (row: SeveralRow) => SeveralRow): SeveralTable {
@@ -348,18 +353,27 @@ function putRow(table: SeveralTable, key: string, change: (row: SeveralRow) => S
   return rows.some((row, at) => row !== table.rows[at]) ? { ...table, rows } : table
 }
 
+const allowsEmptyOption = (column: SeveralColumn) => column.kind === 'select' && !!column.options?.some(option => option.value === '')
+
 /**
- * A typed cell. An empty one goes back to the template's value: its typed value goes, and a full editor's value for the field is reset too,
- * so the grey value shown is the template's.
+ * A typed cell. `undefined` (or an empty string when the column has no empty option) goes back to the template's value: its typed value
+ * goes, and a full editor's value for the field is reset too, so the grey value shown is the template's.
  */
-export function withSeveralCell(context: SeveralContext, table: SeveralTable, key: string, columnId: string, value: string): SeveralTable {
+export function withSeveralCell(context: SeveralContext, table: SeveralTable, key: string, columnId: string, value: string | undefined): SeveralTable {
   const column = columnOf(context, columnId)
   if (!column) return table
+  const templateBase = column.get(context.template) ?? ''
+  const emptyResets = value === undefined || (value === '' && !allowsEmptyOption(column))
   return putRow(table, key, row => {
     const { [columnId]: _gone, ...cells } = row.cells
-    if (value !== '' && value !== (column.get(row.edited ?? context.template) ?? '')) return { ...row, cells: { ...cells, [columnId]: value } }
-    if (value !== '' || !row.edited) return { ...row, cells }
-    const reset = column.set(row.edited, column.get(context.template) ?? '')
+    if (!emptyResets) {
+      const resolved = column.kind === 'select' && column.options ? optionOf(column.options, value)?.value ?? value : value
+      const rowBase = column.get(row.edited ?? context.template) ?? ''
+      if (resolved !== rowBase) return { ...row, cells: { ...cells, [columnId]: resolved } }
+      return { ...row, cells }
+    }
+    if (!row.edited) return { ...row, cells }
+    const reset = column.set(row.edited, templateBase)
     return { ...row, cells, ...typeof reset === 'string' ? {} : { edited: reset } }
   })
 }
@@ -389,7 +403,7 @@ export function withSeveralColumn(context: SeveralContext, table: SeveralTable, 
 
 /** Paste rows: one line per row, tab-separated cells in the visible columns' order (a spreadsheet's copy). An empty cell keeps the grey
  *  value; cells past the last column are ignored. Rows past the table's limit are not added (`cut` says how many). */
-export function pasteSeveralRows(table: SeveralTable, text: string): { readonly table: SeveralTable; readonly added: number; readonly cut: number } {
+export function pasteSeveralRows(table: SeveralTable, text: string, context?: SeveralContext): { readonly table: SeveralTable; readonly added: number; readonly cut: number } {
   const lines = text.slice(0, createSeveralLimits.pasteChars).split(/\r?\n/)
   while (lines.length && !lines[lines.length - 1]!.trim()) lines.pop()
   let next = table, added = 0, cut = 0
@@ -397,7 +411,18 @@ export function pasteSeveralRows(table: SeveralTable, text: string): { readonly 
     if (!line.trim()) continue
     if (next.rows.length >= createSeveralLimits.rows) { cut++; continue }
     const cells: Record<string, string> = {}
-    line.split('\t').forEach((cell, at) => { const id = table.columns[at]; const value = cell.replace(/^"(.*)"$/s, '$1').trim(); if (id && value) cells[id] = value })
+    line.split('\t').forEach((cell, at) => {
+      const id = table.columns[at]
+      const value = cell.replace(/^"(.*)"$/s, '$1').trim()
+      if (!id || !value) return
+      const column = context ? columnOf(context, id) : undefined
+      if (column?.kind === 'select' && column.options) {
+        const resolved = optionOf(column.options, value)?.value ?? value
+        if (resolved !== (column.get(table.template) ?? '')) cells[id] = resolved
+        return
+      }
+      cells[id] = value
+    })
     next = addSeveralRow(next, cells)
     added++
   }
@@ -480,7 +505,7 @@ export const severalOtherCount = (context: SeveralContext, table: SeveralTable, 
  *  takes the template's steps or schedules with the row's column values kept on them. */
 export function resetSeveralDifference(context: SeveralContext, table: SeveralTable, key: string, id: string): SeveralTable {
   const field = /^field:(.+)$/.exec(id)?.[1] as AgentJobField | undefined
-  if (!field) return withSeveralCell(context, table, key, id, '')
+  if (!field) return withSeveralCell(context, table, key, id, undefined)
   if (!agentJobFields.includes(field)) return table
   return putRow(table, key, row => {
     if (!row.edited) return row

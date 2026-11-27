@@ -1,6 +1,6 @@
 import { expect } from '../fixtures/smoke.mjs'
 import { chooseExplorerMenuItem } from '../fixtures/explorer-tree.mjs'
-import { documentFrame, documentTab, gridPart, liveGrid, quickInputRows } from '../fixtures/ui.mjs'
+import { chooseJamMoreAction, documentFrame, documentTab, gridPart, liveGrid, quickInputRows } from '../fixtures/ui.mjs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -17,7 +17,7 @@ export async function captureAp4(outDir, profile, { captureMatrix, launchMainApp
 
     // 1. Log File Viewer with Sources rail open and live-searched.
     await jobCell('Nightly').click()
-    await documentFrame(page, 'Job Activity Monitor').getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'View history', exact: true }).click()
+    await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'View history')
     await expect(documentTab(page, 'Log File Viewer - server-a')).toHaveAttribute('aria-selected', 'true')
     const viewer = documentFrame(page, 'Log File Viewer')
     const runs = liveGrid(page, 'Runs')

@@ -171,7 +171,9 @@ npm run test:smoke:wsl -- --all
 - **Scratch.** `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the session hook) adds the Object Explorer, Script As and object
   action scratch-database checks (actions in their own `VariaScratch_…_act`), the script goldens in
   `tests/fixtures/scripting/`, and lets live vitest files create and drop a uniquely named, marked `varia_scratch_…`
-  database (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those are skipped.
+  database (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those are skipped. With it, `VARIA_TEST_SEARCH_RELOAD_ONLY=1` makes
+  `--live-suite Explorer` run only the Search Objects reload and freshness checks (`SearchReloadLiveChecks`,
+  `SearchFreshnessLiveChecks`), on their own scratch databases.
 - **Rewriting fixtures.** `VARIA_UPDATE_SCRIPT_GOLDENS=1` rewrites the goldens whose manifest source is `varia`;
   `VARIA_UPDATE_ORDINAL_CASING=1` (offline) rewrites `src/shared/ordinal-casing.ts` from the runtime's casing.
 - **Shared servers.** Run live suites one at a time where you can. Runs sharing a server tolerate each other's scratch

@@ -15,7 +15,19 @@ internal sealed partial class SqlService
     private async Task<object> ExecuteActionWithLanguagePausedAsync(ActionArgs args, CancellationToken token, Action<object>? progress)
     {
         using var suspension = language.Suspend();
-        return await CaptureBindingChangesAsync(() => actions.ExecuteAsync(args, token, progress));
+        try { return await CaptureBindingChangesAsync(() => actions.ExecuteAsync(args, token, progress)); }
+        // An object action or Table Designer's save ran DDL (or may have, part way): the index checks the database at its next use;
+        // one on the server's own objects (a login, a database, an Agent job) checks the server's.
+        finally
+        {
+            // A database's own action (properties, rename, drop) changes the server's list of databases and the database itself.
+            if (args.Target.Kind == "database")
+            {
+                search.MarkSqlStale(args.ConnectionId, null);
+                if (args.Target.Name is { Length: > 0 } name) search.MarkSqlStale(args.ConnectionId, name);
+            }
+            else search.MarkSqlStale(args.ConnectionId, args.Target.Database);
+        }
     }
 
     /// <summary>Resolves only an existing Varia connection. The renderer cannot supply credentials or executable paths.

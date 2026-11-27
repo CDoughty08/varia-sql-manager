@@ -107,6 +107,29 @@ describe('BigQuery connections in the workbench', () => {
     } finally { value.dispose() }
   })
 
+  it('waits for an unrelated document operation to finish before accepting a saved BigQuery profile connect', async () => {
+    const value = workbenchFixture()
+    try {
+      value.connectionTargets.restore({ version: 1, targets: [target()] })
+      value.api.push(readyBackend(1))
+      const profile = { id: id(300), favorite: false, autoReconnect: 'on' as const, options: { provider: 'bigquery' as const, project: 'varia-alpha', dataset: 'sales', authentication: 'gcloud' as const } }
+      const loadConnectionLibrary = vi.fn<VariaApi['loadConnectionLibrary']>(async () => ({ ok: true, value: { bigQuery: { profiles: [profile] } } }) as unknown as Awaited<ReturnType<VariaApi['loadConnectionLibrary']>>)
+      const api = Object.assign(value.api, { loadConnectionLibrary }) as typeof value.api & Pick<VariaApi, 'loadConnectionLibrary'>
+      let finishDocTask!: () => void
+      const docTask = value.documents.runTask(() => new Promise<void>(resolve => { finishDocTask = resolve }))
+      value.api.connect.mockImplementation(async (_options, context) => ({ ok: true, value: { id: id(50), targetId: context!.targetId, generation: 1, server: 'varia-alpha', database: 'sales', serverVersion: 'BigQuery', login: 'ada@example.com', providerId: 'bigquery', authentication: { principal } } }))
+      const signal = new AbortController().signal, deps = { ...value, api, signal }
+      const connecting = connectBigQueryProfile(deps, id(300))
+      await vi.waitFor(() => expect(value.api.connect).toHaveBeenCalledTimes(1))
+      expect(value.api.cancelConnectionRequests).not.toHaveBeenCalled()
+      finishDocTask()
+      await docTask
+      expect(await connecting).toEqual({ ok: true, connectionId: id(50) })
+      expect(value.api.cancelConnectionRequests).not.toHaveBeenCalled()
+      expect(value.connections.isLive(id(50))).toBe(true)
+    } finally { value.dispose() }
+  })
+
   it('shows the project, account and default dataset in the query status bar', () => {
     const connection = { server: 'varia-alpha', serverVersion: 'BigQuery', providerId: 'bigquery', login: 'ada@example.com' }
     const model = queryStatusModel({ connection, database: 'sales', running: false, now: 0, settings: defaultSettings, variant: 'segment' })

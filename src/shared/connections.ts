@@ -143,8 +143,10 @@ export function connectionKey(options: ProviderConnectionOptions): string {
     return JSON.stringify(['bigquery', clean.project, clean.dataset ?? '', clean.authentication, clean.keyFile ?? '', clean.impersonateServiceAccount?.toLowerCase() ?? ''])
   }
   const clean = savedConnection(options)
-  return JSON.stringify([clean.server.toLowerCase(), clean.database.toLowerCase(), clean.authentication, clean.username ?? '',
-    clean.encrypt ?? 'mandatory', clean.trustServerCertificate, clean.hostNameInCertificate ?? '', { ...advancedDefaults, ...clean.advanced }])
+  const { commandTimeout: _defaultTimeout, ...otherDefaults } = advancedDefaults
+  const timeout = clean.advanced?.commandTimeout === undefined ? ['inherit'] : ['explicit', clean.advanced.commandTimeout]
+  return JSON.stringify([clean.server.toLowerCase(), clean.database, clean.authentication, clean.username ?? '',
+    clean.encrypt ?? 'mandatory', clean.trustServerCertificate, clean.hostNameInCertificate ?? '', { ...otherDefaults, ...clean.advanced }, timeout])
 }
 
 /** Where the operating system can protect a remembered password; `reason` says why it cannot. */

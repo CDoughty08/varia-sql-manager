@@ -312,7 +312,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     this.put(entry.id, checking)
     let response: ApiResult<BigQueryDryRunResult>
     // The tab's id is its session's: text using the tab's temp tables or variables estimates in that session once it exists.
-    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {}, sessionId: entry.id }) }
+    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : { noDefaultDataset: true }, sessionId: entry.id }) }
     catch (error) { response = { ok: false, error: error instanceof Error ? error.message : 'The dry run failed.' } as ApiResult<BigQueryDryRunResult> }
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
     if (!current) {
