@@ -716,15 +716,19 @@ describe("the job document's Flow overlays", () => {
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     const frame = jobDocuments.get(id)!.frame
-    jobDocuments.setFrame(id, { ...frame, collapsed: [...frame.collapsed.filter(section => section !== 'history'), 'history'] })
+    jobDocuments.setFrame(id, { ...frame, section: 'steps', collapsed: [...frame.collapsed.filter(section => section !== 'history'), 'history'] })
     // The section and Flow's run panels attach the view as they mount; whether it runs is the owner's visible().
     jobDocuments.history.attach(id, '11111111-1111-1111-1111-111111111111')
     const historyView = () => (live.handles as FakeLiveHandle[]).find(item => item.owner.key === 'agent-job-history:' + id && !item.disposed)
     expect(historyView()?.owner.visible?.()).toBe(false)
-    // Run, from the toolbar: Flow's overlay keeps History's view running though its section is closed; on List it does not.
+    // Run, from the toolbar: Flow's overlay keeps History's view running while Steps is active; on List or another tab it does not.
     jobDocuments.setStepsView(id, 'flow')
     jobDocuments.setFlowOverlay(id, 'last')
     expect(jobDocuments.flowOverlayOf(id)).toBe('last')
+    expect(historyView()?.owner.visible?.()).toBe(true)
+    jobDocuments.setFrame(id, { ...jobDocuments.get(id)!.frame, section: 'general' })
+    expect(historyView()?.owner.visible?.()).toBe(false)
+    jobDocuments.setFrame(id, { ...jobDocuments.get(id)!.frame, section: 'steps' })
     expect(historyView()?.owner.visible?.()).toBe(true)
     jobDocuments.setStepsView(id, 'list')
     expect(historyView()?.owner.visible?.()).toBe(false)
@@ -813,8 +817,55 @@ describe("the job document's step command models", () => {
     jobDocuments.editStep(id, 's2')
     expect(jobDocuments.get(id)?.step).toBe('s2')
     expect(jobDocuments.get(id)?.stepEditor).toBeUndefined()
+    expect(jobDocuments.get(id)?.frame.section).toBe('steps')
+    jobDocuments.openHistory(id)
+    expect(jobDocuments.get(id)?.frame.section).toBe('history')
     jobDocuments.setStepsView(id, 'flow')
     jobDocuments.editStep(id, 's1')
-    expect(jobDocuments.get(id)).toMatchObject({ step: 's1', stepEditor: true })
+    expect(jobDocuments.get(id)).toMatchObject({ step: 's1', stepEditor: true, frame: { section: 'steps' } })
+  })
+})
+
+describe('ObjectInspectorFrame tab mapping and Next Run KPI derivation', () => {
+  it('maps legacy targets/alerts section jumps onto hosted tabs and computes Next Run from draft schedules', async () => {
+    const { jobInspectorTab, jobNextRunInfo } = await import('../src/renderer/src/agent/JobDocument')
+    const { initialAgentJobDraft } = await import('../src/shared/actions/agent-job')
+    const { defaultSchedule, freq } = await import('../src/shared/agent/schedule')
+
+    expect(jobInspectorTab('targets', false, true)).toBe('general')
+    expect(jobInspectorTab('alerts', false, true)).toBe('notifications')
+    expect(jobInspectorTab('changes', true, false)).toBe('changes')
+    expect(jobInspectorTab('changes', false, true)).toBe('general')
+    expect(jobInspectorTab('history', false, true)).toBe('history')
+    expect(jobInspectorTab('history', false, false)).toBe('general')
+    expect(jobInspectorTab('steps', false, true)).toBe('steps')
+    expect(jobInspectorTab('schedules', false, true)).toBe('schedules')
+
+    const now = { date: 20261122, time: 143000 }
+    const base = initialAgentJobDraft(model())
+    expect(jobNextRunInfo({ ...base, enabled: false }, now).value).toBe('Disabled')
+    expect(jobNextRunInfo({ ...base, enabled: true, schedules: [] }, now).value).toBe('On demand')
+
+    const daily = defaultSchedule(20261122, 'Daily')
+    const scheduled = {
+      ...base,
+      enabled: true,
+      schedules: [{ key: 'n1', fields: { ...daily, freqType: freq.daily, freqInterval: 1, activeStartTime: 23000 } }]
+    }
+    expect(jobNextRunInfo(scheduled, now).value).toBe('Mon 2026-11-23 02:30')
+
+    const agentStart = {
+      ...base,
+      enabled: true,
+      schedules: [{ key: 'n2', fields: { ...daily, freqType: freq.agentStart } }]
+    }
+    expect(jobNextRunInfo(agentStart, now).value).toBe('On Agent start')
+
+    const cpuIdle = {
+      ...base,
+      enabled: true,
+      schedules: [{ key: 'n3', fields: { ...daily, freqType: freq.idle } }]
+    }
+    expect(jobNextRunInfo(cpuIdle, now).value).toBe('On CPU idle')
   })
 })

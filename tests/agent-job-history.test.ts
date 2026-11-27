@@ -150,6 +150,7 @@ describe("the job document's History section", () => {
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
     expect(history()).toBeUndefined()
+    jobDocuments.openHistory(id)
     jobDocuments.history.attach(id, job)
     jobDocuments.history.attach(id, job)
     const view = history()!
@@ -157,6 +158,10 @@ describe("the job document's History section", () => {
     expect(view.owner.visible()).toBe(true)
     jobDocuments.setFrame(id, { ...jobDocuments.get(id)!.frame, collapsed: ['history'] })
     expect(view.owner.visible()).toBe(false)
+    jobDocuments.setFrame(id, { ...jobDocuments.get(id)!.frame, collapsed: [], section: 'general' })
+    expect(view.owner.visible()).toBe(false)
+    jobDocuments.openHistory(id)
+    expect(view.owner.visible()).toBe(true)
     const failedMessage = 'The job failed.  The Job was invoked by User sa.  The last step to run was step 2 (Load).'
     await deliver({
       0: table(0, [runRow(20, { runOutcome: 'Failed', runTone: 'error', runMessage: failedMessage }), runRow(19)]),
@@ -191,6 +196,7 @@ describe("the job document's History section", () => {
     const { jobDocuments, history, deliver, documents, operations } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
+    jobDocuments.openHistory(id)
     jobDocuments.history.attach(id, job)
     await deliver({ 0: table(0, [runRow(20), runRow(19)]), 1: table(1, [stepRow(20, 0)]), 3: table(3, []) })
     await deliver({ 1: table(1, [stepRow(20, 0)]) })
@@ -220,6 +226,7 @@ describe("the job document's History section", () => {
     const { jobDocuments, history, documents } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
+    jobDocuments.openHistory(id)
     jobDocuments.history.attach(id, job)
     history()!.set({ status: 'ended', ended: { ended: 'failed', code: 'PERMISSION_DENIED', message: 'denied' } as never })
     expect(jobDocuments.history.ended(id)).toEqual({ code: 'PERMISSION_DENIED', message: jobHistoryText.denied })
@@ -235,6 +242,7 @@ describe("the job document's watched state and History", () => {
     const { jobDocuments, history, live } = opened()
     const id = jobDocuments.openJob('c1', 'Nightly load')
     await settled()
+    jobDocuments.openHistory(id)
     jobDocuments.history.attach(id, job)
     const watched = (live.handles as FakeLiveHandle[]).find(handle => handle.spec.source === 'agent.jobs')!
     const tick = (status: number, step: number, now: number) => {

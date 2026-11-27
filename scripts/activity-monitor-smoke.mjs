@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect, within } from './fixtures/smoke.mjs'
 import {
-  activityBanner, backendReady, bannerGlyph, connectDialogWindow, documentActions, documentContent, documentFrame, documentTab, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, livePill, outputPane, pane, quickInput, serverRows, staleBadge, submitConnect, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, connectDialogWindow, documentActions, documentContent, documentFrame, documentTab, documentTabs, documentTitle, explorerTree, gridCell, gridCellSelector, gridPart, inspectorTab, livePill, outputPane, pane, quickInput, serverRows, staleBadge, submitConnect, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -675,7 +675,7 @@ try {
   await page.keyboard.press('Escape')
   await jobLink.click()
   await expect(documentTab(page, 'Job Properties - Nightly')).toHaveAttribute('aria-selected', 'true')
-  await expect(documentFrame(page, 'Nightly').getByRole('button', { name: 'History', exact: true })).toHaveAttribute('aria-current', 'location')
+  await expect(inspectorTab(documentFrame(page, 'Nightly'), 'History')).toHaveAttribute('aria-selected', 'true')
   // Back on the monitor, the link again focuses the one tab rather than opening another.
   await queryTabs().filter({ hasText: 'activity-server - Activity Monitor' }).click()
   await jobLink.click()
