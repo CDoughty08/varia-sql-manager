@@ -108,6 +108,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero STS/SQL round-trips). */
   private readonly lookupCaches = new Map<string, LookupCache>()
   private readonly indexSignatures = new Map<string, string>()
+  private indexStateStore?: IndexStateStore
   private indexStateBinding?: Disposable
   private readonly resolveMeta = new WeakMap<Monaco.languages.CompletionItem, SqlResolveMeta>()
   private lookupInFlight = 0
@@ -305,6 +306,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         // An edit or a closed query cancels the caller's wait, but an already-dispatched refresh still changes the
         // shared metadata context. Notify sibling models even when the initiating query no longer accepts its result.
         if (!this.disposed && backendEpoch === this.backendEpoch && result.ok && result.value.refreshed) {
+          this.completionCache = undefined
+          if (context.connectionId) this.indexStateStore?.syncStatus?.(context.connectionId)
           const active = new Set(this.contexts.values())
           for (const key of this.diagnosticContextEpochs.keys()) if (!active.has(key)) this.diagnosticContextEpochs.delete(key)
           this.diagnosticContextEpochs.set(refresh.capture.key, (this.diagnosticContextEpochs.get(refresh.capture.key) ?? 0) + 1)
@@ -661,12 +664,16 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     this.indexStateBinding?.dispose()
     this.indexSignatures.clear()
     if (this.disposed) return { dispose() {} }
+    this.indexStateStore = store
     this.syncIndexes(store)
     const unsubscribe = store.subscribe(() => this.syncIndexes(store))
     const binding: Disposable = {
       dispose: () => {
         unsubscribe()
-        if (this.indexStateBinding === binding) this.indexStateBinding = undefined
+        if (this.indexStateBinding === binding) {
+          this.indexStateBinding = undefined
+          this.indexStateStore = undefined
+        }
       }
     }
     this.indexStateBinding = binding
@@ -948,6 +955,8 @@ function sqlMetaForItem(
   context: { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string }
 ): SqlResolveMeta | undefined {
   if (item.kind !== undefined && !sqlResolvableKinds.has(item.kind)) return undefined
+  // CTEs and built-in T-SQL functions are script/catalog-local; never mis-resolve them against physical tables or UDFs.
+  if (item.detail === 'CTE' || item.detail?.startsWith('Function · ')) return undefined
   const segments = splitSqlSegments(item.label) ?? (item.filterText ? splitSqlSegments(item.filterText) : undefined)
   if (!segments || segments.length > 3) return undefined
   const leaf = segments[segments.length - 1]

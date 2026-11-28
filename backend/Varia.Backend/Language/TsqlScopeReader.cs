@@ -115,6 +115,7 @@ internal static class TsqlScopeReader
     private const int MaxScriptTokens = 1_000_000;
     private const int MaxLocalTables = 256;
     private const int MaxLocalVariables = 512;
+    private const int MaxSelectIntoParses = 16;
 
     private static readonly HashSet<TSqlTokenType> StatementStarters =
     [
@@ -125,8 +126,9 @@ internal static class TsqlScopeReader
         TSqlTokenType.Truncate, TSqlTokenType.Use, TSqlTokenType.Print, TSqlTokenType.Return
     ];
 
-    internal static TsqlCompletionContext ReadCompletion(string text, LanguagePosition position, string? defaultDatabase)
+    internal static TsqlCompletionContext ReadCompletion(string text, LanguagePosition position, string? defaultDatabase, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var cursor = SqlToolsLanguageService.CompletionOffset(text, position);
         var emptyRange = new LanguageRange(position, position);
         if (cursor < 0 || text.Length > SqlToolsLanguageService.MaxTextCharacters)
@@ -148,17 +150,17 @@ internal static class TsqlScopeReader
         var tableVars = new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase);
         var scalarVars = new Dictionary<string, LocalVariable>(StringComparer.OrdinalIgnoreCase);
 
-        CollectScriptAndBatchLocals(tokens, text, cursor, batchFrom, ref activeDatabase, tempTables, tableVars, scalarVars);
+        CollectScriptAndBatchLocals(tokens, text, cursor, batchFrom, ref activeDatabase, tempTables, tableVars, scalarVars, cancellationToken);
 
         // 3. Determine replacement span, typed text, quoting, and token index immediately before the word.
         var (replaceStart, replaceEnd, typed, quoted, beforeWordIdx, parenAhead) = ReadWordAtCaret(text, tokens, cursor);
         var replaceRange = new LanguageRange(DefinitionNames.PositionOf(text, replaceStart), DefinitionNames.PositionOf(text, replaceEnd));
 
         // 4. Locate statement bounds within the current batch.
-        var (stmtFrom, stmtTo) = FindStatementBounds(tokens, batchFrom, batchTo, cursor);
+        var (stmtFrom, stmtTo) = FindStatementBounds(tokens, batchFrom, batchTo, cursor, cancellationToken);
 
         // 5. Parse statement scope (AST with smart cursor repair, falling back to token scan).
-        var stmtScope = ParseStatementScope(text, tokens, stmtFrom, stmtTo, replaceStart, replaceEnd, cursor, tempTables, tableVars);
+        var stmtScope = ParseStatementScope(text, tokens, stmtFrom, stmtTo, replaceStart, replaceEnd, cursor, tempTables, tableVars, cancellationToken);
 
         // 6. Classify the caret site from token context + statement scope.
         var (site, objHint, qualifierParts, memberIsObject, insertTarget, inOrderBy, inOutput) =
@@ -208,8 +210,9 @@ internal static class TsqlScopeReader
             inOrderBy);
     }
 
-    internal static TsqlHoverContext? ReadHover(string text, LanguagePosition position, string? defaultDatabase)
+    internal static TsqlHoverContext? ReadHover(string text, LanguagePosition position, string? defaultDatabase, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var cursor = SqlToolsLanguageService.CompletionOffset(text, position);
         if (cursor < 0 || text.Length > SqlToolsLanguageService.MaxTextCharacters) return null;
 
@@ -228,7 +231,7 @@ internal static class TsqlScopeReader
         var tempTables = new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase);
         var tableVars = new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase);
         var scalarVars = new Dictionary<string, LocalVariable>(StringComparer.OrdinalIgnoreCase);
-        CollectScriptAndBatchLocals(tokens, text, cursor, batchFrom, ref activeDatabase, tempTables, tableVars, scalarVars);
+        CollectScriptAndBatchLocals(tokens, text, cursor, batchFrom, ref activeDatabase, tempTables, tableVars, scalarVars, cancellationToken);
 
         // Single-token hover for @var, @@global, or built-in type/function keywords (like CAST, CONVERT, LEFT, RIGHT, REPLACE, COALESCE, NULLIF, INT, etc.).
         if (token.TokenType == TSqlTokenType.Variable)
@@ -284,8 +287,20 @@ internal static class TsqlScopeReader
         var isTypePos = IsTypePositionBefore(tokens, prevNonTrivia);
         var isObjectPos = isUseDb || IsObjectPositionBefore(tokens, prevNonTrivia, batchFrom);
 
-        var (stmtFrom, stmtTo) = FindStatementBounds(tokens, batchFrom, batchTo, cursor);
-        var stmtScope = ParseStatementScope(text, tokens, stmtFrom, stmtTo, token.Offset, token.Offset + token.Text.Length, cursor, tempTables, tableVars);
+        var (stmtFrom, stmtTo) = FindStatementBounds(tokens, batchFrom, batchTo, cursor, cancellationToken);
+        var stmtScope = ParseStatementScope(text, tokens, stmtFrom, stmtTo, token.Offset, token.Offset + token.Text.Length, cursor, tempTables, tableVars, cancellationToken);
+
+        var sources = stmtScope.Sources;
+        if (IsInOutputClause(tokens, prevNonTrivia, stmtFrom) && stmtScope.DmlTarget is { } dmlTarget)
+        {
+            var augmented = new List<TsqlSourceRef>(sources.Count + 2)
+            {
+                dmlTarget with { ExposureName = "inserted", RawQualifier = "inserted", HasExplicitAlias = true, Kind = "output" },
+                dmlTarget with { ExposureName = "deleted", RawQualifier = "deleted", HasExplicitAlias = true, Kind = "output" }
+            };
+            augmented.AddRange(sources);
+            sources = augmented;
+        }
 
         return new TsqlHoverContext(
             hoverTokenRange,
@@ -296,7 +311,7 @@ internal static class TsqlScopeReader
             isTypePos,
             isUseDb,
             activeDatabase,
-            stmtScope.Sources,
+            sources,
             stmtScope.OuterSources,
             stmtScope.Ctes,
             tempTables,
@@ -403,13 +418,16 @@ internal static class TsqlScopeReader
         return (from, to);
     }
 
-    private static (int From, int To) FindStatementBounds(IList<TSqlParserToken> tokens, int batchFrom, int batchTo, int cursor)
+    private static (int From, int To) FindStatementBounds(IList<TSqlParserToken> tokens, int batchFrom, int batchTo, int cursor, CancellationToken cancellationToken = default)
     {
         var bounds = new List<int> { batchFrom };
         var depth = 0;
         var prevNonTrivia = TSqlTokenType.None;
+        var prevNonTriviaIdx = -1;
+        var activeStatement = TSqlTokenType.None;
         for (var i = 0; i < tokens.Count; i++)
         {
+            if ((i & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
             var token = tokens[i];
             if (token.Offset < batchFrom) continue;
             if (token.Offset >= batchTo) break;
@@ -420,47 +438,44 @@ internal static class TsqlScopeReader
             {
                 bounds.Add(token.Offset + 1);
                 depth = 0;
+                activeStatement = TSqlTokenType.None;
             }
-            else if (depth == 0 && token.Offset > batchFrom && StatementStarters.Contains(token.TokenType))
+            else if (depth == 0 && StatementStarters.Contains(token.TokenType))
             {
-                // Don't split WITH inside table hints `FROM t WITH (NOLOCK)`, or SELECT after UNION / AS / INSERT, or SET inside UPDATE ... SET, or BEGIN inside BEGIN TRY/TRAN.
+                var isFirstInBatch = token.Offset == batchFrom || prevNonTrivia == TSqlTokenType.None;
+                // Don't split WITH inside table hints `FROM t WITH (NOLOCK)`, SET inside UPDATE/MERGE,
+                // SELECT/INSERT/UPDATE/DELETE/MERGE attached to a leading WITH CTE, or SELECT after UNION/AS/INSERT.
+                var isWithBody = activeStatement == TSqlTokenType.With && prevNonTrivia == TSqlTokenType.RightParenthesis;
                 var isSubClause = token.TokenType switch
                 {
                     TSqlTokenType.With => prevNonTrivia is TSqlTokenType.Identifier or TSqlTokenType.QuotedIdentifier or TSqlTokenType.AsciiStringOrQuotedIdentifier or TSqlTokenType.RightParenthesis,
-                    TSqlTokenType.Set => prevNonTrivia is not (TSqlTokenType.Semicolon or TSqlTokenType.Begin or TSqlTokenType.Else or TSqlTokenType.None or TSqlTokenType.End) && !IsStatementEndBeforeSet(tokens, i, batchFrom),
-                    TSqlTokenType.Select => prevNonTrivia is TSqlTokenType.Union or TSqlTokenType.All or TSqlTokenType.Except or TSqlTokenType.Intersect or TSqlTokenType.As or TSqlTokenType.RightParenthesis or TSqlTokenType.Into or TSqlTokenType.Insert,
-                    TSqlTokenType.Insert or TSqlTokenType.Update or TSqlTokenType.Delete => prevNonTrivia is TSqlTokenType.Then || (i > 0 && IsContextKeyword(tokens[PrevNonTrivia(tokens, i)], "MATCHED")),
+                    TSqlTokenType.Set => activeStatement is TSqlTokenType.Update or TSqlTokenType.Merge,
+                    TSqlTokenType.Select => isWithBody || prevNonTrivia is TSqlTokenType.Union or TSqlTokenType.All or TSqlTokenType.Except or TSqlTokenType.Intersect or TSqlTokenType.As or TSqlTokenType.RightParenthesis or TSqlTokenType.Into or TSqlTokenType.Insert,
+                    TSqlTokenType.Insert or TSqlTokenType.Update or TSqlTokenType.Delete => isWithBody || prevNonTrivia is TSqlTokenType.Then || (prevNonTriviaIdx >= 0 && IsContextKeyword(tokens[prevNonTriviaIdx], "MATCHED")),
+                    TSqlTokenType.Merge => isWithBody,
                     _ => false
                 };
-                if (!isSubClause) bounds.Add(token.Offset);
+                if (!isSubClause)
+                {
+                    if (!isFirstInBatch) bounds.Add(token.Offset);
+                    activeStatement = token.TokenType;
+                }
+                else if (isWithBody)
+                {
+                    // Transition from leading CTE header into its attached DML/SELECT statement so e.g. `WITH c AS (...) UPDATE t SET ...` keeps SET attached!
+                    activeStatement = token.TokenType;
+                }
             }
             prevNonTrivia = token.TokenType;
+            prevNonTriviaIdx = i;
         }
         bounds.Add(batchTo);
         bounds = [.. bounds.Distinct().Order()];
         if (bounds.Count < 2) return (batchFrom, batchTo);
-        var idx = bounds.FindLastIndex(b => b <= cursor);
+        var idx = bounds.FindLastIndex(b => b < cursor);
         if (idx < 0) idx = 0;
         if (idx >= bounds.Count - 1) idx = Math.Max(0, bounds.Count - 2);
         return (bounds[idx], bounds[idx + 1]);
-    }
-
-    private static bool IsStatementEndBeforeSet(IList<TSqlParserToken> tokens, int setIndex, int batchFrom)
-    {
-        // Check if there is an active UPDATE statement before this SET without a semicolon.
-        var depth = 0;
-        for (var i = setIndex - 1; i >= 0 && tokens[i].Offset >= batchFrom; i--)
-        {
-            var t = tokens[i].TokenType;
-            if (IsTrivia(tokens[i])) continue;
-            if (t == TSqlTokenType.RightParenthesis) depth++;
-            else if (t == TSqlTokenType.LeftParenthesis) depth = Math.Max(0, depth - 1);
-            if (depth > 0) continue;
-            if (t == TSqlTokenType.Update) return false;
-            if (t is TSqlTokenType.Semicolon or TSqlTokenType.Select or TSqlTokenType.Insert or TSqlTokenType.Delete or TSqlTokenType.Declare or TSqlTokenType.Create or TSqlTokenType.Use)
-                return true;
-        }
-        return true;
     }
 
     private static (int Start, int End, string Typed, bool Quoted, int BeforeWordIdx, bool ParenAhead)
@@ -508,10 +523,15 @@ internal static class TsqlScopeReader
             }
             else if (tok.TokenType == TSqlTokenType.None && tok.Text is { Length: > 0 } err && (err[0] == '[' || err[0] == '"'))
             {
-                // Unclosed `[Fir|` or `"Fir|`
+                // Unclosed `[Fir|` or `"Fir|` or empty auto-closed `[|]` tokenized as error token
                 start = tok.Offset;
-                endPos = cursor;
-                var raw = text[(tok.Offset + 1)..cursor];
+                var endsWithClose = err[0] == '[' ? err.EndsWith(']') : err.Length > 1 && err.EndsWith('"');
+                if (endsWithClose && cursor <= tokEnd) endPos = tokEnd;
+                else if (err[0] == '[' && cursor < text.Length && text[cursor] == ']') endPos = cursor + 1;
+                else if (err[0] == '"' && cursor < text.Length && text[cursor] == '"') endPos = cursor + 1;
+                else endPos = cursor;
+                var sliceEnd = Math.Min(cursor, endsWithClose ? tokEnd - 1 : tokEnd);
+                var raw = sliceEnd > tok.Offset + 1 ? text[(tok.Offset + 1)..sliceEnd] : "";
                 typed = err[0] == '[' ? raw.Replace("]]", "]", StringComparison.Ordinal) : raw.Replace("\"\"", "\"", StringComparison.Ordinal);
                 quoted = true;
                 beforeIdx = PrevNonTrivia(tokens, hit);
@@ -558,9 +578,19 @@ internal static class TsqlScopeReader
             {
                 start = tok.Offset;
                 endPos = cursor;
-                // Check if next token is `]` (empty auto-closed `[|]`)
-                if (hit + 1 < tokens.Count && tokens[hit + 1].Offset == cursor && tokens[hit + 1].Text == "]")
+                // Check if next character/token is `]` (empty auto-closed `[|]`)
+                if (cursor < text.Length && text[cursor] == ']')
+                    endPos = cursor + 1;
+                else if (hit + 1 < tokens.Count && tokens[hit + 1].Offset == cursor && tokens[hit + 1].Text == "]")
                     endPos = tokens[hit + 1].Offset + 1;
+                quoted = true;
+                typed = "";
+                beforeIdx = PrevNonTrivia(tokens, hit);
+            }
+            else if (cursor > 0 && cursor < text.Length && text[cursor - 1] == '[' && text[cursor] == ']')
+            {
+                start = cursor - 1;
+                endPos = cursor + 1;
                 quoted = true;
                 typed = "";
                 beforeIdx = PrevNonTrivia(tokens, hit);
@@ -572,12 +602,19 @@ internal static class TsqlScopeReader
         }
         else
         {
-            // Caret is in whitespace or at start of document. Find last non-trivia token strictly before cursor.
+            // Caret is in whitespace, at start of document, or inside a lex-error token omitted by ScriptDom (e.g. empty `[]`).
+            if (cursor > 0 && text[cursor - 1] == '[')
+            {
+                start = cursor - 1;
+                endPos = cursor < text.Length && text[cursor] == ']' ? cursor + 1 : cursor;
+                quoted = true;
+                typed = "";
+            }
             beforeIdx = -1;
             for (var i = 0; i < tokens.Count; i++)
             {
                 var t = tokens[i];
-                if (t.Offset >= cursor) break;
+                if (t.Offset >= start) break;
                 if (!IsTrivia(t) && t.TokenType != TSqlTokenType.EndOfFile) beforeIdx = i;
             }
         }
@@ -628,10 +665,13 @@ internal static class TsqlScopeReader
         ref string? activeDatabase,
         Dictionary<string, LocalTable> tempTables,
         Dictionary<string, LocalTable> tableVars,
-        Dictionary<string, LocalVariable> scalarVars)
+        Dictionary<string, LocalVariable> scalarVars,
+        CancellationToken cancellationToken = default)
     {
+        var selectIntoParses = 0;
         for (var i = 0; i < tokens.Count; i++)
         {
+            if ((i & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
             var token = tokens[i];
             if (token.Offset >= cursor) break;
             if (IsTrivia(token)) continue;
@@ -691,7 +731,7 @@ internal static class TsqlScopeReader
                 continue;
             }
 
-            // DROP TABLE [IF EXISTS] #temp
+            // DROP TABLE [IF EXISTS] #temp [, #temp2, ...]
             if (token.TokenType == TSqlTokenType.Drop)
             {
                 var next = NextNonTrivia(tokens, i);
@@ -703,10 +743,17 @@ internal static class TsqlScopeReader
                         cur = NextNonTrivia(tokens, cur);
                         if (cur >= 0 && tokens[cur].TokenType == TSqlTokenType.Exists) cur = NextNonTrivia(tokens, cur);
                     }
-                    if (cur >= 0 && tokens[cur].Offset < cursor && IsQuotedOrPlainIdent(tokens[cur]))
+                    while (cur >= 0 && tokens[cur].Offset < cursor && IsQuotedOrPlainIdent(tokens[cur]))
                     {
                         var dropped = TsqlCatalog.Unquote(tokens[cur].Text);
                         if (dropped.StartsWith('#')) tempTables.Remove(dropped);
+                        var after = NextNonTrivia(tokens, cur);
+                        if (after >= 0 && tokens[after].TokenType == TSqlTokenType.Comma)
+                        {
+                            cur = NextNonTrivia(tokens, after);
+                            continue;
+                        }
+                        break;
                     }
                 }
                 continue;
@@ -725,7 +772,7 @@ internal static class TsqlScopeReader
                         var tableName = TsqlCatalog.Unquote(tokens[nameIdx].Text);
                         if (tableName.StartsWith('#'))
                         {
-                            var parsed = ParseSelectIntoTemp(text, tokens, i, cursor, tableName);
+                            var parsed = ParseSelectIntoTemp(text, tokens, i, cursor, tableName, activeDatabase, tempTables, inCurrentBatch ? tableVars : null, ref selectIntoParses);
                             if (parsed is not null) tempTables[tableName] = parsed;
                         }
                     }
@@ -741,9 +788,18 @@ internal static class TsqlScopeReader
         }
     }
 
-    private static LocalTable? ParseSelectIntoTemp(string text, IList<TSqlParserToken> tokens, int intoIdx, int cursor, string tableName)
+    private static LocalTable? ParseSelectIntoTemp(
+        string text,
+        IList<TSqlParserToken> tokens,
+        int intoIdx,
+        int cursor,
+        string tableName,
+        string? activeDatabase,
+        IReadOnlyDictionary<string, LocalTable> tempTables,
+        IReadOnlyDictionary<string, LocalTable>? tableVars,
+        ref int selectIntoParses)
     {
-        // Find enclosing SELECT before intoIdx.
+        // Find enclosing SELECT (and optional leading WITH CTE) before intoIdx.
         var selectIdx = -1;
         var depth = 0;
         for (var j = intoIdx - 1; j >= 0; j--)
@@ -759,6 +815,26 @@ internal static class TsqlScopeReader
             }
         }
         if (selectIdx < 0) return null;
+
+        // If preceded by a leading WITH CTE (`WITH c AS (...) SELECT ... INTO #t`), include the WITH header.
+        var startIdx = selectIdx;
+        var beforeSelect = PrevNonTrivia(tokens, selectIdx);
+        if (beforeSelect >= 0 && tokens[beforeSelect].TokenType == TSqlTokenType.RightParenthesis)
+        {
+            var d = 0;
+            for (var j = beforeSelect; j >= 0; j--)
+            {
+                var t = tokens[j].TokenType;
+                if (IsTrivia(tokens[j])) continue;
+                if (t == TSqlTokenType.RightParenthesis) d++;
+                else if (t == TSqlTokenType.LeftParenthesis) d = Math.Max(0, d - 1);
+                else if (d == 0)
+                {
+                    if (t == TSqlTokenType.With) { startIdx = j; break; }
+                    if (t is TSqlTokenType.Semicolon or TSqlTokenType.Go || StatementStarters.Contains(t)) break;
+                }
+            }
+        }
 
         // Find end of this SELECT INTO statement (semicolon, GO, next statement starter at depth 0, or cursor).
         var endOffset = cursor;
@@ -776,17 +852,43 @@ internal static class TsqlScopeReader
             }
         }
 
-        var snippet = text[tokens[selectIdx].Offset..endOffset];
-        var parser = new TSql180Parser(initialQuotedIdentifiers: true);
-        var stmtTokens = parser.GetTokenStream(new StringReader(snippet), out var errors);
-        if (errors.Count == 0 && SqlToolsLanguageService.BoundedCompletionSyntax(stmtTokens))
+        if (selectIntoParses < MaxSelectIntoParses)
         {
-            var fragment = parser.Parse(stmtTokens, out errors);
-            if (errors.Count == 0 && fragment is TSqlScript { Batches: [{ Statements: [SelectStatement { QueryExpression: QuerySpecification spec }, ..] }, ..] })
+            selectIntoParses++;
+            var snippet = text[tokens[startIdx].Offset..endOffset];
+            var parser = new TSql180Parser(initialQuotedIdentifiers: true);
+            var stmtTokens = parser.GetTokenStream(new StringReader(snippet), out var errors);
+            if (errors.Count == 0 && SqlToolsLanguageService.BoundedCompletionSyntax(stmtTokens))
             {
-                var (cols, hasStar, starSources) = ExtractQueryProjection(spec, snippet, new Dictionary<string, TsqlCteInfo>(StringComparer.OrdinalIgnoreCase),
-                    new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase), new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase));
-                return new LocalTable(tableName, false, cols, starSources, hasStar);
+                var fragment = parser.Parse(stmtTokens, out errors);
+                if (errors.Count == 0 && fragment is TSqlScript { Batches: [{ Statements: [SelectStatement selectStmt, ..] }, ..] })
+                {
+                    var localCtes = new Dictionary<string, TsqlCteInfo>(StringComparer.OrdinalIgnoreCase);
+                    var tv = tableVars ?? new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase);
+                    if (selectStmt.WithCtesAndXmlNamespaces?.CommonTableExpressions is { Count: > 0 } cteNodes)
+                    {
+                        foreach (var cte in cteNodes)
+                        {
+                            var cteName = cte.ExpressionName?.Value;
+                            if (string.IsNullOrEmpty(cteName)) continue;
+                            var explicitCols = cte.Columns?.Select(c => new LocalColumn(c.Value)).ToList() ?? [];
+                            if (explicitCols.Count > 0)
+                            {
+                                localCtes[cteName] = new TsqlCteInfo(cteName, explicitCols, false, []);
+                            }
+                            else if (cte.QueryExpression is not null)
+                            {
+                                var (cCols, cStar, cSources) = ExtractQueryProjection(cte.QueryExpression, snippet, localCtes, tempTables, tv, cte.Columns);
+                                localCtes[cteName] = new TsqlCteInfo(cteName, cCols, cStar, StampDatabase(cSources, activeDatabase));
+                            }
+                        }
+                    }
+                    if (selectStmt.QueryExpression is QuerySpecification spec)
+                    {
+                        var (cols, hasStar, starSources) = ExtractQueryProjection(spec, snippet, localCtes, tempTables, tv);
+                        return new LocalTable(tableName, false, cols, StampDatabase(starSources, activeDatabase), hasStar);
+                    }
+                }
             }
         }
 
@@ -813,6 +915,19 @@ internal static class TsqlScopeReader
         if (lastBeforeInto > selectIdx && IsQuotedOrPlainIdent(tokens[lastBeforeInto]))
             fallbackCols.Add(new LocalColumn(TsqlCatalog.Unquote(tokens[lastBeforeInto].Text)));
         return new LocalTable(tableName, false, fallbackCols, null, sawStar);
+    }
+
+    private static IReadOnlyList<TsqlSourceRef> StampDatabase(IReadOnlyList<TsqlSourceRef> sources, string? activeDatabase)
+    {
+        if (string.IsNullOrEmpty(activeDatabase) || sources.Count == 0) return sources;
+        var stamped = new List<TsqlSourceRef>(sources.Count);
+        foreach (var src in sources)
+        {
+            var nextObj = src.ObjectRef is { Database: null } obj ? obj with { Database = activeDatabase } : src.ObjectRef;
+            var nextStar = src.StarSources is { Count: > 0 } nested ? StampDatabase(nested, activeDatabase) : src.StarSources;
+            stamped.Add(src with { ObjectRef = nextObj, StarSources = nextStar });
+        }
+        return stamped;
     }
 
     private static int ScanDeclareStatement(
@@ -887,11 +1002,21 @@ internal static class TsqlScopeReader
             cur = NextNonTrivia(tokens, cur);
         if (cur < 0 || tokens[cur].Offset >= cursor) return;
         var inParens = tokens[cur].TokenType == TSqlTokenType.LeftParenthesis;
+        var depth = inParens ? 1 : 0;
         if (inParens) cur = NextNonTrivia(tokens, cur);
         while (cur >= 0 && tokens[cur].Offset < cursor)
         {
-            if (tokens[cur].TokenType is TSqlTokenType.As or TSqlTokenType.Begin or TSqlTokenType.RightParenthesis || IsContextKeyword(tokens[cur], "RETURNS")) break;
-            if (tokens[cur].TokenType == TSqlTokenType.Variable)
+            var t = tokens[cur].TokenType;
+            if (t == TSqlTokenType.LeftParenthesis) { depth++; cur = NextNonTrivia(tokens, cur); continue; }
+            if (t == TSqlTokenType.RightParenthesis)
+            {
+                depth--;
+                cur = NextNonTrivia(tokens, cur);
+                if (inParens && depth <= 0) break;
+                continue;
+            }
+            if (depth == (inParens ? 1 : 0) && (t is TSqlTokenType.As or TSqlTokenType.Begin || IsContextKeyword(tokens[cur], "RETURNS"))) break;
+            if (depth == (inParens ? 1 : 0) && t == TSqlTokenType.Variable)
             {
                 var paramName = tokens[cur].Text;
                 var typeStart = NextNonTrivia(tokens, cur);
@@ -907,6 +1032,26 @@ internal static class TsqlScopeReader
                 }
             }
             cur = NextNonTrivia(tokens, cur);
+        }
+
+        // Capture multi-statement table-valued function return variable: `RETURNS @out TABLE (...)`
+        if (cur >= 0 && tokens[cur].Offset < cursor && IsContextKeyword(tokens[cur], "RETURNS"))
+        {
+            var retVarIdx = NextNonTrivia(tokens, cur);
+            if (retVarIdx >= 0 && tokens[retVarIdx].Offset < cursor && tokens[retVarIdx].TokenType == TSqlTokenType.Variable)
+            {
+                var retVarName = tokens[retVarIdx].Text;
+                var tableKw = NextNonTrivia(tokens, retVarIdx);
+                if (tableKw >= 0 && tokens[tableKw].Offset < cursor && tokens[tableKw].TokenType == TSqlTokenType.Table)
+                {
+                    var openParen = NextNonTrivia(tokens, tableKw);
+                    if (openParen >= 0 && tokens[openParen].Offset < cursor && tokens[openParen].TokenType == TSqlTokenType.LeftParenthesis && tableVars.Count < MaxLocalTables)
+                    {
+                        var cols = ParseColumnDefinitionList(tokens, openParen, cursor, out _);
+                        tableVars[retVarName] = new LocalTable(retVarName, true, cols);
+                    }
+                }
+            }
         }
     }
 
@@ -1044,7 +1189,8 @@ internal static class TsqlScopeReader
         int replaceEnd,
         int cursor,
         IReadOnlyDictionary<string, LocalTable> tempTables,
-        IReadOnlyDictionary<string, LocalTable> tableVars)
+        IReadOnlyDictionary<string, LocalTable> tableVars,
+        CancellationToken cancellationToken = default)
     {
         var stmtText = text[stmtFrom..stmtTo];
         var relStart = Math.Clamp(replaceStart - stmtFrom, 0, stmtText.Length);
@@ -1056,6 +1202,7 @@ internal static class TsqlScopeReader
         // Try direct parse first, then targeted cursor repairs for incomplete mid-typing SQL.
         foreach (var candidate in BuildParseCandidates(stmtText, relStart, relEnd, relCursor))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var tokens = parser.GetTokenStream(new StringReader(candidate.Text), out var errors);
             if (errors.Count != 0 || !SqlToolsLanguageService.BoundedCompletionSyntax(tokens)) continue;
             var fragment = parser.Parse(tokens, out errors);
@@ -1065,7 +1212,7 @@ internal static class TsqlScopeReader
         }
 
         // Fast bounded token-stream fallback for heavily broken / mid-edit SQL.
-        return ScanTokenScope(text, allTokens, stmtFrom, stmtTo, tempTables, tableVars);
+        return ScanTokenScope(text, allTokens, stmtFrom, stmtTo, cursor, tempTables, tableVars, cancellationToken);
     }
 
     private static IEnumerable<(string Text, int CaretOffset)> BuildParseCandidates(string stmtText, int relStart, int relEnd, int relCursor)
@@ -1086,6 +1233,13 @@ internal static class TsqlScopeReader
         // 4. Trailing marker + close open parens (works for `WHERE EXISTS (SELECT | FROM dbo.B b`).
         if (closeSuffix.Length > 0)
             yield return (withMarker + closeSuffix, relStart);
+
+        // 4b. Unfinished CTE header/body (`WITH C AS (SELECT o.| FROM dbo.Orders o)`): append trailing `SELECT 1`.
+        if (stmtText.AsSpan().TrimStart().StartsWith("WITH", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return (withMarker + closeSuffix + "\nSELECT 1", relStart);
+            yield return (withPredicate + "\nSELECT 1", relStart);
+        }
 
         // 5. Trailing incomplete `JOIN tbl alias ON |` where statement ends after ON or AND.
         var trimmedEnd = stmtText[..relStart].TrimEnd();
@@ -1604,8 +1758,10 @@ internal static class TsqlScopeReader
         IList<TSqlParserToken> tokens,
         int stmtFrom,
         int stmtTo,
+        int cursor,
         IReadOnlyDictionary<string, LocalTable> tempTables,
-        IReadOnlyDictionary<string, LocalTable> tableVars)
+        IReadOnlyDictionary<string, LocalTable> tableVars,
+        CancellationToken cancellationToken = default)
     {
         var sources = new List<TsqlSourceRef>();
         var ctes = new Dictionary<string, TsqlCteInfo>(StringComparer.OrdinalIgnoreCase);
@@ -1617,6 +1773,7 @@ internal static class TsqlScopeReader
         while (i < tokens.Count && tokens[i].Offset < stmtFrom) i++;
 
         // Scan leading WITH cte1 AS (...), cte2 AS (...)
+        var scanLimit = stmtTo;
         var firstIdx = i;
         while (firstIdx < tokens.Count && tokens[firstIdx].Offset < stmtTo && IsTrivia(tokens[firstIdx])) firstIdx++;
         if (firstIdx < tokens.Count && tokens[firstIdx].Offset < stmtTo && tokens[firstIdx].TokenType == TSqlTokenType.With)
@@ -1651,6 +1808,14 @@ internal static class TsqlScopeReader
                             else if (tokens[p].TokenType == TSqlTokenType.RightParenthesis) depth--;
                             p++;
                         }
+                        var bodyEndOffset = depth == 0 && p > 0 ? tokens[p - 1].Offset : stmtTo;
+                        // If the caret is inside this CTE's body, scan INSIDE the CTE body instead of skipping past it!
+                        if (cursor > tokens[openBody].Offset && cursor <= bodyEndOffset)
+                        {
+                            i = openBody + 1;
+                            scanLimit = bodyEndOffset;
+                            break;
+                        }
                         var info = new TsqlCteInfo(cteName, cteCols, false, []);
                         ctes[cteName] = info;
                         cteList.Add(info);
@@ -1668,31 +1833,37 @@ internal static class TsqlScopeReader
             }
         }
 
-        // Scan FROM / JOIN / UPDATE / DELETE / INTO / MERGE table references at paren depth 0.
+        // Scan FROM / JOIN / UPDATE / DELETE / INSERT / INTO / MERGE table references at paren depth 0.
         var parenDepth = 0;
-        for (; i < tokens.Count && tokens[i].Offset < stmtTo; i++)
+        for (; i < tokens.Count && tokens[i].Offset < scanLimit; i++)
         {
+            if ((i & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
             var tok = tokens[i];
             if (IsTrivia(tok)) continue;
             if (tok.TokenType == TSqlTokenType.LeftParenthesis) { parenDepth++; continue; }
             if (tok.TokenType == TSqlTokenType.RightParenthesis) { parenDepth = Math.Max(0, parenDepth - 1); continue; }
             if (parenDepth > 0) continue;
 
-            if (tok.TokenType is TSqlTokenType.From or TSqlTokenType.Join or TSqlTokenType.Update or TSqlTokenType.Into or TSqlTokenType.Merge || IsContextKeyword(tok, "USING"))
+            if (tok.TokenType is TSqlTokenType.From or TSqlTokenType.Join or TSqlTokenType.Update or TSqlTokenType.Delete or TSqlTokenType.Insert or TSqlTokenType.Into or TSqlTokenType.Merge || IsContextKeyword(tok, "USING"))
             {
                 var next = NextNonTrivia(tokens, i);
-                if (next < 0 || tokens[next].Offset >= stmtTo) continue;
-                if (tok.TokenType == TSqlTokenType.Merge && tokens[next].TokenType == TSqlTokenType.Into)
+                if (next < 0 || tokens[next].Offset >= scanLimit) continue;
+                if ((tok.TokenType is TSqlTokenType.Merge or TSqlTokenType.Insert) && tokens[next].TokenType == TSqlTokenType.Into)
                 {
                     next = NextNonTrivia(tokens, next);
-                    if (next < 0 || tokens[next].Offset >= stmtTo) continue;
+                    if (next < 0 || tokens[next].Offset >= scanLimit) continue;
                 }
-                var src = ReadTokenTableRef(text, tokens, next, stmtTo, ctes, tempTables, tableVars, out var afterRef);
+                else if (tok.TokenType == TSqlTokenType.Delete && tokens[next].TokenType == TSqlTokenType.From)
+                {
+                    next = NextNonTrivia(tokens, next);
+                    if (next < 0 || tokens[next].Offset >= scanLimit) continue;
+                }
+                var src = ReadTokenTableRef(text, tokens, next, scanLimit, ctes, tempTables, tableVars, out var afterRef);
                 if (src is not null)
                 {
-                    if (tok.TokenType == TSqlTokenType.Into) insertTarget ??= src;
-                    if (tok.TokenType is TSqlTokenType.Update or TSqlTokenType.Merge or TSqlTokenType.Into) dmlTarget ??= src;
-                    if (tok.TokenType != TSqlTokenType.Into) sources.Add(src);
+                    if (tok.TokenType is TSqlTokenType.Into or TSqlTokenType.Insert) insertTarget ??= src;
+                    if (tok.TokenType is TSqlTokenType.Update or TSqlTokenType.Delete or TSqlTokenType.Merge or TSqlTokenType.Into or TSqlTokenType.Insert) dmlTarget ??= src;
+                    if (tok.TokenType is not (TSqlTokenType.Into or TSqlTokenType.Insert)) sources.Add(src);
                     i = Math.Max(i, afterRef - 1);
                 }
             }
@@ -1918,9 +2089,12 @@ internal static class TsqlScopeReader
                 || string.Equals(tokens[fn].Text, "TRY_CONVERT", StringComparison.OrdinalIgnoreCase)))
                 return true;
         }
-        // CAST(... AS |), TRY_CAST(... AS |), PARSE(... AS |), TRY_PARSE(... AS |)
+        // CAST(... AS |), TRY_CAST(... AS |), PARSE(... AS |), TRY_PARSE(... AS |), DECLARE @a AS |, DECLARE @a INT, @b AS |
         if (prev.TokenType == TSqlTokenType.As)
         {
+            var beforeAs = PrevNonTrivia(tokens, prevIdx);
+            if (beforeAs >= 0 && tokens[beforeAs].TokenType == TSqlTokenType.Variable && IsDeclareVariableAt(tokens, beforeAs))
+                return true;
             var depth = 0;
             for (var i = prevIdx - 1; i >= 0; i--)
             {
@@ -1941,11 +2115,36 @@ internal static class TsqlScopeReader
                 }
             }
         }
-        // DECLARE @x |
-        if (prev.TokenType == TSqlTokenType.Variable)
+        // DECLARE @x | or DECLARE @a INT, @b |
+        if (prev.TokenType == TSqlTokenType.Variable && IsDeclareVariableAt(tokens, prevIdx))
+            return true;
+        return false;
+    }
+
+    private static bool IsDeclareVariableAt(IList<TSqlParserToken> tokens, int varIdx)
+    {
+        var beforeVar = PrevNonTrivia(tokens, varIdx);
+        if (beforeVar < 0) return false;
+        if (tokens[beforeVar].TokenType == TSqlTokenType.Declare) return true;
+        if (tokens[beforeVar].TokenType != TSqlTokenType.Comma) return false;
+        // Walk back at paren depth 0 to check whether the comma belongs to a DECLARE statement.
+        var depth = 0;
+        for (var i = beforeVar - 1; i >= 0; i--)
         {
-            var beforeVar = PrevNonTrivia(tokens, prevIdx);
-            if (beforeVar >= 0 && tokens[beforeVar].TokenType == TSqlTokenType.Declare) return true;
+            var t = tokens[i].TokenType;
+            if (IsTrivia(tokens[i])) continue;
+            if (t == TSqlTokenType.RightParenthesis) depth++;
+            else if (t == TSqlTokenType.LeftParenthesis)
+            {
+                if (depth == 0) return false;
+                depth--;
+            }
+            else if (depth == 0)
+            {
+                if (t == TSqlTokenType.Declare) return true;
+                if (t is TSqlTokenType.Semicolon or TSqlTokenType.Go || StatementStarters.Contains(t))
+                    return false;
+            }
         }
         return false;
     }
@@ -1954,8 +2153,8 @@ internal static class TsqlScopeReader
     {
         if (prevIdx < 0 || tokens[prevIdx].Offset < stmtFrom) return false;
         var t = tokens[prevIdx].TokenType;
-        if (t is TSqlTokenType.From or TSqlTokenType.Join or TSqlTokenType.Into or TSqlTokenType.Update
-            or TSqlTokenType.Merge or TSqlTokenType.Exec or TSqlTokenType.Execute
+        if (t is TSqlTokenType.From or TSqlTokenType.Join or TSqlTokenType.Into or TSqlTokenType.Insert
+            or TSqlTokenType.Update or TSqlTokenType.Delete or TSqlTokenType.Merge or TSqlTokenType.Exec or TSqlTokenType.Execute
             || IsContextKeyword(tokens[prevIdx], "USING"))
             return true;
         if (t == TSqlTokenType.Table)

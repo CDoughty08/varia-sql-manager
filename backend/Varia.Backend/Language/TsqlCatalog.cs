@@ -108,25 +108,25 @@ internal static class TsqlCatalog
     internal static readonly IReadOnlyList<DatePartInfo> DateParts =
     [
         new("year", "yy, yyyy", "Calendar year."),
-        new("quarter", "qq, q", "Quarter of the year (1â€“4)."),
-        new("month", "mm, m", "Month of the year (1â€“12)."),
-        new("dayofyear", "dy, y", "Day of the year (1â€“366)."),
-        new("day", "dd, d", "Day of the month (1â€“31)."),
+        new("quarter", "qq, q", "Quarter of the year (1–4)."),
+        new("month", "mm, m", "Month of the year (1–12)."),
+        new("dayofyear", "dy, y", "Day of the year (1–366)."),
+        new("day", "dd, d", "Day of the month (1–31)."),
         new("week", "wk, ww", "Week of the year."),
-        new("weekday", "dw, w", "Day of the week (1â€“7, depends on @@DATEFIRST)."),
-        new("hour", "hh", "Hour of the day (0â€“23)."),
-        new("minute", "mi, n", "Minute of the hour (0â€“59)."),
-        new("second", "ss, s", "Second of the minute (0â€“59)."),
-        new("millisecond", "ms", "Millisecond (0â€“999)."),
-        new("microsecond", "mcs", "Microsecond (0â€“999999)."),
-        new("nanosecond", "ns", "Nanosecond (0â€“999999999)."),
+        new("weekday", "dw, w", "Day of the week (1–7, depends on @@DATEFIRST)."),
+        new("hour", "hh", "Hour of the day (0–23)."),
+        new("minute", "mi, n", "Minute of the hour (0–59)."),
+        new("second", "ss, s", "Second of the minute (0–59)."),
+        new("millisecond", "ms", "Millisecond (0–999)."),
+        new("microsecond", "mcs", "Microsecond (0–999999)."),
+        new("nanosecond", "ns", "Nanosecond (0–999999999)."),
         new("iso_week", "isowk, isoww", "ISO 8601 week number."),
         new("tzoffset", "tz", "Time zone offset in minutes (DATETIMEOFFSET).")
     ];
 
     internal static readonly IReadOnlySet<string> DatePartFunctions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "DATEADD", "DATEDIFF", "DATEDIFF_BIG", "DATENAME", "DATEPART", "DATETRUNC"
+        "DATEADD", "DATEDIFF", "DATEDIFF_BIG", "DATENAME", "DATEPART", "DATETRUNC", "DATE_BUCKET"
     };
 
     internal static readonly IReadOnlyList<GlobalInfo> SystemGlobals =
@@ -143,7 +143,7 @@ internal static class TsqlCatalog
         new("@@LANGUAGE", "nvarchar(128)", "Returns the name of the language currently being used."),
         new("@@LANGID", "smallint", "Returns the local language identifier (ID) of the current language."),
         new("@@LOCK_TIMEOUT", "int", "Returns the current lock time-out setting in milliseconds for the current session."),
-        new("@@NESTLEVEL", "int", "Returns the nesting level of the current stored procedure or trigger execution (0â€“32)."),
+        new("@@NESTLEVEL", "int", "Returns the nesting level of the current stored procedure or trigger execution (0–32)."),
         new("@@OPTIONS", "int", "Returns bitmask information about the current SET options."),
         new("@@PROCID", "int", "Returns the object identifier (ID) of the current Transact-SQL module."),
         new("@@DATEFIRST", "tinyint", "Returns the current value of SET DATEFIRST (1 = Monday through 7 = Sunday)."),
@@ -388,5 +388,36 @@ internal static class TsqlCatalog
             sb.Append(ch);
         }
         return sb.ToString();
+    }
+
+    /// <summary>Formats an untrusted value as a CommonMark inline code span without backslash-escaping punctuation.
+    /// Uses a backtick fence strictly longer than any contiguous backtick run inside the text and strips CR/LF.</summary>
+    internal static string FormatCodeSpan(string text, bool tableCell = false)
+    {
+        if (string.IsNullOrEmpty(text)) return "` `";
+        var sb = new StringBuilder(text.Length);
+        var maxRun = 0;
+        var run = 0;
+        foreach (var ch in text)
+        {
+            var normalized = ch is '\r' or '\n' ? ' ' : ch;
+            if (normalized == '`')
+            {
+                run++;
+                if (run > maxRun) maxRun = run;
+                sb.Append('`');
+            }
+            else
+            {
+                run = 0;
+                if (tableCell && normalized == '|') sb.Append("\\|");
+                else sb.Append(normalized);
+            }
+        }
+        var clean = sb.ToString();
+        var fence = new string('`', maxRun + 1);
+        var pad = clean[0] == '`' || clean[^1] == '`'
+            || (clean[0] == ' ' && clean[^1] == ' ' && clean.Any(c => c != ' '));
+        return pad ? $"{fence} {clean} {fence}" : $"{fence}{clean}{fence}";
     }
 }

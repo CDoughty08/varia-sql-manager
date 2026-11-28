@@ -197,8 +197,8 @@ export interface IntelliSensePopoverProps {
 }
 
 /**
- * Unified Calm Pro Status Bar IntelliSense Popover for both BigQuery (PR #738 3-wave summary, shared 512 MiB memory bar,
- * active query source health) and SQL Server (STS provider status, IndexLookup DB coverage, shared memory bar).
+ * Unified Calm Pro Status Bar IntelliSense Popover for both BigQuery (3-wave summary, shared 512 MiB memory bar,
+ * active query source health) and SQL Server (ScriptDom + IndexLookup completion/hover, STS diagnostics, Entra ID state, shared memory bar).
  */
 export default function IntelliSensePopover({ open, autoFocus = false, popoverId, triggerRef, active, isBigQuery, language, issues, sqlSetting, onClose }: IntelliSensePopoverProps) {
   const { commands, connections, documents, indexCompletion, objectSearch, indexMemory, bigQueryStarred, menus } = useWorkbench()
@@ -342,7 +342,7 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
   }
   const handleBuildIndex = () => {
     if (!connection || !objectSearch) return
-    objectSearch.ensureIndex(connection.id)
+    objectSearch.build(connection.id)
   }
   const handleStarProject = (project: string) => {
     if (!connection || !principal || !bigQueryStarred || starring.has(project)) return

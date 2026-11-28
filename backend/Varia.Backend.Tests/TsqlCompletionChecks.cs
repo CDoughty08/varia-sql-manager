@@ -164,8 +164,8 @@ internal static class TsqlCompletionChecks
             var crossDbJump = Complete("SELECT * FROM DailyRev|", db: "Sales");
             var jumpItem = crossDbJump.Items.FirstOrDefault(i => i.Label == "[AnalyticsDB].[dbo].[DailyRevenue]");
             check(jumpItem is not null && jumpItem.FilterText == "DailyRevenue" && jumpItem.TextEdit!.NewText == "[AnalyticsDB].[dbo].[DailyRevenue]"
-                && jumpItem.Detail!.Contains("AnalyticsDB.dbo", StringComparison.Ordinal),
-                "cross-DB fuzzy FROM jump surfaces [AnalyticsDB].[dbo].[DailyRevenue] with bare FilterText");
+                && jumpItem.Detail == "Table",
+                "cross-DB fuzzy FROM jump surfaces [AnalyticsDB].[dbo].[DailyRevenue] with bare FilterText and concise Table detail");
 
             var crossSchemaJump = Complete("SELECT * FROM ArchOrd|", db: "Sales");
             check(crossSchemaJump.Items.Any(i => i.Label == "[Archive].[ArchiveOrders]" && i.FilterText == "ArchiveOrders"),
@@ -304,6 +304,155 @@ internal static class TsqlCompletionChecks
                 _ = Complete("SELECT o.| FROM dbo.Orders o JOIN dbo.Customers c ON o.customer_id = c.id");
             sw.Stop();
             check(sw.ElapsedMilliseconds < 2000, $"20 ScriptDom + IndexLookup completions ran in {sw.ElapsedMilliseconds} ms");
+
+            // 13. Adversarial Round 1 regressions:
+            // (a) O(1) FindStatementBounds on 12,000 semicolon-free SET lines + repeated SELECT INTO cap + CancellationToken.
+            var manySets = string.Concat(Enumerable.Repeat("SET @a = 1\n", 12_000)) + "SELECT o.| FROM dbo.Orders o";
+            var swSets = Stopwatch.StartNew();
+            var manySetsRes = Complete(manySets);
+            swSets.Stop();
+            check(Has(manySetsRes, "[customer_id]") && swSets.ElapsedMilliseconds < 1500,
+                $"12,000 semicolon-free SET lines complete cleanly in O(N) ({swSets.ElapsedMilliseconds} ms)");
+
+            var repeatedInto = string.Concat(Enumerable.Repeat("SELECT 1 AS a INTO #r;\n", 200)) + "SELECT x.| FROM #r x";
+            var swInto = Stopwatch.StartNew();
+            var repeatedIntoRes = Complete(repeatedInto);
+            swInto.Stop();
+            check(Has(repeatedIntoRes, "[a]") && swInto.ElapsedMilliseconds < 1500,
+                $"200 repeated SELECT INTO #r statements stay bounded ({swInto.ElapsedMilliseconds} ms)");
+
+            using var cancelledCts = new CancellationTokenSource();
+            cancelledCts.Cancel();
+            var threwCancel = false;
+            try { _ = TsqlCompletionService.Complete(new LanguageRequest(Guid.NewGuid().ToString("D"), 1, "SELECT 1", new("sqlserver", null, "Sales"), new(0, 7)), lookup, "Sales", cancelledCts.Token); }
+            catch (OperationCanceledException) { threwCancel = true; }
+            check(threwCancel, "TsqlCompletionService threads and honors CancellationToken");
+
+            // (b) Cross-DB jump fairness: huge BigDb (many columns) must not starve ZzzDb, and detail omits redundant db.schema.
+            var fairBudget = new IndexBudget(1 << 25);
+            var fairPool = new StringPool(fairBudget);
+            var fairConn = new ConnectionIndex(fairBudget, null, fairPool);
+            try
+            {
+                var bigRows = new List<IndexedObject>(12_000);
+                for (var t = 0; t < 1_000; t++)
+                {
+                    var tbl = $"NoiseTable{t:D4}";
+                    bigRows.Add(new("table", "tables", "dbo", tbl));
+                    for (var c = 0; c < 10; c++)
+                        bigRows.Add(new("column", "columns", null, $"Col{c}", "table", "dbo", tbl));
+                }
+                fairConn.Put(new DatabaseIndex("Sales", ObjectTable.Of([new IndexedObject("table", "tables", "dbo", "Orders")]), 0, 0, 0));
+                fairConn.Put(new DatabaseIndex("BigDb", ObjectTable.Of(bigRows), 0, 0, 0));
+                fairConn.Put(new DatabaseIndex("ZzzDb", ObjectTable.Of([new IndexedObject("table", "tables", "dbo", "TargetMetrics")]), 0, 0, 0));
+                var fairLedger = new LookupLedger();
+                fairLedger.Start();
+                fairLedger.List(["Sales", "BigDb", "ZzzDb"]);
+                foreach (var d in new[] { "Sales", "BigDb", "ZzzDb" }) fairLedger.Done(d, null);
+                var fairLookup = new IndexLookup(fairConn, fairBudget, false, fairLedger.Snapshot());
+                var fairJump = Complete("SELECT * FROM TargetMet|", db: "Sales", customLookup: fairLookup);
+                var zzzHit = fairJump.Items.FirstOrDefault(i => i.Label == "[ZzzDb].[dbo].[TargetMetrics]");
+                check(zzzHit is not null && zzzHit.Detail == "Table",
+                    "cross-DB jump is fair across large DBs and omits redundant Database.Schema from cross-DB detail");
+            }
+            finally { fairConn.Dispose(); }
+
+            // (c) Prefix < 2 chars in FROM with other indexed DBs marks IsIncomplete so completionCache re-queries at 2+ chars.
+            var fromEmpty = Complete("SELECT * FROM |", db: "Sales");
+            var fromOne = Complete("SELECT * FROM D|", db: "Sales");
+            check(fromEmpty.IsIncomplete && fromOne.IsIncomplete,
+                "FROM completion with <2 typed chars marks IsIncomplete when other indexed databases exist");
+
+            // (d) Hover inline code spans never emit literal backslashes on parameterized types or function signatures.
+            var globalIdentHover = HoverAt("SELECT @@IDENT|ITY");
+            var fnDateAddHover = HoverAt("SELECT DATE|ADD(day, 1, GETDATE())");
+            var decColHover = HoverAt("SELECT o.tot|al FROM dbo.Orders o", db: "Sales");
+            var udtVarHover = HoverAt("DECLARE @x DECIMAL(18, 2);\nSELECT @|x");
+            check(globalIdentHover is not null && globalIdentHover.Contents.Contains("`numeric(38,0)`", StringComparison.Ordinal)
+                && fnDateAddHover is not null && fnDateAddHover.Contents.Contains("`DATEADD( datepart, number, date )`", StringComparison.Ordinal)
+                && decColHover is not null && decColHover.Contents.Contains("`decimal(18,2)`", StringComparison.Ordinal)
+                && udtVarHover is not null && udtVarHover.Contents.Contains("`DECIMAL(18,2)`", StringComparison.Ordinal),
+                "hover inline code spans format types and signatures cleanly without literal backslashes");
+            check(TsqlCatalog.FormatCodeSpan("a`b") == "``a`b``" && TsqlCatalog.FormatCodeSpan("`lead`") == "`` `lead` ``",
+                "FormatCodeSpan escapes embedded and boundary backticks per CommonMark");
+
+            // (e) Case-sensitive collation: duplicate-case columns `id` and `Id` both appear, and CS FK only matches exact-case table!
+            var csDup = Complete("SELECT x.| FROM dbo.Item x", db: "CasedDb");
+            check(Has(csDup, "[id]") && Has(csDup, "[Id]") && Has(csDup, "[LowerItemCol]"),
+                "case-sensitive table preserves distinct columns differing only in case (id and Id)");
+            var csSchemaWrong = HoverAt("SELECT * FROM DBO|.Item", db: "CasedDb");
+            check(csSchemaWrong is null, "case-sensitive schema hover does not match wrong-case schema name");
+
+            // (f) WITH CTE attached to DELETE / UPDATE / INSERT / MERGE, plus unfinished CTE body!
+            var cteDelete = Complete("WITH Recent AS (SELECT 1 AS a) DELETE FROM Recent WHERE |", db: "Sales");
+            var cteUpdate = Complete("WITH Recent AS (SELECT 1 AS a) UPDATE Recent SET | = 1", db: "Sales");
+            var unfinishedCte = Complete("WITH C AS (SELECT o.| FROM dbo.Orders o)", db: "Sales");
+            check(Has(cteDelete, "[a]") && Has(cteUpdate, "[a]") && Has(unfinishedCte, "[customer_id]"),
+                "WITH CTE stays attached to DELETE/UPDATE and unfinished CTE bodies retain table scope");
+
+            // (g) SELECT ... INTO #S2 FROM #S1 + mid-script USE persistence!
+            var chainInto = Complete("CREATE TABLE #S1 (OrderId INT);\nSELECT * INTO #S2 FROM #S1;\nSELECT s.| FROM #S2 s", db: "Sales");
+            var useInto = Complete("USE AnalyticsDB;\nSELECT * INTO #Rev FROM dbo.DailyRevenue;\nUSE Sales;\nSELECT r.| FROM #Rev r", db: "Sales");
+            check(Has(chainInto, "[OrderId]") && Has(useInto, "[RevenueDate]") && Has(useInto, "[GrossRevenue]"),
+                "SELECT INTO #temp inherits from #temp sources and stamps active database before subsequent USE");
+
+            // (h) Empty auto-closed brackets `SELECT [|]` replace both `[` and `]` without doubling!
+            var emptyBracketSql = "SELECT [] FROM dbo.Orders";
+            var emptyBracketRes = Complete("SELECT [|] FROM dbo.Orders", db: "Sales");
+            var ebItem = emptyBracketRes.Items.FirstOrDefault(i => i.Label == "[customer_id]");
+            check(ebItem?.TextEdit is { } ebEdit
+                && emptyBracketSql[..ebEdit.Range.Start.Character] + ebEdit.NewText + emptyBracketSql[ebEdit.Range.End.Character..] == "SELECT [customer_id] FROM dbo.Orders",
+                "empty auto-closed brackets SELECT [|] replace both brackets cleanly without producing [[col]]");
+
+            // (i) Hover on OUTPUT inserted/deleted + 3-part column `dbo.Orders.customer_id` + scalar UDT not misclassified as table variable!
+            var outputHover = HoverAt("UPDATE dbo.Orders SET total = 1 OUTPUT inserted.custo|mer_id", db: "Sales");
+            var threePartColHover = HoverAt("SELECT dbo.Orders.custo|mer_id FROM dbo.Orders", db: "Sales");
+            var scalarUdtFrom = Complete("DECLARE @zip dbo.PostalCode;\nSELECT * FROM |", db: "Sales");
+            var scalarUdtHover = HoverAt("DECLARE @zip dbo.PostalCode;\nSELECT @z|ip", db: "Sales");
+            check(outputHover is not null && outputHover.Contents.Contains(@"customer\_id", StringComparison.Ordinal)
+                && threePartColHover is not null && threePartColHover.Contents.Contains(@"customer\_id", StringComparison.Ordinal)
+                && !Has(scalarUdtFrom, "@zip")
+                && scalarUdtHover is not null && scalarUdtHover.Contents.Contains("Local variable", StringComparison.Ordinal) && !scalarUdtHover.Contents.Contains("Table variable", StringComparison.Ordinal),
+                "hover resolves OUTPUT inserted/deleted & 3-part columns, and scalar UDT variables are not misclassified as table variables");
+
+            // (j) Missing sites: `INSERT dbo.Orders (|`, `DECLARE @a INT, @b |`, `DECLARE @a AS |`, `SELECT dbo.|` scalar functions only!
+            var insertNoInto = Complete("INSERT dbo.Orders (|", db: "Sales");
+            var multiDeclare = Complete("DECLARE @a INT, @b |", db: "Sales");
+            var declareAs = Complete("DECLARE @a AS |", db: "Sales");
+            var exprSchemaDot = Complete("SELECT dbo.|", db: "Sales");
+            check(Has(insertNoInto, "[customer_id]")
+                && Has(multiDeclare, "INT") && Has(declareAs, "NVARCHAR")
+                && Has(exprSchemaDot, "[fn_total]") && !Has(exprSchemaDot, "[usp_get]"),
+                "INSERT without INTO, multi-var/AS DECLARE type sites, and scalar-only SELECT dbo. completion work cleanly");
+
+            // (k) Clean UTF-8 en-dash (zero mojibake), no backticks in FK plain-text docs, DROP TABLE #t1, #t2, DATE_BUCKET, routine RETURNS @out TABLE!
+            check(TsqlCatalog.DateParts.All(d => !d.Summary.Contains("â€", StringComparison.Ordinal))
+                && TsqlCatalog.SystemGlobals.All(g => !g.Summary.Contains("â€", StringComparison.Ordinal)),
+                "TsqlCatalog contains clean UTF-8 en-dashes with zero mojibake");
+            var fkCleanDoc = Complete("SELECT * FROM dbo.Orders o JOIN dbo.Customers c ON |", db: "Sales");
+            check(fkCleanDoc.Items[0].Documentation is { } fdoc && !fdoc.Contains('`', StringComparison.Ordinal),
+                "FK JOIN ON plain-text documentation contains no raw Markdown backticks");
+            var dropMulti = Complete("CREATE TABLE #t1 (a INT); CREATE TABLE #t2 (b INT); DROP TABLE #t1, #t2; SELECT * FROM |", db: "Sales");
+            var dateBucket = Complete("SELECT DATE_BUCKET(|, 1, GETDATE())");
+            var tvfReturn = Complete("CREATE FUNCTION dbo.fn_test(@a INT = (1), @b INT) RETURNS @out TABLE (Score INT) AS BEGIN SELECT x.| FROM @out x END", db: "Sales");
+            check(!Has(dropMulti, "#t1") && !Has(dropMulti, "#t2")
+                && Has(dateBucket, "day")
+                && Has(tvfReturn, "[Score]"),
+                "DROP TABLE #t1, #t2, DATE_BUCKET dateparts, nested-paren routine params, and RETURNS @out TABLE work");
+
+            // (l) RefreshAsync cancellation via CloseAsync maps to STALE (never TIMEOUT)!
+            using var refreshSvc = new SqlToolsLanguageService(
+                _ => null,
+                activeDatabase: _ => "Sales",
+                refreshIndex: async (_, ct) => { await Task.Delay(5000, ct); return true; });
+            var refreshDocId = Guid.NewGuid().ToString("D");
+            var refreshTask = refreshSvc.RefreshAsync(new LanguageRefreshRequest(refreshDocId, 1, "SELECT 1", new("sqlserver", Guid.NewGuid().ToString("D"), "Sales")), CancellationToken.None);
+            await Task.Delay(50);
+            await refreshSvc.CloseAsync(refreshDocId, CancellationToken.None);
+            string? refreshErrCode = null;
+            try { await refreshTask; }
+            catch (RequestException ex) { refreshErrCode = ex.Code; }
+            check(refreshErrCode == "STALE", $"RefreshAsync cancelled by CloseAsync maps to STALE (got {refreshErrCode ?? "none"})");
         }
         finally
         {
@@ -340,10 +489,12 @@ internal static class TsqlCompletionChecks
         var analytics = await ReadAnalyticsDbAsync(pool);
         conn.Put(analytics);
 
-        // Case-sensitive DB
+        // Case-sensitive DB (including duplicate-case columns `id` and `Id` on dbo.Item)
         var casedRows = new IndexedObject[]
         {
             new("table", "tables", "dbo", "Item"),
+            new("column", "columns", null, "id", "table", "dbo", "Item"),
+            new("column", "columns", null, "Id", "table", "dbo", "Item"),
             new("column", "columns", null, "LowerItemCol", "table", "dbo", "Item"),
             new("table", "tables", "dbo", "ITEM"),
             new("column", "columns", null, "UpperItemCol", "table", "dbo", "ITEM")

@@ -70,8 +70,9 @@ function mountEditorStatus(options: PopoverHarnessOptions) {
     paneFocus: 0
   })
   const refreshBigQuery = vi.fn()
+  const build = vi.fn()
   const ensureIndex = vi.fn()
-  const objectSearch = Object.assign(searchStore, { refreshBigQuery, ensureIndex })
+  const objectSearch = Object.assign(searchStore, { refreshBigQuery, build, ensureIndex })
 
   const memoryStore = new SnapshotStore<MemoryUsage>(options.memory ?? { usedBytes: 64 * 1024 * 1024, globalBytes: 512 * 1024 * 1024 })
   const starredStore = new SnapshotStore<{ readonly byPrincipal: Readonly<Record<string, readonly string[]>> }>({
@@ -123,7 +124,7 @@ function mountEditorStatus(options: PopoverHarnessOptions) {
   cleanups.push(() => { act(() => { root.unmount() }); host.remove(); trailingButton.remove() })
   act(() => { root.render(createElement(WorkbenchProvider, { workbench: wb, children: createElement(EditorStatus) })) })
   const trigger = host.querySelector<HTMLButtonElement>('.editor-status-sql')!
-  return { host, trigger, trailingButton, reportError, setStarred, refreshBigQuery, ensureIndex, lookupDocument }
+  return { host, trigger, trailingButton, reportError, setStarred, refreshBigQuery, build, ensureIndex, lookupDocument }
 }
 
 describe('IntelliSensePopover accessibility, badges, Star action, and memory bar', () => {
@@ -169,8 +170,24 @@ describe('IntelliSensePopover accessibility, badges, Star action, and memory bar
     const buildBtn = document.body.querySelector<HTMLButtonElement>('.intellisense-popover-inline-action')!
     expect(buildBtn.textContent).toContain('Build index')
     act(() => { buildBtn.click() })
-    expect(unbuilt.ensureIndex).toHaveBeenCalledWith('sql-1')
+    expect(unbuilt.build).toHaveBeenCalledWith('sql-1')
+    expect(unbuilt.ensureIndex).not.toHaveBeenCalled()
     act(() => { unbuilt.trigger.click() })
+
+    const leftOut = mountEditorStatus({
+      isBigQuery: false,
+      indexEntry: {
+        connectionId: 'sql-1', done: 2, total: 2, objects: 120,
+        status: { state: 'ready', databases: 2, indexed: 2, objects: 120, modules: 0, cut: 0, skipped: [{ database: 'BigDb', code: 'CHILDREN_LEFT_OUT', message: 'Left out' }], definitions: true }
+      }
+    })
+    await act(async () => { leftOut.trigger.click() })
+    const refreshIdxBtn = document.body.querySelector<HTMLButtonElement>('.intellisense-popover-inline-action')!
+    expect(refreshIdxBtn.textContent).toContain('Refresh index')
+    act(() => { refreshIdxBtn.click() })
+    expect(leftOut.build).toHaveBeenCalledWith('sql-1')
+    expect(leftOut.ensureIndex).not.toHaveBeenCalled()
+    act(() => { leftOut.trigger.click() })
 
     const paused = mountEditorStatus({
       isBigQuery: false,

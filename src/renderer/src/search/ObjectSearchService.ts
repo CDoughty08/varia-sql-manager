@@ -1253,6 +1253,22 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     }
   }
 
+  /** Syncs a connection's index status from the backend (e.g. after SQL Server Ctrl+Shift+R builds or refreshes an index). */
+  syncStatus(connectionId: string): void {
+    const read = this.o.api.explorerIndexStatus
+    if (this.disposed || !read || !live(this.o.connections.get(connectionId))) return
+    const seq = ++this.statusSeq
+    this.statusReads.set(connectionId, seq)
+    void read({ connectionId }).then(result => {
+      if (this.statusReads.get(connectionId) !== seq) return
+      this.statusReads.delete(connectionId)
+      const entry = this.getSnapshot().indexes[connectionId]
+      if (this.disposed || !result.ok || entry?.requestId || !live(this.o.connections.get(connectionId))) return
+      const { status } = result.value
+      this.putIndex({ connectionId, done: status.indexed, total: status.databases, objects: status.objects, status, ...entry?.error ? { error: entry.error } : {} })
+    }, onUnexpectedError)
+  }
+
   /** Reads a connection's index status after a stopped build, unless a newer build or a disconnect came first. */
   private readStatus(connectionId: string): void {
     const read = this.o.api.explorerIndexStatus

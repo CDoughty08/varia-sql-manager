@@ -1521,4 +1521,68 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     expect(labelText(sorted[0].label)).toBe('o.[CustomerId] = c.[Id]')
     expect(labelText(sorted[1].label)).toBe('o.[CustomerId]')
   })
+
+  it('re-queries cross-DB FROM jump when 0-1 char response is incomplete, excludes CTEs/built-ins from lookup, and syncs index status on Ctrl+Shift+R', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    const syncStatus = vi.fn()
+    const indexState = new SnapshotStore<{ readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }>({ indexes: {} })
+    f.service.bindIndexState(Object.assign(indexState, { syncStatus }))
+
+    // 1. Multi-keystroke FROM jump: initial 0-char completion returns isIncomplete: true, so typing `Da` re-queries backend!
+    const jumpTab = f.documents.create('jump.sql', 'SELECT * FROM ', 'SalesDB', 'sql-1')
+    f.api.languageComplete
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [{ label: '[dbo].[Orders]', kind: 7, filterText: 'Orders' }] } })
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: '[AnalyticsDB].[dbo].[DailyRevenue]', kind: 7, detail: 'Table', filterText: 'DailyRevenue' }] } })
+    const first = await f.complete(jumpTab.id, { lineNumber: 1, column: 15 } as Monaco.Position)
+    expect(first.incomplete).toBe(true)
+    const model = f.model(jumpTab.id)
+    model.applyEdits([{ range: { startLineNumber: 1, startColumn: 15, endLineNumber: 1, endColumn: 15 }, text: 'Da' }])
+    const second = await f.completion.provideCompletionItems(model, { lineNumber: 1, column: 17 } as Monaco.Position, { triggerKind: 2 }, token()) as Monaco.languages.CompletionList
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+    expect(second.suggestions.some(s => labelText(s.label) === '[AnalyticsDB].[dbo].[DailyRevenue]')).toBe(true)
+
+    // 2. CTE shadowing physical table & built-in T-SQL function shadowing UDF must NOT fire language.lookup!
+    const shadowTab = f.documents.create('shadow.sql', 'WITH Orders AS (SELECT 1 AS a) SELECT ', 'SalesDB', 'sql-1')
+    f.api.languageLookup.mockResolvedValue({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: [{
+          state: 'ready',
+          path: ['SalesDB', 'dbo', 'Orders'],
+          truncated: false,
+          object: { name: 'Orders', kind: 'table', detailed: true },
+          items: [{ name: 'Id', kind: 'column', type: 'int', nullable: false, detail: 'PK' }]
+        }]
+      }
+    })
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: 'Orders', kind: 7, detail: 'CTE' },
+          { label: 'FORMAT', kind: 3, detail: 'Function · nvarchar', documentation: 'Built-in FORMAT docs' },
+          { label: '[dbo].[Orders]', kind: 7, detail: 'Table · SalesDB.dbo' }
+        ]
+      }
+    })
+    const shadowList = await f.complete(shadowTab.id, { lineNumber: 1, column: 39 } as Monaco.Position)
+    const lookupBefore = f.api.languageLookup.mock.calls.length
+    const cteItem = shadowList.suggestions.find(s => labelText(s.label) === 'Orders')!
+    const builtinItem = shadowList.suggestions.find(s => labelText(s.label) === 'FORMAT')!
+    const tableItem = shadowList.suggestions.find(s => labelText(s.label) === '[dbo].[Orders]')!
+    await f.completion.resolveCompletionItem!(cteItem, token())
+    await f.completion.resolveCompletionItem!(builtinItem, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore)
+    expect(builtinItem.documentation).toBe('Built-in FORMAT docs')
+    await f.completion.resolveCompletionItem!(tableItem, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore + 1)
+
+    // 3. Ctrl+Shift+R (refreshCache) calls indexState.syncStatus(connectionId) so popover updates from Not built to Ready.
+    const refreshed = await f.service.refreshCache(shadowTab.id)
+    expect(refreshed).toBe(true)
+    expect(syncStatus).toHaveBeenCalledWith(shadowTab.connectionId)
+  })
 })

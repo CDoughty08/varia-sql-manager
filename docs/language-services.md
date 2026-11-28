@@ -169,7 +169,8 @@ hover, and cache refresh active.
 
 A BigQuery tab has no language server: completion and hover are Varia's own, read from the connection's Search Objects
 index ([object-search.md](object-search.md#bigquery)) in the backend's memory through `language.lookup`
-([ipc.md](ipc.md)). Nothing is sent to Google and nothing is billed. SQL Server tabs keep SQL Tools.
+([ipc.md](ipc.md)). Nothing is sent to Google and nothing is billed. SQL Server tabs use the in-process `ScriptDom` +
+`IndexLookup` provider above for completion and hover, and keep SQL Tools Service only for live error checking until Phase 2.
 
 - **Pipeline.** `src/shared/completion/` knows no engine: a grammar reads the caret's statement into a site (an object
   name, a member after a dot, an expression, or a clause site such as `afterFromTable`, `statementStart`, `castType`,
@@ -291,12 +292,12 @@ before promoting any SQL Server-specific assumption into the common contract.
   resolve the requesting model, not the active query. Responses are discarded after an edit, context change, close,
   cancellation or backend-generation change. Query editors stay in the main OS window; other panels support
   [OS popouts](popout-windows.md).
-- Credentials stay in the backend. SQL Tools keeps its own database connection, not a query tab's session, so temporary
-  tables, session variables, uncommitted changes and session SET options are invisible to it, and background analysis
-  cannot interfere with a running query or transaction.
-- The SQL Server adapter opens the buffer before connecting, waits for metadata readiness and retries transient busy
-  completion responses within a deadline. It sends explicit UTF-16 replacement ranges and refreshes its parse tree before
-  hovering changed text. Service file tracing is off; stderr is drained without logging.
+- Credentials stay in the backend. For live SQL error checking, SQL Tools keeps its own database connection, not a query
+  tab's session, so uncommitted changes and session SET options are invisible to it, and background analysis cannot
+  interfere with a running query or transaction.
+- The SQL Server diagnostics child opens its buffer before connecting and waits for metadata readiness before publishing
+  issues. Completion and hover never spawn or touch SQL Tools Service; they run in-process via ScriptDom + `IndexLookup`
+  with explicit UTF-16 replacement ranges. Service file tracing is off; stderr is drained without logging.
 - The executable and arguments come only from the trusted application.
 
 ## Scope and limits

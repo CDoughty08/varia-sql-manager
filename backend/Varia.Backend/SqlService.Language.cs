@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using System.Text.Json;
+using Varia.Backend.Explorer;
 using Varia.Backend.Language;
 
 namespace Varia.Backend;
@@ -49,21 +50,29 @@ internal sealed partial class SqlService
             throw new RequestException("NOT_CONNECTED", "Connect this query before refreshing IntelliSense.");
         var database = context.Database ?? DatabaseOf(connectionId, text);
         var status = search.IndexStatus(new ObjectIndexStatusArgs(connectionId)).Status;
-        if (status.State == "none" && status.Databases == 0)
+        try
         {
-            await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D")), token);
+            if (status.State == "none" && status.Databases == 0)
+            {
+                await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D")), token);
+                return true;
+            }
+            if (!string.IsNullOrEmpty(database) && ExplorerRefs.Ident(database))
+            {
+                search.MarkSqlStale(connectionId, database);
+                await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D"), Stale: true, Database: database), token);
+            }
+            else
+            {
+                await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D"), Stale: true, CheckAll: true), token);
+            }
             return true;
         }
-        if (!string.IsNullOrEmpty(database))
+        catch (RequestException ex) when (ex.Code == "CANCELLED" && !token.IsCancellationRequested)
         {
-            search.MarkSqlStale(connectionId, database);
-            await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D"), Stale: true, Database: database), token);
+            // A concurrent index build or freshness check superseded this check; the index is already being refreshed.
+            return true;
         }
-        else
-        {
-            await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D"), Stale: true, CheckAll: true), token);
-        }
-        return true;
     }
 
     /// <summary>Resolves only an existing Varia connection for SQL Tools Service diagnostics (Phase 2 retires STS completely).

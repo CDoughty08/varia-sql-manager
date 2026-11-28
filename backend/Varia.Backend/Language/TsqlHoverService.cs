@@ -13,9 +13,9 @@ internal static class TsqlHoverService
     private const int MaxRelationsShown = 6;
     private const int MaxSamplesShown = 8;
 
-    internal static LanguageHover? Hover(LanguageRequest request, IndexLookup? lookup, string? defaultDatabase)
+    internal static LanguageHover? Hover(LanguageRequest request, IndexLookup? lookup, string? defaultDatabase, CancellationToken cancellationToken = default)
     {
-        var ctx = TsqlScopeReader.ReadHover(request.Text, request.Position, defaultDatabase);
+        var ctx = TsqlScopeReader.ReadHover(request.Text, request.Position, defaultDatabase, cancellationToken);
         if (ctx is null || ctx.Parts.Count == 0) return null;
 
         var markdown = BuildMarkdown(ctx, lookup);
@@ -35,18 +35,19 @@ internal static class TsqlHoverService
         if (parts.Count == 1 && hovered.StartsWith("@@", StringComparison.Ordinal))
         {
             if (TsqlCatalog.SystemGlobalMap.TryGetValue(hovered, out var global))
-                return $"**{TsqlCatalog.EscapeMarkdown(global.Name)}** · `{TsqlCatalog.EscapeMarkdown(global.ReturnType)}`\n\n{TsqlCatalog.EscapeMarkdown(global.Summary)}";
+                return $"**{TsqlCatalog.EscapeMarkdown(global.Name)}** · {TsqlCatalog.FormatCodeSpan(global.ReturnType)}\n\n{TsqlCatalog.EscapeMarkdown(global.Summary)}";
             return null;
         }
 
         // 2. @ Local variables (@table or @scalar)
         if (parts.Count == 1 && hovered.StartsWith('@'))
         {
-            if (ctx.TableVariables.TryGetValue(hovered, out var tv))
+            if (ctx.TableVariables.TryGetValue(hovered, out var tv)
+                && TsqlCompletionService.IsConfirmedTableVariable(tv, lookup, ctx.ActiveDatabase))
                 return FormatLocalTableMarkdown(tv, lookup, ctx.ActiveDatabase);
             if (ctx.ScalarVariables.TryGetValue(hovered, out var sv))
             {
-                var type = !string.IsNullOrEmpty(sv.TypeText) ? $" · `{TsqlCatalog.EscapeMarkdown(sv.TypeText)}`" : "";
+                var type = !string.IsNullOrEmpty(sv.TypeText) ? $" · {TsqlCatalog.FormatCodeSpan(sv.TypeText)}" : "";
                 return $"**{TsqlCatalog.EscapeMarkdown(sv.Name)}** · Local variable{type}";
             }
             return null;
@@ -130,17 +131,14 @@ internal static class TsqlHoverService
         }
         else if (parts.Count >= 2 && at == parts.Count - 1)
         {
-            // Hovering leaf in `o.CustomerId` or `dbo.fn_total(...)`
-            if (parts.Count == 2)
+            // Hovering leaf in `o.CustomerId`, `dbo.Orders.CustomerId`, `Sales.dbo.Orders.CustomerId`, or `dbo.fn_total(...)`
+            var matchedSrc = FindSourceByQualifierParts(allSources, parts, caseSensitive, Same);
+            if (matchedSrc is not null)
             {
-                var src = FindSource(allSources, parts[0], caseSensitive, Same);
-                if (src is not null)
-                {
-                    if (FormatColumnHover(src, parts[1], lookup, ctx.ActiveDatabase, Same) is { } colMd)
-                        return colMd;
-                }
+                if (FormatColumnHover(matchedSrc, parts[^1], lookup, ctx.ActiveDatabase, Same) is { } colMd)
+                    return colMd;
             }
-            if (lookup is not null)
+            if (lookup is not null && parts.Count <= 3)
             {
                 var dbName = parts.Count == 3 ? parts[0] : ctx.ActiveDatabase;
                 var schemaName = parts.Count == 3 ? (string.IsNullOrEmpty(parts[1]) ? null : parts[1]) : parts[0];
@@ -247,12 +245,39 @@ internal static class TsqlHoverService
         return sb.ToString();
     }
 
+    private static TsqlSourceRef? FindSourceByQualifierParts(
+        List<TsqlSourceRef> allSources,
+        IReadOnlyList<string> parts,
+        bool caseSensitive,
+        Func<string, string, bool> same)
+    {
+        if (parts.Count == 2)
+            return FindSource(allSources, parts[0], caseSensitive, same);
+        if (parts.Count == 3)
+        {
+            // `schema.table.column` (unaliased table)
+            return allSources.FirstOrDefault(s => !s.HasExplicitAlias && s.ObjectRef is { } obj
+                && same(obj.Name, parts[1])
+                && (obj.Schema is null || same(obj.Schema, parts[0])));
+        }
+        if (parts.Count == 4)
+        {
+            // `db.schema.table.column` (unaliased table)
+            return allSources.FirstOrDefault(s => !s.HasExplicitAlias && s.ObjectRef is { } obj
+                && same(obj.Name, parts[2])
+                && (string.IsNullOrEmpty(parts[1]) || obj.Schema is null || same(obj.Schema, parts[1]))
+                && (obj.Database is null || string.Equals(obj.Database, parts[0], StringComparison.OrdinalIgnoreCase)));
+        }
+        return null;
+    }
+
     private static string? FormatSchemaHover(IndexLookup lookup, string dbName, string schemaName)
     {
         var db = lookup.Database(dbName);
         if (db.State == LookupState.Absent) return null;
         var objects = lookup.ObjectsInSchema(db.Database, schemaName).ToList();
-        var knownSchema = lookup.Schemas(db.Database).FirstOrDefault(s => string.Equals(s, schemaName, StringComparison.OrdinalIgnoreCase));
+        var comparer = TsqlCompletionService.CollationComparer(db);
+        var knownSchema = lookup.Schemas(db.Database).FirstOrDefault(s => comparer.Equals(s, schemaName));
         if (objects.Count == 0 && knownSchema is null) return null;
 
         var resolvedSchema = knownSchema ?? schemaName;
@@ -311,7 +336,7 @@ internal static class TsqlHoverService
 
         var pkIds = new HashSet<short>();
         var ukIds = new HashSet<short>();
-        var fkCols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var fkCols = new HashSet<string>(TsqlCompletionService.CollationComparer(summary.Database));
         var pks = new List<LookupIndex>();
         var uks = new List<LookupIndex>();
         var indexes = new List<LookupIndex>();
@@ -450,7 +475,7 @@ internal static class TsqlHoverService
         if (col is null) return null;
 
         var parts = new List<string> { $"**{TsqlCatalog.EscapeMarkdown(col.Name)}**" };
-        if (!string.IsNullOrEmpty(col.TypeText)) parts.Add($"`{TsqlCatalog.EscapeMarkdown(col.TypeText)}`");
+        if (!string.IsNullOrEmpty(col.TypeText)) parts.Add(TsqlCatalog.FormatCodeSpan(col.TypeText));
         if (col.Nullable == false) parts.Add("NOT NULL");
         if (!string.IsNullOrEmpty(col.Markers)) parts.Add(TsqlCatalog.EscapeMarkdown(col.Markers));
 
@@ -504,14 +529,14 @@ internal static class TsqlHoverService
     private static string FormatFunctionMarkdown(TsqlCatalog.FunctionInfo fn)
     {
         var sb = new StringBuilder(256);
-        sb.Append("**").Append(TsqlCatalog.EscapeMarkdown(fn.Name)).Append("** · Built-in function · `")
-            .Append(TsqlCatalog.EscapeMarkdown(fn.ReturnType)).Append("`\n\n")
+        sb.Append("**").Append(TsqlCatalog.EscapeMarkdown(fn.Name)).Append("** · Built-in function · ")
+            .Append(TsqlCatalog.FormatCodeSpan(fn.ReturnType)).Append("\n\n")
             .Append(TsqlCatalog.EscapeMarkdown(fn.Summary));
         if (fn.Signatures.Length > 0)
         {
             sb.Append('\n');
             foreach (var sig in fn.Signatures)
-                sb.Append("\n- `").Append(TsqlCatalog.EscapeMarkdown(sig)).Append('`');
+                sb.Append("\n- ").Append(TsqlCatalog.FormatCodeSpan(sig));
         }
         return sb.ToString();
     }

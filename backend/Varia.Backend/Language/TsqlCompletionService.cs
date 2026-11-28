@@ -8,9 +8,34 @@ namespace Varia.Backend.Language;
 internal static class TsqlCompletionService
 {
     private const int MaxJumpHits = 50;
-    private const int MaxJumpScan = 100_000;
+    private const int MaxJumpTopLevelScan = 50_000;
     private const int MaxStarDepth = 8;
     private const int MaxAggregateChars = 1_000_000;
+
+    internal sealed class TurkishCaseComparer : IEqualityComparer<string>
+    {
+        public static readonly TurkishCaseComparer Instance = new();
+        public bool Equals(string? x, string? y) => x is null ? y is null : y is not null && TurkishCase.Same(x, y);
+        public int GetHashCode(string obj)
+        {
+            var hash = new HashCode();
+            foreach (var ch in obj)
+                hash.Add(ch switch { 'i' => 'İ', 'ı' => 'I', _ => char.ToUpperInvariant(ch) });
+            return hash.ToHashCode();
+        }
+    }
+
+    internal static IEqualityComparer<string> CollationComparer(LookupDatabase? db) =>
+        db?.CaseSensitive == true ? StringComparer.Ordinal
+        : db?.Held?.DottedI == true ? TurkishCaseComparer.Instance
+        : StringComparer.OrdinalIgnoreCase;
+
+    internal static bool IsConfirmedTableVariable(LocalTable tv, IndexLookup? lookup, string? activeDb)
+    {
+        if (tv.TableTypeRef is null) return true;
+        if (lookup is null) return false;
+        return ResolveCatalogObject(lookup, tv.TableTypeRef.Database ?? activeDb, tv.TableTypeRef.Schema, tv.TableTypeRef.Name, TableTypeKinds, out _) is not null;
+    }
 
     internal sealed record ResolvedColumn(
         string Name,
@@ -19,9 +44,9 @@ internal static class TsqlCompletionService
         string? Markers = null,
         string? ForeignKeyTarget = null);
 
-    internal static LanguageCompletionResult Complete(LanguageRequest request, IndexLookup? lookup, string? defaultDatabase)
+    internal static LanguageCompletionResult Complete(LanguageRequest request, IndexLookup? lookup, string? defaultDatabase, CancellationToken cancellationToken = default)
     {
-        var ctx = TsqlScopeReader.ReadCompletion(request.Text, request.Position, defaultDatabase);
+        var ctx = TsqlScopeReader.ReadCompletion(request.Text, request.Position, defaultDatabase, cancellationToken);
         if (ctx.Site == TsqlSiteKind.None) return new([], false);
 
         var candidates = new List<Candidate>();
@@ -68,7 +93,7 @@ internal static class TsqlCompletionService
                 break;
 
             case TsqlSiteKind.LocalVariable:
-                EmitLocalVariables(ctx, Add);
+                EmitLocalVariables(ctx, lookup, Add);
                 EmitSystemGlobals(Add, basePriority: 70);
                 break;
 
@@ -86,7 +111,7 @@ internal static class TsqlCompletionService
                 break;
 
             case TsqlSiteKind.Object:
-                EmitObjectCompletions(ctx, lookup, Add, ref incomplete);
+                EmitObjectCompletions(ctx, lookup, Add, ref incomplete, cancellationToken);
                 break;
 
             case TsqlSiteKind.JoinCondition:
@@ -145,14 +170,22 @@ internal static class TsqlCompletionService
 
     private static int MatchRank(string target, string label, string prefix)
     {
-        var best = 4;
-        foreach (var raw in new[] { target, TsqlCatalog.Unquote(label) })
+        static int Score(string raw, string p)
         {
-            if (string.IsNullOrEmpty(raw)) continue;
-            if (raw.Equals(prefix, StringComparison.OrdinalIgnoreCase)) return 0;
-            if (raw.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) best = Math.Min(best, 1);
-            else if (raw.Contains(prefix, StringComparison.OrdinalIgnoreCase)) best = Math.Min(best, 2);
-            else if (IsSubsequence(raw, prefix)) best = Math.Min(best, 3);
+            if (string.IsNullOrEmpty(raw)) return 4;
+            if (raw.Equals(p, StringComparison.OrdinalIgnoreCase)) return 0;
+            if (raw.StartsWith(p, StringComparison.OrdinalIgnoreCase)) return 1;
+            if (raw.Contains(p, StringComparison.OrdinalIgnoreCase)) return 2;
+            return IsSubsequence(raw, p) ? 3 : 4;
+        }
+
+        var best = Score(target, prefix);
+        if (best == 0) return 0;
+        var unquotedLabel = TsqlCatalog.Unquote(label);
+        if (!string.Equals(unquotedLabel, target, StringComparison.Ordinal))
+        {
+            var labelScore = Score(unquotedLabel, prefix);
+            if (labelScore < best) best = labelScore;
         }
         return best;
     }
@@ -241,12 +274,20 @@ internal static class TsqlCompletionService
         }
     }
 
-    private static void EmitLocalVariables(TsqlCompletionContext ctx, AddItem add)
+    private static void EmitLocalVariables(TsqlCompletionContext ctx, IndexLookup? lookup, AddItem add)
     {
-        foreach (var v in ctx.ScalarVariables.Values)
-            add(v.Name, 6, v.TypeText ?? "Local variable", null, v.Name, v.Name, $"10:{v.Name}", priority: 10);
+        var confirmedTableVars = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in ctx.TableVariables.Values)
+        {
+            if (!IsConfirmedTableVariable(t, lookup, ctx.ActiveDatabase)) continue;
+            confirmedTableVars.Add(t.Name);
             add(t.Name, 6, t.TableTypeRef is { } udt ? $"Table variable ({udt.Schema}.{udt.Name})" : "Table variable", null, t.Name, t.Name, $"15:{t.Name}", priority: 15);
+        }
+        foreach (var v in ctx.ScalarVariables.Values)
+        {
+            if (confirmedTableVars.Contains(v.Name)) continue;
+            add(v.Name, 6, v.TypeText ?? "Local variable", null, v.Name, v.Name, $"10:{v.Name}", priority: 10);
+        }
     }
 
     private static void EmitMemberCompletions(TsqlCompletionContext ctx, IndexLookup? lookup, AddItem add, ref bool incomplete)
@@ -263,14 +304,14 @@ internal static class TsqlCompletionService
                 EmitSourceColumns(matchedSource, lookup, ctx.ActiveDatabase, qualify: false, add, ref incomplete);
                 return;
             }
-            // Also check scalar functions on schema dot in expressions (`SELECT dbo.|`).
+            // Also check scalar/aggregate functions on schema dot in expressions (`SELECT dbo.|`).
             if (lookup is not null && !string.IsNullOrEmpty(ctx.ActiveDatabase) && qualifier.Count == 1)
             {
                 var db = lookup.Database(ctx.ActiveDatabase);
                 if (db.State == LookupState.Building) incomplete = true;
                 foreach (var obj in lookup.ObjectsInSchema(ctx.ActiveDatabase, qualifier[0]))
                 {
-                    if (obj.Kind is not ("function" or "procedure")) continue;
+                    if (obj.Kind != "function" || obj.Subtype is "inline" or "tableValued" or "clrTableValued") continue;
                     EmitCatalogObject(obj, qualifySchema: false, qualifyDatabase: false, detailSuffix: null, add, priority: 30, sortPrefix: "30");
                 }
             }
@@ -322,7 +363,7 @@ internal static class TsqlCompletionService
         }
     }
 
-    private static void EmitObjectCompletions(TsqlCompletionContext ctx, IndexLookup? lookup, AddItem add, ref bool incomplete)
+    private static void EmitObjectCompletions(TsqlCompletionContext ctx, IndexLookup? lookup, AddItem add, ref bool incomplete, CancellationToken cancellationToken)
     {
         // 1. CTEs
         foreach (var cte in ctx.Ctes)
@@ -332,9 +373,12 @@ internal static class TsqlCompletionService
         foreach (var temp in ctx.TempTables.Values)
             add(temp.Name, 7, temp.Name.StartsWith("##", StringComparison.Ordinal) ? "Global temporary table" : "Temporary table", null, temp.Name, temp.Name, $"12:{temp.Name}", priority: 12);
 
-        // 3. Batch-local @table variables
+        // 3. Batch-local @table variables (excluding scalar UDTs that do not resolve to a tableType)
         foreach (var tv in ctx.TableVariables.Values)
+        {
+            if (!IsConfirmedTableVariable(tv, lookup, ctx.ActiveDatabase)) continue;
             add(tv.Name, 6, "Table variable", null, tv.Name, tv.Name, $"14:{tv.Name}", priority: 14);
+        }
 
         if (lookup is null) return;
         if (lookup.IndexState == "building") incomplete = true;
@@ -344,7 +388,7 @@ internal static class TsqlCompletionService
         var activeResolved = hasActiveDb ? lookup.Database(activeDb!) : null;
         if (activeResolved?.State == LookupState.Building) incomplete = true;
 
-        // 4. Current DB schemas + objects in dbo (and other schemas)
+        // 4. Current DB schemas + objects in a single O(N) pass (avoiding O(schemas * N) scans).
         if (activeResolved is { State: not LookupState.Absent })
         {
             var schemas = lookup.Schemas(activeResolved.Database);
@@ -355,61 +399,88 @@ internal static class TsqlCompletionService
                 add(bracketed, 9, isSystem ? "System schema" : "Schema", null, bracketed, schema, $"{(isSystem ? "55" : "40")}:{schema}", priority: isSystem ? 55 : 40);
             }
 
-            // Current DB dbo objects first
-            foreach (var obj in lookup.ObjectsInSchema(activeResolved.Database, "dbo"))
+            if (activeResolved.Held is { } read)
             {
-                if (!MatchesObjectHint(obj, ctx.ObjectHint)) continue;
-                EmitCatalogObject(obj, qualifySchema: true, qualifyDatabase: false, detailSuffix: $"{activeResolved.Database}.dbo", add, priority: 20, sortPrefix: "20");
-            }
-
-            // Current DB other user schemas
-            foreach (var schema in schemas)
-            {
-                if (schema.Equals("dbo", StringComparison.OrdinalIgnoreCase)
-                    || schema.Equals("sys", StringComparison.OrdinalIgnoreCase)
-                    || schema.Equals("INFORMATION_SCHEMA", StringComparison.OrdinalIgnoreCase)) continue;
-                foreach (var obj in lookup.ObjectsInSchema(activeResolved.Database, schema))
+                var table = read.Table;
+                for (var at = 0; at < table.Count; at++)
                 {
+                    if ((at & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
+                    if (table.Parent(at) >= 0) continue;
+                    var obj = new LookupObject(activeResolved.Database, table, at, read);
                     if (!MatchesObjectHint(obj, ctx.ObjectHint)) continue;
-                    EmitCatalogObject(obj, qualifySchema: true, qualifyDatabase: false, detailSuffix: $"{activeResolved.Database}.{schema}", add, priority: 25, sortPrefix: "25");
+                    var schema = obj.Schema ?? "dbo";
+                    if (schema.Equals("sys", StringComparison.OrdinalIgnoreCase)
+                        || schema.Equals("INFORMATION_SCHEMA", StringComparison.OrdinalIgnoreCase)) continue;
+                    var isDbo = schema.Equals("dbo", StringComparison.OrdinalIgnoreCase);
+                    EmitCatalogObject(obj, qualifySchema: true, qualifyDatabase: false, detailSuffix: $"{activeResolved.Database}.{schema}",
+                        add, priority: isDbo ? 20 : 25, sortPrefix: isDbo ? "20" : "25");
                 }
             }
         }
 
         // 5. Indexed databases (for `[OtherDB].dbo.Table` navigation)
-        foreach (var dbName in lookup.Databases())
+        var allDatabases = lookup.Databases();
+        var hasOtherDatabases = false;
+        foreach (var dbName in allDatabases)
         {
+            if (activeResolved is null || !string.Equals(dbName, activeResolved.Database, StringComparison.OrdinalIgnoreCase))
+                hasOtherDatabases = true;
             var bracketed = TsqlCatalog.Bracket(dbName);
             add(bracketed, 9, "Database", null, bracketed, dbName, $"45:{dbName}", priority: 45);
         }
 
-        // 6. Cross-DB / cross-schema fuzzy FROM jump when 2+ characters typed!
+        // 6. Cross-DB fuzzy FROM jump when 2+ characters typed!
+        // When < 2 characters are typed and other databases exist, mark incomplete so interactive typing re-queries once 2+ chars exist.
         var prefix = TsqlCatalog.Unquote(ctx.Typed);
         if (prefix.Length >= 2)
-            EmitCrossDatabaseJump(lookup, activeResolved?.Database, prefix, ctx.ObjectHint, add, ref incomplete);
+            EmitCrossDatabaseJump(lookup, allDatabases, activeResolved?.Database, prefix, ctx.ObjectHint, add, ref incomplete, cancellationToken);
+        else if (hasOtherDatabases)
+            incomplete = true;
     }
 
     private static void EmitCrossDatabaseJump(
         IndexLookup lookup,
+        IReadOnlyList<string> allDatabases,
         string? activeDb,
         string prefix,
         TsqlObjectHint hint,
         AddItem add,
-        ref bool incomplete)
+        ref bool incomplete,
+        CancellationToken cancellationToken)
     {
-        var hits = new List<(LookupObject Obj, int Tier, int Rank)>();
-        var scanned = 0;
-
-        foreach (var dbName in lookup.Databases())
+        var otherDbs = new List<LookupDatabase>();
+        foreach (var dbName in allDatabases)
         {
-            var isCurrentDb = activeDb is not null && string.Equals(dbName, activeDb, StringComparison.OrdinalIgnoreCase);
+            if (activeDb is not null && string.Equals(dbName, activeDb, StringComparison.OrdinalIgnoreCase)) continue;
             var db = lookup.Database(dbName);
-            if (db.Held is null) continue;
-            var table = db.Held.Table;
+            if (db.Held is not null) otherDbs.Add(db);
+        }
+        if (otherDbs.Count == 0) return;
+
+        // Per-DB top-level object budget prevents one huge database from starving smaller databases.
+        var perDbTopBudget = Math.Max(500, MaxJumpTopLevelScan / otherDbs.Count);
+        var totalTopScanned = 0;
+        var topK = new List<(LookupObject Obj, int Rank)>(MaxJumpHits + 1);
+
+        static int CompareHit((LookupObject Obj, int Rank) a, (LookupObject Obj, int Rank) b)
+        {
+            var cmp = a.Rank.CompareTo(b.Rank);
+            if (cmp != 0) return cmp;
+            cmp = StringComparer.OrdinalIgnoreCase.Compare(a.Obj.Name, b.Obj.Name);
+            if (cmp != 0) return cmp;
+            return StringComparer.OrdinalIgnoreCase.Compare(a.Obj.Database, b.Obj.Database);
+        }
+
+        foreach (var db in otherDbs)
+        {
+            var table = db.Held!.Table;
+            var dbTopScanned = 0;
             for (var at = 0; at < table.Count; at++)
             {
-                if (++scanned > MaxJumpScan) { incomplete = true; goto DoneScan; }
+                if ((at & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
                 if (table.Parent(at) >= 0) continue;
+                if (++dbTopScanned > perDbTopBudget) { incomplete = true; break; }
+                if (++totalTopScanned > MaxJumpTopLevelScan) { incomplete = true; goto DoneScan; }
                 var kind = table.Kind(at);
                 if (!MatchesObjectKind(kind, table.Subtype(at), hint)) continue;
                 var schema = table.Schema(at) ?? "dbo";
@@ -417,29 +488,34 @@ internal static class TsqlCompletionService
                 var name = table.Name(at);
                 var rank = MatchRank(name, name, prefix);
                 if (rank > 3) continue;
-                var tier = isCurrentDb ? (schema.Equals("dbo", StringComparison.OrdinalIgnoreCase) ? 0 : 1) : 2;
-                hits.Add((new LookupObject(db.Database, table, at, db.Held), tier, rank));
+
+                var candidate = (new LookupObject(db.Database, table, at, db.Held), rank);
+                if (topK.Count < MaxJumpHits)
+                {
+                    topK.Add(candidate);
+                    if (topK.Count == MaxJumpHits) topK.Sort(CompareHit);
+                }
+                else if (CompareHit(candidate, topK[^1]) < 0)
+                {
+                    topK[^1] = candidate;
+                    for (var j = topK.Count - 1; j > 0 && CompareHit(topK[j], topK[j - 1]) < 0; j--)
+                        (topK[j], topK[j - 1]) = (topK[j - 1], topK[j]);
+                }
             }
         }
 
     DoneScan:
-        var best = hits
-            .OrderBy(h => h.Rank)
-            .ThenBy(h => h.Tier)
-            .ThenBy(h => h.Obj.Name, StringComparer.OrdinalIgnoreCase)
-            .Take(MaxJumpHits);
-
-        foreach (var hit in best)
+        if (topK.Count > 1 && topK.Count < MaxJumpHits) topK.Sort(CompareHit);
+        foreach (var hit in topK)
         {
-            var isOtherDb = hit.Tier == 2;
             EmitCatalogObject(
                 hit.Obj,
                 qualifySchema: true,
-                qualifyDatabase: isOtherDb,
-                detailSuffix: $"{hit.Obj.Database}.{hit.Obj.Schema ?? "dbo"}",
+                qualifyDatabase: true,
+                detailSuffix: null,
                 add,
-                priority: isOtherDb ? 30 : hit.Tier == 0 ? 18 : 22,
-                sortPrefix: isOtherDb ? "30" : hit.Tier == 0 ? "18" : "22");
+                priority: 30,
+                sortPrefix: "30");
         }
     }
 
@@ -503,7 +579,7 @@ internal static class TsqlCompletionService
             predicate,
             10, // Property (and !-prefixed sortText puts it unconditionally #1 ahead of columns!)
             $"FK · {fk.Entry.Name}",
-            $"Foreign key join condition from `{fk.Entry.Name}`.",
+            $"Foreign key join condition from {fk.Entry.Name}.",
             predicate,
             predicate,
             $"!0{idx:D2}:{predicate}",
@@ -599,7 +675,11 @@ internal static class TsqlCompletionService
         int depth)
     {
         var result = new List<ResolvedColumn>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dbForCollation = lookup is not null && !string.IsNullOrEmpty(source.ObjectRef?.Database ?? activeDb)
+            ? lookup.Database((source.ObjectRef?.Database ?? activeDb)!)
+            : null;
+        var colComparer = CollationComparer(dbForCollation);
+        var seen = new HashSet<string>(colComparer);
         var incomplete = false;
         LookupObject? catalogObj = null;
 
@@ -611,6 +691,12 @@ internal static class TsqlCompletionService
             {
                 catalogObj = found;
                 var db = lookup.Database(found.Database);
+                var objComparer = CollationComparer(db);
+                if (!ReferenceEquals(objComparer, colComparer))
+                {
+                    colComparer = objComparer;
+                    seen = new HashSet<string>(colComparer);
+                }
                 if (db.Gaps.HasFlag(LookupGaps.ChildrenLeftOut)) incomplete = true;
                 var cols = lookup.Columns(found);
                 var indexes = lookup.Indexes(found);
@@ -624,7 +710,7 @@ internal static class TsqlCompletionService
                     else if (ix.Kind == "key" && ix.Subtype == "unique")
                         foreach (var ukc in ix.Columns) if (!ukc.Included && ukc.ColumnId > 0) ukIds.Add(ukc.ColumnId);
                 }
-                var fkMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var fkMap = new Dictionary<string, string>(objComparer);
                 foreach (var fk in fks)
                 {
                     var target = fk.Referenced is { } r ? $"{(r.Schema is { Length: > 0 } s ? s + "." : "")}{r.Name}" : null;
@@ -664,7 +750,7 @@ internal static class TsqlCompletionService
         if (source.HasStar && source.StarSources is { Count: > 0 } && depth < MaxStarDepth)
         {
             var excluded = source.ExcludedColumns is { Count: > 0 }
-                ? new HashSet<string>(source.ExcludedColumns, StringComparer.OrdinalIgnoreCase)
+                ? new HashSet<string>(source.ExcludedColumns, colComparer)
                 : null;
             foreach (var starSrc in source.StarSources)
             {
@@ -758,9 +844,7 @@ internal static class TsqlCompletionService
     }
 
     private static bool SameCatalogObject(LookupObject a, LookupObject b) =>
-        string.Equals(a.Database, b.Database, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(a.Schema ?? "", b.Schema ?? "", StringComparison.OrdinalIgnoreCase)
-        && string.Equals(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        ReferenceEquals(a.Table, b.Table) && a.At == b.At;
 
     private static bool MatchesObjectHint(LookupObject obj, TsqlObjectHint hint) =>
         MatchesObjectKind(obj.Kind, obj.Subtype, hint);

@@ -118,6 +118,17 @@ internal static class SqlCompletionChecks
             && autoClosedText[..edit.Range.Start.Character] + edit.NewText + autoClosedText[edit.Range.End.Character..] == "SELECT [bob].[high] FROM dbo.LeftFixture AS [bob]",
             "accepting a column inside an auto-closed bracket replaces the closing bracket without doubling it");
 
+        // Hostile ANSI `||` concat chain (SQL Server 2025) must be bounded before TSql180Parser.Parse so it never overflows the stack!
+        var concatChain = "SELECT 'a'" + string.Concat(Enumerable.Repeat("||'a'", 7_500)) + " FROM dbo.LeftFixture t";
+        var concatTokens = new Microsoft.SqlServer.TransactSql.ScriptDom.TSql180Parser(true).GetTokenStream(new StringReader(concatChain), out _);
+        check(!SqlToolsLanguageService.BoundedCompletionSyntax(concatTokens),
+            "BoundedCompletionSyntax rejects deeply chained || string concatenation before ScriptDom AST parsing");
+        var concatResult = TsqlCompletionService.Complete(
+            new LanguageRequest(Guid.NewGuid().ToString("D"), 1, concatChain, new("sqlserver", null, "Sales"), new(0, 7)),
+            lookup, "Sales");
+        check(concatResult.Items.Count > 0,
+            "hostile || concat chain completes safely via bounded token-stream fallback without stack overflow");
+
         conn.Dispose();
         return Task.CompletedTask;
     }

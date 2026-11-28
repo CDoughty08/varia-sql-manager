@@ -89,23 +89,35 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
             if ((diagnosticRunning ? diagnosticContextKey : diagnosticOwner?.ContextKey) == refreshContext) ResetDiagnostics();
         }
         var doc = GetDocument(request.DocumentId);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
-        deadline.CancelAfter(TimeSpan.FromSeconds(25));
-        await doc.Serial.WaitAsync(deadline.Token);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        using var active = new CancellationTokenSource();
+        using var combined = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token, active.Token);
         try
         {
-            AcceptVersionLocked(doc, document, checkContextMatch: true, deadline);
-            // Verify connection is live (supports SQL Login, Windows, and Microsoft Entra ID).
-            _ = activeDatabase(request.Context);
-            if (refreshIndex is not null)
-                return new(await refreshIndex(request.Context, deadline.Token));
-            return new(true);
+            await doc.Serial.WaitAsync(combined.Token);
         }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
         {
             throw new RequestException("TIMEOUT", "The IntelliSense cache refresh exceeded its time limit.");
         }
-        finally { lock (gate) doc.Active = null; doc.Serial.Release(); }
+        try
+        {
+            AcceptVersionLocked(doc, document, checkContextMatch: true, active);
+            // Verify connection is live (supports SQL Login, Windows, and Microsoft Entra ID).
+            _ = activeDatabase(request.Context);
+            if (refreshIndex is not null)
+                return new(await refreshIndex(request.Context, combined.Token));
+            return new(true);
+        }
+        catch (OperationCanceledException) when (active.IsCancellationRequested && !token.IsCancellationRequested && !timeout.IsCancellationRequested)
+        {
+            throw new RequestException("STALE", "The language refresh was superseded or its document closed.");
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            throw new RequestException("TIMEOUT", "The IntelliSense cache refresh exceeded its time limit.");
+        }
+        finally { lock (gate) if (ReferenceEquals(doc.Active, active)) doc.Active = null; doc.Serial.Release(); }
     }
 
     public async Task<LanguageCompletionResult> CompleteAsync(LanguageRequest request, CancellationToken token)
@@ -120,9 +132,9 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
             AcceptVersionLocked(document, request, checkContextMatch: false, operation);
             var db = activeDatabase(request.Context);
             var lookup = request.Context.ConnectionId is { } connectionId ? indexLookup(connectionId) : null;
-            return TsqlCompletionService.Complete(request, lookup, db);
+            return TsqlCompletionService.Complete(request, lookup, db, operation.Token);
         }
-        finally { lock (gate) document.Active = null; document.Serial.Release(); }
+        finally { lock (gate) if (ReferenceEquals(document.Active, operation)) document.Active = null; document.Serial.Release(); }
     }
 
     public async Task<LanguageHover?> HoverAsync(LanguageRequest request, CancellationToken token)
@@ -137,9 +149,9 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
             AcceptVersionLocked(document, request, checkContextMatch: false, operation);
             var db = activeDatabase(request.Context);
             var lookup = request.Context.ConnectionId is { } connectionId ? indexLookup(connectionId) : null;
-            return TsqlHoverService.Hover(request, lookup, db);
+            return TsqlHoverService.Hover(request, lookup, db, operation.Token);
         }
-        finally { lock (gate) document.Active = null; document.Serial.Release(); }
+        finally { lock (gate) if (ReferenceEquals(document.Active, operation)) document.Active = null; document.Serial.Release(); }
     }
 
     private void AcceptVersionLocked(Document document, LanguageRequest request, bool checkContextMatch, CancellationTokenSource operation)
@@ -281,8 +293,8 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
         lock (gate)
         {
             ids = [.. documents.Where(pair => pair.Value.ConnectionId == id).Select(pair => pair.Key)];
-            var ownerCtx = diagnosticRunning ? diagnosticContextKey : diagnosticOwner?.ContextKey;
-            if (ownerCtx is not null && ownerCtx.Contains(id, StringComparison.Ordinal)) ResetDiagnostics();
+            var ownerConnection = diagnosticRunning ? diagnosticConnectionId : diagnosticOwner?.ConnectionId;
+            if (ownerConnection == id) ResetDiagnostics();
         }
         await Task.WhenAll(ids.Select(document => CloseAsync(document, CancellationToken.None)));
     }
@@ -362,7 +374,8 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
 
     internal static bool BoundedCompletionSyntax(IList<TSqlParserToken> tokens)
     {
-        // ScriptDom's grammar is recursive. Tokenize before parsing so hostile nesting cannot overflow the backend stack.
+        // ScriptDom's grammar is recursive (including left-recursive binary operators such as ||, +, AND/OR, COLLATE, AT, ::).
+        // Tokenize before parsing so hostile nesting or operator chains cannot overflow even a 512 KB ThreadPool stack.
         if (tokens.Count > 16_384) return false;
         var parentheses = 0;
         var recursiveKeywords = 0;
@@ -377,10 +390,14 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
                 || string.Equals(token.Text, "APPLY", StringComparison.OrdinalIgnoreCase))
                 if (++recursiveKeywords > 64) return false;
             unary = token.Text is "+" or "-" or "~" || string.Equals(token.Text, "NOT", StringComparison.OrdinalIgnoreCase) ? unary + 1 : 0;
-            if (unary > 64) return false;
-            if (token.Text is "+" or "-" or "~" or "*" or "/" or "%" or "^" or "|" or "&" or "=" or "<" or ">" or "<>" or "<=" or ">=" or "!=" or "!<" or "!>"
-                || string.Equals(token.Text, "AND", StringComparison.OrdinalIgnoreCase) || string.Equals(token.Text, "OR", StringComparison.OrdinalIgnoreCase))
-                if (++operators > 256) return false;
+            if (unary > 32) return false;
+            if (token.TokenType is TSqlTokenType.DoubleColon or TSqlTokenType.Collate
+                || token.Text is "+" or "-" or "~" or "*" or "/" or "%" or "^" or "|" or "||" or "&" or "=" or "<" or ">" or "<>" or "<=" or ">=" or "!=" or "!<" or "!>" or "+=" or "-=" or "*=" or "/=" or "%=" or "&=" or "|=" or "^=" or "::"
+                || string.Equals(token.Text, "AND", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(token.Text, "OR", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(token.Text, "COLLATE", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(token.Text, "AT", StringComparison.OrdinalIgnoreCase))
+                if (++operators > 128) return false;
         }
         return true;
     }
