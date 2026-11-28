@@ -11,7 +11,7 @@ import { defaultSettings, settingKeys } from '../src/shared/settings/catalog'
 import { HelpService } from '../src/renderer/src/help/HelpService'
 import HelpDocument, { guideLoaders } from '../src/renderer/src/help/HelpDocument'
 import { GuideAction } from '../src/renderer/src/help/References'
-import { BigQueryResultsSample, bigQuerySampleResidence, bigQuerySampleResults } from '../src/renderer/src/help/Samples'
+import { BigQueryResultsSample, MultiServerSample, bigQuerySampleResidence, bigQuerySampleResults } from '../src/renderer/src/help/Samples'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { documentFixture } from './fixtures/documents'
@@ -48,6 +48,7 @@ describe('Getting Started registration and dependencies', () => {
     expect(matchingGuides('copy headers')).toEqual(['results'])
     expect(matchingGuides('  ENTRA ')).toEqual(['connect'])
     expect(matchingGuides('gcloud key file')).toEqual(['bigquery'])
+    expect(matchingGuides('cross-engine')).toEqual(['multi-server-query'])
     expect(matchingGuides('not-a-feature')).toEqual([])
     expect(matchingGuides('')).toEqual(guideIds)
     for (const value of ['constructor', '__proto__', '../connect', 'connect'.repeat(1000), null]) expect(isGuideId(value)).toBe(false)
@@ -76,6 +77,20 @@ describe('BigQuery results sample', () => {
   })
 })
 
+describe('Multi-server query sample', () => {
+  it('renders real statement classification without executing queries or connecting', () => {
+    const fixture = workbenchFixture()
+    try {
+      const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(MultiServerSample) }))
+      expect(html).toContain('SQL Server DML + SELECT')
+      expect(html).toContain('BigQuery permanent DDL')
+      expect(html).toContain('Cross-Engine blocked write')
+      expect(html).toContain('Coordinated Transaction is available')
+      expect(fixture.api.execute).not.toHaveBeenCalled()
+    } finally { fixture.dispose() }
+  })
+})
+
 describe('contextual references', () => {
   it.each<Platform>(['win32', 'linux', 'darwin'])('uses effective rules in lesson focus on %s', platform => {
     const rules = defaultRules(platform)
@@ -87,6 +102,8 @@ describe('contextual references', () => {
     // Alt+F5 moves between differences only in a comparison's grid.
     expect(lessonShortcut('output.compareNextDifference', 'comparisonGrid', platform, rules)).toBe(platform === 'darwin' ? '⌥F5' : 'Alt+F5')
     expect(lessonShortcut('output.compareNextDifference', 'resultsGrid', platform, rules)).toBeUndefined()
+    expect(lessonShortcut('explorer.toggleMultiSelect', 'explorerServer', platform, rules)).toBe('Space')
+    expect(lessonShortcut('explorer.toggleMultiSelect', 'queryEditor', platform, rules)).toBeUndefined()
     expect(lessonShortcut('query.execute', 'queryEditor', platform, rules.filter(rule => rule.command !== 'query.execute'))).toBeUndefined()
     const remapped = [...rules.filter(rule => rule.command !== 'query.execute'), resolveKeybinding('query.execute', { key: 'mod+shift+enter', when: 'editorFocus || queryBarFocus' }, platform)!]
     expect(lessonShortcut('query.execute', 'queryEditor', platform, remapped)).toBe(platform === 'darwin' ? '⇧⌘↩' : 'Ctrl+Shift+Enter')

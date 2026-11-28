@@ -10,7 +10,7 @@ using Varia.Backend.Results;
 namespace Varia.Backend.MultiQuery;
 
 /// <summary>
-/// BigQuery target runner for <c>query.executeMulti</c> (docs/multi-server-query-plan.md §4.1–§4.4).
+/// BigQuery target runner for <c>query.executeMulti</c> (docs/multi-server-query.md).
 /// Holds <see cref="BigQueryConnection.Lease"/> for every participating connection across pre-flight, Phase 1, and Phase 2,
 /// runs free <c>dryRun: true</c> / location resolution through <see cref="BigQueryService.MetadataAsync"/>, opens fresh
 /// ephemeral sessions only in <c>transaction</c> mode (never for pure SELECT or Fire-and-Forget), verifies

@@ -35,6 +35,11 @@ database management tools in one app, with SSMS's features and keys and a modern
   identity federation), browse projects and datasets, edit GoogleSQL with IntelliSense, run queries and scripts in per-tab
   sessions with the cost estimate beside Execute, keep results too large for memory windowed in BigQuery, and follow jobs
   in Job History ([BigQuery](docs/bigquery.md)).
+- **Multi-server and Cross-Engine queries**: select multiple SQL Servers or BigQuery projects in Object Explorer, choose
+  **Coordinated Transaction** (all-or-nothing local/session transactions, no MSDTC) or **Fire and Forget** with inline
+  BigQuery cost estimates, or run read-only **Cross-Engine SELECT** queries across Transact-SQL and GoogleSQL side by
+  side with **Summary**, **Combined**, **Compare**, and filtered **Messages**
+  ([Multi-server and Cross-Engine queries](docs/multi-server-query.md)).
 
 Varia supports SQL Server 2016 through 2025 and runs on Windows, Linux and macOS.
 

@@ -9,6 +9,7 @@ import type { LessonContext } from './catalog'
 const connectedQuery = { hasActiveDocument: true, activeDocumentIsText: true, activeDocumentIsQuery: true, hasConnection: true, activeDocumentConnected: true, backendReady: true }
 export const lessonContexts: Record<LessonContext, { readonly title: string; readonly values: Partial<ContextKeys> }> = {
   workbench: { title: 'In the workbench', values: {} },
+  explorerServer: { title: 'On a connected server in Object Explorer', values: { hasConnection: true, backendReady: true, activePanel: 'explorer', explorerFocus: true, explorerServerFocus: true } },
   queryEditor: { title: 'In the SQL query editor', values: { ...connectedQuery, activePanel: 'editor', editorFocus: true, editorTextFocus: true, textInputFocus: true } },
   // A grid in the Results pane of a query with several results, where the results take the browser tab keys.
   resultsGrid: { title: 'In the results grid', values: { ...connectedQuery, activePanel: 'output', outputGridFocus: true, resultsFocus: true, outputView: 'grid', hasResults: true, hasResultSets: true, multipleResults: true } },
@@ -38,6 +39,7 @@ function menuPath(menu: MenuId, platform: Platform, visited: ReadonlySet<string>
   if (root) return [root.label]
   if (menu === 'output.context') return ['Results context menu']
   if (menu === 'editor.context') return ['Editor context menu']
+  if (menu === 'explorer.context') return ['Object Explorer context menu']
   if (visited.has(menu)) return undefined
   const submenu = submenus[menu as SubmenuId]
   const parent = submenu?.placements.find(item => !item.platforms || item.platforms.includes(platform))

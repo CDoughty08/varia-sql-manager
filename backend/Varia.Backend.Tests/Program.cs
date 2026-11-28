@@ -1092,6 +1092,7 @@ try
         await SessionEstimatedPlanChecks.RunAsync(Check, service, info, json);
     });
     await Suite("Transaction", () => TransactionLiveChecks.RunAsync(Check, service, info, json));
+    await Suite("MultiQuery", () => MultiQuerySqlChecks.RunLiveAsync(Check, service, info, Live, json));
     await Suite("LiveResult", () => LiveResultChecks.RunAsync(Check, service, info, Live("master"), json));
     await Suite("ClientStatistics", () => ClientStatisticsChecks.RunAsync(Check, service, info, json));
     await Suite("CellLength", () => CellLengthLiveChecks.RunAsync(Check, service, info, json));

@@ -178,7 +178,7 @@ export default function MultiExecuteDialog({ service, estimateBigQuery }: MultiE
 }
 
 /**
- * Run Mode Prompt dialog (`docs/multi-server-query-plan.md` §2.4) for same-engine multi-target runs (`>= 2` targets).
+ * Run Mode Prompt dialog (`docs/multi-server-query.md`) for same-engine multi-target runs (`>= 2` targets).
  * - Shows first 6 target chips with environment badges + expandable `"+N more"` toggle (fits up to 32 targets in 1024×700).
  * - Classifies SQL via `classifyStatements(sql, provider)` and disables Coordinated Transaction with explanation when blocked.
  * - On BigQuery runs, runs free per-target dry runs inline (omitting `sessionId`, cancellable on cancel/unmount) and renders
