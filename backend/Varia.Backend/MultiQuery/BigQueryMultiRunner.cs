@@ -602,9 +602,11 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 {
                     try
                     {
-                        (children, listedAll) = await ChildrenAsync(full: true, readRows: !isTransaction);
+                        (children, listedAll) = await ChildrenAsync(full: true, readRows: false);
                         if (children is not null && ((finished.Statistics?.NumChildJobs is { } expectedChildren && children.Count < expectedChildren) || children.Any(c => !c.Done)))
                             listedAll = false;
+                        if (!isTransaction && children is not null)
+                            await ReadChildrenAsync(children, incompleteListing: !listedAll);
                     }
                     catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure))
                     {
@@ -973,7 +975,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 MarkRolledBackPreview(sets, target.Events);
 
             var endedReason = status == "failed" ? "the run failed before its result set arrived"
-                : status is "cancelled" or "timedOut" or "rolledBack" ? "the run stopped before its result set arrived" : null;
+                : status is "cancelled" or "timedOut" or "rolledBack" or "commitInDoubt" ? "the run stopped before its result set arrived" : null;
             FlushNameNotes(endedReason);
 
             EmitTargetState(target, status, 0, 1, recordsAffected, sets.Count, watch.ElapsedMilliseconds, summary?.BytesProcessed, targetError);

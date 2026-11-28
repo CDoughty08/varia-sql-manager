@@ -309,8 +309,11 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
         : (!connected || language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none')) ? 'neutral'
           : 'success'
 
-  const headerStatusText = !connected
-    ? 'Disconnected'
+  const suspended = !!langContext?.suspended
+  const headerStatusText = suspended
+    ? 'Paused'
+    : !connected
+      ? 'Disconnected'
     : isBigQuery && waves
       ? waves.state === 'building'
         ? `Indexing · ${waves.done.toLocaleString('en-US')}/${waves.total.toLocaleString('en-US')}`
@@ -379,9 +382,10 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
       : language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' ? 'neutral'
         : language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense starting' ? 'running'
           : 'success'
-  const sqlProviderText = !connected ? 'Disconnected'
-    : language?.label === 'IntelliSense' ? 'SQL Tools Service'
-      : (language?.label ?? 'SQL Tools Service')
+  const sqlProviderText = suspended ? 'Paused (File view)'
+    : !connected ? 'Disconnected'
+      : language?.label === 'IntelliSense' ? 'SQL Tools Service'
+        : (language?.label ?? 'SQL Tools Service')
 
   const waveBadge = (count: number, full: number, namesOnly: number, kind: 'starred' | 'discovered'): { readonly tone: StatusTone; readonly label: string } => {
     if (!waves || waves.state === 'none') return { tone: 'neutral', label: count === 0 && kind === 'starred' ? 'None' : 'Not built' }
@@ -502,8 +506,8 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
               </div>
               <div className="intellisense-popover-row" role="listitem">
                 <span>Schema preview drawer</span>
-                <StatusBadge tone={!connected ? 'neutral' : sqlIndexBuilding ? 'running' : sqlIndexReady ? 'success' : 'neutral'}>
-                  {!connected ? 'Disconnected' : sqlIndexBuilding ? 'Indexing' : sqlIndexReady ? 'IndexLookup (RAM)' : 'Not built'}
+                <StatusBadge tone={suspended || !connected ? 'neutral' : sqlIndexBuilding ? 'running' : sqlIndexReady ? 'success' : 'neutral'}>
+                  {suspended ? 'Paused' : !connected ? 'Disconnected' : sqlIndexBuilding ? 'Indexing' : sqlIndexReady ? 'IndexLookup (RAM)' : 'Not built'}
                 </StatusBadge>
               </div>
               <div className="intellisense-popover-row" role="listitem">
@@ -513,7 +517,8 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
                     <button type="button" className="intellisense-popover-inline-action" onClick={handleBuildIndex}>Build index</button>
                   )}
                   <span className="intellisense-popover-meta">
-                    {!connected ? 'Not connected'
+                    {suspended ? 'Paused (File view)'
+                      : !connected ? 'Not connected'
                       : sqlIndexBuilding ? `${(indexEntry?.done ?? 0).toLocaleString('en-US')} / ${(indexEntry?.total ?? 0).toLocaleString('en-US')} building`
                         : sqlStatus && sqlStatus.state === 'ready'
                           ? `${sqlStatus.indexed.toLocaleString('en-US')} / ${sqlStatus.databases.toLocaleString('en-US')} ready${sqlStatus.skipped.length ? ` · ${sqlStatus.skipped.length} skipped` : ''}`

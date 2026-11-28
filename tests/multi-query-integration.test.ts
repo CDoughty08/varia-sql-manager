@@ -1338,7 +1338,7 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
       { ...wb.api, languageLookup: lookupSpy } as never,
       wb.documents,
       wb.connections,
-      {}
+      { ensureIndex: () => {} }
     )
     const answers = await indexCompletion.lookupDocument(crossDoc.id, [{ path: ['prod-bq-01', 'analytics', 'orders'], limit: 1 }])
     expect(answers).toHaveLength(1)
