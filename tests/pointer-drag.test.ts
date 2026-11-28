@@ -29,13 +29,24 @@ describe('followPointerDrag', () => {
     expect(onMove).not.toHaveBeenCalled()
     expect(onEnd).not.toHaveBeenCalled()
   })
-  it.each(['src/renderer/src/designer/TableDesigner.tsx', 'src/renderer/src/activity/ActivityMonitor.tsx', 'src/renderer/src/kit/ObjectInspectorFrame.tsx', 'src/renderer/src/kit/ResizableSplit.tsx'])('is how %s drags its splitter, with the left button only', file => {
+  it.each(['src/renderer/src/designer/TableDesigner.tsx', 'src/renderer/src/activity/ActivityMonitor.tsx', 'src/renderer/src/kit/ResizableSplit.tsx'])('is how %s drags its splitter, with the left button only', file => {
     const source = readFileSync(file, 'utf8')
     expect(source).toMatch(/followPointerDrag\(\s*event\.currentTarget,\s*event\.pointerId/)
     expect(source).toContain('event.button !== 0) return')
     expect(source).not.toContain('setPointerCapture')
   })
-  it.each(['.table-designer-splitter', '.activity-splitter', '.inspector-vitals-sash', '.varia-sash'])('keeps a touch drag on %s from turning into a pan, which would cancel it at once', selector => {
+  it.each([
+    'src/renderer/src/kit/ObjectInspectorFrame.tsx',
+    'src/renderer/src/settings/OptionsDialog.tsx',
+    'src/renderer/src/plans/PlanPaneSizer.tsx',
+    'src/renderer/src/ConnectDialog.tsx'
+  ])('keeps %s on the shared ResizableSplit / SplitSash kit with no hand-rolled drag listeners', file => {
+    const source = readFileSync(file, 'utf8')
+    expect(source).toMatch(/from '\.{1,2}\/kit\/ResizableSplit'|from '\.\/ResizableSplit'/)
+    expect(source).not.toContain('setPointerCapture')
+    expect(source).not.toMatch(/addEventListener\(['"]mousemove['"]/)
+  })
+  it.each(['.table-designer-splitter', '.activity-splitter', '.varia-sash'])('keeps a touch drag on %s from turning into a pan, which would cancel it at once', selector => {
     const styles = readFileSync('src/renderer/src/styles.css', 'utf8')
     const rule = styles.split(/\r?\n/).find(line => line.startsWith(selector + ' {'))
     expect(rule).toContain('touch-action: none')

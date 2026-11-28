@@ -19,6 +19,7 @@ import { dialogWindowKinds } from '../../shared/popouts'
 import Icon from './Icon'
 import DialogFooter from './kit/DialogFooter'
 import InlineError, { type ErrorAction } from './kit/InlineError'
+import { SplitSash } from './kit/ResizableSplit'
 import { connectFix } from './connect-fix'
 import { advancedCount, advancedSummary, busyRequestNotice, clampConnectRailWidth, connectRailLimits, listStep, parseConnectionString, rowTitle, validateSqlAdvancedNumber, type ConnectIncomingRequest } from './connect-form'
 export type { ConnectIncomingRequest }
@@ -314,13 +315,12 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
   const touched = useRef(false)
   const [dialogWidth, setDialogWidth] = useState<number>(dialogWindowKinds.connect.width)
   const [railWidth, setRailWidth] = useState(() => loadRailWidth(dialogWindowKinds.connect.width))
-  const [draggingSplit, setDraggingSplit] = useState(false)
+  const [dragRailWidth, setDragRailWidth] = useState<number | undefined>(undefined)
   // Lifted Advanced drafts so switching tabs preserves invalid values and errors.
   const [sqlAdvancedDraft, setSqlAdvancedDraft] = useState<SqlAdvancedDraft>({})
   const sqlAdvancedEdited = useRef(new Set<string>())
   const [bigQueryAdvancedDraft, setBigQueryAdvancedDraft] = useState<BigQueryAdvancedDraft>(() => bigQueryAdvancedDraftFrom(initial.provider === 'bigquery' ? initial : bigQueryDefaults()))
   const prevRequestSeq = useRef(incomingRequest?.seq ?? 0)
-  const splitterCleanup = useRef<(() => void) | undefined>(undefined)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const pendingFavoriteFocus = useRef<string | undefined>(undefined)
   const dialog = useRef<HTMLFormElement | null>(null)
@@ -447,7 +447,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     }).catch(reason => { if (alive.current) { setError(message(reason)); setLoaded(true) } })
     return () => {
       alive.current = false; dbRequest.current++; browseRequest.current++
-      splitterCleanup.current?.(); clearTimeout(copyTimer.current)
+      clearTimeout(copyTimer.current)
       cancelDatabases(); stopTest(); stop()
     }
   }, [])
@@ -1255,46 +1255,11 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     setSqlAdvancedDraft({}); sqlAdvancedEdited.current.clear()
     startAfresh(); settle(connectionDefaults(platform), 'inherit'); labelServer.current = null; environmentOwner.current = null; setOptions(connectionDefaults(platform))
   }
-  const maxRailWidth = Math.max(connectRailLimits.minWidth, Math.min(connectRailLimits.maxWidth, Math.round(dialogWidth) - connectRailLimits.minFormWidth))
-  function startSplitterDrag(event: React.MouseEvent<HTMLDivElement>) {
-    if (locked) return
-    event.preventDefault()
-    splitterCleanup.current?.()
-    const doc = dialog.current?.ownerDocument ?? document, win = doc.defaultView
-    const startX = event.clientX, startWidth = effectiveRailWidth
-    let current = startWidth
-    setDraggingSplit(true)
-    const onMove = (ev: MouseEvent) => {
-      current = Math.max(connectRailLimits.minWidth, Math.min(maxRailWidth, Math.round(startWidth + (ev.clientX - startX))))
-      setRailWidth(current)
-    }
-    const teardown = () => {
-      doc.removeEventListener('mousemove', onMove)
-      doc.removeEventListener('mouseup', onUp)
-      win?.removeEventListener('blur', onUp)
-      if (splitterCleanup.current === teardown) splitterCleanup.current = undefined
-    }
-    const onUp = () => {
-      teardown()
-      if (alive.current) { setDraggingSplit(false); saveRailWidth(current) }
-    }
-    splitterCleanup.current = teardown
-    doc.addEventListener('mousemove', onMove)
-    doc.addEventListener('mouseup', onUp)
-    win?.addEventListener('blur', onUp)
-  }
-  function splitterKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (locked || event.ctrlKey || event.altKey || event.metaKey) return
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-      event.preventDefault()
-      const delta = event.key === 'ArrowLeft' ? -16 : 16
-      const next = clampConnectRailWidth(effectiveRailWidth + delta, dialogWidth)
-      setRailWidth(next); saveRailWidth(next)
-    } else if (event.key === 'Home') {
-      event.preventDefault()
-      const next = clampConnectRailWidth(connectRailLimits.defaultWidth, dialogWidth)
-      setRailWidth(next); saveRailWidth(next)
-    }
+  const connectSplitBounds = {
+    defaultWidth: connectRailLimits.defaultWidth,
+    minWidth: connectRailLimits.minWidth,
+    maxWidth: connectRailLimits.maxWidth,
+    minOtherWidth: connectRailLimits.minFormWidth
   }
   function profileRows(entries: readonly HistoryRow[], empty: string) {
     const keyDown = (event: KeyboardEvent<HTMLButtonElement>, row: HistoryRow) => {
@@ -1413,7 +1378,7 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
     }, () => { if (alive.current) setNotice('Could not copy connection string.') })
   }
 
-  const effectiveRailWidth = clampConnectRailWidth(railWidth, dialogWidth)
+  const effectiveRailWidth = clampConnectRailWidth(dragRailWidth ?? railWidth, dialogWidth)
   const connectLabel = !isBigQuery && matchingTarget(options) && (options.password || rememberEdited.current) ? 'Update Credentials and Reconnect' : 'Connect'
   const formStyle = { '--connect-rail-width': `${effectiveRailWidth}px` } as React.CSSProperties
 
@@ -1451,7 +1416,20 @@ export default function ConnectDialog({ initial, initialTargetId, raise, incomin
             </>}
           </div>
         </div>
-        <div className={'connect-splitter' + (draggingSplit ? ' is-dragging' : '')} role="separator" aria-orientation="vertical" aria-label="Resize saved connections list" aria-valuenow={effectiveRailWidth} aria-valuemin={connectRailLimits.minWidth} aria-valuemax={maxRailWidth} tabIndex={0} onMouseDown={startSplitterDrag} onKeyDown={splitterKeyDown} onDoubleClick={() => { setRailWidth(connectRailLimits.defaultWidth); saveRailWidth(connectRailLimits.defaultWidth) }} />
+        <SplitSash
+          className="connect-splitter"
+          side="left"
+          label="Resize saved connections list"
+          value={effectiveRailWidth}
+          bounds={connectSplitBounds}
+          containerWidth={dialogWidth}
+          step={16}
+          shiftStep={32}
+          disabled={locked}
+          onDragPreview={setDragRailWidth}
+          onCommit={next => { setRailWidth(next); saveRailWidth(next) }}
+          onReset={() => { setRailWidth(connectRailLimits.defaultWidth); saveRailWidth(connectRailLimits.defaultWidth) }}
+        />
         <div className="connect-form-pane">
           <div className="connect-form-header">
             <div className="connect-engine-row">
