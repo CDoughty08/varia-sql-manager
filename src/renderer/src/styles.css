@@ -4887,3 +4887,119 @@ button.ui-button[aria-pressed="true"] { background: var(--varia-list-activeSelec
 .agent-timeline-overlaps-list { display: flex; flex-direction: column; gap: var(--varia-space-1); max-height: 136px; overflow-y: auto; padding: var(--varia-space-1) var(--varia-space-2) var(--varia-space-2); border-top: 1px solid var(--varia-panel-border); }
 
 /* === AP-5: Operators, Alerts, Proxies & Props === */
+.inspector-pane-flow[hidden], .inspector-pane-fill[hidden] { display: none; }
+.inspector-frame:is([data-agent-operators], [data-agent-alert], [data-agent-operator], [data-agent-proxy], [data-credential]) .document-crumbs { overflow: hidden; }
+.inspector-frame:is([data-agent-operators], [data-agent-alert], [data-agent-operator], [data-agent-proxy], [data-credential]) .field-note:has(> .codicon, > .icon) { display: flex; align-items: flex-start; gap: var(--varia-space-1); }
+.inspector-frame:is([data-agent-operators], [data-agent-alert], [data-agent-operator], [data-agent-proxy], [data-credential]) .field-note > .codicon { flex: none; font-size: var(--varia-size-sm); margin-top: 2px; }
+.inspector-frame:is([data-agent-operators], [data-agent-alert], [data-agent-operator], [data-agent-proxy], [data-credential]) .field-note > .icon { margin-top: 2px; }
+.agent-object-flow { --ui-control-height: var(--varia-control); display: flex; flex-direction: column; gap: var(--varia-space-2); max-width: 820px; }
+.agent-object-flow > .agent-eyebrow { margin: var(--varia-space-2) 0 0; }
+.agent-object-flow > .agent-eyebrow:first-child { margin-top: 0; }
+.inspector-pane-flow .agent-object-flow .property-field { grid-template-columns: 160px minmax(0, 1fr); column-gap: var(--varia-space-3); padding: var(--varia-space-0) 0; }
+.inspector-pane-flow .agent-object-flow .fact-grid:not(.compact) { grid-template-columns: 160px minmax(0, 1fr); }
+.inspector-pane-flow .agent-object-flow .property-field-label { padding-right: 0; }
+.inspector-pane-flow .agent-object-flow .fact-grid:not(.compact) .fact-grid-row > dt { padding-right: var(--varia-space-3); }
+.inspector-pane-flow .agent-object-flow .properties-fields > .field-note,
+.inspector-pane-flow .agent-object-flow .agent-proxy-new-credential > .field-note { padding-inline-start: calc(160px + var(--varia-space-3)); }
+.inspector-pane-flow .agent-object-flow .property-field-control > .property-input, .inspector-pane-flow .agent-object-flow .property-field-control > select, .agent-object-flow .password-field { width: min(100%, 420px); }
+.agent-object-flow .password-field { height: var(--ui-control-height, var(--varia-control)); }
+.agent-object-flow textarea.property-input { height: auto; min-height: 56px; padding: var(--varia-space-1) var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); color: var(--varia-input-foreground); font-family: var(--varia-font-ui); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); resize: vertical; }
+.agent-object-flow textarea.property-input:hover:not(:disabled, :focus-visible) { border-color: var(--varia-descriptionForeground); }
+.agent-object-flow textarea.property-input:focus-visible { outline: var(--varia-space-0) solid var(--varia-focusBorder); outline-offset: calc(-1 * var(--varia-space-0)); transition: none; }
+@container inspector-pane (max-width: 520px) {
+  .inspector-pane-flow .agent-object-flow .property-field { grid-template-columns: minmax(0, 1fr); }
+  .inspector-pane-flow .agent-object-flow .fact-grid:not(.compact) { grid-template-columns: minmax(0, 1fr); }
+  .inspector-pane-flow .agent-object-flow .properties-fields > .field-note,
+  .inspector-pane-flow .agent-object-flow .agent-proxy-new-credential > .field-note { padding-inline-start: 0; }
+}
+.agent-field-stack { display: flex; flex-direction: column; gap: var(--varia-space-1); width: 100%; min-width: 0; }
+.agent-field-stack > .field-note { margin: 0; }
+
+/* Operators & Notifications (2-tab fill + ResizableSplit + matrix pills + side pane). */
+.agent-operators-tools { display: inline-flex; align-items: center; gap: var(--varia-space-1); }
+.agent-operators-tools > button { min-height: var(--varia-control); padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); }
+.agent-operators-empty { padding: var(--varia-space-4); }
+.agent-operators-split { flex: 1; min-height: 0; }
+.agent-operators-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.agent-operators-grid-wrap { flex: 1; min-width: 0; min-height: 0; max-height: none; overflow: auto; }
+.agent-operators-foot { flex: none; padding: var(--varia-space-2) var(--varia-space-4); border-top: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); }
+.agent-operators-foot .field-note { margin: 0; }
+.agent-operators-foot .field-note + .field-note { margin-top: var(--varia-space-0); }
+.agent-operators-grid { width: 100%; }
+.agent-operators-grid thead th { padding: 0; text-align: center; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); }
+.agent-operators-grid thead th:first-child { padding: 0 var(--varia-space-3); text-align: left; }
+.agent-operators-grid tbody th { padding: 0 var(--varia-space-3); font-weight: 500; }
+.agent-operators-grid tbody td { padding: var(--varia-space-0) var(--varia-space-2); text-align: center; }
+.agent-operators-head { width: 100%; min-height: var(--varia-row); padding: var(--varia-space-1) var(--varia-space-2); border: 0; border-radius: 0; background: transparent; color: inherit; font-size: var(--varia-size-xs); font-weight: 600; justify-content: center; }
+.agent-operators-head:hover:not(:disabled) { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.agent-operators-head[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); font-weight: 600; transition: none; }
+.agent-operators-head:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-operators-grid [data-selected] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.agent-operators-cell { width: auto; min-width: 34px; min-height: 20px; padding: 0 var(--varia-space-1); display: inline-grid; place-items: center; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: transparent; color: var(--varia-descriptionForeground); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); font-weight: 600; }
+.agent-operators-cell[data-set] { border-color: var(--varia-chip-activeBorder); background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); }
+.agent-operators-grid td[data-changed] .agent-operators-cell { border-color: var(--varia-warningForeground); background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); font-weight: 600; }
+.agent-operators-cell:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 1px; transition: none; }
+.agent-operators-side { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--varia-space-3); padding: var(--varia-space-3) var(--varia-space-4); border-left: 0; background: var(--varia-sideBar-background); }
+.agent-operators-side-head { display: flex; align-items: center; gap: var(--varia-space-2); flex-wrap: wrap; }
+.agent-operators-side-head > h3 { display: inline-flex; align-items: center; gap: var(--varia-space-1); margin: 0; font-size: var(--varia-size-md); font-weight: 600; min-width: 0; }
+.agent-operators-side-actions { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; }
+.agent-operators-side-actions > button { justify-content: flex-start; min-height: var(--varia-control); padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); }
+.agent-operators-side-actions > button.danger { color: var(--varia-errorForeground); }
+.agent-operators-jobs-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.agent-operators-jobs-scroll { flex: 1; min-height: 0; overflow: auto; }
+.agent-operators-jobs-pane .agent-operators-jobs { margin-top: 0; }
+.agent-operators-jobs-pane .agent-operators-jobs > .field-note { padding: var(--varia-space-4); margin: 0; }
+.agent-operators-jobs-scroll .agent-table button { min-height: 20px; padding: 0 var(--varia-space-2); font-size: var(--varia-size-xs); border-color: var(--varia-button-border); }
+
+/* Alert & Operator documents. */
+.agent-alert-chip { min-height: var(--varia-control); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) var(--varia-space-2); background: var(--varia-panel-background); border-color: var(--varia-input-border); }
+.agent-alert-method { min-width: 20px; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-sm); font-family: var(--varia-font-mono); font-size: var(--varia-size-xs); font-weight: 600; }
+.agent-alert-method[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
+.agent-alert-method:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; transition: none; }
+.agent-alert-chip > button[aria-label^="Remove"] { padding: 0; min-width: 20px; min-height: 20px; }
+.agent-alert-chips { width: min(100%, 420px); }
+.agent-alert-chip-list:empty { display: none; }
+.agent-alert-add { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--varia-space-1); flex: 1 1 250px; min-width: 0; max-width: 100%; }
+.agent-alert-add > select.property-input { width: auto; flex: 1 1 130px; min-width: 0; max-width: 240px; }
+.agent-alert-add > button, .agent-alert-chips > button, .agent-alert-new-operator > button:not(.primary), .agent-alert-count > button, .agent-operator-email > button, .agent-alert-counter-values > button { min-height: var(--varia-control); padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); }
+.agent-alert-counter-values > button { align-self: flex-start; }
+.agent-alert-raise > select.property-input { width: auto; min-width: 72px; }
+.agent-alert-raise > input.property-input { width: 120px; }
+.agent-alert-condition > select.property-input { width: auto; }
+.agent-operator-email { width: min(100%, 420px); }
+.agent-operator-email > .property-input { flex: 1 1 200px; min-width: 0; }
+.agent-operator-duty .agent-table td { padding: var(--varia-space-1) var(--varia-space-2); }
+.agent-operator-jobs { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: var(--varia-space-1); }
+.agent-operator-jobs > li { padding: var(--varia-space-0) var(--varia-space-2); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); font-size: var(--varia-size-sm); }
+
+/* Proxy & Credential documents. */
+.agent-proxy-credential, .agent-proxy-add { width: min(100%, 420px); }
+.agent-proxy-credential > button, .agent-proxy-add > button { min-height: var(--varia-control); padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); }
+.agent-proxy-new-credential { background: var(--varia-panel-background); padding: var(--varia-space-3); }
+.agent-proxy-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--varia-space-1) var(--varia-space-3); padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+.agent-proxy-chip { background: var(--varia-panel-background); }
+.agent-proxy-chip > button { min-width: 20px; min-height: 20px; padding: 0; }
+.credential-uses { padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); background: var(--varia-panel-background); }
+
+/* SQL Server Agent Properties modal & confirmations. */
+.agent-properties { gap: var(--varia-space-4); }
+.agent-props-section { display: flex; flex-direction: column; gap: var(--varia-space-2); min-width: 0; }
+.agent-props-section > .agent-eyebrow { margin: 0; }
+.agent-props-section > .agent-eyebrow .field-note { text-transform: none; letter-spacing: normal; font-weight: 400; }
+.agent-props-facts { grid-template-columns: 160px minmax(0, 1fr); }
+.agent-properties .property-field { grid-template-columns: 160px minmax(0, 1fr); column-gap: var(--varia-space-3); min-height: var(--varia-control); padding: var(--varia-space-0) 0; }
+.agent-properties .property-field-label { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.agent-properties .agent-history-input > input.ui-field { flex: 0 1 140px; min-width: 0; height: var(--ui-control-height); }
+.agent-properties .agent-purge-count.ui-field { width: 64px; height: var(--ui-control-height); }
+.agent-properties .agent-purge-row select.ui-field { height: var(--ui-control-height); min-width: 92px; }
+.agent-properties .agent-purge-row > button { min-height: var(--varia-control); padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); }
+.agent-retention td.agent-retention-server { font-style: normal; }
+.agent-retention-table td[data-tone="warning"] { color: var(--varia-warningForeground); }
+.agent-retention-table td[data-tone="success"] { color: var(--varia-successForeground); }
+.agent-properties .ratio-bar { margin: 0; }
+.agent-start-steps { display: flex; flex-direction: column; gap: var(--varia-space-1); }
+
+@media (forced-colors: active) {
+  .agent-operators-head[aria-pressed="true"], .agent-operators-cell[data-set], .agent-alert-method[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .agent-operators-grid td[data-changed] .agent-operators-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+}
