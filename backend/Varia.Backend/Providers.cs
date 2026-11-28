@@ -26,7 +26,7 @@ internal static class Providers
     /// nothing to resolve; bigquery.dryRun and language.lookup name their handle, and a SQL Server handle is refused (language.lookup's
     /// SQL Server reader comes with Varia's own completion there).</summary>
     internal static readonly string[] BigQueryMethods = ["bigquery.account", "bigquery.projects", "bigquery.connectionProjects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "results.remoteQuery", "query.attach",
-        "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel", "language.lookup"];
+        "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel", "language.lookup", "language.hydrate"];
     private static readonly string[] BigQueryOnly = [BigQuery];
 
     /// <summary>The methods whose provider is their parameters' <c>provider</c> (absent: SQL Server): they open a connection.</summary>

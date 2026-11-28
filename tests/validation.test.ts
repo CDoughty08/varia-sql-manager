@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest, validateResult } from '../src/main/validation'
+import { jumpLookupLimits, languageHydrateLimits } from '../src/shared/language-lookup'
 import { connectContext } from '../src/main/connection-requests'
 import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSchema, sessionCloseResultSchema } from '../src/shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
@@ -489,5 +490,78 @@ describe('IPC validation', () => {
     const invalid = connectionCancelSchema.safeParse({ requestIds: [crypto.randomUUID(), null, 'stop'] })
     expect(invalid.success).toBe(false)
     expect(invalid.error?.issues.map(issue => issue.path)).toEqual([['requestIds', 1], ['requestIds', 2]])
+  })
+  it('validates language.lookup jump mode and language.hydrate strictly and mirrors C# limits', () => {
+    const connectionId = crypto.randomUUID()
+    expect(validateRequest('language.lookup', { connectionId, requests: [{ path: [], prefix: 'daily_rev', mode: 'jump', limit: 50, dataset: 'sales' }] }))
+      .toEqual({ connectionId, requests: [{ path: [], prefix: 'daily_rev', mode: 'jump', limit: 50, dataset: 'sales' }] })
+    for (const bad of [
+      { path: ['varia-alpha'], prefix: 'da', mode: 'jump' },
+      { path: [], prefix: 'd', mode: 'jump' },
+      { path: [], prefix: '   ', mode: 'jump' },
+      { path: [], prefix: 'a'.repeat(jumpLookupLimits.maxPrefixChars + 1), mode: 'jump' },
+      { path: [], prefix: 'da', exact: true, mode: 'jump' },
+      { path: [], prefix: 'da', limit: jumpLookupLimits.items + 1, mode: 'jump' },
+      { path: [], prefix: 'da', dataset: 'sales' },
+      { path: [], prefix: 'da', mode: 'fuzzy' }
+    ]) expect(() => validateRequest('language.lookup', { connectionId, requests: [bad] }), JSON.stringify(bad)).toThrow('Invalid request')
+
+    const validHydrate = {
+      connectionId,
+      targets: [
+        { project: 'varia-alpha', dataset: 'sales', name: 'orders' },
+        { project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', kind: 'table', allowExternal: true },
+        { project: 'varia-alpha', dataset: 'sales', name: 'to_cents', kind: 'routine' }
+      ]
+    }
+    expect(validateRequest('language.hydrate', validHydrate)).toEqual(validHydrate)
+    expect(methodPolicies['language.hydrate']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 15_000, providers: ['bigquery'] })
+    expect(methodAllows('language.hydrate', 'bigquery')).toBe(true)
+    expect(methodAllows('language.hydrate', 'sqlserver')).toBe(false)
+    for (const bad of [
+      { connectionId: 'not-a-uuid', targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders' }] },
+      { connectionId, targets: [] },
+      { connectionId, targets: Array.from({ length: languageHydrateLimits.targets + 1 }, (_, i) => ({ project: 'varia-alpha', dataset: 'sales', name: `t_${i}` })) },
+      { connectionId, targets: [{ project: 'Bad Project!', dataset: 'sales', name: 'orders' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'bad-dataset', name: 'orders' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'bad`table' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'bad-routine name', kind: 'routine' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'a'.repeat(300), kind: 'routine' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders', kind: 'view' }] },
+      { connectionId, targets: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders', extra: 1 }] }
+    ]) expect(() => validateRequest('language.hydrate', bad), JSON.stringify(bad).slice(0, 80)).toThrow('Invalid request')
+
+    expect(validateResult('language.hydrate', {
+      outcomes: [
+        { project: 'varia-alpha', dataset: 'sales', name: 'orders', status: 'hydrated' },
+        { project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', status: 'external' },
+        { project: 'varia-alpha', dataset: 'sales', name: 'missing', status: 'notFound', code: 'NOT_FOUND' }
+      ]
+    })).toBeTruthy()
+    for (const bad of [
+      { outcomes: [] },
+      { outcomes: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders', status: 'unknown' }] },
+      { outcomes: [{ project: 'varia-alpha', dataset: 'sales', name: 'orders', status: 'hydrated', extra: true }] }
+    ]) expect(() => validateResult('language.hydrate', bad)).toThrow('invalid answer')
+
+    // Parity between TS jumpLookupLimits / languageHydrateLimits and C# EditorLookup.cs constants.
+    const source = readFileSync('backend/Varia.Backend/Search/EditorLookup.cs', 'utf8')
+    const parseConsts = (className: string) => {
+      const match = new RegExp(`class ${className}\\s*\\{\\s*public const int ([^;]+);`).exec(source)
+      if (!match) throw new Error(`${className} not found`)
+      return Object.fromEntries(match[1].split(',').map(entry => entry.split('=').map(part => part.trim())).map(([k, v]) => [k, Number(v.replaceAll('_', ''))]))
+    }
+    expect(parseConsts('JumpLookupLimits')).toEqual({
+      MinPrefixChars: jumpLookupLimits.minPrefixChars,
+      MaxPrefixChars: jumpLookupLimits.maxPrefixChars,
+      Items: jumpLookupLimits.items,
+      MaxScanObjects: jumpLookupLimits.maxScanObjects
+    })
+    expect(parseConsts('LanguageHydrateLimits')).toEqual({
+      Targets: languageHydrateLimits.targets,
+      MaxNegativeEntries: languageHydrateLimits.maxNegativeEntries,
+      MaxPerMinute: languageHydrateLimits.maxPerMinute,
+      MaxConcurrent: languageHydrateLimits.maxConcurrent
+    })
   })
 })

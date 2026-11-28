@@ -353,14 +353,47 @@ const bigQueryIndex = {
   }
 }
 const bigQueryNamed = (names, name) => names.find(entry => entry === name) ?? names.find(entry => entry.toLowerCase() === name.toLowerCase())
-function bigQueryLookup(request) {
+const bigQueryTierProjects = [
+  { name: 'varia-fake', kind: 'bqProject', tier: 'billing' },
+  { name: 'dw-shared', kind: 'bqProject', tier: 'starred' },
+  { name: 'ml-features', kind: 'bqProject', tier: 'starred' },
+  { name: 'org-recent-mart', kind: 'bqProject', tier: 'discovered', recent: true },
+  { name: 'org-marketing-312', kind: 'bqProject', tier: 'discovered' },
+  { name: 'org-raw-09', kind: 'bqProject', tier: 'discovered', namesOnly: true, detail: 'names' }
+]
+const bigQueryTierJumpHits = [
+  { name: 'daily_revenue', kind: 'bqTable', tier: 'billing', project: 'varia-fake', dataset: 'finance' },
+  { name: 'daily_revenue_v2', kind: 'bqTable', tier: 'starred', project: 'dw-shared', dataset: 'gold' },
+  { name: 'daily_rev_mart', kind: 'bqTable', tier: 'discovered', recent: true, project: 'org-recent-mart', dataset: 'analytics' },
+  { name: 'daily_rev_raw', kind: 'bqTable', tier: 'discovered', namesOnly: true, project: 'org-raw-09', dataset: 'landing' }
+]
+function bigQueryLookup(request, tierMode = false) {
+  if (request.mode === 'jump') {
+    const query = (request.prefix ?? '').trim().toLowerCase()
+    const limit = Math.min(request.limit ?? 50, 50)
+    if (tierMode) {
+      const matched = bigQueryTierJumpHits.filter(item => item.name.toLowerCase().includes(query))
+      return { state: 'ready', path: [], items: matched.slice(0, limit), truncated: matched.length > limit }
+    }
+    const hits = []
+    for (const [project, datasets] of Object.entries(bigQueryIndex)) {
+      for (const [dataset, objects] of Object.entries(datasets)) {
+        for (const [name, entry] of Object.entries(objects)) {
+          if (name.toLowerCase().includes(query)) {
+            hits.push({ name, kind: entry.kind, tier: project === 'varia-fake' ? 'billing' : 'discovered', project, dataset })
+          }
+        }
+      }
+    }
+    return { state: 'ready', path: [], items: hits.slice(0, limit), truncated: hits.length > limit }
+  }
   const [projectName, datasetName, objectName] = request.path
   const keep = name => request.prefix === undefined || (request.exact ? name.toLowerCase() === request.prefix.toLowerCase() : name.toLowerCase().startsWith(request.prefix.toLowerCase()))
   const answer = (path, entries, object) => {
     const kept = entries.filter(entry => keep(entry.name)), limit = request.limit ?? 500
     return { state: 'ready', path, items: kept.slice(0, limit), truncated: kept.length > limit, ...object ? { object } : {} }
   }
-  if (projectName === undefined) return answer([], Object.keys(bigQueryIndex).map(name => ({ name, kind: 'bqProject' })))
+  if (projectName === undefined) return answer([], tierMode ? bigQueryTierProjects : Object.keys(bigQueryIndex).map(name => ({ name, kind: 'bqProject' })))
   const project = bigQueryNamed(Object.keys(bigQueryIndex), projectName)
   if (!project) return { state: 'absent', path: request.path, items: [], truncated: false }
   if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset' })))
@@ -2520,7 +2553,20 @@ async function workbench(id, method, params, credit) {
     case 'bigquery.account': return respond(id, { kind: 'emulator', account: 'Anonymous (emulator)' })
     case 'language.lookup': {
       if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.lookup needs a BigQuery connection.')
-      return respond(id, { index: 'ready', answers: params.requests.map(bigQueryLookup) })
+      const tierMode = await controlled('bq-tiers')
+      return respond(id, { index: 'ready', answers: params.requests.map(request => bigQueryLookup(request, tierMode)) })
+    }
+    case 'language.hydrate': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.hydrate needs a BigQuery connection.')
+      const outcomes = params.targets.map(target => {
+        const project = bigQueryNamed(Object.keys(bigQueryIndex), target.project)
+        const dataset = project ? bigQueryNamed(Object.keys(bigQueryIndex[project]), target.dataset) : undefined
+        const name = dataset ? bigQueryNamed(Object.keys(bigQueryIndex[project][dataset]), target.name) : undefined
+        if (name) return { project, dataset, name, status: 'cached' }
+        if (!project && !target.allowExternal) return { project: target.project, dataset: target.dataset, name: target.name, status: 'external' }
+        return { project: target.project, dataset: target.dataset, name: target.name, status: 'notFound', code: 'NOT_FOUND' }
+      })
+      return respond(id, { outcomes })
     }
     case 'language.status': {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
