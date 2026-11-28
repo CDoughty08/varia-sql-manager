@@ -9,6 +9,8 @@ import {
 import { captureAp3 } from './capture-agent-polish-lanes/ap3.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { captureAp2 } from './capture-agent-polish-lanes/ap2.mjs'
+import { captureAp5 } from './capture-agent-polish-lanes/ap5.mjs'
+import { captureAp6 } from './capture-agent-polish-lanes/ap6.mjs'
 import react from '@vitejs/plugin-react'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -227,7 +229,9 @@ const lanes = {
   'ap-1': captureAp1,
   'ap-2': (outDir, profile) => captureAp2({ outDir, profile, launchMainApp, connectFakeServer, captureMatrix, expect }),
   'ap-3': (outDir, profile) => captureAp3(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix }),
-  'ap-4': captureAp4
+  'ap-4': captureAp4,
+  'ap-5': (outDir, profile) => captureAp5(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix }),
+  'ap-6': (outDir, profile) => captureAp6(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix })
 }
 const implementedLanes = new Set(Object.keys(lanes))
 

@@ -8,7 +8,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem, explorerRow, expandExplorerPath } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentFrame, documentTab, documentVerb, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { connectDialogWindow, documentFrame, documentTab, documentVerb, inspectorTab, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -79,8 +79,11 @@ try {
   await expect(documentTab(page, 'Proxy Account Properties - FileShareWriter')).toHaveAttribute('aria-selected', 'true')
   const existing = documentFrame(page, 'FileShareWriter')
   await expect(existing.getByLabel('Description', { exact: true })).toHaveValue('Writes extracts to the file share.')
+  await inspectorTab(existing, 'References').click()
   await expect(existing.getByRole('table', { name: 'Job steps that run as this proxy', exact: true })).toContainText('Copy extracts')
+  await inspectorTab(existing, 'Proxy & Subsystems').click()
   await existing.getByLabel('Description', { exact: true }).fill('Writes the nightly extracts.')
+  await inspectorTab(existing, 'Principals').click()
   await existing.getByRole('button', { name: 'Remove CONTOSO\\etl', exact: true }).click()
   await documentVerb(existing, 'FileShareWriter', 'Save · 2 changes').click()
   await expect(existing.getByRole('status').filter({ hasText: 'The proxy was saved.' })).toBeVisible()
@@ -95,7 +98,9 @@ try {
   await page.keyboard.press('Enter')
   await expect(documentTab(page, 'Credential Properties - FileShareWriterCred')).toHaveAttribute('aria-selected', 'true')
   const credential = documentFrame(page, 'FileShareWriterCred')
+  await inspectorTab(credential, 'Used by').click()
   await expect(credential.getByRole('list', { name: 'Proxies and job steps that use this credential', exact: true })).toContainText('FileShareWriter')
+  await inspectorTab(credential, 'Credential').click()
   await expect(credential.getByLabel('Identity', { exact: true })).toBeDisabled()
   await credential.getByLabel('Change identity and password', { exact: true }).check()
   await credential.getByLabel('Password', { exact: true }).fill(typed)
