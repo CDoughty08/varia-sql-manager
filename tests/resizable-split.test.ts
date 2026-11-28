@@ -2,7 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import ResizableSplit, { type ResizableSplitProps } from '../src/renderer/src/kit/ResizableSplit'
+import ResizableSplit, { SplitSash, type ResizableSplitProps } from '../src/renderer/src/kit/ResizableSplit'
+import { PlanPaneSizer } from '../src/renderer/src/plans/PlanPaneSizer'
 import {
   clampSplitWidth, dynamicSplitMax, isSplitNarrowStacked, loadSplitWidth, saveSplitWidth, splitStorageKey, splitWidthKey,
   type SplitBounds
@@ -126,6 +127,26 @@ describe('resizable-split helpers', () => {
     expect(splitWidthKey(400, 'Home', 'left', bounds)).toBe(304)
     expect(splitWidthKey(400, 'Home', 'right', bounds, 600)).toBe(252)
     expect(splitWidthKey(304, 'Enter', 'left', bounds)).toBeUndefined()
+  })
+
+  it('respects maxShare and extended keyboard options (custom step, homeAction=min, endToMax)', () => {
+    const vitalsBounds: SplitBounds = { defaultWidth: 272, minWidth: 200, maxWidth: 440, minOtherWidth: 0, maxShare: 0.48 }
+    expect(dynamicSplitMax(vitalsBounds)).toBe(440)
+    expect(dynamicSplitMax(vitalsBounds, 900)).toBe(432)
+    expect(dynamicSplitMax(vitalsBounds, 700)).toBe(336)
+    expect(dynamicSplitMax(vitalsBounds, 300)).toBe(200)
+    expect(clampSplitWidth(440, vitalsBounds, 700)).toBe(336)
+
+    const optionsBounds: SplitBounds = { defaultWidth: 224, minWidth: 180, maxWidth: 340, minOtherWidth: 0, maxShare: 0.42 }
+    expect(dynamicSplitMax(optionsBounds, 960)).toBe(340)
+    expect(dynamicSplitMax(optionsBounds, 640)).toBe(268)
+
+    const planBounds: SplitBounds = { defaultWidth: 220, minWidth: 120, maxWidth: 600, minOtherWidth: 0 }
+    expect(splitWidthKey(220, 'ArrowRight', 'left', planBounds, undefined, false, { step: 16 })).toBe(236)
+    expect(splitWidthKey(220, 'ArrowRight', 'left', planBounds, undefined, true, { step: 16, shiftStep: 32 })).toBe(252)
+    expect(splitWidthKey(220, 'Home', 'left', planBounds, undefined, false, { homeAction: 'min' })).toBe(120)
+    expect(splitWidthKey(220, 'End', 'left', planBounds, undefined, false, { endToMax: true })).toBe(600)
+    expect(splitWidthKey(220, 'End', 'left', planBounds, undefined, false)).toBeUndefined()
   })
 
   it('detects narrow stacking threshold', () => {
@@ -506,6 +527,173 @@ describe('ResizableSplit component', () => {
   })
 })
 
+describe('SplitSash and PlanPaneSizer consolidation', () => {
+  it('supports disabled SplitSash with aria-disabled, no tooltip, and no drag/keyboard/double-click callbacks', () => {
+    const onCommit = vi.fn(), onReset = vi.fn(), onDragPreview = vi.fn()
+    const host = mount(createElement(SplitSash, {
+      className: 'connect-splitter',
+      side: 'left',
+      label: 'Resize saved connections list',
+      value: 320,
+      bounds: { defaultWidth: 320, minWidth: 220, maxWidth: 460, minOtherWidth: 440 },
+      containerWidth: 900,
+      step: 16,
+      shiftStep: 32,
+      disabled: true,
+      onDragPreview,
+      onCommit,
+      onReset
+    }))
+    const sash = host.querySelector<HTMLElement>('.varia-sash.connect-splitter')!
+    expect(sash.getAttribute('aria-disabled')).toBe('true')
+    expect(sash.hasAttribute('title')).toBe(false)
+    sash.setPointerCapture = vi.fn()
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 1, clientX: 320, bubbles: true }))
+      sash.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      sash.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+      sash.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+    })
+    expect(sash.hasAttribute('data-dragging')).toBe(false)
+    expect(onDragPreview).not.toHaveBeenCalled()
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(onReset).not.toHaveBeenCalled()
+  })
+
+  it('aborts an active drag immediately when disabled flips true->false without resuming or committing, and ignores zero-move clicks for onDragPreview', () => {
+    const onCommit = vi.fn(), onDragPreview = vi.fn(), onDragCancel = vi.fn()
+    const baseProps = {
+      className: 'connect-splitter',
+      side: 'left' as const,
+      label: 'Resize saved connections list',
+      value: 320,
+      bounds: { defaultWidth: 320, minWidth: 220, maxWidth: 460, minOtherWidth: 440 },
+      containerWidth: 760,
+      revertOnCancel: true,
+      onDragPreview,
+      onDragCancel,
+      onCommit
+    }
+    const { host, rerender } = mountWithRender(createElement(SplitSash, { ...baseProps, disabled: false }))
+    const sash = host.querySelector<HTMLElement>('.varia-sash.connect-splitter')!
+    const releasePointerCapture = vi.fn()
+    sash.setPointerCapture = vi.fn()
+    sash.hasPointerCapture = vi.fn(() => true)
+    sash.releasePointerCapture = releasePointerCapture
+
+    // Zero-movement click must not invoke onDragPreview or onCommit.
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 1, clientX: 320, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointerup', { button: 0, pointerId: 1, clientX: 320, bubbles: true }))
+    })
+    expect(onDragPreview).not.toHaveBeenCalled()
+    expect(onCommit).not.toHaveBeenCalled()
+
+    // Start dragging and move, then disable mid-drag.
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 2, clientX: 320, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 280, bubbles: true }))
+    })
+    expect(sash.hasAttribute('data-dragging')).toBe(true)
+    expect(onDragPreview).toHaveBeenLastCalledWith(280)
+
+    rerender(createElement(SplitSash, { ...baseProps, disabled: true }))
+    expect(sash.hasAttribute('data-dragging')).toBe(false)
+    expect(releasePointerCapture).toHaveBeenCalledWith(2)
+    expect(onDragPreview).toHaveBeenLastCalledWith(undefined)
+    expect(onDragCancel).toHaveBeenCalledWith(320)
+    expect(onCommit).not.toHaveBeenCalled()
+
+    // Re-enabling before pointerup must NOT resume or commit the aborted drag.
+    onDragPreview.mockClear(); onDragCancel.mockClear(); onCommit.mockClear()
+    rerender(createElement(SplitSash, { ...baseProps, disabled: false }))
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointermove', { pointerId: 2, clientX: 260, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointerup', { button: 0, pointerId: 2, clientX: 260, bubbles: true }))
+    })
+    expect(onDragPreview).not.toHaveBeenCalled()
+    expect(onDragCancel).not.toHaveBeenCalled()
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('routes PlanPaneSizer keyboard (Arrow/Shift+Arrow/Home/End), focusOnPointerDown, double-click reset, drag commit, and cancel/lostcapture revert through SplitSash', () => {
+    const resize = vi.fn(), commit = vi.fn()
+    const host = mount(createElement(PlanPaneSizer, {
+      name: 'properties',
+      value: 260,
+      minimum: 140,
+      defaultWidth: 260,
+      reverse: true,
+      resize,
+      commit
+    }))
+    const sash = host.querySelector<HTMLElement>('.varia-sash.plan-pane-sizer')!
+    expect(sash.getAttribute('aria-label')).toBe('Resize plan properties')
+    expect(sash.getAttribute('aria-valuemin')).toBe('140')
+    expect(sash.getAttribute('aria-valuemax')).toBe('600')
+    expect(sash.getAttribute('aria-valuenow')).toBe('260')
+
+    // Reverse polarity: ArrowLeft widens (+16), Shift+ArrowLeft (+32), Home -> min (140), End -> 600.
+    act(() => { sash.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })) })
+    expect(resize).toHaveBeenLastCalledWith(276)
+    expect(commit).toHaveBeenLastCalledWith(276)
+
+    act(() => { sash.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', shiftKey: true, bubbles: true })) })
+    expect(resize).toHaveBeenLastCalledWith(292)
+    expect(commit).toHaveBeenLastCalledWith(292)
+
+    act(() => { sash.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })) })
+    expect(commit).toHaveBeenLastCalledWith(140)
+
+    act(() => { sash.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    expect(commit).toHaveBeenLastCalledWith(600)
+
+    // Double-click resets to defaultWidth (260).
+    act(() => { sash.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })
+    expect(resize).toHaveBeenLastCalledWith(260)
+    expect(commit).toHaveBeenLastCalledWith(260)
+
+    // Drag cancelled via pointercancel focuses sash and reverts to start width without committing.
+    resize.mockClear(); commit.mockClear()
+    sash.setPointerCapture = vi.fn()
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 9, clientX: 500, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointermove', { pointerId: 9, clientX: 460, bubbles: true }))
+    })
+    expect(document.activeElement).toBe(sash)
+    expect(resize).toHaveBeenLastCalledWith(300)
+    expect(commit).not.toHaveBeenCalled()
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 9, bubbles: true }))
+    })
+    expect(resize).toHaveBeenLastCalledWith(260)
+    expect(commit).not.toHaveBeenCalled()
+
+    // Drag cancelled via lostpointercapture also reverts to start width without committing.
+    resize.mockClear(); commit.mockClear()
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 11, clientX: 500, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointermove', { pointerId: 11, clientX: 450, bubbles: true }))
+    })
+    expect(resize).toHaveBeenLastCalledWith(310)
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('lostpointercapture', { pointerId: 11, bubbles: true }))
+    })
+    expect(resize).toHaveBeenLastCalledWith(260)
+    expect(commit).not.toHaveBeenCalled()
+
+    // Completed pointer drag commits final width.
+    resize.mockClear(); commit.mockClear()
+    act(() => {
+      sash.dispatchEvent(new PointerEvent('pointerdown', { button: 0, pointerId: 10, clientX: 500, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointermove', { pointerId: 10, clientX: 470, bubbles: true }))
+      sash.dispatchEvent(new PointerEvent('pointerup', { button: 0, pointerId: 10, clientX: 470, bubbles: true }))
+    })
+    expect(resize).toHaveBeenLastCalledWith(290)
+    expect(commit).toHaveBeenLastCalledWith(290)
+  })
+})
+
 describe('ResizableSplit CSS invariants', () => {
   const rules = stylesheetRules()
   const decl = (selector: string, property: string, at: readonly string[] = []) =>
@@ -513,9 +701,11 @@ describe('ResizableSplit CSS invariants', () => {
       .flatMap(rule => rule.declarations)
       .find(declaration => declaration.property === property)?.value
 
-  it('sets touch-action: none on .varia-sash and forced-colors visibility', () => {
+  it('sets touch-action: none, disabled cursor, and forced-colors visibility on .varia-sash', () => {
     expect(decl('.varia-sash', 'touch-action')).toBe('none')
+    expect(decl('.varia-sash[aria-disabled="true"]', 'cursor')).toBe('default')
     expect(decl('.varia-sash::after', 'background', ['@media (forced-colors: active)'])).toBe('CanvasText')
-    expect(decl('.varia-sash:hover::after, .varia-sash[data-dragging]::after, .varia-sash:focus-visible::after', 'background', ['@media (forced-colors: active)'])).toBe('Highlight')
+    expect(decl('.varia-sash:not([aria-disabled="true"]):hover::after, .varia-sash[data-dragging]::after, .varia-sash:focus-visible::after', 'background', ['@media (forced-colors: active)'])).toBe('Highlight')
+    expect(decl('.plan-body:has(.plan-sql-view) > .plan-outline', 'border-right', ['@media (forced-colors: active)'])).toBe('1px solid CanvasText')
   })
 })

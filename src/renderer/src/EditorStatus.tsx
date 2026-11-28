@@ -89,7 +89,7 @@ export default function EditorStatus() {
   if (!active || !caret) return <span className="editor-status" />
   const file = active.file
   const encoding = documentEncodingLabel(file, values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined)
-  // A BigQuery tab's IntelliSense is Varia's own, from the index; SQL Server's is SQL Tools Service's.
+  // A BigQuery tab's IntelliSense is Varia's IndexCompletionService; SQL Server's uses ScriptDom + IndexLookup.
   const bigQueryLanguage = isQueryDocument(active) ? indexCompletion.availability(active.id) : undefined
   const language = isQueryDocument(active) ? bigQueryLanguage ?? sqlLanguage.availability(active.id) : undefined
   // A BigQuery tab's issues come from its dry runs; SQL Server's from SQL analysis.

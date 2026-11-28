@@ -139,8 +139,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
     single-instance initialization) before scheduling cleanup, since closing inside SqlClient's Open callback can wait on
     the unfinished Open. On a driver upgrade, real-driver regressions must still prove refusal before command send.
   - A missing registration/profile fails closed at factory ownership and Open admission, during Disconnect too; metadata
-    fallback keeps fatal connection errors and their authentication details. SQL Tools Service keeps its own SQL/Windows
-    credential contract (no Entra, no cross-open identity proof). No token, raw password or secret-derived key enters a
+    fallback keeps fatal connection errors and their authentication details. No token, raw password or secret-derived key enters a
     workspace snapshot or renderer receipt.
 - **Background connect** is noninteractive: it needs a pinned prior principal and, for passwords, the exact opaque
   credential revision, independent of Remember Password. Each attempt is bounded even with an unlimited stored timeout,
@@ -171,19 +170,17 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
 
 - **Language features** belong to each Monaco model, never the globally active editor. The engine-neutral broker routes
   to provider adapters; SQL Server authentication, metadata readiness and dialect rules stay in its adapter. Only typed
-  language operations cross IPC. Executables and arguments come from the trusted app; SQL Tools Service is a pinned,
-  checksum-verified build artifact, never downloaded at runtime. Metadata uses independent connections, discards stale
-  responses, and management actions release them. Service tracing is off so upstream exception logging cannot persist
-  document text or connection details. Analysis never executes the buffer.
+  language operations cross IPC. SQL Server completion, hover, diagnostics, and cache refresh (`TsqlLanguageService`) run
+  100% in-process using `ScriptDom` (`TSql180Parser` on a shared 32 MB reserved-stack parse worker thread with
+  bounded-syntax guards) and Search Objects' `IndexLookup`, across SQL Login, Windows, Microsoft Entra ID, and
+  disconnected tabs, with zero external language-server child processes. Stale responses are discarded, management
+  actions pause language requests and mark Search Objects stale, and analysis never executes the buffer.
   - Diagnostics carry their model version and a dedicated marker owner; edits, context changes and backend loss clear
-    obsolete markers at once. SQL Tools' unversioned notifications are correlated to immutable snapshot URIs on a
-    serialized analysis child, apart from completion's debounce, with bounded retained context and lifetime, released on
-    close, disconnect, reset and relevant cache refresh. Foreground requests preempt a document's background diagnostics, which resume once they settle.
-  - A language server child is killed only through `ExitGate`, which the backend's exit also takes (.NET's tree kill
-    SIGSTOPs before killing, and an exit between would leave it stopped). The gate cannot cover a backend main kills, so
-    only Windows kills the child's tree (`LspClient.KillsTree`); Linux and macOS send one signal.
-- **Go To Definition** (`language.definition`, `DefinitionService`) never goes through SQL Tools; docs/language-services.md
-  has the user-facing rules.
+    obsolete markers at once. Diagnostics never block waiting for an index build (running syntax-only immediately while
+    building, and re-running automatically when `indexStateStore` signals completion/refresh). Foreground requests
+    preempt a document's background diagnostics, which resume once they settle.
+- **Go To Definition** (`language.definition`, `DefinitionService`) runs in-process with ScriptDom and catalog views;
+  docs/language-services.md has the user-facing rules.
   - ScriptDom finds the name under the caret (white space and comments allowed around dots) in the caret's batch or, when the batch does
     not parse, the widest parsing run of statements around it (statements starting after a semicolon or at a statement keyword), and `DefinitionNames` yields at most 8 candidates, scoped as SQL Server
     does: a level's tables are its own FROM and DML target, never a subquery's; an alias hides a same-named object only

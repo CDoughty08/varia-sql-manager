@@ -2144,4 +2144,29 @@ describe('refreshBigQueryScopes', () => {
     expect(await disconnected).toEqual({ ok: false, cancelled: true })
     service.dispose()
   })
+
+  it('syncStatus populates an unbuilt connection entry and clears stale build errors when status is ready', async () => {
+    const { service, api, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([connection('c1')])
+    expect(service.getSnapshot().indexes.c1).toBeUndefined()
+
+    // 1. Populates an entry when indexOnConnect was off (entry previously undefined).
+    const readyStatus = status({ state: 'ready', databases: 2, indexed: 2, objects: 42 })
+    api.explorerIndexStatus = vi.fn(async () => ({ ok: true as const, value: { status: readyStatus, elapsedMs: 1 } }))
+    service.syncStatus('c1')
+    await settle()
+    expect(service.getSnapshot().indexes.c1).toEqual({ connectionId: 'c1', done: 2, total: 2, objects: 42, status: readyStatus })
+
+    // 2. Clears stale error from a prior failed build once syncStatus reports ready.
+    service.build('c1')
+    pendingIndex[0]({ ok: false, code: 'BACKEND_ERROR', error: 'Transient network failure.' })
+    await settle()
+    expect(service.getSnapshot().indexes.c1?.error).toBe('Transient network failure.')
+
+    service.syncStatus('c1')
+    await settle()
+    expect(service.getSnapshot().indexes.c1?.error).toBeUndefined()
+    expect(service.getSnapshot().indexes.c1?.status).toEqual(readyStatus)
+    service.dispose()
+  })
 })

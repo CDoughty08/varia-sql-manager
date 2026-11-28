@@ -215,7 +215,7 @@ internal sealed partial class ObjectSearchService
         ObjectIndexResult Answer()
         {
             lock (state.Gate)
-                if (Current()) { state.Build = null; state.Building = false; state.Checking = false; PruneLocked(state); }
+                if (Current()) { state.Build = null; state.Building = false; state.Checking = false; PruneLocked(state); PulseLocked(state); }
             return new(Status(state), watch.ElapsedMilliseconds);
         }
         // Spends a target's marks made before the check began: DDL that lands while it reads stays marked.
@@ -275,6 +275,7 @@ internal sealed partial class ObjectSearchService
                     state.Skipped.Remove(name);
                     if (outcome is { Skip: { } skip }) state.Skipped.Add(Math.Max(0, names.IndexOf(name)), skip);
                     state.Ledger.Done(name, outcome?.Skip);
+                    PulseLocked(state);
                 }
                 // A check whose fingerprint failed leaves the database marked: its next use shows it is still not checked.
                 if (outcome is { Unchecked: true }) { lock (state.Gate) if (Current()) state.Tried[databases[at]] = UtcNow().Ticks; }
@@ -299,7 +300,7 @@ internal sealed partial class ObjectSearchService
         finally
         {
             lock (state.Gate)
-                if (Current()) { state.Build = null; state.Building = false; state.Checking = false; }
+                if (Current()) { state.Build = null; state.Building = false; state.Checking = false; PulseLocked(state); }
             Ended();
             running.Unregister(args.RequestId, entry);
         }

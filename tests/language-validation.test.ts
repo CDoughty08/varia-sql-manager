@@ -10,7 +10,7 @@ describe('language-service IPC boundary', () => {
     const { position: _position, ...value } = request()
     expect(validateRequest('language.diagnostics', value)).toEqual(value)
     expect(() => validateRequest('language.diagnostics', { ...value, executable: 'anything' })).toThrow('Invalid request')
-    const item = { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 2 } }, message: 'Missing column.', severity: 1, code: '207', source: 'SQL Tools Service' }
+    const item = { range: { start: { line: 0, character: 1 }, end: { line: 0, character: 2 } }, message: 'Missing column.', severity: 1, code: 'SQL207', source: 'sqlserver' }
     expect(validateResult('language.diagnostics', { version: 1, items: [item], isIncomplete: false })).toMatchObject({ version: 1, items: [item] })
     for (const patch of [{ severity: 0 }, { severity: 5 }, { message: 'x'.repeat(languageLimits.diagnosticMessageCharacters + 1) },
       { range: { start: { line: -1, character: 0 }, end: { line: 0, character: 0 } } }, { command: 'anything' }])

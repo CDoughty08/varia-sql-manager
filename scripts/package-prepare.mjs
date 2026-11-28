@@ -1,5 +1,5 @@
 // Prepares all independent packaging inputs concurrently for package.yml:
-// electron-vite build, pinned SQL Tools Service for the target RID, self-contained ReadyToRun backend publish,
+// electron-vite build, self-contained ReadyToRun backend publish,
 // and (on Windows) NativeAOT update helper publish. Each lane holds its output until completion so CI logs stay grouped.
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
@@ -8,7 +8,6 @@ import { parseArgs } from 'node:util'
 export function packagePrepareSteps({ rid, updater = false }) {
   const steps = [
     { name: 'Build application', command: 'npx electron-vite build' },
-    { name: 'Prepare pinned SQL Tools Service', command: `npm run sqltools:prepare -- --rid ${rid}` },
     { name: 'Publish self-contained backend', command: `dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${rid} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend` }
   ]
   if (updater) {

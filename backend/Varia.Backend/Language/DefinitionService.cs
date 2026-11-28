@@ -73,7 +73,7 @@ internal sealed class DefinitionService(IExplorerHost host)
 
     public async Task<LanguageDefinition?> ResolveAsync(LanguageRequest request, CancellationToken token)
     {
-        SqlToolsLanguageService.Validate(request);
+        TsqlLanguageService.Validate(request);
         if (request.Context.ConnectionId is not { } connectionId) return null;
         var lookup = DefinitionNames.Find(request.Text, request.Position);
         if (lookup is null) return null;

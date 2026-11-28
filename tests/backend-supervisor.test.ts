@@ -11,7 +11,6 @@ import { BackendSupervisor, type SupervisorDeps, firstLaunchWaitMs } from '../sr
 import { BackendError, sentences } from '../src/main/backend/errors'
 import type { LiveEvent } from '../src/shared/live/schema'
 import { backendSpawnSpec, resultMemoryEnvironment } from '../src/main/backend/spawn-spec'
-import { sqlToolsEnvironment } from '../src/main/backend/sqltools-runtime'
 import { fakeSpawn, manualClock, settle, type FakeBackend } from './fixtures/fake-process'
 
 const supervisors: BackendSupervisor[] = []
@@ -636,10 +635,9 @@ describe('smoke-test backends', () => {
   })
   it('passes the OS locale to the real backend, which dates script headers in it', () => {
     const base = { packaged: false, root: resolve('app'), resourcesPath: resolve('resources'), platform: process.platform, smokeTest: false, env: { PATH: '/bin', VARIA_BACKEND_TEST_HOOKS: '1' } }
-    const runtime = sqlToolsEnvironment({ ...base, env: { PATH: '/bin' } })
-    const installed = sqlToolsEnvironment({ ...base, packaged: true, env: { PATH: '/bin' } })
+    const runtime = { PATH: '/bin' }
     expect(backendSpawnSpec({ ...base, locale: 'de-DE' }).env).toEqual({ ...runtime, VARIA_LOCALE: 'de-DE' })
-    expect(backendSpawnSpec({ ...base, packaged: true, locale: 'ja-JP' }).env).toEqual({ ...installed, VARIA_LOCALE: 'ja-JP' })
+    expect(backendSpawnSpec({ ...base, packaged: true, locale: 'ja-JP' }).env).toEqual({ ...runtime, VARIA_LOCALE: 'ja-JP' })
     expect(backendSpawnSpec({ ...base, smokeTest: true, locale: 'tr-TR' }).env).toEqual({ ...runtime, VARIA_BACKEND_TEST_HOOKS: '1', VARIA_LOCALE: 'tr-TR' })
     expect(backendSpawnSpec(base).env).toEqual(runtime)
     // Without an explicit environment the backend still inherits main's, plus the locale.

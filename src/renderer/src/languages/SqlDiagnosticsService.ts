@@ -6,6 +6,7 @@ import { documentProvider, isQueryDocument } from '../documents'
 import { isWelcomeQuery, mayBeWelcomeQuery, type DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
+import type { IndexStateStore } from './IndexCompletionService'
 import type { SqlLanguageService } from './SqlLanguageService'
 
 export const sqlDiagnosticOwner = 'varia.sql.diagnostics'
@@ -40,14 +41,43 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
   private readonly queue: Entry[] = []
   private active = 0
   private disposed = false
+  private indexStateStore?: IndexStateStore
+  private indexStateBinding?: Disposable
   constructor(private readonly monaco: MarkerMonaco, private readonly language: Language,
     private readonly documents: DocumentService, private readonly connections: ConnectionService,
-    private readonly settings: Settings, private readonly backend?: Pick<BackendStateService, 'getSnapshot' | 'subscribe'>) {
+    private readonly settings: Settings, private readonly backend?: Pick<BackendStateService, 'getSnapshot' | 'subscribe'>,
+    indexState?: IndexStateStore) {
     super({ documents: new Map() })
     const reconcile = () => this.reconcile()
     this.subscriptions.push(documents.subscribe(reconcile), connections.subscribe(reconcile), language.subscribe(reconcile), settings.subscribe(reconcile))
     if (backend) this.subscriptions.push(backend.subscribe(reconcile))
+    if (indexState) this.bindIndexState(indexState)
     this.reconcile()
+  }
+  /** Subscribes to Search Objects' index state store so open SQL tabs re-run diagnostics when a connection's index finishes building or refreshes. */
+  bindIndexState(store: IndexStateStore): Disposable {
+    this.indexStateBinding?.dispose()
+    if (this.disposed) return { dispose() {} }
+    this.indexStateStore = store
+    const unsubscribe = store.subscribe(() => this.reconcile())
+    const binding: Disposable = {
+      dispose: () => {
+        unsubscribe()
+        if (this.indexStateBinding === binding) {
+          this.indexStateBinding = undefined
+          this.indexStateStore = undefined
+        }
+      }
+    }
+    this.indexStateBinding = binding
+    this.reconcile()
+    return binding
+  }
+  private indexSignature(connectionId: string | undefined): string | undefined {
+    if (!connectionId || !this.indexStateStore) return undefined
+    const status = this.indexStateStore.getSnapshot().indexes[connectionId]?.status
+    if (!status || status.state !== 'ready') return 'none'
+    return `ready:${status.builtAt ?? ''}:${status.indexed}:${status.objects}:${status.skipped.length}`
   }
   private reconcile(): void {
     if (this.disposed) return
@@ -74,6 +104,7 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
       const connection = connectionId ? this.connections.get(connectionId) : undefined
       const backend = this.backend?.getSnapshot().state
       const key = JSON.stringify([connectionId, langContext?.database ?? document.database, langContext?.suspended, document.multiMode, document.crossView, connection?.providerId, connection?.generation, connection?.lost,
+        this.indexSignature(connectionId),
         this.settings.enabled(), backend?.status, backend && 'generation' in backend ? backend.generation : undefined, this.language.diagnosticsEpoch(document.id),
         this.language.getSnapshot().activities.get(document.id) === 'refreshing',
         this.language.getSnapshot().status?.providers.find(provider => provider.id === (connection?.providerId ?? 'sqlserver'))])
@@ -114,9 +145,8 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     const detail = this.paused(entry)
     this.put(entry.id, { phase: detail ? 'paused' : 'checking', errors: previous?.errors ?? 0, warnings: previous?.warnings ?? 0,
       ...previous?.isIncomplete ? { isIncomplete: true } : {}, ...detail ? { detail } : {} })
-    // The welcome query is known to be valid: analysing it started a SQL Tools process at every first launch, to report
-    // nothing. Its first edit is analysed as any other. This runs on every keystroke, so the whole text is read only when
-    // its length could be the welcome query's; the analysis reads it once, after the debounce.
+    // The welcome query is known to be valid: skip analysis on first launch until it is edited. This runs on every
+    // keystroke, so the whole text is read only when its length could match; analysis reads it once, after the debounce.
     if (detail || blank(entry.model) || (mayBeWelcomeQuery(entry.model.getValueLength()) && isWelcomeQuery(entry.model.getValue()))) {
       if (!detail) this.put(entry.id, { phase: 'ready', errors: 0, warnings: 0 })
       return
@@ -207,6 +237,8 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.indexStateBinding?.dispose()
+    this.indexStateBinding = undefined
     this.subscriptions.forEach(unsubscribe => unsubscribe())
     for (const entry of this.entries.values()) this.remove(entry)
     this.queue.length = 0

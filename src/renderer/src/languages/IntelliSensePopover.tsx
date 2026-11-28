@@ -197,8 +197,9 @@ export interface IntelliSensePopoverProps {
 }
 
 /**
- * Unified Calm Pro Status Bar IntelliSense Popover for both BigQuery (PR #738 3-wave summary, shared 512 MiB memory bar,
- * active query source health) and SQL Server (STS provider status, IndexLookup DB coverage, shared memory bar).
+ * Unified Calm Pro Status Bar IntelliSense Popover for both BigQuery (3-wave summary, shared 512 MiB memory bar,
+ * active query source health) and SQL Server (in-process ScriptDom + IndexLookup completion, hover and diagnostics,
+ * plus shared memory bar).
  */
 export default function IntelliSensePopover({ open, autoFocus = false, popoverId, triggerRef, active, isBigQuery, language, issues, sqlSetting, onClose }: IntelliSensePopoverProps) {
   const { commands, connections, documents, indexCompletion, objectSearch, indexMemory, bigQueryStarred, menus } = useWorkbench()
@@ -302,12 +303,14 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
   const sqlStatus = indexEntry?.status
   const sqlIndexBuilding = !!indexEntry?.requestId || sqlStatus?.state === 'building'
   const sqlIndexReady = !sqlIndexBuilding && sqlStatus?.state === 'ready'
+  const hasChildrenLeftOut = !!sqlStatus?.skipped.some(entry => entry.code === 'CHILDREN_LEFT_OUT')
   const issuesPaused = issues?.label === 'SQL analysis paused'
-  const headerTone: StatusTone = issues && /\berrors?\b/i.test(issues.label) ? 'critical'
-    : (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable' || (issues && /\bwarnings?\b/i.test(issues.label))) ? 'warning'
-      : (language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense indexing' || language?.label === 'IntelliSense starting' || (isBigQuery && waves?.state === 'building') || (!isBigQuery && connected && sqlIndexBuilding)) ? 'running'
-        : (!connected || language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none')) ? 'neutral'
-          : 'success'
+  const headerTone: StatusTone = !connected ? 'neutral'
+    : issues && /\berrors?\b/i.test(issues.label) ? 'critical'
+      : (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable' || (issues && /\bwarnings?\b/i.test(issues.label))) ? 'warning'
+        : (language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense indexing' || language?.label === 'IntelliSense starting' || (isBigQuery && waves?.state === 'building') || (!isBigQuery && sqlIndexBuilding)) ? 'running'
+          : (language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none') || (!isBigQuery && !sqlIndexReady)) ? 'neutral'
+            : 'success'
 
   const suspended = !!langContext?.suspended
   const headerStatusText = suspended
@@ -322,17 +325,15 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
           : 'Index not built'
       : language?.label && language.label !== 'IntelliSense'
         ? language.label
-        : issuesPaused
-          ? sqlIndexReady
-            ? 'STS + Index · Analysis paused'
-            : sqlIndexBuilding
-              ? 'STS · Indexing'
-              : 'STS Ready · Analysis paused'
-          : sqlIndexBuilding
-            ? 'STS · Indexing'
+        : sqlIndexBuilding
+          ? 'ScriptDom · Indexing'
+          : issuesPaused
+            ? sqlIndexReady
+              ? 'ScriptDom + Index · Analysis paused'
+              : 'ScriptDom · Analysis paused'
             : sqlIndexReady
-              ? 'STS + Index Ready'
-              : 'STS Ready'
+              ? 'ScriptDom + Index'
+              : 'ScriptDom · No index'
 
   const handleRefresh = () => {
     onClose(true)
@@ -344,7 +345,7 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
   }
   const handleBuildIndex = () => {
     if (!connection || !objectSearch) return
-    objectSearch.ensureIndex(connection.id)
+    objectSearch.build(connection.id)
   }
   const handleStarProject = (project: string) => {
     if (!connection || !principal || !bigQueryStarred || starring.has(project)) return
@@ -380,12 +381,25 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
   const sqlProviderTone: StatusTone = !connected ? 'neutral'
     : language?.label === 'IntelliSense unavailable' ? 'warning'
       : language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' ? 'neutral'
-        : language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense starting' ? 'running'
-          : 'success'
+        : language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense starting' || sqlIndexBuilding ? 'running'
+          : sqlIndexReady ? 'success' : 'neutral'
   const sqlProviderText = suspended ? 'Paused (File view)'
-    : !connected ? 'Disconnected'
-      : language?.label === 'IntelliSense' ? 'SQL Tools Service'
-        : (language?.label ?? 'SQL Tools Service')
+    : !connected ? 'ScriptDom (offline)'
+      : language?.label && language.label !== 'IntelliSense' ? language.label
+        : sqlIndexBuilding ? 'ScriptDom · Indexing'
+          : sqlIndexReady ? 'ScriptDom + Index'
+            : 'ScriptDom (no index)'
+
+  const sqlDiagTone: StatusTone = suspended || issuesPaused ? 'neutral'
+    : issues?.label === 'SQL analysis unavailable' || issues?.label === 'SQL analysis incomplete' ? 'warning'
+      : issues?.label === 'Checking SQL' || (connected && sqlIndexBuilding) ? 'running'
+        : connected && sqlIndexReady ? 'success' : 'neutral'
+  const sqlDiagText = suspended ? 'Paused (File view)'
+    : issuesPaused ? 'Paused'
+      : issues?.label === 'SQL analysis unavailable' ? 'Unavailable'
+        : !connected ? 'ScriptDom (syntax)'
+          : sqlIndexReady ? 'ScriptDom + Index'
+            : 'ScriptDom (syntax)'
 
   const waveBadge = (count: number, full: number, namesOnly: number, kind: 'starred' | 'discovered'): { readonly tone: StatusTone; readonly label: string } => {
     if (!waves || waves.state === 'none') return { tone: 'neutral', label: count === 0 && kind === 'starred' ? 'None' : 'Not built' }
@@ -501,20 +515,20 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
             </div>
             <div className="intellisense-popover-rows" role="list" aria-label="SQL Server IntelliSense providers">
               <div className="intellisense-popover-row" role="listitem">
-                <span>Language provider</span>
+                <span>Completion &amp; hover</span>
                 <StatusBadge tone={sqlProviderTone}>{sqlProviderText}</StatusBadge>
               </div>
               <div className="intellisense-popover-row" role="listitem">
-                <span>Schema preview drawer</span>
-                <StatusBadge tone={suspended || !connected ? 'neutral' : sqlIndexBuilding ? 'running' : sqlIndexReady ? 'success' : 'neutral'}>
-                  {suspended ? 'Paused' : !connected ? 'Disconnected' : sqlIndexBuilding ? 'Indexing' : sqlIndexReady ? 'IndexLookup (RAM)' : 'Not built'}
-                </StatusBadge>
+                <span>Error checking</span>
+                <StatusBadge tone={sqlDiagTone}>{sqlDiagText}</StatusBadge>
               </div>
               <div className="intellisense-popover-row" role="listitem">
                 <span>Indexed databases</span>
                 <span className="intellisense-popover-source-actions">
-                  {connected && !sqlIndexReady && !sqlIndexBuilding && objectSearch && (
-                    <button type="button" className="intellisense-popover-inline-action" onClick={handleBuildIndex}>Build index</button>
+                  {connected && !sqlIndexBuilding && objectSearch && (!sqlIndexReady || hasChildrenLeftOut) && (
+                    <button type="button" className="intellisense-popover-inline-action" onClick={handleBuildIndex}>
+                      {sqlIndexReady ? 'Refresh index' : 'Build index'}
+                    </button>
                   )}
                   <span className="intellisense-popover-meta">
                     {suspended ? 'Paused (File view)'
@@ -527,6 +541,12 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
                 </span>
               </div>
             </div>
+            {connected && !sqlIndexReady && !sqlIndexBuilding && (
+              <p className="intellisense-popover-note">Search Objects index is not built yet. Keywords, built-ins, #temp tables, @variables and CTEs stay active; click Build index for table and column completion.</p>
+            )}
+            {connected && hasChildrenLeftOut && (
+              <p className="intellisense-popover-note">Some databases omitted columns to stay within the shared index memory budget. Raise the index memory limit in Options or click Refresh index.</p>
+            )}
             {language?.detail && (language.label === 'IntelliSense unavailable' || language.label === 'IntelliSense off' || language.label === 'IntelliSense paused') && (
               <p className="intellisense-popover-note">{language.detail}</p>
             )}

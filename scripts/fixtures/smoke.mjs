@@ -91,7 +91,7 @@ export function trackElectronProcess(application) {
 
 /**
  * Linux: the processes in a process group as `name pid state` (state T is stopped), at most 20. Playwright's close waits for
- * the app's pipes, which the backend and its language server inherit, so a close that hangs after main exited names its holder.
+ * the app's pipes, which the backend inherits, so a close that hangs after main exited names its holder.
  */
 export function groupMembers(group) {
   const members = []
