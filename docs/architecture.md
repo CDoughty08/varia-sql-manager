@@ -93,7 +93,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   passwords wait for the connections, whose library their store reconciles against. A marker that exists but cannot be
   used counts every step done (a newer version's is left alone; a corrupt one is quarantined and replaced). An unreadable
   0.9.0 file is quarantined. Logs carry only the step and an error code. A 0.9.0 workspace seal still verifies over the old `sqlServer` spelling (`connection-workspace-seal.ts`). Principals and targets carry `provider` (0.9.0's `sqlServer` reads as `sqlserver`); session
-  files are version 3 and AutoRecover records version 2, each with `provider` and BigQuery's 1,024-character datasets.
+  files are version 4 and AutoRecover records version 3, each with `provider`, BigQuery's 1,024-character datasets and multi-target metadata (`docs/multi-server-query.md`).
 - **Targets.** `src/shared/connection-targets.ts`: target ID, saved-profile hint and backend handle are distinct. Persist
   only the strict nonsecret target/workspace shapes, never lifecycle, handles, operation epochs or main-only comparison
   keys. `ConnectionIdentityRegistry` (`src/main/connection-identity.ts`) compares only authenticated live handles by
@@ -292,6 +292,7 @@ docs/connection-ownership.md describes main's authentication, receipt, checkpoin
   of one the view's inverse, 4 bytes a row of the result, and keeps a narrowing memo of two bits a position as spare
   memory, one a result, freed with it and given back to the search's own reservations when they would be refused: docs/ipc.md, Search in results); small steps go through `WorkSteps`, which asks the memory load once per 64 MiB held.
   `tests/working-memory-lint.test.ts` pins each operation's reservations in `SqlService`.
+- **Multi-server and Cross-Engine queries** (`docs/multi-server-query.md`): `query.executeMulti` shares the per-`sessionId` active-run gate with `query.execute`, opens unpooled ephemeral SQL Server connections (capped globally at 8 concurrent runs and 64 ephemeral connections) or ephemeral BigQuery sessions in `transaction` mode (sessionless jobs for `fireAndForget` and `crossEngineReadOnly`; `Detachable = false`, `AbandonBigQueryOnShutdown = hasBigQuery`), and coordinates a two-stage barrier (`MultiQueryCoordinator`, `SqlServerMultiRunner`, `BigQueryMultiRunner`, `CrossEngineRunner`). Cross-Engine `crossEngineReadOnly` enforces read-only `SELECT`/`WITH` across renderer allowlist diagnostics (`varia-cross-engine-guard`), pre-execute refusal, and backend `TSql180Parser` AST + BigQuery dry-run `statementType == "SELECT"` verification (`READ_ONLY_VIOLATION`). `ResultCombiner` (`results.combine` on `ResultsPortHost`, and post-Phase-2 `autoCombine`) combines in-memory sets under the same `QueryBudget` with trusted `_server` metadata, whole-buffer rollback on budget refusal, and safe cross-dialect widening (unzoned `date`/`datetime`/`time` + zoned `timestamp` widen to `text`).
 - **Rows are compared only in the backend.** Row identities (`Results/RowIdentity.cs`, `results.identify`,
   `results.findRows`) hash collation-normalized values; the renderer gets positions and ids, never rows. `GridView` draws
   highlights from sorted positions by binary search per painted row, theme colours only. A cell's own colour (a diff's

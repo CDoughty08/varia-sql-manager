@@ -5,7 +5,7 @@ connections, sign-in, identity pins, connect and disconnect, the pre-connect met
 History, errors, emulator mode, what Varia does not do yet and testing. Search Objects indexes BigQuery connections too
 ([Search Objects › BigQuery](object-search.md#bigquery)), docs/googlesql.md describes GoogleSQL editing, and
 docs/language-services.md its [completion](language-services.md#completion-from-the-index),
-[Go To Definition and Peek](language-services.md#go-to-definition) and [Move Commas](language-services.md#toggle-brackets-and-comma-placement).
+[Go To Definition and Peek](language-services.md#go-to-definition) and [Move Commas](language-services.md#toggle-brackets-and-comma-placement). For running one query across multiple BigQuery projects or querying SQL Server and BigQuery side by side, see [Multi-server and Cross-Engine queries](multi-server-query.md).
 
 Varia runs GoogleSQL only; legacy SQL is refused (`LEGACY_SQL`). SQL Server-only features are hidden for a BigQuery
 connection rather than half-working, through the catalogues' `providers` and the method gate (docs/architecture.md,
@@ -964,7 +964,7 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   live scope's provider gate, on the `jobs-*.json` and `job-script.json` fixtures; `tests/bigquery-job-history.test.ts` the
   shared rules, the bounds both sides hold, and the document's service and commands. `scripts/bigquery-jobs-smoke.mjs` drives
   the document end to end with the real backend in emulator mode against a loopback fake of the jobs API: opening it from
-  Object Explorer, rows and tones, Cancel Job, details and statements, a refused All users and closing.
+  Object Explorer, rows and tones, Cancel Job, details and statements, a refused All users and closing. `MultiQueryBigQueryChecks` covers multi-project BigQuery execution, pre-flight dry runs, DDL/session guards, and Cross-Engine `statementType == "SELECT"` enforcement (`docs/multi-server-query.md`).
 - **Emulator.** `-- --bigquery-emulator-live` with `VARIA_TEST_BIGQUERY_ENDPOINT` runs emulator mode end to end and the
   REST calls later lanes build on (client job ids, result and table paging, scripts, parameters, cancel, metadata), and
   `query.execute` end to end (every type, paging, the row limit, a script on the default dataset, DML, a failure).

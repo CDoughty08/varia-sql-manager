@@ -22,7 +22,7 @@ public static class LiveGroups
     /// </summary>
     public static readonly (string Name, int Seconds)[] Suites =
     [
-        ("Query", 10), ("Live", 0), ("LiveData", 18), ("LiveTableData", 13), ("ExplorerStatus", 27), ("Execution", 42), ("ResultName", 1), ("EstimatedPlans", 3), ("Transaction", 5),
+        ("Query", 10), ("Live", 0), ("LiveData", 18), ("LiveTableData", 13), ("ExplorerStatus", 27), ("Execution", 42), ("ResultName", 1), ("EstimatedPlans", 3), ("Transaction", 5), ("MultiQuery", 4),
         ("LiveResult", 62), ("ClientStatistics", 1), ("CellLength", 0), ("Explorer", 45), ("Scripting", 198), ("ScriptingInjection", 44), ("Action", 33), ("ServerFiles", 1), ("Seam", 24), ("DatabaseState", 17),
         ("RenameDatabase", 23), ("Detach", 25), ("ActionProgress", 3), ("Attach", 2), ("Restore", 27), ("Login", 12), ("LoginListing", 0), ("LoginAction", 3), ("LoginDelete", 2), ("Unlock", 3),
         ("LoginProperties", 2), ("Securables", 3), ("LoginKinds", 1), ("DatabaseProperties", 43), ("TableProperties", 1),

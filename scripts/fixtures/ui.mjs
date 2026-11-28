@@ -117,6 +117,9 @@ export const part = {
   /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
   liveGrid: '.live-grid',
   localGrid: '.local-grid',
+  // Multi-Server & Cross-Engine
+  crossEnginePane: '.cross-engine-pane',
+  crossEngineGuardStrip: '.cross-engine-guard-strip',
   // Object Explorer
   explorerLabel: '.oe-label',
   explorerText: '.oe-text',
@@ -847,7 +850,7 @@ export const resultSplitters = page => outputPane(page).getByRole('separator', {
 
 /** The row of result and comparison tabs, and one tab in it by its name ("Result 2", "Differences: Result 1 → Result 2"). */
 export const resultTabs = page => outputPane(page).getByRole('tablist', { name: 'Results and comparisons', exact: true })
-export const resultTab = (page, name) => resultTabs(page).getByRole('tab', { name, exact: true })
+export const resultTab = (page, name) => resultTabs(page).getByRole('tab', named(name))
 /** The selected result's view tabs ("Views of Result 2"), and one by its name: Table, Plan set, or "Pivot of Result 2". */
 export const viewTabs = page => outputPane(page).getByRole('tablist', { name: /^Views of / })
 export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, exact: true })
@@ -1166,3 +1169,14 @@ export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('li
 export const chartTable = box => box.getByRole('grid', { name: / table(?:, |$)/ })
 /** The line above it: how many of the window's samples it lists. */
 export const chartTableCaption = box => box.locator(part.chartTableCaption)
+
+// Multi-Server & Cross-Engine query surfaces
+export const explorerMultiBar = page => page.getByRole('region', { name: 'Multi-server selection', exact: true })
+export const multiTargetTrigger = scope => queryBar(scope).getByRole('group', { name: 'Targets', exact: true }).getByRole('button')
+export const multiTargetPopover = page => page.getByRole('dialog', { name: /^(?:Query|Cross-Engine) Targets$/ })
+export const multiExecuteDialog = page => page.getByRole('dialog', { name: /^Execute across / })
+export const multiRunSummary = page => page.getByRole('region', { name: 'Multi-server execution summary', exact: true })
+export const messagesFilterBar = page => page.getByRole('region', { name: 'Filter messages by server', exact: true })
+export const crossEngineBar = page => page.getByRole('toolbar', { name: 'Cross-Engine editor layout', exact: true })
+export const crossEnginePane = (page, dialect) => page.locator(`${part.crossEnginePane}[data-cross-dialect="${dialect}"]`)
+export const crossEngineGuardStrip = scope => scope.locator(part.crossEngineGuardStrip)

@@ -22,6 +22,104 @@ internal static class MultiQuerySqlChecks
         await CoordinatorChecksAsync(check);
     }
 
+    /// <summary>Live SQL Server multi-query checks against VARIA_TEST_SQL_SERVER using only ephemeral session-local
+    /// temp objects: parallel fire-and-forget + autoCombine + results.combine, sequential stop-on-first-error,
+    /// duplicate-physical-server self-deadlock pre-flight guard, and coordinated transaction commit &amp; rollback with
+    /// rolledBackPreview.</summary>
+    public static async Task RunLiveAsync(Action<bool, string> check, SqlService service, ConnectionInfo primary,
+        Func<string, ConnectOptions> live, JsonSerializerOptions json)
+    {
+        async Task<T> Call<T>(string method, object args) =>
+            (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
+
+        var secondary = await Call<ConnectionInfo>("connections.connect", live("tempdb"));
+        var sessionId = Guid.NewGuid().ToString();
+        try
+        {
+            var t1 = new MultiQueryTargetArgs("t-master", primary.Id, "srv-master", "Development", "master");
+            var t2 = new MultiQueryTargetArgs("t-tempdb", secondary.Id, "srv-tempdb", "Development", "tempdb");
+
+            // 1. Fire-and-forget parallel across 2 live connections + autoCombine + results.combine rebuild.
+            var fanOut = await Call<QueryMultiResult>("query.executeMulti", new QueryMultiArgs(
+                Guid.NewGuid().ToString(), sessionId, "fireAndForget", [t1, t2],
+                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, AutoCombine: true,
+                Sql: "SELECT DB_NAME() AS DbName, 42 AS Answer;"));
+            var combined = fanOut.ResultSets.SingleOrDefault(set => set.Kind == "combined");
+            var rowSets = fanOut.ResultSets.Where(set => set.Kind == "rows").ToList();
+            check(fanOut.Status == "completed" && fanOut.Targets.Count == 2
+                && fanOut.Targets.All(t => t.Status == "succeeded")
+                && rowSets.Count == 2 && combined is not null,
+                "live fire-and-forget query.executeMulti succeeds across two SQL connections and builds an auto-combined result");
+            if (combined is not null)
+            {
+                var rows = LiveResultChecks.RowsOf(service.Results, combined);
+                var paired = rows
+                    .Select(r => (Server: r.ElementAtOrDefault(0), Db: r.ElementAtOrDefault(1), Answer: r.ElementAtOrDefault(2)))
+                    .OrderBy(r => r.Server, StringComparer.Ordinal)
+                    .ToArray();
+                check(combined.Columns.Count == 3 && combined.Columns[0].Name == "_server"
+                    && paired.Length == 2
+                    && paired[0] == ("srv-master", "master", "42")
+                    && paired[1] == ("srv-tempdb", "tempdb", "42"),
+                    "live auto-combined result pairs _server metadata with each SQL database's own row values");
+                var rebuilt = await Call<ResultsCombineResult>("results.combine", new ResultsCombineArgs(
+                    [.. rowSets.Select(set => set.ResultId)], "LiveRebuild"));
+                check(rebuilt.Descriptor.Kind == "combined" && rebuilt.Descriptor.Name == "LiveRebuild" && rebuilt.Descriptor.RowsRead == 2,
+                    "live results.combine rebuilds a named combined result set from two live SQL Server result sets");
+            }
+
+            // 2. Sequential rollout stops on first failing target and skips remaining peers.
+            var seq = await Call<QueryMultiResult>("query.executeMulti", new QueryMultiArgs(
+                Guid.NewGuid().ToString(), sessionId, "fireAndForget", [t1, t2],
+                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, Sequential: true, AutoCombine: false, StopOnError: true,
+                Sql: "IF DB_NAME() = N'master' RAISERROR(N'varia-live-seq-stop', 16, 1); SELECT 1 AS Ok;"));
+            check(seq.Status == "failed" && seq.Targets.Count == 2 && seq.Targets[0].Status == "failed"
+                && seq.Targets[0].Error?.Code == "SQL_ERROR" && seq.Targets[1].Status == "skipped",
+                "live sequential fire-and-forget stops after the first failing target and marks subsequent targets skipped");
+
+            // 3. Coordinated transaction pre-flight rejects two connections targeting the same physical SQL Server.
+            var dup = await Call<QueryMultiResult>("query.executeMulti", new QueryMultiArgs(
+                Guid.NewGuid().ToString(), sessionId, "transaction", [t1, t2],
+                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, AutoCombine: false,
+                Sql: "SELECT 1 AS Blocked;"));
+            check(dup.Status == "failed" && dup.Targets.Count == 2
+                && dup.Targets[1].Status == "failed" && dup.Targets[1].Error?.Code == "INVALID_PARAMS"
+                && dup.Targets[0].Status == "skipped" && dup.ResultSets.Count == 0,
+                "live coordinated transaction pre-flight refuses duplicate connections to the same physical SQL Server instance");
+
+            // 4. Coordinated transaction commit against a real SQL Server session (verifies CURRENT_TRANSACTION_ID probe + COMMIT).
+            var committed = await Call<QueryMultiResult>("query.executeMulti", new QueryMultiArgs(
+                Guid.NewGuid().ToString(), sessionId, "transaction", [t1],
+                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, AutoCombine: false,
+                Sql: "CREATE TABLE #VariaMqLive (Id int NOT NULL); INSERT INTO #VariaMqLive (Id) VALUES (7); SELECT Id FROM #VariaMqLive;"));
+            var commitSet = committed.ResultSets.SingleOrDefault(set => set.Kind == "rows");
+            check(committed.Status == "completed" && committed.Targets.Count == 1
+                && committed.Targets[0].Status == "committed" && commitSet is not null && commitSet.RolledBackPreview != true
+                && LiveResultChecks.RowsOf(service.Results, commitSet) is [["7"]],
+                "live coordinated transaction executes DDL/DML/SELECT under SET XACT_ABORT ON + BEGIN TRANSACTION, passes post-batch probe, and commits");
+
+            // 5. Coordinated transaction rollback preserves earlier SELECT rows with rolledBackPreview = true.
+            var rolledBack = await Call<QueryMultiResult>("query.executeMulti", new QueryMultiArgs(
+                Guid.NewGuid().ToString(), sessionId, "transaction", [t1],
+                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, AutoCombine: false,
+                Sql: "SELECT 99 AS PreviewVal;\nGO\nRAISERROR(N'varia-live-rollback', 16, 1);"));
+            var previewSet = rolledBack.ResultSets.SingleOrDefault(set => set.Kind == "rows");
+            check(rolledBack.Status == "failed" && rolledBack.Targets.Count == 1
+                && rolledBack.Targets[0].Status == "failed" && rolledBack.Targets[0].Error?.Code == "SQL_ERROR"
+                && previewSet is not null && previewSet.RolledBackPreview == true
+                && LiveResultChecks.RowsOf(service.Results, previewSet) is [["99"]],
+                "live coordinated transaction rollback on batch error marks streamed SELECT result sets as rolledBackPreview");
+
+            check(service.ActiveEphemeralSqlConnections == 0,
+                "live multi-query executions release every ephemeral SQL Server connection on completion");
+        }
+        finally
+        {
+            service.Results.ReleaseSession(sessionId);
+            await Call<object>("connections.disconnect", new ConnectionArgs(secondary.Id));
+        }
+    }
+
     private static async Task ReadOnlyValidatorChecksAsync(Action<bool, string> check)
     {
         var validator = new ReadOnlySqlValidator();

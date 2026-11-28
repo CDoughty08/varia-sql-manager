@@ -15,7 +15,7 @@ internal sealed record CrossEnginePreflightResult(
     IReadOnlyList<MultiTargetPreflightOutcome>? BigQueryOutcomes = null);
 
 /// <summary>
-/// Cross-Engine (<c>crossEngineReadOnly</c>) pre-flight validator (docs/multi-server-query-plan.md §3.1, §4.2, §4.3).
+/// Cross-Engine (<c>crossEngineReadOnly</c>) pre-flight validator (docs/multi-server-query.md).
 /// Combines <see cref="IReadOnlySqlValidator"/> (T-SQL AST allowlist with <c>startLines?.Sqlserver ?? 1</c>) with
 /// BigQuery's <see cref="GoogleSqlScanner.IsReadOnlySelect"/> allowlist and free <c>dryRun: true</c> through
 /// <see cref="BigQueryService.MetadataAsync"/> asserting <c>estimate.Faked || estimate.StatementType == "SELECT"</c>,

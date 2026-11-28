@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import { WorkbenchProvider, useServiceSnapshot, useWorkbench } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import HelpDocument from '../src/renderer/src/help/HelpDocument'
-import { AgentScheduleSample, ResultsSample } from '../src/renderer/src/help/Samples'
+import { AgentScheduleSample, MultiServerSample, ResultsSample } from '../src/renderer/src/help/Samples'
 import * as frames from '../src/renderer/src/core/frame'
 import { DocumentSections } from '../src/renderer/src/kit/DocumentFrame'
 import { initialFrameState } from '../src/renderer/src/kit/document-frame'
@@ -253,5 +253,22 @@ it('reads the SQL Server Agent schedule sample through the production schedule r
     expect([...view.host.querySelectorAll('[aria-label="Sample schedule starting point"] button')].map(item => item.textContent)).toEqual(['Every day at', 'Weekdays at', 'Weekly on', 'Every N minutes', 'Monthly on day'])
     expect(view.fixture.api.execute).not.toHaveBeenCalled()
     expect(view.fixture.api.executeObjectAction).not.toHaveBeenCalled()
+  } finally { view.dispose() }
+})
+
+it('exercises every MultiServerSample scenario through production classifiers without sending SQL', async () => {
+  const view = await mount(createElement(MultiServerSample))
+  const button = (name: string) => [...view.host.querySelectorAll('button')].find(button => button.textContent === name)!
+  const status = () => view.host.querySelector('[role="status"]')?.textContent ?? ''
+  try {
+    expect(view.host.textContent).toContain('Detected: 1 DML (UPDATE) · 1 SELECT')
+    expect(status()).toContain('Coordinated Transaction is available')
+    await act(async () => button('BigQuery permanent DDL').click())
+    expect(view.host.textContent).toContain('Detected: 1 permanent DDL (Line 1: CREATE VIEW)')
+    expect(status()).toContain('Coordinated Transaction is disabled for permanent BigQuery DDL')
+    await act(async () => button('Cross-Engine blocked write').click())
+    expect(view.host.textContent).not.toContain('Detected:')
+    expect(status()).toContain('Blocked before sending (1 violation on Line 1):')
+    expect(view.fixture.api.execute).not.toHaveBeenCalled()
   } finally { view.dispose() }
 })

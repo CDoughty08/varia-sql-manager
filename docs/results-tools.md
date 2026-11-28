@@ -542,6 +542,10 @@ none. The status bar's **Results discarded** opens Options at the setting.
 
 ![The same view in the light theme](images/results-discarded-light.png)
 
+## Multi-server Summary, Combined and Messages
+
+Multi-server and Cross-Engine runs add a **Summary** view (in both Tabs and Stacked layouts, including pure-DDL/DML runs), an automatic **Combined (`k/N`)** derived grid with a prepended `_server` column (supporting Sort, Filter, Search, Column Profile, Pivot, Transpose, Copy and Save Results As, with **Rebuild** / **Close** notices when a source server's result closes), rolled-back preview banners on cancelled/rolled-back coordinated transactions, **Compare…** pairing directly from Summary or Combined, and a sibling server filter bar above Messages that stays out of **Ctrl+A**. See [Multi-server and Cross-Engine queries](multi-server-query.md#composited-results-combined-compare-and-messages).
+
 ## Error source navigation
 
 Errors with a location in the submitted query have **Go to line** in Messages (keyboard, or double-click the error), which

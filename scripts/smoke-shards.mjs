@@ -27,7 +27,7 @@ export const suiteSeconds = {
     'scripts/backend-smoke.mjs': 37, 'scripts/live-smoke.mjs': 25, 'scripts/chart-smoke.mjs': 33,
     'scripts/live-grid-smoke.mjs': 22, 'scripts/activity-monitor-smoke.mjs': 92, 'scripts/menus-smoke.mjs': 86,
     'scripts/explorer-smoke.mjs': 121, 'scripts/scripting-smoke.mjs': 33, 'scripts/object-actions-smoke.mjs': 124,
-    'scripts/results-smoke.mjs': 95, 'scripts/grouped-results-smoke.mjs': 9, 'scripts/bigquery-results-smoke.mjs': 7, 'scripts/bigquery-explorer-smoke.mjs': 8, 'scripts/estimated-plans-smoke.mjs': 18, 'scripts/options-resize-smoke.mjs': 5, 'scripts/options-smoke.mjs': 18,
+    'scripts/results-smoke.mjs': 95, 'scripts/grouped-results-smoke.mjs': 9, 'scripts/multi-server-query-smoke.mjs': 8, 'scripts/bigquery-results-smoke.mjs': 7, 'scripts/bigquery-explorer-smoke.mjs': 8, 'scripts/estimated-plans-smoke.mjs': 18, 'scripts/options-resize-smoke.mjs': 5, 'scripts/options-smoke.mjs': 18,
     'scripts/files-smoke.mjs': 17, 'scripts/hot-exit-smoke.mjs': 41, 'scripts/editor-smoke.mjs': 33, 'scripts/language-services-smoke.mjs': 15, 'scripts/language-diagnostics-smoke.mjs': 10,
     'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 11, 'scripts/ssis-smoke.mjs': 7,
     'scripts/ssis-operations-smoke.mjs': 21, 'scripts/bigquery-jobs-smoke.mjs': 12, 'scripts/agent-jobs-smoke.mjs': 18, 'scripts/agent-job-smoke.mjs': 21, 'scripts/agent-proxy-smoke.mjs': 6, 'scripts/agent-hot-exit-smoke.mjs': 6, 'scripts/updates-smoke.mjs': 11
@@ -40,7 +40,7 @@ export const suiteSeconds = {
     'scripts/backend-smoke.mjs': 37, 'scripts/live-smoke.mjs': 27, 'scripts/chart-smoke.mjs': 27,
     'scripts/live-grid-smoke.mjs': 22, 'scripts/activity-monitor-smoke.mjs': 87, 'scripts/menus-smoke.mjs': 104,
     'scripts/explorer-smoke.mjs': 119, 'scripts/scripting-smoke.mjs': 26, 'scripts/object-actions-smoke.mjs': 179,
-    'scripts/results-smoke.mjs': 90, 'scripts/grouped-results-smoke.mjs': 12, 'scripts/bigquery-results-smoke.mjs': 9, 'scripts/bigquery-explorer-smoke.mjs': 8, 'scripts/estimated-plans-smoke.mjs': 7, 'scripts/options-resize-smoke.mjs': 5, 'scripts/options-smoke.mjs': 22,
+    'scripts/results-smoke.mjs': 90, 'scripts/grouped-results-smoke.mjs': 12, 'scripts/multi-server-query-smoke.mjs': 8, 'scripts/bigquery-results-smoke.mjs': 9, 'scripts/bigquery-explorer-smoke.mjs': 8, 'scripts/estimated-plans-smoke.mjs': 7, 'scripts/options-resize-smoke.mjs': 5, 'scripts/options-smoke.mjs': 22,
     'scripts/files-smoke.mjs': 22, 'scripts/hot-exit-smoke.mjs': 33, 'scripts/editor-smoke.mjs': 39, 'scripts/language-services-smoke.mjs': 18, 'scripts/language-diagnostics-smoke.mjs': 11,
     'scripts/table-designer-smoke.mjs': 7, 'scripts/document-frame-smoke.mjs': 8, 'scripts/ssis-smoke.mjs': 9,
     'scripts/ssis-operations-smoke.mjs': 21, 'scripts/bigquery-jobs-smoke.mjs': 13, 'scripts/agent-jobs-smoke.mjs': 18, 'scripts/agent-job-smoke.mjs': 20, 'scripts/agent-proxy-smoke.mjs': 6, 'scripts/agent-hot-exit-smoke.mjs': 7, 'scripts/updates-smoke.mjs': 11

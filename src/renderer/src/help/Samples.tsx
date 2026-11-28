@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { authenticationCatalog, authenticationModes, type AuthenticationMode } from '../../../shared/auth'
 import { settingValueLabel } from '../../../shared/help/references'
 import { defaultSchedule, formatRun, nextRuns, schedulePresets, scheduleSentence, type AgentMoment, type SchedulePresetId } from '../../../shared/agent/schedule'
+import { checkCrossEngineReadOnly, classifyStatements } from '../../../shared/multi-query'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 
 /** Bounded teaching illustrations, not another editor, connection dialog or result-grid implementation. */
@@ -88,5 +89,77 @@ export function AgentScheduleSample() {
     <p>Next runs of the fictional job “Nightly sales load”, counted from Monday 2026-01-05 09:00:</p>
     <ol aria-label="Sample next runs">{nextRuns(schedule, agentSampleNow, 3).map(run => <li key={formatRun(run)}>{formatRun(run)}</li>)}</ol>
     <p className="help-muted">Illustration only. The sentence and runs come from the job document’s own schedule rules, on a fictional date; this sample never connects, creates a schedule or runs a job.</p>
+  </figure>
+}
+
+export const multiServerSampleScenarios = [
+  {
+    id: 'sqlDml',
+    label: 'SQL Server DML + SELECT',
+    provider: 'sqlserver' as const,
+    crossEngine: false,
+    sql: "UPDATE dbo.Orders SET Status = 'Archived' WHERE CreatedAt < '2025-01-01';\nSELECT COUNT(*) AS Archived FROM dbo.Orders WHERE Status = 'Archived';"
+  },
+  {
+    id: 'bqDdl',
+    label: 'BigQuery permanent DDL',
+    provider: 'bigquery' as const,
+    crossEngine: false,
+    sql: 'CREATE OR REPLACE VIEW analytics.active_orders AS SELECT id, region FROM analytics.orders WHERE active;'
+  },
+  {
+    id: 'crossGuard',
+    label: 'Cross-Engine blocked write',
+    provider: 'sqlserver' as const,
+    crossEngine: true,
+    sql: "DELETE FROM dbo.Orders WHERE Status = 'Cancelled';"
+  }
+] as const
+export type MultiServerSampleId = (typeof multiServerSampleScenarios)[number]['id']
+
+export interface MultiServerSampleInput {
+  readonly provider: 'sqlserver' | 'bigquery'
+  readonly crossEngine: boolean
+  readonly sql: string
+}
+
+export function multiServerSampleOutcome(scenario: MultiServerSampleInput): {
+  readonly tags: readonly string[]
+  readonly outcome: string
+} {
+  if (scenario.crossEngine) {
+    const violations = checkCrossEngineReadOnly(scenario.sql, scenario.provider)
+    const location = violations.length === 1
+      ? `1 violation on Line ${violations[0]!.line}`
+      : `${violations.length} violations, first on Line ${violations[0]?.line ?? 1}`
+    return {
+      tags: [],
+      outcome: violations.length > 0
+        ? `Blocked before sending (${location}): ${violations[0]!.message}`
+        : 'Read-only check passed: both dialect panes run together.'
+    }
+  }
+  const classification = classifyStatements(scenario.sql, scenario.provider)
+  const outcome = scenario.provider === 'bigquery' && classification.hasBigQueryPermanentDdl
+    ? 'Coordinated Transaction is disabled for permanent BigQuery DDL. Varia pre-selects Fire and Forget with Pre-flight Dry Run (free) and Sequential rollout.'
+    : scenario.provider === 'bigquery' && classification.blocksBigQueryTransaction
+      ? 'Coordinated Transaction is disabled for this BigQuery statement. Run it with Fire and Forget instead.'
+      : scenario.provider === 'sqlserver' && classification.hasNonTransactionalTSql
+        ? 'Coordinated Transaction is disabled for non-transactional SQL Server statements. Run it with Fire and Forget instead.'
+        : 'Coordinated Transaction is available: all servers commit together if every target succeeds, or all roll back together if any target fails.'
+  return { tags: classification.tags, outcome }
+}
+
+export function MultiServerSample() {
+  const [scenarioId, setScenarioId] = useState<MultiServerSampleId>('sqlDml')
+  const scenario = multiServerSampleScenarios.find(item => item.id === scenarioId) ?? multiServerSampleScenarios[0]
+  const { tags, outcome } = multiServerSampleOutcome(scenario)
+  return <figure className="help-sample"><figcaption>Sample · how Varia classifies statements before multi-server execution</figcaption>
+    <div className="help-sample-controls" role="group" aria-label="Sample multi-server scenario">{multiServerSampleScenarios.map(item =>
+      <button key={item.id} type="button" aria-pressed={item.id === scenario.id} onClick={() => setScenarioId(item.id)}>{item.label}</button>)}</div>
+    <pre aria-label="Sample multi-server SQL"><code>{scenario.sql}</code></pre>
+    {tags.length > 0 && <p>Detected: <strong>{tags.join(' · ')}</strong></p>}
+    <p role="status">{outcome}</p>
+    <p className="help-muted">Illustration only. Uses Varia’s real statement classifier and Cross-Engine read-only guard on fictional SQL; it never connects or sends queries.</p>
   </figure>
 }
