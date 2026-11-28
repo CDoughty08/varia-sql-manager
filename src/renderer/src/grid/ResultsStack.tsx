@@ -3,25 +3,179 @@ import { limits as wire } from '../../../shared/ipc/wire/protocol'
 import { nextFrame } from '../core/frame'
 import { observeResize } from '../core/windows'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import EnvironmentTag from '../EnvironmentTag'
 import Icon from '../Icon'
-import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, pivotOutOfDate, slotNamed, setKey, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import MultiRunSummary, { multiModeLabel, multiOutcomeInfo, normalizeMultiEnvironment } from '../results/MultiRunSummary'
+import { distinctName, entryName, entryNumber, entrySecondary, entryTitle, hasMultiSummary, pivotOutOfDate, setKey, slotNamed, summaryEntryKey, targetOfEntry, transposedView, type EntryKey, type GridSort, type GridViewState, type ResultSetEntry, type TabResults } from '../results/ResultsService'
 import { formatCount, plural, rowsFact } from '../results/status'
 import { gridLimits as g } from './constants'
 import ResultGrid from './ResultGrid'
-import { stackReveals } from './result-picker'
+import { combinedTargetCount, stackReveals } from './result-picker'
 import { visibleColumnCount } from './hidden-columns'
 import { scrollbarSize } from './scrollbar'
 import { contentHeight, dragSplitter, minGridHeight, mountedRange, revealScrollTop, setFloors, splitterMoves, stackLayout, stackMinimum } from './stack'
 
 export { scrollbarSize }
 
+/** Height (px) of one multi-server grid notice strip (Rolled-back preview, Stale Combined, or Partial-merge/Schema-drift). */
+export const multiNoticeHeight = 28
+/** Height (px) of the collapsible summary header band above grids in Stacked layout. */
+export const multiStackHeaderHeight = 32
+/** Height (px) of the compact statement selector strip in Stacked layout when statements > 1. */
+export const multiStmtBarHeight = 28
+/** Minimum comfortable height (px) for the MultiRunSummary view when sets.length === 0 or Summary is active. */
+export const multiSummaryMinHeight = 120
+
+export interface EntryNotice {
+  readonly kind: 'rolledBack' | 'staleCombined' | 'partialCombine' | 'combineWarning'
+  readonly tone: 'warn' | 'info'
+  readonly text: string
+}
+
+/** Notice strips shown directly above a grid (Rolled-back preview, Stale Combined, Partial-merge / Schema-drift). */
+export function entryNotices(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, entry: ResultSetEntry): EntryNotice[] {
+  const notices: EntryNotice[] = []
+  if (entry.descriptor.rolledBackPreview || entry.handle?.getSnapshot().rolledBackPreview) {
+    notices.push({ kind: 'rolledBack', tone: 'warn', text: 'Rolled back — preview only (not committed).' })
+  }
+  if (entry.descriptor.kind === 'combined') {
+    const stale = !!tab.staleCombined?.has(entry.key)
+    if (stale) {
+      notices.push({ kind: 'staleCombined', tone: 'warn', text: 'Source server results changed. Rebuild Combined from the current in-memory servers or close this view.' })
+    }
+    if (hasMultiSummary(tab)) {
+      const warnings = tab.combineWarnings && tab.combineWarnings.size > 0 ? tab.combineWarnings.get(entry.key) : tab.multi!.combineWarnings
+      if (warnings && warnings.length > 0) {
+        notices.push({ kind: 'combineWarning', tone: 'info', text: warnings.join(' ') })
+      }
+      if (!stale && !warnings?.some(warning => warning.startsWith('Skipped ') && !warning.startsWith('Skipped Combined view'))) {
+        const slot = entry.descriptor.statementSlot ?? 0
+        const k = tab.combinedCounts?.get(entry.key) ?? combinedTargetCount(tab, slot), total = tab.multi!.targets.length
+        if (k < total) {
+          notices.push({ kind: 'partialCombine', tone: 'info', text: `Combined from ${formatCount(k)} of ${formatCount(total)} servers — remaining servers returned no in-memory rows for this statement.` })
+        }
+      }
+    }
+  }
+  return notices
+}
+
+/** Exact total height (px) of notice strips rendered above `entry`'s grid (0 for ordinary single-server grids). */
+export function entryNoticesHeight(tab: Partial<Pick<TabResults, 'multi' | 'sets' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, entry: ResultSetEntry | undefined): number {
+  return entry ? entryNotices(tab, entry).length * multiNoticeHeight : 0
+}
+
+/** Renders the notice strip(s) above a multi-server result grid, including Rebuild / Close actions for stale Combined views. */
+export const EntryNoticeBars = memo(function EntryNoticeBars({ tabId, tab, entry, running, onClose, onRebuiltFocus }: {
+  readonly tabId: string
+  readonly tab: TabResults
+  readonly entry: ResultSetEntry
+  readonly running: boolean
+  readonly onClose?: (key: EntryKey, event: MouseEvent<HTMLButtonElement>) => void
+  readonly onRebuiltFocus?: () => void
+}) {
+  const { results } = useWorkbench()
+  const entryState = useSyncExternalStore(entry.handle.subscribe, () => entry.handle.getSnapshot().state)
+  const notices = entryNotices(tab, entry)
+  const stale = notices.some(notice => notice.kind === 'staleCombined')
+  const actionFocus = useRef(false)
+  const ownerDocRef = useRef<Document | null>(null)
+  const rebuiltFocusRef = useRef(onRebuiltFocus)
+  rebuiltFocusRef.current = onRebuiltFocus
+  useLayoutEffect(() => {
+    if (stale || !actionFocus.current) return
+    actionFocus.current = false
+    const doc = ownerDocRef.current ?? globalThis.document
+    if (!doc.activeElement || doc.activeElement === doc.body) rebuiltFocusRef.current?.()
+  }, [stale])
+  if (notices.length === 0) return null
+  const rebuilding = !!tab.combining?.has(entry.key)
+  const lost = entryState === 'lost' || entryState === 'released'
+  const canRebuild = !running && !rebuilding && !lost && results.canRebuildCombined(tabId, entry.key)
+  const rebuildTitle = !rebuilding && !canRebuild
+    ? (running
+      ? 'Unavailable while the query runs.'
+      : entryState === 'lost'
+        ? 'These results are no longer available because the SQL backend restarted.'
+        : 'At least two complete in-memory server result sets are needed to rebuild Combined.')
+    : undefined
+  return <div className="multi-grid-notices">
+    {notices.map(notice => <div key={notice.kind} className={`multi-grid-notice multi-grid-notice-${notice.tone}`} role="status" data-notice-kind={notice.kind}>
+      <Icon name={notice.tone === 'warn' ? 'warning' : 'info'} />
+      <span className="multi-grid-notice-text">{notice.text}</span>
+      {notice.kind === 'staleCombined' && <span className="multi-grid-notice-actions"
+        onFocus={event => {
+          actionFocus.current = true
+          ownerDocRef.current = event.currentTarget.ownerDocument
+        }}
+        onBlur={event => {
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) actionFocus.current = false
+        }}>
+        <button type="button" className="multi-grid-notice-btn" disabled={!rebuilding && !canRebuild} aria-disabled={rebuilding || undefined}
+          title={rebuildTitle}
+          onClick={() => { if (canRebuild) void results.rebuildCombined(tabId, entry.key) }}>
+          <Icon name={rebuilding ? 'loading' : 'refresh'} spin={rebuilding} /><span>{rebuilding ? 'Rebuilding…' : 'Rebuild'}</span>
+        </button>
+        <button type="button" className="multi-grid-notice-btn" disabled={running || rebuilding}
+          title={running ? 'Unavailable while the query runs.' : rebuilding ? 'Wait until Combined finishes rebuilding.' : 'Close this Combined view'}
+          onClick={event => onClose ? onClose(entry.key, event) : results.removeEntry(tabId, entry.key)}>
+          <Icon name="close" /><span>Close</span>
+        </button>
+      </span>}
+    </div>)}
+  </div>
+})
+
+/** Counts distinct multi-server statement slots present across a tab's sets. */
+function distinctStatementSlots(sets: readonly ResultSetEntry[]): { readonly slot: number; readonly label: string }[] {
+  const bySlot = new Map<number, string>()
+  for (const entry of sets) {
+    if (entry.descriptor.kind !== 'rows' && entry.descriptor.kind !== 'combined') continue
+    if (entry.descriptor.targetKey === undefined && entry.descriptor.kind !== 'combined') continue
+    const slot = entry.descriptor.statementSlot ?? 0
+    if (!bySlot.has(slot) || (entry.descriptor.name && bySlot.get(slot) === `Statement ${slot + 1}`)) {
+      bySlot.set(slot, entry.descriptor.name || `Statement ${slot + 1}`)
+    }
+  }
+  return [...bySlot.entries()].sort(([a], [b]) => a - b).map(([slot, label]) => ({ slot, label }))
+}
+
+/** Orders multi-server stacked entries: Combined first, then each server in target order (with its Pivot directly under it),
+ *  then any other entries, and comparisons last. */
+function orderedMultiSets(tab: TabResults, selectedStmt: number | 'all'): readonly ResultSetEntry[] {
+  if (!hasMultiSummary(tab)) return tab.sets
+  const matchesStmt = (entry: ResultSetEntry) => selectedStmt === 'all' || (entry.descriptor.statementSlot ?? 0) === selectedStmt
+  const ordered: ResultSetEntry[] = []
+  const added = new Set<EntryKey>()
+  const pushGroup = (group: TabResults['groups'][number]) => {
+    if (!matchesStmt(group.table.entry)) return
+    ordered.push(group.table.entry)
+    added.add(group.table.key)
+    if (group.pivot) { ordered.push(group.pivot.entry); added.add(group.pivot.key) }
+  }
+  // 1. Combined sets first
+  for (const group of tab.groups) if (group.table.entry.descriptor.kind === 'combined') pushGroup(group)
+  // 2. Per-server sets in tab.multi.targets order
+  for (const target of tab.multi!.targets) {
+    for (const group of tab.groups) {
+      if (group.table.entry.descriptor.targetKey === target.targetKey && !added.has(group.table.key)) pushGroup(group)
+    }
+  }
+  // 3. Any remaining groups (e.g. samples)
+  for (const group of tab.groups) if (!added.has(group.table.key)) pushGroup(group)
+  // 4. Comparisons last
+  for (const slot of tab.comparisons) ordered.push(slot.entry)
+  return ordered
+}
+
 /**
  * Each set's height sized to its rows once it has them all (`contentHeight`), undefined while it streams. A horizontal scroll
  * bar is counted unless the set's grid said its columns fit (`narrow`): a grid not yet shown might need one. A set drawn
  * transposed (`turned`) is sized by the rows it draws, which are its columns, with the strip it shows past the cap.
+ * Multi-server notice strips above a grid are included in its settled height.
  */
-export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>): (number | undefined)[] {
-  return tab.sets.map(entry => {
+export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, narrow?: ReadonlySet<EntryKey>, turned?: ReadonlySet<EntryKey>, entries: readonly ResultSetEntry[] = tab.sets): (number | undefined)[] {
+  return entries.map(entry => {
     const set = tab.settled.get(setKey(entry.descriptor))
     if (!set) return undefined
     const isTurned = !!turned?.has(entry.key)
@@ -29,6 +183,7 @@ export function settledContent(tab: Pick<TabResults, 'sets' | 'settled'> & Parti
     // filter that leaves fewer (Transpose Selected Rows always does) leaves no strip.
     const capped = isTurned && (tab.sorts?.get(entry.key)?.view?.rows ?? set.rows) > wire.transpose.maxRows
     return contentHeight(isTurned ? entry.descriptor.columns.length : set.rows, narrow?.has(entry.key) ? 0 : scrollbarSize(), set.strip || capped, entry.descriptor.kind === 'diff')
+      + entryNoticesHeight(tab, entry)
   })
 }
 /** The entries drawn transposed, by the one rule the grid, Copy and Save follow (`transposedView`) over each grid's state. */
@@ -56,11 +211,16 @@ export function weightsOf(sets: readonly ResultSetEntry[], weights: ReadonlyMap<
   const mean = sum / known
   return sets.map(entry => weights.get(entry.key) ?? mean)
 }
-/** The room a run's stack needs before it scrolls: every set at its floor (what the Messages strip leaves it, at least). */
-export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
-  const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab, undefined, grids && turnedEntries(tab.sets, grids)), count = tab.sets.length, places = collapsedPlaces(tab.sets, collapsed)
-  if (count === 0) return 0
-  return count === 1 ? places.has(0) ? g.captionHeight : Math.min(minHeight, content[0] ?? minHeight) : stackMinimum(count, minHeight, { content, collapsed: places })
+/** The room a run's stack needs before it scrolls: every set at its floor (including multi-server summary/statement/notice
+ *  strips, so short panes never starve grids). */
+export function stackNeed(tab: Pick<TabResults, 'sets' | 'settled'> & Partial<Pick<TabResults, 'sorts' | 'multi' | 'staleCombined' | 'combineWarnings' | 'combinedCounts'>>, collapsed: ReadonlySet<EntryKey>, grids?: ReadonlyMap<EntryKey, GridViewState>): number {
+  const multi = hasMultiSummary(tab)
+  const count = tab.sets.length
+  if (count === 0) return multi ? multiSummaryMinHeight : 0
+  const minHeight = minGridHeight(scrollbarSize()), content = settledContent(tab, undefined, grids && turnedEntries(tab.sets, grids)), places = collapsedPlaces(tab.sets, collapsed)
+  const extraMin = multi ? tab.sets.map(entry => entryNoticesHeight(tab, entry)) : undefined
+  const multiChrome = multi ? multiStackHeaderHeight + (distinctStatementSlots(tab.sets).length > 1 ? multiStmtBarHeight : 0) : 0
+  return multiChrome + stackMinimum(count, minHeight, { content, collapsed: places, ...extraMin ? { extraMin } : {} })
 }
 
 /** "Batch 2 of 3", with the repetition of a batch run with GO n; '' for a script of one batch run once. */
@@ -68,6 +228,10 @@ export function batchText(batchNumber: number, iteration: number, totalBatches: 
   const batch = totalBatches > 1 ? `Batch ${batchNumber} of ${totalBatches}` : ''
   return iteration > 1 ? batch ? `${batch}, repetition ${iteration}` : `Repetition ${iteration}` : batch
 }
+
+/** Per-entry batch total: single-server runs use `tab.totalBatches`; multi-server runs use the entry's own target's `batchesTotal` (0 for Combined). */
+export const entryTotalBatches = (tab: Pick<TabResults, 'totalBatches' | 'multi'>, entry: ResultSetEntry): number =>
+  !hasMultiSummary(tab) ? tab.totalBatches : entry.descriptor.targetKey ? targetOfEntry(tab, entry)?.batchesTotal ?? 0 : 0
 
 /**
  * A filtered result's filters, each its words and a Remove button, and Clear filters when there are several. Removing the
@@ -126,9 +290,10 @@ export function PivotMark({ tabId, entry, name, ordinal, source, stale, running,
  * Results As for it and, in a stack that closes results (`onClose`), its close button, which is disabled while the query
  * runs (`running`). A Table's closes its group, so its tooltip says what goes with it (`others`: its Pivot); a Pivot's or
  * a comparison's closes that view alone. It renders for each set in view, so a set's facts show before its grid mounts.
+ * Calm Pro: multi-server captions show a small color dot and optional environment pill with zero left-border stripes.
  */
-const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, sort, running, others, named, pivotOf, pivotSource, stale, onToggle, onClose }: {
-  tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string
+const ResultCaption = memo(function ResultCaption({ tabId, tab, entry, collapsed, totalBatches, sort, running, others, named, pivotOf, pivotSource, stale, onToggle, onClose }: {
+  tabId: string; tab: TabResults; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; sort?: GridSort; running: boolean; others: string
   /** The group number of the Pivot this caption heads, and whether it is out of date (its Table's filters changed). */
   pivotOf?: number; stale?: boolean
   /** The name of the Table that Pivot was built from ("Result 2", "Open orders"). */
@@ -139,8 +304,14 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
 }) {
   const { commands, results } = useWorkbench()
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  const cached = useSyncExternalStore(results.subscribe, () => results.getSnapshot()[tabId]?.summary?.job?.cacheHit === true)
+  const cached = useSyncExternalStore(results.subscribe, () => {
+    const current = results.getSnapshot()[tabId] ?? tab
+    return current?.summary?.job?.cacheHit === true || targetOfEntry(current, entry)?.job?.cacheHit === true
+  })
   const { descriptor } = entry, columns = visibleColumnCount(descriptor), name = entryName(entry), number = entrySecondary(entry)
+  const target = targetOfEntry(tab, entry)
+  const targetIndex = target && tab.multi ? tab.multi.targets.findIndex(item => item.targetKey === target.targetKey) : -1
+  const normalizedEnv = normalizeMultiEnvironment(target?.environment)
   // A named result's buttons are named with its number too, so a screen reader tells two of one name apart.
   const spoken = number ? `${name}, ${number}` : name
   // A named result's number leads its facts, so two results of one name are told apart.
@@ -157,8 +328,12 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
   return <div className="rs-caption">
     <button ref={toggleRef} type="button" className="rs-caption-toggle" data-caption-entry={entry.key} aria-expanded={!collapsed} data-named={named || undefined}
       {...number ? { title: `${name} · ${number}`, 'aria-label': spoken } : named ? { title: name } : {}} onClick={() => onToggle(entry.key)}>
-      <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
+      <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} />
+      {targetIndex >= 0 && <span className="rs-server-dot" data-target-color={targetIndex % 6} aria-hidden="true" />}
+      {descriptor.kind === 'combined' && <Icon name="layers" />}
+      <span className="rs-caption-name">{name}</span>
     </button>
+    {target && <EnvironmentTag environment={normalizedEnv} place="list" about={target.label} />}
     {/* Rows change while the set streams; the grid's own label announces its counts. */}
     <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
     <FilterChips tabId={tabId} entry={entry} name={spoken} sort={sort} refocus={refocus} />
@@ -172,22 +347,24 @@ const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, tot
 })
 
 /**
- * A run's views stacked, one item each, in the order of `tab.sets`: each group's Table, its Pivot directly under it, then
- * the next group, and the comparisons last. Each is under its caption: a set that has all its rows and needs less than its
- * share is sized to them (one drawn transposed, to the rows it draws), the rest share the pane equally (or by the weights a splitter drag left), no grid is shorter than a
- * header and four rows (or its rows), a collapsed set is its caption alone, and when they do not fit the stack scrolls.
- * Only the sets within a view above and below are rendered, at most 12, mounting at most 2 grids a frame; a set waiting
- * for its grid shows its caption. One set in a pane too short for its minimum shows its grid without the caption, whose
- * facts the run summary already gives. Scroll position, weights, collapsed sets and the focused grid live in the tab's
- * view state, each by its entry's key. Each caption has a close button for its view: a Table's closes its group. A bare
- * run (`tab.bare`, Peek's rows) draws the grid alone: no close buttons, and no caption either while it has one grid
- * without filters (a caption returns to hold the filters, so they can be removed).
+ * A run's views stacked, one item each, in the order of `tab.sets` (or for multi-server runs: a top MultiRunSummary band
+ * — full when sets.length === 0 so pure-DDL/DML runs are never blank, collapsible above grids when sets.length > 0 —
+ * optional compact statement selector strip when statements > 1, then Combined, each server's grids in target order,
+ * and comparisons last). Each grid sits under its calm caption with zero left-border accent stripes.
  */
 export default function ResultsStack({ tabId, tab, revealFocused = false }: { tabId: string; tab: TabResults; revealFocused?: boolean }) {
   const { results, resultsSearch } = useWorkbench()
   const view = results.viewState(tabId)
   const search = useServiceSnapshot(resultsSearch)[tabId]
-  const sets = tab.sets, count = sets.length, closable = !tab.bare
+  const multi = hasMultiSummary(tab)
+  const summaryOnly = multi && tab.sets.length === 0
+  const statementSlots = useMemo(() => multi ? distinctStatementSlots(tab.sets) : [], [multi, tab.sets])
+  const [selectedStmt, setSelectedStmt] = useState<number | 'all'>('all')
+  const effectiveStmt = selectedStmt !== 'all' && !statementSlots.some(item => item.slot === selectedStmt) ? 'all' : selectedStmt
+  // Compact summary band defaults collapsed once sets exist (pure-DDL/DML renders full MultiRunSummary above).
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const sets = useMemo(() => multi ? orderedMultiSets(tab, effectiveStmt) : tab.sets, [multi, tab, effectiveStmt])
+  const count = sets.length, closable = !tab.bare
   // What each entry shows of its group, for its grid's attributes and its caption.
   const slots = useMemo(() => {
     const map = new Map<EntryKey, { view: 'table' | 'pivot' | 'comparison' | 'plan'; group?: number; others: string; stale?: boolean; source?: string; named: boolean }>()
@@ -199,7 +376,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     }
     for (const slot of tab.comparisons) map.set(slot.key, { view: 'comparison', others: '', named: slotNamed(slot) })
     return map
-  }, [tab.groups, tab.comparisons, tab.sorts])
+  }, [tab.groups, tab.comparisons, tab.sorts, tab.sets])
   const stackRef = useRef<HTMLDivElement>(null)
   const [paneHeight, setPaneHeight] = useState(0)
   const [scrollTop, setScrollTop] = useState(view.stackScrollTop)
@@ -209,10 +386,6 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const [mounted, setMounted] = useState<ReadonlySet<EntryKey>>(() => new Set())
   // The sets whose grids said their columns fit, so their content height leaves out the horizontal scroll bar.
   const [narrow, setNarrow] = useState<ReadonlySet<EntryKey>>(() => new Set())
-  // The sets drawn transposed, which are sized by their columns. The orientation is in each grid's state and the service
-  // publishes when it changes (`setOrientation`), so it is read again with every snapshot, mounted grid or not.
-  // The same set while the same entries are turned, so the layout is made again only when one is turned or turned back,
-  // not with every snapshot.
   const lastTurned = useRef<ReadonlySet<EntryKey>>(new Set())
   const turned = useMemo(() => {
     const next = turnedEntries(sets, view.grids), last = lastTurned.current
@@ -222,15 +395,16 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
   const settled = tab.settled
   const sorts = tab.sorts
-  const content = useMemo(() => settledContent({ sets, settled, sorts }, narrow, turned), [sets, settled, sorts, narrow, turned])
+  const content = useMemo(() => settledContent({ sets: tab.sets, settled, sorts, multi: tab.multi, staleCombined: tab.staleCombined, combineWarnings: tab.combineWarnings, combinedCounts: tab.combinedCounts }, narrow, turned, sets), [tab.sets, settled, sorts, tab.multi, tab.staleCombined, tab.combineWarnings, tab.combinedCounts, narrow, turned, sets])
   // By place, for the layout: what the stack keeps by entry key, over the entries as they are drawn.
   const weights = useMemo(() => weightsOf(sets, entryWeights), [sets, entryWeights])
   const collapsed = useMemo(() => collapsedPlaces(sets, collapsedEntries), [sets, collapsedEntries])
   // The grid F6 focuses: the one that last had the focus, else the first.
-  const focused = focusedEntry !== undefined && sets.some(entry => entry.key === focusedEntry) ? focusedEntry : tab.focused ?? sets[0]?.key
-  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed }), [paneHeight, count, weights, minHeight, content, collapsed])
-  const floors = useMemo(() => setFloors(count, minHeight, { content, collapsed }), [count, minHeight, content, collapsed])
-  const bare = count === 1 && !collapsed.has(0) && paneHeight > 0 && paneHeight < minHeight
+  const focused = focusedEntry !== undefined && sets.some(entry => entry.key === focusedEntry) ? focusedEntry : (tab.focused && sets.some(entry => entry.key === tab.focused) ? tab.focused : sets[0]?.key)
+  const extraMin = useMemo(() => multi ? sets.map(entry => entryNoticesHeight(tab, entry)) : undefined, [multi, sets, tab])
+  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {}, ...multi ? { keepFloor: true } : {} }), [paneHeight, count, weights, minHeight, content, collapsed, extraMin, multi])
+  const floors = useMemo(() => setFloors(count, minHeight, { content, collapsed, ...extraMin ? { extraMin } : {} }), [count, minHeight, content, collapsed, extraMin])
+  const bare = !multi && count === 1 && !collapsed.has(0) && paneHeight > 0 && paneHeight < minHeight
   const [first, last] = paneHeight > 0 ? mountedRange(layout, scrollTop, paneHeight) : [0, -1]
   const drag = useRef<{ index: number; pointerId: number; startY: number; heights: readonly number[]; floors: readonly number[]; frame?: () => void; y: number } | undefined>(undefined)
   const setWeights = (next: number[] | undefined) => {
@@ -239,12 +413,23 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     setWeightsState(byEntry)
   }
 
+  // Stacked layout displays grids immediately when sets exist: clear virtual Summary focus so Transpose / Save Results As act on the first grid right away.
+  const firstEntryKey = sets[0]?.key
   useLayoutEffect(() => {
-    const element = stackRef.current!
+    if (!multi || firstEntryKey === undefined) return
+    if (tab.activeSummary || tab.focused === summaryEntryKey) {
+      results.focusEntry(tabId, firstEntryKey)
+      setFocused(firstEntryKey)
+    }
+  }, [multi, firstEntryKey, tab.activeSummary, tab.focused, results, tabId])
+
+  useLayoutEffect(() => {
+    const element = stackRef.current
+    if (!element) return
     const observer = observeResize(element, () => setPaneHeight(element.clientHeight))
     setPaneHeight(element.clientHeight)
     return () => observer.dispose()
-  }, [])
+  }, [summaryOnly])
   // The saved scroll position, once the content is tall enough to take it.
   useLayoutEffect(() => {
     const element = stackRef.current
@@ -271,55 +456,54 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     return nextFrame(() => setMounted(mount))
   }, [first, last, mounted, sets])
   useEffect(() => () => drag.current?.frame?.(), [])
-  // A splitter drag holds places and heights of the entries as they were: when one goes, the drag ends where it was. (One
-  // that arrives while the query runs is added after them, and leaves the drag alone.)
   const drawn = useRef(count)
   useEffect(() => {
     if (count < drawn.current) { drag.current?.frame?.(); drag.current = undefined }
     drawn.current = count
   }, [count])
-  // Closing a view (its caption's button; a Table's closes its group): the focus goes to the caption after what closes,
-  // else the one before, else to the
-  // Results tab, which stays when the last result has gone (and takes it too when that caption is not drawn: one result
-  // left in a pane too short for a caption). Only when the focus was in what closes, or nowhere. It moves once, in the
-  // first layout without the closed result, and never later.
   const pendingFocus = useRef<{ readonly closed: EntryKey; readonly next: EntryKey } | undefined>(undefined)
   const close = useCallback((key: EntryKey) => {
-    const stack = stackRef.current, list = results.getSnapshot()[tabId]?.sets ?? []
+    const stack = stackRef.current, list = sets
     const gone = new Set(results.closing(tabId, key).map(entry => entry.key))
     const places = list.flatMap((entry, place) => gone.has(entry.key) ? [place] : [])
-    // A Pivot leaves the focus in its group, on the Table's caption, as the service leaves the
-    // grid focus on the Table; a group or a comparison passes it to the next surviving item, else the one before.
     const slot = slots.get(key), table = slot?.group !== undefined && slot.view !== 'table' && slot.view !== 'plan' ? list.find(entry => entry.ordinal === slot.group) : undefined
     const next = table ?? (places.length ? list[places[places.length - 1] + 1] ?? list[places[0] - 1] : undefined)
     const active = stack?.ownerDocument.activeElement
     const own = !active || active === stack?.ownerDocument.body || gone.has(active.closest('.rs-item')?.querySelector('[data-caption-entry]')?.getAttribute('data-caption-entry') ?? '')
     if (own && !next) resultsTab()?.focus({ preventScroll: true })
-    const focused = results.getSnapshot()[tabId]?.focused
-    if (!results.removeEntry(tabId, key) || !own || !next) return
-    // When the closed view had the grid focus, the service passed it to the view its neighbour last showed (a group's Pivot
-    // or Table): the caption focus goes there too, so commands act on the view the focus is on.
-    const moved = focused !== undefined && gone.has(focused) ? results.getSnapshot()[tabId]?.focused : undefined
+    const focusedNow = results.getSnapshot()[tabId]?.focused
+    if (!results.removeEntry(tabId, key)) return
+    const remaining = new Set(list.filter(entry => !gone.has(entry.key)).map(entry => entry.key))
+    let moved = focusedNow !== undefined && gone.has(focusedNow) ? results.getSnapshot()[tabId]?.focused : undefined
+    if (next && ((multi && focusedNow !== undefined && gone.has(focusedNow)) || (moved !== undefined && !remaining.has(moved)))) {
+      results.focusEntry(tabId, next.key)
+      setFocused(next.key)
+      moved = next.key
+    }
+    if (!own || !next) return
     pendingFocus.current = { closed: key, next: moved ?? next.key }
-  }, [results, tabId, slots])
+  }, [results, tabId, slots, sets, multi])
   const resultsTab = () => stackRef.current?.closest('.output-panel')?.querySelector<HTMLElement>('[role="tab"][data-output-tab="results"]')
+  const focusRebuilt = useCallback((key: EntryKey) => {
+    const stack = stackRef.current
+    if (!stack) return
+    const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(key) : key
+    const target = stack.querySelector<HTMLElement>(`[data-result-grid][data-result-entry="${escaped}"]`)
+      ?? stack.querySelector<HTMLElement>(`[data-caption-entry="${escaped}"]`)
+      ?? resultsTab()
+    target?.focus({ preventScroll: true })
+  }, [])
   useLayoutEffect(() => {
     const pending = pendingFocus.current
-    // Until the stack is drawn without the closed result, the focus is still in it.
     if (!pending || sets.some(entry => entry.key === pending.closed)) return
     pendingFocus.current = undefined
     const stack = stackRef.current, active = stack?.ownerDocument.activeElement
-    // The user has moved on meanwhile: the focus is theirs.
     if (active && active !== stack?.ownerDocument.body && !stack?.contains(active)) return
     const target = stack?.querySelector<HTMLElement>(`[data-caption-entry="${pending.next}"]`) ?? resultsTab()
     target?.focus({ preventScroll: true })
   })
 
   const focus = (key: EntryKey) => { results.focusEntry(tabId, key); setFocused(key) }
-  // A bare run's one grid has a caption only while it has filters (or is collapsed). When the caption goes with the focus
-  // in it (the last filter removed from its chip), the focus goes to the grid, not to the page: Peek's card keeps its
-  // keys only while the focus is inside it. Only then: a focus that was elsewhere, or nowhere, is left alone. (An element
-  // removed while it has the focus gets no blur, so the mark set when the caption took the focus is still set.)
   const captionless = !!tab.bare && count === 1 && !collapsed.has(0) && !tab.sorts.get(sets[0].key)?.filters.length
   const hadCaption = useRef(!captionless), captionFocus = useRef(false)
   const trackFocus = (event: FocusEvent<HTMLDivElement>) => { captionFocus.current = !!(event.target as Element).closest?.('.rs-caption') }
@@ -331,6 +515,18 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const stack = stackRef.current, active = stack?.ownerDocument.activeElement
     if (went && was && stack && (!active || active === stack.ownerDocument.body)) stack.querySelector<HTMLElement>('[data-pane-focus]')?.focus({ preventScroll: true })
   }, [captionless])
+  const hadSummaryOnly = useRef(summaryOnly), summaryFocus = useRef(false)
+  useLayoutEffect(() => {
+    const went = hadSummaryOnly.current && !summaryOnly, was = summaryFocus.current
+    hadSummaryOnly.current = summaryOnly
+    if (went) summaryFocus.current = false
+    const stack = stackRef.current, active = stack?.ownerDocument.activeElement
+    if (went && was && stack && (!active || active === stack.ownerDocument.body)) {
+      const target = stack.closest('.rs-multi-root')?.querySelector<HTMLElement>('.rs-multi-summary-toggle')
+        ?? stack.querySelector<HTMLElement>('[data-result-grid], [data-pane-focus]')
+      target?.focus({ preventScroll: true })
+    }
+  }, [summaryOnly])
   const wide = useCallback((key: EntryKey, isWide: boolean) => {
     setNarrow(current => {
       if (current.has(key) === !isWide) return current
@@ -340,26 +536,20 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
       return next
     })
   }, [])
-  // Stable, so captions re-render only when their own facts change.
   const toggle = useCallback((key: EntryKey) => {
     const next = new Set(view.collapsed)
     if (!next.delete(key)) next.add(key)
     setCollapsedState(next)
-    // Through the service, which publishes it: a Pivot expanded again is shown, and follows its Table's filters.
     results.setCollapsed(tabId, next)
   }, [view, results, tabId])
-  // Search in results: the grid holding the active match opens and scrolls into view, which mounts it; the grid then
-  // scrolls the match itself into view (ResultGrid). Layout effects run before the grid's effect takes the reveal, so the
-  // stack still sees it pending; a collapsed grid opens first and scrolls once its new layout is in.
   const revealSeq = search?.reveal ?? 0, revealEntry = search?.revealEntry
   const stackReveal = useRef<EntryKey | undefined>(undefined)
   useLayoutEffect(() => {
-    if (revealEntry === undefined || !sets.some(entry => entry.key === revealEntry) || !resultsSearch.pendingReveal(tabId, revealEntry)) return
+    if (revealEntry === undefined || !tab.sets.some(entry => entry.key === revealEntry) || !resultsSearch.pendingReveal(tabId, revealEntry)) return
+    if (!sets.some(entry => entry.key === revealEntry) && effectiveStmt !== 'all') setSelectedStmt('all')
     if (collapsedEntries.has(revealEntry)) toggle(revealEntry)
     stackReveal.current = revealEntry
   }, [revealSeq, revealEntry])
-  // Drawn in place of the Tabs layout while a grid had the focus (OutputPane): the focused view opens and scrolls into
-  // view as a match does, so its grid mounts and can take the focus back. Only at mount.
   const revealAtMount = useRef(revealFocused)
   useLayoutEffect(() => {
     const key = tab.focused
@@ -368,9 +558,6 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     if (collapsedEntries.has(key)) toggle(key)
     stackReveal.current = key
   }, [])
-  // Next Result, Previous Result and Go to Result N select a view through the service and ask the stack to show it: it
-  // opens and scrolls into view as a match does, and the focus follows to its grid once mounted when it was in the stack
-  // (a grid, a caption); from the editor it stays there. The request only marks the place: the work waits for a render.
   const [revealTick, setRevealTick] = useState(0)
   const revealAsked = useRef<EntryKey | undefined>(undefined), commandFocus = useRef<EntryKey | undefined>(undefined)
   useEffect(() => {
@@ -382,7 +569,8 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   useLayoutEffect(() => {
     const key = revealAsked.current
     revealAsked.current = undefined
-    if (key === undefined || !sets.some(entry => entry.key === key)) return
+    if (key === undefined || !tab.sets.some(entry => entry.key === key)) return
+    if (!sets.some(entry => entry.key === key) && effectiveStmt !== 'all') setSelectedStmt('all')
     if (collapsedEntries.has(key)) toggle(key)
     setFocused(key)
     stackReveal.current = key
@@ -393,8 +581,7 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     const key = commandFocus.current, stack = stackRef.current
     if (key === undefined || !stack) return
     const active = stack.ownerDocument.activeElement
-    // The view went, or the user moved the focus elsewhere meanwhile: the focus is theirs.
-    if (!sets.some(entry => entry.key === key) || (active && active !== stack.ownerDocument.body && !stack.contains(active))) { commandFocus.current = undefined; return }
+    if (!tab.sets.some(entry => entry.key === key) || (active && active !== stack.ownerDocument.body && !stack.contains(active))) { commandFocus.current = undefined; return }
     const grid = stack.querySelector<HTMLElement>(`[data-result-entry="${CSS.escape(key)}"]`)
     if (!grid) return
     commandFocus.current = undefined
@@ -403,16 +590,13 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
   useLayoutEffect(() => {
     const element = stackRef.current, key = stackReveal.current
     if (key === undefined) return
-    // Where the entry stands now, which is where the stack scrolls to; an entry that has gone has nothing to reveal.
     const index = sets.findIndex(entry => entry.key === key)
-    if (index < 0) { stackReveal.current = undefined; return }
-    // A stack just mounted (Find Next while Messages showed) has no height for its first layout: the reveal waits for it.
+    if (index < 0) { if (!tab.sets.some(entry => entry.key === key)) stackReveal.current = undefined; return }
     if (!element || index >= layout.offsets.length || collapsed.has(index) || paneHeight <= 0) return
     stackReveal.current = undefined
     const top = revealScrollTop(layout, index, element.scrollTop, element.clientHeight)
     if (top === undefined) return
     element.scrollTop = top
-    // The scroll event comes later: the saved position follows now, so a restore before it does not undo the reveal.
     view.stackScrollTop = element.scrollTop
   }, [revealSeq, revealEntry, revealTick, layout, collapsed, paneHeight, sets])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
@@ -427,7 +611,6 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     if (!state || state.pointerId !== event.pointerId) return
     state.y = event.clientY
     if (state.frame) return
-    // One layout per frame while dragging.
     state.frame = nextFrame(() => {
       state.frame = undefined
       if (drag.current === state) setWeights(dragSplitter(state.heights, state.index, state.y - state.startY, state.floors, collapsed))
@@ -448,25 +631,32 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
     setWeights(dragSplitter(layout.heights, index, delta, floors, collapsed))
   }
 
+  // Pure-DDL/DML multi-server run (0 result sets): render full MultiRunSummary so Stacked layout is never blank.
+  if (summaryOnly) {
+    return <div ref={stackRef} className="rs-stack rs-stack-summary"
+      onFocus={() => { summaryFocus.current = true }}
+      onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) summaryFocus.current = false }}>
+      <MultiRunSummary tabId={tabId} tab={tab} active />
+    </div>
+  }
+
+  const budget = tab.summary?.budget ?? tab.multiSummary?.budget
   const items = []
   for (let index = first; index <= last; index++) {
     const entry = sets[index]
     if (!entry) continue
     const shut = collapsed.has(index), slot = slots.get(entry.key), sort = tab.sorts.get(entry.key)
-    // A bare run's one grid stands alone, unless it has filters to show and remove.
     const plain = bare || captionless
     items.push(<div key={`item-${entry.key}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {!plain && <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} named={!!slot?.named} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, pivotSource: slot.source, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
-      {!shut && mounted.has(entry.key) && <ResultGrid key={setKey(entry.descriptor)} tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={tab.summary?.budget} sort={sort}
+      {!plain && <ResultCaption tabId={tabId} tab={tab} entry={entry} collapsed={shut} totalBatches={entryTotalBatches(tab, entry)} sort={sort} running={tab.status === 'running'} others={slot?.others ?? ''} named={!!slot?.named} {...slot?.view === 'pivot' && !tab.bare ? { pivotOf: slot.group, pivotSource: slot.source, stale: !!slot.stale } : {}} onToggle={toggle} onClose={closable ? close : undefined} />}
+      {!shut && <EntryNoticeBars tabId={tabId} tab={tab} entry={entry} running={tab.status === 'running'} onClose={closable ? close : undefined} onRebuiltFocus={() => focusRebuilt(entry.key)} />}
+      {!shut && mounted.has(entry.key) && <ResultGrid key={setKey(entry.descriptor)} tabId={tabId} entry={entry} count={tab.numbered} focused={entry.key === focused} budget={budget} sort={sort}
         view={slot?.view} group={slot?.group} bare={tab.bare} onFocus={focus} onWide={wide} />}
     </div>)
     if (index < count - 1) {
       const top = layout.offsets[index] + layout.heights[index]
-      // Beside a collapsed set a splitter has nothing to move: it is a plain divider until the set opens again.
       if (!splitterMoves(count, index, collapsed)) { items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" data-inert="" style={{ top }} />); continue }
-      // The value is the upper grid's height, which the splitter moves between the two grids' floors.
       const height = Math.round(layout.heights[index])
-      // Named by the result above it, by its name or else its number, as that result's grid is.
       items.push(<div key={`splitter-${entry.key}`} className="rs-splitter" role="separator" aria-orientation="horizontal" aria-label={`Resize ${entryTitle(entry)}`}
         aria-valuenow={height} aria-valuemin={Math.round(floors[index])} aria-valuemax={Math.round(Math.max(floors[index], layout.heights[index] + layout.heights[index + 1] - floors[index + 1]))}
         aria-valuetext={`${entryTitle(entry)} height ${height} pixels`} tabIndex={0} style={{ top }}
@@ -474,7 +664,61 @@ export default function ResultsStack({ tabId, tab, revealFocused = false }: { ta
         onDoubleClick={() => setWeights(undefined)} onKeyDown={event => splitterKey(index, event)} />)
     }
   }
-  return <div ref={stackRef} className="rs-stack" onFocus={trackFocus} onBlur={trackBlur} onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
+
+  const jumpToTarget = (targetKey: string) => {
+    const entry = sets.find(item => item.descriptor.targetKey === targetKey) ?? tab.sets.find(item => item.descriptor.targetKey === targetKey)
+    if (!entry) return
+    if (effectiveStmt !== 'all' && (entry.descriptor.statementSlot ?? 0) !== effectiveStmt) setSelectedStmt('all')
+    if (collapsedEntries.has(entry.key)) toggle(entry.key)
+    focus(entry.key)
+    stackReveal.current = entry.key
+    setRevealTick(tick => tick + 1)
+  }
+
+  const multiOutcome = multi ? multiOutcomeInfo(tab) : undefined
+  const okCount = multi ? tab.multi!.targets.filter(target => target.phase === 'committed' || target.phase === 'succeeded').length : 0
+
+  const selectStmt = (next: number | 'all') => {
+    setSelectedStmt(next)
+    if (stackRef.current) stackRef.current.scrollTop = 0
+    view.stackScrollTop = 0
+    setScrollTop(0)
+    const nextSets = orderedMultiSets(tab, next)
+    if (nextSets.length > 0 && !nextSets.some(entry => entry.key === tab.focused)) {
+      results.focusEntry(tabId, nextSets[0].key)
+      setFocused(nextSets[0].key)
+    }
+  }
+
+  const stackEl = <div ref={stackRef} className="rs-stack" onFocus={trackFocus} onBlur={trackBlur} onScroll={event => { view.stackScrollTop = event.currentTarget.scrollTop; setScrollTop(event.currentTarget.scrollTop) }}>
     <div className="rs-content" style={{ height: layout.total }}>{items}</div>
+  </div>
+
+  if (!multi) return stackEl
+
+  return <div className="rs-multi-root">
+    {multiOutcome && <div className="rs-multi-summary-band" data-open={summaryOpen || undefined}>
+      <button type="button" className="rs-multi-summary-toggle" aria-expanded={summaryOpen} onClick={() => setSummaryOpen(open => !open)}>
+        <Icon name={summaryOpen ? 'chevron-down' : 'chevron-right'} />
+        <span className="multi-mode-pill" data-mode={tab.multi!.mode}>{multiModeLabel(tab.multi!.mode)}</span>
+        <span className="multi-outcome-badge" data-tone={multiOutcome.tone}>
+          <Icon name={multiOutcome.icon} spin={multiOutcome.icon === 'loading'} /><strong>{multiOutcome.label}</strong>
+        </span>
+        <span className="rs-multi-summary-facts">{formatCount(okCount)}/{formatCount(tab.multi!.targets.length)} {plural(tab.multi!.targets.length, 'server')}</span>
+      </button>
+      {summaryOpen && <MultiRunSummary tabId={tabId} tab={tab} compact onSelectTarget={jumpToTarget} />}
+    </div>}
+    {statementSlots.length > 1 && <div className="rs-stmt-strip" role="region" aria-label="Filter stacked results by statement">
+      {statementSlots.length > 5
+        ? <select className="rs-stmt-select" aria-label="Statement" value={String(effectiveStmt)} onChange={event => selectStmt(event.target.value === 'all' ? 'all' : Number(event.target.value))}>
+            <option value="all">All statements ({formatCount(statementSlots.length)})</option>
+            {statementSlots.map(item => <option key={item.slot} value={String(item.slot)}>{item.label}</option>)}
+          </select>
+        : <div className="rs-stmt-buttons" role="group" aria-label="Statements">
+            <button type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === 'all'} onClick={() => selectStmt('all')}>All statements</button>
+            {statementSlots.map(item => <button key={item.slot} type="button" className="rs-stmt-btn" aria-pressed={effectiveStmt === item.slot} onClick={() => selectStmt(item.slot)}>{item.label}</button>)}
+          </div>}
+    </div>}
+    {stackEl}
   </div>
 }

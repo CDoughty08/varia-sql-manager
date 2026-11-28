@@ -13,8 +13,9 @@ import { maxLineDigits, parseLineNumber, type GoToLineRequest } from './go-to-li
 export default function GoToLineDialog({ request }: { readonly request: GoToLineRequest }) {
   const { documents, editorDialogs } = useWorkbench()
   const [text, setText] = useState(String(request.line))
-  // Read while rendering, before the field takes focus: the editor's text area.
+  // Read while rendering, before the field takes focus: the editor's text area and active model.
   const [returnFocus] = useState(() => document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const [expectedModel] = useState(() => documents.activeModel(request.tabId))
   const line = parseLineNumber(text, request.lineCount)
   const close = () => {
     editorDialogs.closeGoToLine()
@@ -25,7 +26,7 @@ export default function GoToLineDialog({ request }: { readonly request: GoToLine
     if (line === undefined) return
     editorDialogs.closeGoToLine()
     const editor = documents.boundEditor, model = editor?.getModel()
-    if (!editor || !model || documents.getSnapshot().activeId !== request.tabId || documents.getModel(request.tabId) !== model) { close(); return }
+    if (!editor || !model || documents.getSnapshot().activeId !== request.tabId || expectedModel !== model) { close(); return }
     // The query may have lost lines while the dialog was open.
     const lineNumber = Math.min(line, model.getLineCount())
     editor.setPosition({ lineNumber, column: 1 })

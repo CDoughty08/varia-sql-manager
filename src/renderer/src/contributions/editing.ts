@@ -124,7 +124,8 @@ export function editingContribution(workbench: Pick<Workbench, 'commands' | 'doc
       onDidAccept: item => {
         // Only into the query the picker was opened for, if the editor still shows it; focus is back in it by now.
         const snippet = snippetById(item.id), current = documents.boundEditor
-        if (!snippet || !current?.getModel() || current.getModel() !== documents.getModel(tabId)) return
+        const owns = documents.ownsModel ? documents.ownsModel(tabId, current?.getModel()) : current?.getModel() === documents.getModel(tabId)
+        if (!snippet || !current?.getModel() || !owns) return
         current.focus()
         snippetController(current).insert(snippet.body, { undoStopBefore: true, undoStopAfter: true })
       }

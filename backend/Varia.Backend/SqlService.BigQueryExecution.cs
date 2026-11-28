@@ -119,8 +119,14 @@ internal sealed partial class SqlService
                 }
             }
         }
+        if (!TryBeginSessionRun(args.SessionId, args.QueryId))
+        {
+            Unregister();
+            throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
+        }
         if (!bigQueryTabs.TryAdd(args.SessionId, 0))
         {
+            EndSessionRun(args.SessionId, args.QueryId);
             Unregister();
             throw new RequestException("SESSION_BUSY", "A query is already running in this tab.");
         }
@@ -128,6 +134,7 @@ internal sealed partial class SqlService
         if (bigQuery.Find(args.ConnectionId) != connection)
         {
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            EndSessionRun(args.SessionId, args.QueryId);
             Unregister();
             throw new RequestException("NOT_CONNECTED", "The connection was closed.");
         }
@@ -220,7 +227,7 @@ internal sealed partial class SqlService
             {
                 if (args.DiscardResults) { nameBinder?.TakeChild(child, incompleteListing, discarded: true); discarded++; return; }
                 if (sets.Count >= args.MaxResultSets) { nameBinder?.RefusedChild(child, incompleteListing, "the run kept no more result sets"); discarded++; return; }
-                var first = await bigQuery.QueryResultsAsync(connection, project, child.Id, child.Location ?? location, null, BigQueryFirstPageRows, 0, token);
+                var first = await ReadBigQueryChildFirstPageAsync(connection, project, child.Id, child.Location ?? location, token);
                 var childPlan = BigQueryColumnPlan.From(first.Schema);
                 var rows = first.TotalRows ?? 0;
                 if (childPlan is null)
@@ -241,20 +248,7 @@ internal sealed partial class SqlService
                 var keptBefore = left > 0 ? 0 : keptRows;
                 sets.Add(set);
                 currentSet = set;
-                BigQueryWindow? window = null;
-                RemoteResult? windowed;
-                // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
-                // the set is still announced, so the run's end closes a set the grid heard open.
-                try { windowed = await DecideResidenceAsync(childArgs, connection, project, child.Id, child.Location ?? location, null, true, childPlan, first, set, budget!, messages, value => window = value, token, args.MaxRows); }
-                catch
-                {
-                    first.Dispose();
-                    events.Opened(set);
-                    throw;
-                }
-                events.Opened(set);
-                if (windowed is null) await ReadBigQueryRowsAsync(childArgs, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, token, window, messages, keptBefore);
-                else first.Dispose();
+                await IngestBigQueryChildResultAsync(childArgs, connection, project, child.Id, child.Location ?? location, childPlan, first, set, budget!, rows, roomWaited, events, warn, messages, args.MaxRows, keptBefore, token);
                 set.Complete();
                 keptRows += set.RowsAvailable;
                 events.Closed(set);
@@ -477,7 +471,7 @@ internal sealed partial class SqlService
                     while (true)
                     {
                         token.ThrowIfCancellationRequested();
-                        page = await bigQuery.QueryResultsAsync(connection, project, jobId, location, null, args.DiscardResults ? 0 : BigQueryFirstPageRows, bigQuery.ChildPollMs, token);
+                        page = await PollBigQueryFirstPageAsync(connection, project, jobId, location, args.DiscardResults, token);
                         if (page.JobComplete) break;
                         page.Dispose();
                         page = null;
@@ -564,31 +558,9 @@ internal sealed partial class SqlService
                         else
                         {
                             sets.Add(currentSet);
-                            // In memory or windowed, decided from the first page before the set is announced.
-                            BigQueryWindow? window = null;
-                            RemoteResult? windowed;
-                            // Announced even when deciding fails or is stopped, so the run's end closes a set the grid heard open.
-                            try { windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, false, plan, page, currentSet, budget, messages, value => window = value, token); }
-                            catch
-                            {
-                                events.Opened(currentSet);
-                                throw;
-                            }
-                            events.Opened(currentSet);
-                            if (windowed is null)
-                            {
-                                // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
-                                var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, page, messages, token);
-                                // The reader owns the page from here.
-                                var reading = page;
-                                page = null;
-                                if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, currentSet, budget, totalRows, roomWaited, events, warn, token, window, messages);
-                                else
-                                {
-                                    reading.Dispose();
-                                    await ReadBigQueryArrowAsync(args, readSession, currentSet, budget, totalRows, roomWaited, events, warn, token, window, messages);
-                                }
-                            }
+                            var readingPage = page;
+                            page = null;
+                            await IngestBigQueryTopLevelResultAsync(args, connection, project, jobId, location, finished, plan, readingPage, currentSet, budget, totalRows, roomWaited, events, warn, messages, token);
                             currentSet.Complete();
                             events.Closed(currentSet);
                             currentSet = null;
@@ -703,6 +675,7 @@ internal sealed partial class SqlService
                 session.Queue.Release();
             }
             bigQueryTabs.TryRemove(args.SessionId, out _);
+            EndSessionRun(args.SessionId, args.QueryId);
             running.Ended.TrySetResult();
         }
         if (nameBinder is not null && status is not ("detached" or "superseded") && attach?.Detached != true)
@@ -730,9 +703,79 @@ internal sealed partial class SqlService
             IndexStale: search.StaleMarkOf(args.ConnectionId));
     }
 
+    /// <summary>Polls a top-level BigQuery job for completion and its first page of rows.</summary>
+    internal Task<BigQueryPage> PollBigQueryFirstPageAsync(BigQueryConnection connection, string project, string jobId, string? location, bool discardResults, CancellationToken token) =>
+        bigQuery.QueryResultsAsync(connection, project, jobId, location, null, discardResults ? 0 : BigQueryFirstPageRows, bigQuery.ChildPollMs, token);
+
+    /// <summary>Reads the first page of rows for a completed BigQuery script child SELECT job.</summary>
+    internal Task<BigQueryPage> ReadBigQueryChildFirstPageAsync(BigQueryConnection connection, string project, string childId, string? location, CancellationToken token) =>
+        bigQuery.QueryResultsAsync(connection, project, childId, location, null, BigQueryFirstPageRows, 0, token);
+
+    /// <summary>Decides residence and ingests a completed BigQuery script child SELECT result set. Takes ownership of disposing <paramref name="first"/>.</summary>
+    internal async Task IngestBigQueryChildResultAsync(QueryArgs childArgs, BigQueryConnection connection, string project, string childId, string? location,
+        BigQueryColumnPlan childPlan, BigQueryPage first, ResultSetBuffer set, QueryBudget budget, long rows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn,
+        QueryMessages messages, int queryMaxRows, long keptBefore, CancellationToken token, MultiResidenceCoordinator? residenceCoordinator = null)
+    {
+        BigQueryWindow? window = null;
+        RemoteResult? windowed;
+        // The first page is the reader's only once the residence is decided: a failure or Stop while deciding frees it, and
+        // the set is still announced, so the run's end closes a set the grid heard open.
+        try { windowed = await DecideResidenceAsync(childArgs, connection, project, childId, location, null, true, childPlan, first, set, budget, messages, value => window = value, token, queryMaxRows, residenceCoordinator); }
+        catch
+        {
+            first.Dispose();
+            events.Opened(set);
+            throw;
+        }
+        events.Opened(set);
+        if (windowed is null) await ReadBigQueryRowsAsync(childArgs, connection, project, childId, location, childPlan, first, set, budget, rows, roomWaited, events, warn, token, window, messages, keptBefore);
+        else first.Dispose();
+    }
+
+    /// <summary>Decides residence and ingests a top-level BigQuery result set (REST or Storage Read). Takes ownership of disposing <paramref name="page"/>.</summary>
+    internal async Task IngestBigQueryTopLevelResultAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, Job? finished,
+        BigQueryColumnPlan plan, BigQueryPage page, ResultSetBuffer set, QueryBudget budget, long totalRows, RoomWaited roomWaited, QueryEventSink events, Action<string> warn,
+        QueryMessages messages, CancellationToken token, MultiResidenceCoordinator? residenceCoordinator = null)
+    {
+        BigQueryPage? owned = page;
+        try
+        {
+            // In memory or windowed, decided from the first page before the set is announced.
+            BigQueryWindow? window = null;
+            RemoteResult? windowed;
+            // Announced even when deciding fails or is stopped, so the run's end closes a set the grid heard open.
+            try { windowed = await DecideResidenceAsync(args, connection, project, jobId, location, finished, false, plan, owned, set, budget, messages, value => window = value, token, residenceCoordinator: residenceCoordinator); }
+            catch
+            {
+                events.Opened(set);
+                throw;
+            }
+            events.Opened(set);
+            if (windowed is null)
+            {
+                // Large results that did not arrive whole are read through Storage Read; the rest, and every fallback, through REST.
+                var readSession = await BigQueryStorageSessionAsync(args, connection, project, jobId, location, plan, owned, messages, token, set.TargetKey, set.TargetProvider);
+                // The reader owns the page from here.
+                var reading = owned;
+                owned = null;
+                if (readSession is null) await ReadBigQueryRowsAsync(args, connection, project, jobId, location, plan, reading, set, budget, totalRows, roomWaited, events, warn, token, window, messages);
+                else
+                {
+                    reading.Dispose();
+                    await ReadBigQueryArrowAsync(args, readSession, set, budget, totalRows, roomWaited, events, warn, token, window, messages);
+                }
+            }
+        }
+        finally { owned?.Dispose(); }
+    }
+
     /// <summary>The query.job event body (docs/ipc.md, Query events): the request's top-level job, never its session id.</summary>
-    private static object JobEvent(string project, string jobId, string? location, string state, BigQueryTransaction transaction) =>
-        new { Type = "query.job", JobId = jobId, Project = project, Location = location, State = state, Auxiliary = false, Transaction = TransactionName(transaction) };
+    internal static object JobEvent(string project, string jobId, string? location, string state, BigQueryTransaction transaction, string? targetKey = null) =>
+        new { Type = "query.job", JobId = jobId, Project = project, Location = location, State = state, Auxiliary = false, Transaction = TransactionName(transaction), TargetKey = targetKey };
+
+    /// <summary>Resolves a target's BigQuery dataset or connection location via <see cref="BigQueryService.MetadataAsync"/>.</summary>
+    internal Task<string?> ResolveBigQueryLocationAsync(BigQueryConnection connection, string? dataset, CancellationToken token) =>
+        TabLocationAsync(null, connection, dataset, token);
 
     /// <summary>
     /// Where the tab's job runs: its session's location once it has one; otherwise, when the connection's location is
@@ -740,7 +783,7 @@ internal sealed partial class SqlService
     /// location than the tab's session is refused up front (LOCATION_MISMATCH): switching it ends the session first,
     /// which the tab's Dataset box asks about.
     /// </summary>
-    private async Task<string?> TabLocationAsync(BigQueryTabSession session, BigQueryConnection connection, string? dataset, CancellationToken token)
+    private async Task<string?> TabLocationAsync(BigQueryTabSession? session, BigQueryConnection connection, string? dataset, CancellationToken token)
     {
         string? datasetLocation = null;
         if (connection.Options.Location is null && dataset is not null && dataset != connection.Options.Dataset && !bigQuery.Environment.Emulator
@@ -750,14 +793,14 @@ internal sealed partial class SqlService
             {
                 using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
                 limit.CancelAfter(TimeSpan.FromSeconds(10));
-                var found = await connection.Client.Service.Datasets.Get(connection.Options.Project, dataset).ExecuteAsync(limit.Token);
+                var found = await bigQuery.MetadataAsync(connection, BqMethod.DatasetsGet, t => connection.Client.Service.Datasets.Get(connection.Options.Project, dataset).ExecuteAsync(t), limit.Token);
                 datasetLocation = KnownLocation(found.Location);
                 connection.DatasetLocations[dataset] = datasetLocation;
             }
             // The query's own failure says more than this lookup's (a missing dataset, a refused permission).
             catch (Exception) when (!token.IsCancellationRequested) { datasetLocation = null; }
         }
-        if (session.Id is not null && session.Location is { } sessionLocation)
+        if (session?.Id is not null && session.Location is { } sessionLocation)
         {
             if (datasetLocation is not null && !string.Equals(datasetLocation, sessionLocation, StringComparison.OrdinalIgnoreCase))
                 throw new RequestException("LOCATION_MISMATCH", "Dataset " + dataset + " is in location " + datasetLocation + ", but this tab's BigQuery session is in " + sessionLocation
@@ -788,7 +831,7 @@ internal sealed partial class SqlService
                 // so a small capped result is not refused (or switched to windowed) for a page mostly read past.
                 if (args.MaxRows > 0 && page.RowCount > 0 && args.MaxRows - storedRows < page.RowCount)
                     charge = (long)Math.Ceiling((double)charge * Math.Max(0, args.MaxRows - storedRows) / page.RowCount);
-                if (!store.TryReserve(budget, charge, true, out var refusal))
+                if (!store.TryReserve(budget, charge, true, out var refusal, out var refusedBytes))
                 {
                     // The page does not fit beside the rows already stored, so neither would its rows.
                     charge = 0;
@@ -796,7 +839,7 @@ internal sealed partial class SqlService
                     if (window is not null && SwitchesOn(set, refusal) && SwitchToWindowed(set, window, events, messages!, refusal)) return;
                     set.Skip(refusal);
                     // A derived set (a view or value list in BigQuery) stops only itself: its source keeps its budget.
-                    if (!set.Derived) budget.Stop(refusal);
+                    if (!set.Derived) budget.Stop(refusal, refusedBytes);
                     storing = false;
                 }
                 try
@@ -849,7 +892,7 @@ internal sealed partial class SqlService
     }
 
     /// <summary>A location Google answered, when it is one (main's schema holds the summary's to 64 characters).</summary>
-    static string? KnownLocation(string? location) => location is { Length: > 0 and <= BigQueryLimits.Location } && BigQueryLimits.LocationId().IsMatch(location) ? location : null;
+    internal static string? KnownLocation(string? location) => location is { Length: > 0 and <= BigQueryLimits.Location } && BigQueryLimits.LocationId().IsMatch(location) ? location : null;
 
     /// <summary><c>project:LOCATION.job_id</c>, the fully qualified id the console and bq show.</summary>
     internal static string JobName(string project, string? location, string jobId) => project + ":" + (location is null ? "" : location + ".") + jobId;
@@ -865,7 +908,7 @@ internal sealed partial class SqlService
         };
     }
 
-    private static BigQueryJobSummary JobSummary(string project, string? location, string jobId, Job job)
+    internal static BigQueryJobSummary JobSummary(string project, string? location, string jobId, Job job)
     {
         var statistics = job.Statistics;
         var query = statistics?.Query;
@@ -877,7 +920,7 @@ internal sealed partial class SqlService
 
     /// <summary>The error value for a failed execution: the job's own error, or the failed call's, with a location mismatch
     /// told apart from a missing dataset by asking where the dataset is (datasets.get, free).</summary>
-    private async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, long? cap, bool prices, CancellationToken token)
+    internal async Task<RequestException> BigQueryFailureAsync(Exception error, BigQueryConnection connection, bool created, long? cap, bool prices, CancellationToken token)
     {
         var project = connection.Options.Project;
         var mapped = error is BigQueryJobException job ? BigQueryErrors.Job(job.Result, job.Errors, project, cap, prices)
@@ -885,4 +928,10 @@ internal sealed partial class SqlService
             ?? new RequestException("BACKEND_ERROR", "Execution stopped unexpectedly: " + BigQueryErrors.Sanitize(error.Message));
         return await BigQueryErrors.LocationAsync(mapped, connection.Client);
     }
+
+    internal void MarkBigQueryIndex(string connectionId, BigQueryConnection connection, Job job, string? statement, List<BigQueryChild>? children, bool listedAll, string project, string? dataset, string? sql) =>
+        MarkIndex(connectionId, connection, job, statement, children, listedAll, project, dataset, sql);
+
+    internal void MarkBigQueryIndexWhenDone(string connectionId, BigQueryConnection connection, string project, string jobId, string? location, string? dataset, string? sql) =>
+        MarkIndexWhenDone(connectionId, connection, project, jobId, location, dataset, sql);
 }

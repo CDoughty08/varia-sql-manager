@@ -24,7 +24,8 @@ export interface SqlToken { readonly kind: SqlTokenKind; readonly start: number;
 
 const wordStart = /[\p{L}_]/u
 const wordPart = /[\p{L}\p{N}\p{M}_@#$]/u
-const isSpace = (char: string) => char === ' ' || char === '\t' || char === '\f' || char === '\v' || char === ' ' || char === '﻿'
+const unicodeSpace = /^[\s\u0085]$/
+const isSpace = (char: string) => char !== '\r' && char !== '\n' && (char === ' ' || char === '\t' || unicodeSpace.test(char))
 
 /** The tokens of `text`, in order, covering it end to end. */
 export function lexSql(text: string): SqlToken[] {
@@ -67,7 +68,7 @@ export function lexSql(text: string): SqlToken[] {
       lineStart = startOfLine
       continue
     }
-    if (startOfLine && char === ':') {
+    if (startOfLine && ((char === ':' && next !== ':') || (char === '!' && next === '!'))) {
       let end = at
       while (end < length && text[end] !== '\n' && text[end] !== '\r') end++
       push('sqlcmd', end)
@@ -81,12 +82,17 @@ export function lexSql(text: string): SqlToken[] {
     }
     if (char === '/' && next === '*') {
       let depth = 1, end = at + 2
+      let sawLineBreak = false
       while (end < length && depth > 0) {
         if (text[end] === '/' && text[end + 1] === '*') { depth++; end += 2 }
         else if (text[end] === '*' && text[end + 1] === '/') { depth--; end += 2 }
-        else end++
+        else {
+          if (text[end] === '\n' || text[end] === '\r') sawLineBreak = true
+          end++
+        }
       }
       push('blockComment', end)
+      lineStart = startOfLine || sawLineBreak
       continue
     }
     if (char === "'") { push('string', delimited(at + 1, "'")); continue }
@@ -100,7 +106,20 @@ export function lexSql(text: string): SqlToken[] {
         let end = at + 2
         while (end < length && text[end] !== ')' && text[end] !== '\n' && text[end] !== '\r') end++
         push('special', text[end] === ')' ? end + 1 : end)
-      } else push('special', runOf(at + 1, /[\p{L}\p{N}_.]/u))
+      } else if (next !== undefined && ((next >= '0' && next <= '9') || (next === '.' && text[at + 2] !== undefined && text[at + 2]! >= '0' && text[at + 2]! <= '9'))) {
+        let end = next === '.' ? runOf(at + 2, /[0-9]/) : runOf(at + 1, /[0-9]/)
+        if (next !== '.' && text[end] === '.') end = runOf(end + 1, /[0-9]/)
+        if (text[end] === 'e' || text[end] === 'E') {
+          end++
+          if (text[end] === '+' || text[end] === '-') end++
+          end = runOf(end, /[0-9]/)
+        }
+        push('number', end)
+      } else if (next !== undefined && wordStart.test(String.fromCodePoint(text.codePointAt(at + 1)!))) {
+        push('special', runOf(at + 1, /[\p{L}\p{N}_]/u))
+      } else {
+        push('special', at + 1)
+      }
       continue
     }
     if (char >= '0' && char <= '9' || (char === '.' && next !== undefined && next >= '0' && next <= '9')) {
@@ -109,10 +128,18 @@ export function lexSql(text: string): SqlToken[] {
       else {
         end = runOf(at, /[0-9]/)
         if (text[end] === '.') end = runOf(end + 1, /[0-9]/)
-        if ((text[end] === 'e' || text[end] === 'E') && /[0-9+-]/.test(text[end + 1] ?? '')) end = runOf(end + 2, /[0-9]/)
+        let hadExponent = false
+        if (text[end] === 'e' || text[end] === 'E') {
+          hadExponent = true
+          end++
+          if (text[end] === '+' || text[end] === '-') end++
+          end = runOf(end, /[0-9]/)
+        }
         // A file size (SIZE = 8192KB, FILEGROWTH = 10%) is one value.
-        const unit = /^(KB|MB|GB|TB)/i.exec(text.slice(end, end + 2))
-        if (unit && !wordPart.test(text[end + 2] ?? ' ')) end += 2
+        if (!hadExponent) {
+          const unit = /^(KB|MB|GB|TB)/i.exec(text.slice(end, end + 2))
+          if (unit && !wordPart.test(text[end + 2] ?? ' ')) end += 2
+        }
       }
       push('number', end)
       continue

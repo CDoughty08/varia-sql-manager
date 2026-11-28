@@ -58,7 +58,7 @@ describe('the AutoRecover store', () => {
     expect(await next.list(1)).toEqual([entry])
     // The record names its owner and holds the text; it is the only file there.
     const stored = JSON.parse(await readFile(join(folder, kept.id + '.json'), 'utf8'))
-    expect(stored).toMatchObject({ version: 2, id: kept.id, owner: { instance: store.instance, generation: 1 }, text: 'SELECT secret FROM dbo.T', eol: 'crlf' })
+    expect(stored).toMatchObject({ version: 3, id: kept.id, owner: { instance: store.instance, generation: 1 }, text: 'SELECT secret FROM dbo.T', eol: 'crlf' })
     expect(await records()).toEqual([kept.id + '.json'])
     // Taken, it is the taker's: no longer offered to it, and it may write and discard it.
     expect(await next.take(kept.id, 1)).toMatchObject({ text: 'SELECT secret FROM dbo.T', name: 'SQLQuery2.sql', kind: 'sql', eol: 'crlf', path: 'C:\\Queries\\orders.sql' })
@@ -346,5 +346,46 @@ describe('registering a recovered query\'s file', () => {
     // One file, one registration (and one tab): a second recovered copy of it opens without a file.
     expect(await files.register(path)).toBeUndefined()
     expect(await files.register(join(directory, 'missing.sql'))).toBeUndefined()
+  })
+
+  it('round-trips version 3 multiTargets hints, reads version 2 files forward, and rejects invalid shapes', async () => {
+    const multi = query({
+      multiMode: 'cross',
+      crossView: 'file',
+      multiTargets: [
+        { provider: 'sqlserver', database: 'Sales', enabled: true, lastServer: 'sql01' },
+        { provider: 'bigquery', database: 'd'.repeat(1024), enabled: false }
+      ]
+    })
+    expect(recoveryWriteSchema.safeParse(multi).success).toBe(true)
+    const store = new RecoveryStore(folder)
+    await store.write(multi, 1)
+    expect(await store.list(2)).toHaveLength(1)
+    expect(await store.take(multi.id, 2)).toMatchObject({
+      multiMode: 'cross',
+      crossView: 'file',
+      multiTargets: multi.multiTargets
+    })
+    for (const invalid of [
+      { ...multi, targetId: randomUUID() },
+      { ...multi, jobKey: randomUUID() },
+      { ...multi, multiMode: 'same' as const, crossView: 'split' as const },
+      { ...multi, multiTargets: Array.from({ length: 33 }, (_, i) => ({ provider: 'sqlserver' as const, database: `db${i}`, enabled: true })) },
+      { ...multi, multiTargets: [{ provider: 'sqlserver', database: 'd'.repeat(129), enabled: true }] },
+      { ...multi, multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true, targetId: randomUUID() }] },
+      { ...multi, multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true, attachWanted: true }] },
+      { ...multi, multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true, connectionId: randomUUID() }] },
+      { ...multi, multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true, jobKey: randomUUID() }] },
+      { ...query(), kind: 'agentJob', multiMode: 'same', multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true }] }
+    ]) expect(recoveryWriteSchema.safeParse(invalid).success).toBe(false)
+    // Version 2 record on disk reads forward to version 3; version 2 with multiTargets quarantines.
+    const v2Id = randomUUID(), badV2Id = randomUUID()
+    const owner = { instance: randomUUID(), generation: 1 }
+    const baseRecord = { owner, name: 'Legacy', kind: 'sql', eol: 'lf', savedAt: '2026-11-01T10:00:00.000Z', text: 'SELECT 1' }
+    await writeFile(join(folder, `${v2Id}.json`), JSON.stringify({ ...baseRecord, version: 2, id: v2Id, provider: 'bigquery', database: 'analytics' }))
+    await writeFile(join(folder, `${badV2Id}.json`), JSON.stringify({ ...baseRecord, version: 2, id: badV2Id, multiMode: 'same', multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true }] }))
+    const listed = await new RecoveryStore(folder).list(3)
+    expect(listed.some(entry => entry.id === v2Id)).toBe(true)
+    expect(listed.some(entry => entry.id === badV2Id)).toBe(false)
   })
 })

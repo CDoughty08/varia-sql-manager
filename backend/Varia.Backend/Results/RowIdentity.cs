@@ -295,13 +295,14 @@ internal static class RowIdentity
 /// read hash alike. 64-bit FNV-1a, then a SplitMix64 finish; collisions are possible but vanishingly rare.</summary>
 internal sealed class CellHasher
 {
-    internal enum Kind { Bytes, Collated, Trimmed, Exact, Guid, Ticks }
+    internal enum Kind { Bytes, Collated, Trimmed, Exact, Float, Guid, Ticks, DateTime, Time }
 
     private readonly Kind[] kinds;
     private readonly (CompareInfo Info, CompareOptions Options)?[] cultures;
     private readonly bool[] hidden;
     // Columns whose cells may keep an exact value beside their text (float and real).
     private readonly bool[] exacts;
+    private readonly bool[] booleans;
     private char[] chars = new char[256];
     private byte[] sortKey = new byte[512];
     private const ulong Offset = 14695981039346656037UL, Prime = 1099511628211UL;
@@ -314,6 +315,7 @@ internal sealed class CellHasher
         cultures = other.cultures;
         hidden = other.hidden;
         exacts = other.exacts;
+        booleans = other.booleans;
     }
 
     /// <summary>A hasher of the same columns with buffers of its own, for another thread.</summary>
@@ -326,11 +328,13 @@ internal sealed class CellHasher
         cultures = new (CompareInfo, CompareOptions)?[Count];
         hidden = new bool[Count];
         exacts = new bool[Count];
+        booleans = new bool[Count];
         for (var c = 0; c < Count; c++)
         {
             var column = columns[c];
             hidden[c] = ResultTextWriter.Hidden(column);
-            exacts[c] = ColumnTypes.HoldsExact(column);
+            exacts[c] = wires[c] != WireKind.Binary && ColumnTypes.HoldsExact(column);
+            booleans[c] = column.SortKind == ColumnTypes.Boolean;
             if (wires[c] == WireKind.Binary) { kinds[c] = Kind.Bytes; continue; }
             if (column.Collation is not null && column.SortKind == ColumnTypes.Text)
             {
@@ -338,7 +342,13 @@ internal sealed class CellHasher
                 kinds[c] = cultures[c] is null ? Kind.Trimmed : Kind.Collated;
                 continue;
             }
-            kinds[c] = ColumnTypes.IsExact(column) ? Kind.Exact : ColumnTypes.IsGuid(column) ? Kind.Guid : column.SortKind == ColumnTypes.Timestamp ? Kind.Ticks : Kind.Bytes;
+            kinds[c] = ColumnTypes.IsExact(column) ? Kind.Exact
+                : column.SortKind == ColumnTypes.Float ? Kind.Float
+                : ColumnTypes.IsGuid(column) ? Kind.Guid
+                : column.SortKind == ColumnTypes.Timestamp ? Kind.Ticks
+                : column.SortKind is ColumnTypes.Date or ColumnTypes.DateTime ? Kind.DateTime
+                : column.SortKind == ColumnTypes.Time ? Kind.Time
+                : Kind.Bytes;
         }
     }
 
@@ -354,28 +364,70 @@ internal sealed class CellHasher
     /// result's columns take the first's).</summary>
     public bool ReadsExact(int column) => exacts[column];
 
+    private const NumberStyles FloatStyles = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint | NumberStyles.AllowExponent;
+
     /// <summary>Whether a non-NULL cell's characters count beyond its value, as <see cref="Same"/>'s <c>text</c> says: a
-    /// character column's, or in an exact numeric column (a second result's text column compares by the first's kind) a
-    /// cell with trailing spaces or that is not a number. Exact text compares such cells character for character.</summary>
-    public bool Literal(int column, ReadOnlySpan<byte> cell) =>
-        IsText(column) || kinds[column] == Kind.Exact && (ViewSorter.TrimEnd(cell).Length != cell.Length || !NumericParts(cell, out _, out _, out _));
+    /// character column's, an exact numeric cell with trailing spaces or that is not a number, or a float cell with trailing
+    /// spaces or that is not a parseable number. Exact text compares such cells character for character.</summary>
+    public bool Literal(int column, ReadOnlySpan<byte> cell)
+    {
+        if (IsText(column)) return true;
+        if (kinds[column] == Kind.Exact)
+        {
+            var trimmed = ViewSorter.TrimEnd(cell);
+            var normalized = booleans[column] ? ColumnTypes.BooleanNumber(trimmed) : trimmed;
+            return trimmed.Length != cell.Length || !NumericParts(normalized, out _, out _, out _);
+        }
+        if (kinds[column] == Kind.Float)
+        {
+            var trimmed = ViewSorter.TrimEnd(cell);
+            return trimmed.Length != cell.Length || !double.TryParse(trimmed, FloatStyles, CultureInfo.InvariantCulture, out _);
+        }
+        return false;
+    }
 
     /// <summary>One cell's hash (not masked).</summary>
     public long Cell(PageView view, int column, int row) =>
-        view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));
+        view.IsNull(column, row) ? (long)Finish(NullHash) : (long)Finish(HashCell(view, column, row, Offset));
 
     /// <summary>A cell's hash, and whether the cell is NULL or unreadable: what the diff compares per cell.</summary>
     public ulong CellValue(PageView view, int column, int row) =>
-        view.IsNull(column, row) ? NullHash : Finish(WithExact(view, column, row, Value(view.Span(column, row), column, Offset)));
+        view.IsNull(column, row) ? NullHash : Finish(HashCell(view, column, row, Offset));
 
-    /// <summary>A float or real cell's exact value after its text, when the text reads back as another value: 1E0 and
-    /// 1.0000000000000002E0 both show as 1, and are different values.</summary>
-    private ulong WithExact(PageView view, int column, int row, ulong hash)
+    private ulong HashCell(PageView view, int column, int row, ulong hash) =>
+        kinds[column] == Kind.Float
+            ? Float(view, column, row, hash)
+            : Value(view.Span(column, row), column, hash);
+
+    /// <summary>Canonical IEEE-754 bits for float hashing and equality: -0.0 maps to +0.0 and every NaN maps to
+    /// <see cref="double.NaN"/> so hash and equality stay in exact parity.</summary>
+    internal static long CanonicalFloatBits(double value) =>
+        BitConverter.DoubleToInt64Bits(value == 0d ? 0d : double.IsNaN(value) ? double.NaN : value);
+
+    private static bool TryFloat(PageView view, int column, int row, bool readsExact, ReadOnlySpan<byte> trimmed, out long bits)
     {
-        if (!exacts[column] || !view.TryExact(column, row, out var exact)) return hash;
+        if (readsExact && view.TryExact(column, row, out var exact))
+        {
+            bits = CanonicalFloatBits(exact);
+            return true;
+        }
+        if (double.TryParse(trimmed, FloatStyles, CultureInfo.InvariantCulture, out var parsed))
+        {
+            bits = CanonicalFloatBits(parsed);
+            return true;
+        }
+        bits = 0;
+        return false;
+    }
+
+    private ulong Float(PageView view, int column, int row, ulong hash)
+    {
+        var trimmed = ViewSorter.TrimEnd(view.Span(column, row));
+        if (!TryFloat(view, column, row, exacts[column], trimmed, out var bits))
+            return Bytes(Step(hash, (byte)'!'), trimmed);
         Span<byte> bytes = stackalloc byte[8];
-        BinaryPrimitives.WriteInt64LittleEndian(bytes, BitConverter.DoubleToInt64Bits(exact));
-        return Bytes(Step(hash, 0xfe), bytes);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes, bits);
+        return Bytes(Step(hash, (byte)'#'), bytes);
     }
 
     /// <summary>Whether two non-NULL cells hold the same value by this column's rules (<paramref name="other"/> hashes its
@@ -385,20 +437,13 @@ internal sealed class CellHasher
         Same(view, column, row, other, otherView, otherColumn, otherRow, out _);
 
     /// <summary>As above, and whether the two compared as text, whose equal values may still differ in characters (a diff's
-    /// soft difference, or a change under Exact): a character column's, or exact numerics either of which has trailing
-    /// spaces or is not a number (<see cref="Literal"/>).</summary>
+    /// soft difference, or a change under Exact): a character column's, exact numerics either of which has trailing
+    /// spaces or is not a number, or a float cell that is not a number (<see cref="Literal"/>).</summary>
     public bool Same(PageView view, int column, int row, CellHasher other, PageView otherView, int otherColumn, int otherRow, out bool text)
     {
         var a = view.Span(column, row);
         var b = otherView.Span(otherColumn, otherRow);
         text = IsText(column);
-        // A float or real whose display text reads back as another value is the same only as a cell of the same text and
-        // exact value, as its hash says (its text, then its exact value).
-        var exactX = 0d;
-        var exactY = 0d;
-        var exactA = exacts[column] && view.TryExact(column, row, out exactX);
-        var exactB = other.exacts[otherColumn] && otherView.TryExact(otherColumn, otherRow, out exactY);
-        if (exactA || exactB) return exactA && exactB && exactX == exactY && a.SequenceEqual(b);
         switch (kinds[column])
         {
             case Kind.Collated:
@@ -414,17 +459,39 @@ internal sealed class CellHasher
                 var trimmedA = ViewSorter.TrimEnd(a);
                 var trimmedB = ViewSorter.TrimEnd(b);
                 text = trimmedA.Length != a.Length || trimmedB.Length != b.Length;
-                if (!NumericParts(trimmedA, out var negativeA, out var wholeA, out var fractionA) | !NumericParts(trimmedB, out var negativeB, out var wholeB, out var fractionB))
+                var normA = booleans[column] ? ColumnTypes.BooleanNumber(trimmedA) : trimmedA;
+                var normB = booleans[column] ? ColumnTypes.BooleanNumber(trimmedB) : trimmedB;
+                if (!NumericParts(normA, out var negativeA, out var wholeA, out var fractionA) | !NumericParts(normB, out var negativeB, out var wholeB, out var fractionB))
                 {
                     text = true;
                     return trimmedA.SequenceEqual(trimmedB);
                 }
                 return negativeA == negativeB && wholeA.SequenceEqual(wholeB) && fractionA.SequenceEqual(fractionB);
             }
+            case Kind.Float:
+            {
+                var trimmedA = ViewSorter.TrimEnd(a);
+                var trimmedB = ViewSorter.TrimEnd(b);
+                text = trimmedA.Length != a.Length || trimmedB.Length != b.Length;
+                var hasA = TryFloat(view, column, row, exacts[column], trimmedA, out var bitsA);
+                var hasB = TryFloat(otherView, otherColumn, otherRow, other.exacts[otherColumn], trimmedB, out var bitsB);
+                if (!hasA || !hasB)
+                {
+                    text = true;
+                    return !hasA && !hasB && trimmedA.SequenceEqual(trimmedB);
+                }
+                return bitsA == bitsB;
+            }
             case Kind.Guid:
                 return Guid.TryParse(Decode(a[..Math.Min(a.Length, 40)]), out var x) && Guid.TryParse(other.Decode(b[..Math.Min(b.Length, 40)]), out var y) ? x == y : a.SequenceEqual(b);
             case Kind.Ticks:
                 return Instant(a) is { } p && other.Instant(b) is { } q ? p == q : a.SequenceEqual(b);
+            case Kind.DateTime:
+            case Kind.Time:
+            {
+                var timeOnly = kinds[column] == Kind.Time;
+                return UnzonedTicks(a, timeOnly) is { } ticksA && UnzonedTicks(b, timeOnly) is { } ticksB ? ticksA == ticksB : a.SequenceEqual(b);
+            }
             default: return a.SequenceEqual(b);
         }
     }
@@ -453,7 +520,7 @@ internal sealed class CellHasher
         {
             if (view.IsTruncated(c, row)) approximate = true;
             hash = Step(hash, 1);
-            hash = WithExact(view, c, row, Value(view.Span(c, row), c, hash));
+            hash = HashCell(view, c, row, hash);
         }
         return Step(hash, 0xff);
     }
@@ -470,7 +537,7 @@ internal sealed class CellHasher
                 return Bytes(hash, sortKey.AsSpan(0, written));
             }
             case Kind.Trimmed: return Bytes(hash, ViewSorter.TrimEnd(cell));
-            case Kind.Exact: return Numeric(hash, cell);
+            case Kind.Exact: return Numeric(hash, cell, booleans[column]);
             case Kind.Guid:
             {
                 Span<byte> bytes = stackalloc byte[16];
@@ -481,10 +548,18 @@ internal sealed class CellHasher
             }
             case Kind.Ticks:
             {
-                if (Instant(cell) is not { } ticks) return Bytes(hash, cell);
+                if (Instant(cell) is not { } ticks) return Bytes(Step(hash, (byte)'!'), cell);
                 Span<byte> bytes = stackalloc byte[8];
                 BinaryPrimitives.WriteInt64LittleEndian(bytes, ticks);
-                return Bytes(hash, bytes);
+                return Bytes(Step(hash, (byte)'#'), bytes);
+            }
+            case Kind.DateTime:
+            case Kind.Time:
+            {
+                if (UnzonedTicks(cell, kinds[column] == Kind.Time) is not { } ticks) return Bytes(Step(hash, (byte)'!'), cell);
+                Span<byte> bytes = stackalloc byte[8];
+                BinaryPrimitives.WriteInt64LittleEndian(bytes, ticks);
+                return Bytes(Step(hash, (byte)'#'), bytes);
             }
             default: return Bytes(hash, cell);
         }
@@ -493,10 +568,11 @@ internal sealed class CellHasher
     /// <summary>An exact numeric's digits without a sign on zero, leading zeros or trailing fractional zeros, so 1.50, 01.5
     /// and 1.5 hash alike. Trailing spaces never count, as in text; other text that is not a number hashes by its bytes
     /// behind a mark, apart from every number, so cells hash alike exactly when <see cref="Same"/> calls them equal.</summary>
-    private static ulong Numeric(ulong hash, ReadOnlySpan<byte> text)
+    private static ulong Numeric(ulong hash, ReadOnlySpan<byte> text, bool boolean)
     {
         text = ViewSorter.TrimEnd(text);
-        if (!NumericParts(text, out var negative, out var whole, out var fraction)) return Bytes(Step(hash, (byte)'!'), text);
+        var normalized = boolean ? ColumnTypes.BooleanNumber(text) : text;
+        if (!NumericParts(normalized, out var negative, out var whole, out var fraction)) return Bytes(Step(hash, (byte)'!'), text);
         if (negative) hash = Step(hash, (byte)'-');
         hash = Bytes(hash, whole);
         if (!fraction.IsEmpty) { hash = Step(hash, (byte)'.'); hash = Bytes(hash, fraction); }
@@ -524,8 +600,17 @@ internal sealed class CellHasher
         return true;
     }
 
-    private long? Instant(ReadOnlySpan<byte> cell) => ViewSorter.UtcTicks(cell) ??
-        (DateTimeOffset.TryParse(Decode(cell[..Math.Min(cell.Length, 64)]), CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : null);
+    private long? Instant(ReadOnlySpan<byte> cell)
+    {
+        if (ViewSorter.UtcTicks(cell) is { } fast) return fast;
+        var text = Decode(cell[..Math.Min(cell.Length, 64)]).Trim();
+        // Never assume TimeZoneInfo.Local for unzoned dates or datetimes (e.g. SQL Server date/datetime2 diffed against BigQuery TIMESTAMP).
+        if (!ViewSorter.HasExplicitZone(text)) return null;
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out var value) ? value.UtcTicks : null;
+    }
+
+    private static long? UnzonedTicks(ReadOnlySpan<byte> cell, bool timeOnly) =>
+        ViewSorter.TryInstant(cell, out var ticks, out _, out var dated, out var zoned) && !zoned && dated != timeOnly ? ticks : null;
 
     private ReadOnlySpan<char> Decode(ReadOnlySpan<byte> utf8)
     {

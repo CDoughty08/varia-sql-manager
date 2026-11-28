@@ -1,4 +1,4 @@
-import { isQueryDocument, type QueryDocument } from '../documents'
+import { isQueryDocument, type MultiDocumentTarget, type QueryDocument } from '../documents'
 import type { ConnectionService } from './connections'
 import { isBigQueryConnection, isLiveConnection } from './connection-availability'
 import type { DocumentService } from './documents'
@@ -33,8 +33,8 @@ export class TargetService {
   update(tabId: string, patch: TargetPatch): void {
     const current = this.documents.get(tabId)
     if (current && Object.entries(patch).every(([key, value]) => current[key as keyof TargetPatch] === value)) return
-    // A value opened from the results (XML, JSON, plan) never has a server or database.
-    if (current && !isQueryDocument(current)) return
+    // A value opened from the results (XML, JSON, plan) never has a server or database; multi-server tabs manage targets via multiTargets[].
+    if (current && (!isQueryDocument(current) || current.multiMode)) return
     // The query's results stay, as in SSMS: they live until it runs again, closes, or the user closes them. A query moved
     // to another connection (or disconnected) starts afresh, so a notice about its old session no longer applies.
     const moved = current && 'connectionId' in patch && patch.connectionId !== current.connectionId
@@ -53,7 +53,7 @@ export class TargetService {
    */
   async changeConnection(tabId: string, connectionId?: string): Promise<void> {
     const document = this.documents.get(tabId)
-    if (!document || !isQueryDocument(document)) return
+    if (!document || !isQueryDocument(document) || document.multiMode) return
     const candidate = connectionId === undefined ? undefined : this.connections.get(connectionId)
     if (connectionId !== undefined && !isLiveConnection(candidate)) { this.files.reportError('The selected connection is not connected. Choose its connection again.'); return }
     const next = candidate
@@ -79,12 +79,14 @@ export class TargetService {
   /** Moves a query to another database, or a BigQuery query to another dataset. A dataset in another location than the
    *  query's session ends the session (a session lives in one location): `switchLocation` asks first, and Don't Switch keeps the dataset. */
   changeDatabase(tabId: string, database: string): void {
-    const document = this.documents.get(tabId), connectionId = document?.connectionId
+    const document = this.documents.get(tabId)
+    if (!document || document.multiMode) return
+    const connectionId = document.connectionId
     // A connection with a fixed location runs every session there (TabLocationAsync), so only Automatic ones switch.
     const options = connectionId ? this.connections.get(connectionId)?.options : undefined, fixed = options?.provider === 'bigquery' && !!options.location
     const from = this.queries.sessionLocation?.(tabId), to = connectionId && !fixed ? this.datasetLocation?.(connectionId, database) : undefined
     // Choosing the same dataset again still switches, as LOCATION_MISMATCH's advice says.
-    if (!document || !connectionId || !from || !to || from.toLowerCase() === to.toLowerCase()) { this.update(tabId, { database }); return }
+    if (!connectionId || !from || !to || from.toLowerCase() === to.toLowerCase()) { this.update(tabId, { database }); return }
     // The switch is a document task, so it cannot start beside another one; say so rather than drop the choice.
     if (this.documents.getSnapshot().busy) { this.files.reportError(`The dataset was not changed: wait for the current task to finish, then choose ${database} again.`); return }
     void this.switchLocation(tabId, connectionId, database, from, to)
@@ -104,13 +106,27 @@ export class TargetService {
   /** Bind existing documents only by the exact handle that created them; useful at the connect orchestration seam. */
   rememberConnection(connectionId: string, targetId: string): void {
     if (this.targetForConnection(connectionId) !== targetId) return
-    for (const document of this.documents.getSnapshot().documents) if (document.connectionId === connectionId)
-      this.documents.update(document.id, { targetId, ...isQueryDocument(document) ? { attachWanted: true } : {} })
+    for (const document of this.documents.getSnapshot().documents) {
+      if (document.multiMode) {
+        this.documents.updateMultiTarget(document.id, target => target.connectionId === connectionId && target.targetId !== targetId, { targetId, attachWanted: true })
+        continue
+      }
+      if (document.connectionId === connectionId)
+        this.documents.update(document.id, { targetId, ...isQueryDocument(document) ? { attachWanted: true } : {} })
+    }
   }
   /** Reconnect opens fresh sessions for queries that still want this exact target, preserving their own databases. */
   attachTarget(targetId: string, connectionId: string, includeCustom = false): void {
     if (this.targetForConnection(connectionId) !== targetId) return
     for (const document of this.documents.getSnapshot().documents) {
+      if (isQueryDocument(document) && document.multiMode) {
+        this.documents.updateMultiTarget(
+          document.id,
+          target => target.targetId === targetId && target.connectionId !== connectionId && !!target.attachWanted,
+          { connectionId, lastServer: undefined }
+        )
+        continue
+      }
       if (document.targetId !== targetId || document.connectionId === connectionId) continue
       if (isQueryDocument(document)) {
         if (document.attachWanted) this.documents.update(document.id, { connectionId, sessionNotice: 'restarted' })
@@ -124,6 +140,31 @@ export class TargetService {
     const source = this.registry?.get(fromTargetId)
     if (!source || source.lifecycle.state === 'connected' || source.lifecycle.state === 'disconnecting') return
     for (const document of this.documents.getSnapshot().documents) {
+      if (isQueryDocument(document) && document.multiMode && document.multiTargets?.some(target => target.targetId === fromTargetId)) {
+        const migrated: MultiDocumentTarget[] = document.multiTargets.map(target => target.targetId === fromTargetId
+          ? { ...target, targetId: toTargetId, connectionId: target.attachWanted ? connectionId : undefined, lastServer: undefined }
+          : target)
+        const deduped: MultiDocumentTarget[] = []
+        const byTargetId = new Map<string, number>()
+        for (const target of migrated) {
+          if (target.targetId === undefined) { deduped.push(target); continue }
+          const existingIndex = byTargetId.get(target.targetId)
+          if (existingIndex === undefined) {
+            byTargetId.set(target.targetId, deduped.length)
+            deduped.push(target)
+          } else {
+            const existing = deduped[existingIndex]!
+            deduped[existingIndex] = {
+              ...existing,
+              connectionId: existing.connectionId ?? target.connectionId,
+              enabled: existing.enabled || target.enabled,
+              attachWanted: existing.attachWanted || target.attachWanted
+            }
+          }
+        }
+        this.documents.setMultiTargets(document.id, deduped)
+        continue
+      }
       if (document.targetId !== fromTargetId) continue
       if (isQueryDocument(document)) {
         this.documents.update(document.id, { targetId: toTargetId, connectionId: document.attachWanted ? connectionId : undefined,
@@ -138,6 +179,14 @@ export class TargetService {
     const target = this.registry?.get(targetId), connection = this.connections.get(handle.id)
     if (!target || target.lifecycle.state !== 'disconnected' || !connection || connection.targetId !== targetId || connection.generation !== handle.generation) return
     for (const document of this.documents.getSnapshot().documents) {
+      if (isQueryDocument(document) && document.multiMode) {
+        this.documents.updateMultiTarget(
+          document.id,
+          item => item.connectionId === handle.id && (item.targetId === undefined || item.targetId === targetId),
+          item => ({ ...item, connectionId: undefined, lastServer: item.lastServer ?? connection.server })
+        )
+        continue
+      }
       if (document.connectionId !== handle.id || document.targetId !== undefined && document.targetId !== targetId) continue
       if (isQueryDocument(document)) {
         this.documents.update(document.id, { connectionId: undefined, sessionNotice: 'restarted' })
@@ -150,6 +199,14 @@ export class TargetService {
   retarget(oldId: string, newId: string): void {
     const targetId = this.targetForConnection(newId)
     for (const document of this.documents.getSnapshot().documents) {
+      if (isQueryDocument(document) && document.multiMode) {
+        this.documents.updateMultiTarget(
+          document.id,
+          item => item.connectionId === oldId && (!item.targetId || item.targetId === targetId),
+          item => ({ ...item, connectionId: newId, ...targetId ? { targetId, attachWanted: item.attachWanted ?? true } : {} })
+        )
+        continue
+      }
       if (document.connectionId !== oldId) continue
       if (document.targetId && document.targetId !== targetId) continue
       if (isQueryDocument(document)) this.documents.update(document.id, { connectionId: newId, ...targetId ? { targetId, attachWanted: document.attachWanted ?? true } : {}, sessionNotice: 'restarted' })
@@ -162,7 +219,8 @@ export class TargetService {
   async disconnectAll(): Promise<void> {
     await this.runDocumentTask(async () => {
       // A table designer has no session to end, and keeps its server, as SSMS's does.
-      const connected = this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId !== undefined)
+      const connected = this.documents.getSnapshot().documents.filter(document =>
+        isQueryDocument(document) && !document.multiMode && document.connectionId !== undefined)
       // A BigQuery query holding a job (running, or left running) stays connected, as a running query does.
       const holding = new Set((await Promise.all(connected.map(async document => await this.queries.holdsJob?.(document.id) ? [document.id] : []))).flat())
       const asked = new Set(connected.filter(document => !this.queries.isRunning(document.id) && !holding.has(document.id)).map(document => document.id))
@@ -170,8 +228,27 @@ export class TargetService {
       if (!plan) return
       let running = 0, unasked = 0
       for (const document of this.documents.getSnapshot().documents) {
+        if (!isQueryDocument(document)) continue
+        if (document.multiMode) {
+          if (!document.multiTargets?.some(item => item.connectionId !== undefined)) continue
+          if (this.queries.isRunning(document.id)) { running++; continue }
+          this.documents.updateMultiTarget(
+            document.id,
+            item => item.connectionId !== undefined,
+            item => {
+              const server = item.connectionId ? this.connections.get(item.connectionId)?.server : undefined
+              return {
+                ...item,
+                connectionId: undefined,
+                ...item.targetId !== undefined ? { attachWanted: false } : {},
+                ...server ? { lastServer: server } : {}
+              }
+            }
+          )
+          continue
+        }
         const { id, connectionId } = document
-        if (connectionId === undefined || !isQueryDocument(document)) continue
+        if (connectionId === undefined) continue
         if (this.queries.isRunning(id) || holding.has(id) && await this.queries.holdsJob?.(id)) { running++; continue }
         if (!asked.has(id) && await this.queries.mayHaveTransaction(id)) { unasked++; continue }
         const note = await this.documents.endSession(id, plan.get(id))

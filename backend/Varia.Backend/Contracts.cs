@@ -80,7 +80,7 @@ internal sealed record CancelArgs(string QueryId, bool? Detach = null);
 internal sealed record DisconnectResult(bool Disconnected, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FailedAborts = null);
 /// <summary>A database, or for BigQuery a dataset with its location (absent when BigQuery names none).</summary>
 internal sealed record DatabaseInfo(string Name, bool IsSystem, bool IsSnapshot, string? Location = null);
-internal enum BigQueryDecimalKind { None, Numeric, BigNumeric }
+internal enum BigQueryDecimalKind { None, Numeric, BigNumeric, WideDecimal }
 /// <summary>A result column as the grid sees it: wire is "text" (SSMS display text) or "binary"; role marks documents
 /// (xml, json, plan), CLR UDTs and vectors, which are data, and the hidden columns (ResultTextWriter.Hidden): a row's tone
 /// and a diff's suffix (old, mark, leftRow, rightRow). Of is the pair a diff's previous-value column (role old) belongs to.
@@ -105,7 +105,8 @@ internal sealed record ResultCollation(int Lcid, int SortId, int CodePage, bool 
 /// renderer offers Load into memory under; null for any other result.</summary>
 internal sealed record ResultDescriptor(uint ResultId, int Index, int BatchNumber, int Iteration, string Kind, IReadOnlyList<ResultColumn> Columns,
     long RowsRead, long RowsStored, long RowsAvailable, long BytesStored, long TruncatedCells, string State, string? Truncated, bool Incomplete, string? Name = null,
-    string? Residence = null, long? RowsTotal = null, int? Revision = null, long? ProjectedBytes = null);
+    string? Residence = null, long? RowsTotal = null, int? Revision = null, long? ProjectedBytes = null,
+    string? TargetKey = null, int? StatementSlot = null, bool? RolledBackPreview = null);
 internal sealed record ColumnInfo(string Name, string DataType);
 internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncated);
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
@@ -160,7 +161,7 @@ internal sealed record ManagedHeap(long CommittedBytes, long FreeBytes);
 /// <summary>One line of the Messages tab: kind is "info" (Varia's row counts and notes), "print" (PRINT and RAISERROR with
 /// severity 10 or less), "server" (SQL Server's other informational messages: warnings, SET STATISTICS output, DBCC) or "error"
 /// (SQL errors, cancellation and timeout, shown in red).</summary>
-internal sealed record MessageEntry(string Text, string Kind, int? Line = null);
+internal sealed record MessageEntry(string Text, string Kind, int? Line = null, string? TargetKey = null, string? Dialect = null);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
 /// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
@@ -172,6 +173,35 @@ internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int Discar
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
     int? Spid = null, string? Login = null, List<ResultDescriptor>? PlanSets = null, List<uint>? PlanOrder = null, Statistics.ClientStatisticsSample? ClientStatistics = null,
     BigQuery.BigQueryJobSummary? Job = null, long? IndexStale = null);
+
+internal sealed record MultiQueryTargetArgs(string TargetKey, string ConnectionId, string Label, string? Environment = null, string? Database = null,
+    string? Dataset = null, long? MaximumBytesBilled = null, bool NoDefaultDataset = false);
+/// <summary>Property names Sqlserver and Bigquery intentionally use lowercase 's'/'q' after the first letter so
+/// JsonNamingPolicy.CamelCase maps them to "sqlserver" and "bigquery" under UnmappedMemberHandling.Disallow.</summary>
+internal sealed record MultiQueryScripts(string Sqlserver, string Bigquery);
+internal sealed record MultiQueryStartLines(int? Sqlserver = null, int? Bigquery = null);
+internal sealed record QueryMultiArgs(string QueryId, string SessionId, string Mode, MultiQueryTargetArgs[] Targets, int? MaxRows, int? TimeoutSeconds,
+    int MaxResultSets = 10, string? JobKey = null, bool? Sequential = null, bool? PreflightDryRun = null, bool? AutoCombine = null, bool? StopOnError = null,
+    bool? DiscardResults = null, bool? Prices = null, string? Residence = null, int? WindowCacheMiB = null, string? Sql = null, int? StartLine = null,
+    int? StartColumn = null, MultiQueryScripts? Scripts = null, MultiQueryStartLines? StartLines = null);
+internal sealed record MultiTargetError(string Code, string Message, int? BatchNumber = null, int? Iteration = null, int? Line = null);
+internal sealed record MultiTargetOutcome(string TargetKey, string Provider, string Label, string Status, int BatchesCompleted, int BatchesTotal,
+    long RowsAffected, long ElapsedMs, List<uint> ResultSetIds, string? Environment = null, int? Spid = null, string? Login = null,
+    long? BytesProcessed = null, BigQuery.BigQueryJobSummary? Job = null, MultiTargetError? Error = null);
+internal sealed record QueryMultiResult(string Status, string Mode, List<MultiTargetOutcome> Targets, List<ResultDescriptor> ResultSets,
+    int DiscardedResultSets, List<MessageEntry> Messages, bool MessagesTruncated, long ElapsedMs, ResultBudget Budget, string CompletedAt,
+    List<string>? CombineWarnings = null);
+internal sealed record ResultsCombineArgs(uint[] ResultIds, string? StatementName = null);
+internal sealed record ResultsCombineResult(ResultDescriptor Descriptor, IReadOnlyList<string>? Warnings = null);
+internal sealed record ResultSetMetaEvent(uint ResultId, bool RolledBackPreview)
+{
+    [JsonPropertyOrder(-1)] public string Type => "resultSet.meta";
+}
+internal sealed record MultiQueryTargetStateEvent(string TargetKey, string Phase, int BatchesCompleted, int BatchesTotal, long RowsAffected,
+    int ResultSetCount, long ElapsedMs, long? BytesProcessed = null, string? ErrorCode = null, string? ErrorMessage = null)
+{
+    [JsonPropertyOrder(-1)] public string Type => "multiQuery.targetState";
+}
 
 internal sealed record SessionStateArgs(string SessionId);
 /// <summary>query.session.state: an idle session's @@TRANCOUNT, read on demand before it ends. Checked is false when the

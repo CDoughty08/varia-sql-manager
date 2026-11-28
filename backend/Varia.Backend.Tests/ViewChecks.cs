@@ -54,13 +54,14 @@ internal static class ViewChecks
         var invariant = System.Globalization.CultureInfo.InvariantCulture;
         string[] written =
         [
-            "2024-01-01", "0001-01-01", "9999-12-31", "2024-02-29", "2024-01-01 10:20:30", "2024-01-01 10:20:30.5", "2024-01-01 10:20:30.123", "2024-01-01 23:59:59.9999999",
+            "2024-01-01", "0001-01-01", "9999-12-31", "2024-02-29", "2024-01-01 10:20:30", "2024-01-01T10:20:30", "2024-01-01T10:20:30.123456",
+            "2024-01-01 10:20:30.5", "2024-01-01 10:20:30.123", "2024-01-01 23:59:59.9999999",
             "1900-01-01 00:00:00.0000000", "10:20:30", "23:59:59.9999999", "00:00:00.0000001", "2024-01-01 10:00:00.0000000 +02:00", "2024-01-01 10:00:00.0000000 -05:30",
             "0001-01-01 00:00:00.0000000 +00:00", "9999-12-31 23:59:59.9999999 -14:00", "2024-06-30 12:00:00 +14:00"
         ];
         string[] other =
         [
-            "", "2024-1-1", "2023-02-29", "2024-13-01", "2024-01-32", "0000-01-01", "2024-01-01T10:20:30", "2024-01-01 24:00:00", "2024-01-01 10:60:00", "2024-01-01 10:20:60",
+            "", "2024-1-1", "2023-02-29", "2024-13-01", "2024-01-32", "0000-01-01", "2024-01-01 24:00:00", "2024-01-01 10:60:00", "2024-01-01 10:20:60",
             "2024-01-01 10:20:30.", "2024-01-01 10:20:30.12345678", "2024-01-01 10:20", "2024-01-01 ", "10:20", "1.10:20:30", "2024-01-01 10:00:00 +15:00", "2024-01-01 10:00:00 +14:30",
             "2024-01-01 10:00:00 Z", "2024-01-01 10:00:00+02:00", " 2024-01-01", "2024-01-01 10:00:00 +02:0", "abcd-ef-gh", "2024-01-01 1a:00:00", "Jan 1 2024"
         ];
@@ -146,8 +147,10 @@ internal static class ViewChecks
         var byTicks = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.9999999", "2024-03-01 10:00:00.0000000", "2024-01-15 00:00:00.0000001");
         var mixed = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.9999999", "not a date", "2024-01-15 00:00:00.0000001");
         var widths = Held("2024-03-01 10:00:00.0000000", "2023-12-31 23:59:59.99", "2024-01-15 00:00:00.0000001");
-        check(byTicks is ["ticks", "1,3,0,2"] && mixed[0] != "ticks" && mixed[1] == "1,3,0,2" && widths[0] != "ticks" && widths[1] == "1,2,0",
-            "a date column sorts by its ticks while its cells are all written one way, and by its text's bytes once one is not: " + string.Join(" / ", byTicks.Concat(mixed).Concat(widths)));
+        var crossDialect = Held("2024-03-01 10:00:00.0000000", "2024-03-01T09:59:59.5", "2024-03-01T10:00:00", "2024-03-01");
+        check(byTicks is ["ticks", "1,3,0,2"] && mixed[0] != "ticks" && mixed[1] == "1,3,0,2" && widths is ["ticks", "1,2,0"] && crossDialect is ["ticks", "3,1,0,2"],
+            "a date column sorts by its ticks across widths and space/T separators, and by its text's bytes once a cell is not an instant: "
+            + string.Join(" / ", byTicks.Concat(mixed).Concat(widths).Concat(crossDialect)));
         check(wrong.Count == 0 && same.Count == written.Length, "date and time text read directly gives the general parser's ticks for the text the backend writes, and declines any other; columns holding cells of another kind sort and profile as that parser has them: " + string.Join(" | ", wrong));
     }
 

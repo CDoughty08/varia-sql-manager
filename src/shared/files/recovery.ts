@@ -20,10 +20,20 @@ export const recoveryLimits = {
   /** A BigQuery query's dataset (its `database`), on BigQuery records only. */
   datasetChars: 1024,
   /** Ids in one discard. */
-  discardIds: 256
+  discardIds: 256,
+  /** Target hints kept on a multi-server or cross-engine query copy. */
+  multiTargets: 32
 } as const
 /** Why a write was refused at the caps; a fixed sentence, as the banner shows it. */
 export const recoveryCapMessage = 'AutoRecover keeps at most 64 queries (256 MB).'
+
+/** One target hint of a multi-server or cross-engine query kept by AutoRecover (never `targetId`, `attachWanted`, `connectionId` or `jobKey`). */
+export interface MultiTargetRecoveryEntry {
+  readonly database: string
+  readonly enabled: boolean
+  readonly provider: ProviderId
+  readonly lastServer?: string
+}
 
 /** What the renderer asks main to keep for one query: main adds the file's path from its own registration. `provider` is
  *  the query's engine (absent: SQL Server); a BigQuery query's `database` is its dataset. A SQL Server Agent document (AG-6g)
@@ -42,6 +52,9 @@ export interface RecoveryWrite {
   /** A SQL Server Agent document's connection target, which the recovered document follows once it connects (only on those copies). */
   readonly targetId?: string
   readonly text: string
+  readonly multiMode?: 'same' | 'cross'
+  readonly multiTargets?: readonly MultiTargetRecoveryEntry[]
+  readonly crossView?: 'split' | 'file'
 }
 /** A kept query as the Recover dialog lists it: no text. `savedAt` is an ISO time; `path` is the file it was saved to. */
 export interface RecoveryEntry {
@@ -68,6 +81,9 @@ export interface RecoveredDocument {
   readonly jobs?: readonly RestoredJob[]
   /** A SQL Server Agent document's connection target, as kept. */
   readonly targetId?: string
+  readonly multiMode?: 'same' | 'cross'
+  readonly multiTargets?: readonly MultiTargetRecoveryEntry[]
+  readonly crossView?: 'split' | 'file'
 }
 
 /** The crash, hang and reload prompts' details: AutoRecover's wording once it has kept this page's queries. */

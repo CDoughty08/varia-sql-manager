@@ -35,6 +35,11 @@ database management tools in one app, with SSMS's features and keys and a modern
   identity federation), browse projects and datasets, edit GoogleSQL with IntelliSense, run queries and scripts in per-tab
   sessions with the cost estimate beside Execute, keep results too large for memory windowed in BigQuery, and follow jobs
   in Job History ([BigQuery](docs/bigquery.md)).
+- **Multi-server and Cross-Engine queries**: select multiple SQL Servers or BigQuery projects in Object Explorer, choose
+  **Coordinated Transaction** (all-or-nothing local/session transactions, no MSDTC) or **Fire and Forget** with inline
+  BigQuery cost estimates, or run read-only **Cross-Engine SELECT** queries across Transact-SQL and GoogleSQL side by
+  side with **Summary**, **Combined**, **Compare**, and filtered **Messages**
+  ([Multi-server and Cross-Engine queries](docs/multi-server-query.md)).
 
 Varia supports SQL Server 2016 through 2025 and runs on Windows, Linux and macOS.
 
@@ -122,7 +127,7 @@ through a small preload API that main verifies, and query results stay in backen
 
 | Area | Docs |
 | --- | --- |
-| Editor | [Language services](docs/language-services.md), [commands](docs/commands.md), [gestures](docs/gestures.md), [editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md), [popout windows](docs/popout-windows.md) |
+| Editor | [Language services](docs/language-services.md), [commands](docs/commands.md), [gestures](docs/gestures.md), [editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md), [popout windows](docs/popout-windows.md), [multi-server and Cross-Engine queries](docs/multi-server-query.md), [BigQuery](docs/bigquery.md) |
 | Results | [Result grid tools](docs/results-tools.md), [named results](docs/named-result-sets-scope.md), [execution plans](docs/execution-plans.md) |
 | Objects | [Object Explorer](docs/object-explorer.md), [connections](docs/connections-explorer.md), [object actions](docs/object-actions.md), [Search Objects](docs/object-search.md), [scripting](docs/scripting.md), [Table Designer](docs/table-designer.md) |
 | Monitoring | [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), [Integration Services](docs/integration-services.md), [SQL Server Agent](docs/sql-server-agent.md) |

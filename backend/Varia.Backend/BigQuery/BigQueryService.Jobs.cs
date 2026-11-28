@@ -143,7 +143,7 @@ internal sealed partial class BigQueryService
                     await LocateAsync(connection, reference, dataset, token);
                     return await GetJobAsync(connection, reference.ProjectId, reference.JobId, reference.Location, token);
                 }
-                catch (Exception) when (!token.IsCancellationRequested) { throw new BigQueryJobMayExist(error, exists: true); }
+                catch (Exception lookup) when (!token.IsCancellationRequested || lookup is not OperationCanceledException) { throw new BigQueryJobMayExist(error, exists: true); }
             }
             catch (Exception error) when (Transient(error, token))
             {
@@ -157,11 +157,11 @@ internal sealed partial class BigQueryService
                 catch (GoogleApiException lookup) when (lookup.HttpStatusCode == HttpStatusCode.NotFound && attempt < InsertAttempts) { }
                 catch (Exception lookup) when (attempt < InsertAttempts && Transient(lookup, token)) { }
                 // A lookup that fails in a way not retried (a 403, a 400) still leaves the first insert's fate unknown.
-                catch (Exception) when (attempt >= InsertAttempts || !token.IsCancellationRequested) { throw ambiguous is null ? error : new BigQueryJobMayExist(error, exists: false); }
+                catch (Exception lookup) when (!token.IsCancellationRequested || lookup is not OperationCanceledException) { throw ambiguous is null ? error : new BigQueryJobMayExist(error, exists: false); }
                 await Task.Delay(Backoff(attempt), token);
             }
-            // A later attempt refused outright (a 403, a 400) says nothing about an earlier one that may have created the job.
-            catch (Exception error) when (ambiguous is not null && !token.IsCancellationRequested) { throw new BigQueryJobMayExist(error, exists: false); }
+            // A later attempt refused outright (a 403, a 400, or a 429 racing cancellation) says nothing about an earlier one that may have created the job.
+            catch (Exception error) when (ambiguous is not null && (!token.IsCancellationRequested || error is not OperationCanceledException)) { throw new BigQueryJobMayExist(error, exists: false); }
         }
     }
 

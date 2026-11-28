@@ -681,7 +681,7 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
     // folder's action places itself on its folder, and on rows only through `rows`, so each placement names the nodes it is for.
     const placement: ActionMenuPlacement = {
       menu: spec.menu ?? 'explorer.context', group: spec.group, order: spec.order, ...spec.menuTitle ? { title: spec.menuTitle } : {}, mnemonic: spec.mnemonic,
-      when: spec.folder ? `${key} != '' && explorerNode == 'folder'` : `${key} != '' && explorerNode != 'background'`
+      when: spec.folder ? `${key} != '' && explorerNode == 'folder'` : `${key} != '' && explorerNode != 'background' && !explorerMultiSelected`
     }
     const precondition = `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : '')
     // A Search Objects result's menu stands in the result's keys for the selection's (`selectionContextOf`).
@@ -689,7 +689,7 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
     const entry: ActionCommandEntry = { title: spec.title, category: 'Object Explorer', ...data, precondition, menus: [placement, ...search], ...spec.providers ? { providers: spec.providers } : {} }
     if (!spec.rows) return [[spec.command, entry]]
     const { command, ...rows } = spec.rows
-    const row: ActionCommandEntry = { ...entry, palette: false, menus: [{ ...rows, when: `${key} != '' && explorerNode != 'folder' && explorerNode != 'background'` }] }
+    const row: ActionCommandEntry = { ...entry, palette: false, menus: [{ ...rows, when: `${key} != '' && explorerNode != 'folder' && explorerNode != 'background' && !explorerMultiSelected` }] }
     return [[spec.command, entry], [command, row]]
   })) as { readonly [K in ActionCommandId]: ActionCommandEntry }
 }

@@ -24,7 +24,9 @@ export const sessionLimits = {
   serverChars: 256,
   databaseChars: 128,
   /** A BigQuery tab's dataset (its `database`): BigQuery's 1,024 characters, on BigQuery tabs only. */
-  datasetChars: 1024
+  datasetChars: 1024,
+  /** Targets kept on a multi-server or cross-engine query tab. */
+  multiTargets: 32
 } as const
 
 /** A tab name the user chose (Rename Tab): trimmed, at most this many characters. */
@@ -32,6 +34,16 @@ export const tabNameChars = 128
 /** The name a rename keeps: trimmed, line breaks and other control characters dropped, at most `tabNameChars`. */
 export function cleanTabName(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, tabNameChars).trim()
+}
+
+/** One target of a multi-server or cross-engine query tab kept for Hot Exit (never `connectionId` or `jobKey`). */
+export interface MultiTargetSessionEntry {
+  readonly targetId?: string
+  readonly database: string
+  readonly enabled: boolean
+  readonly provider: ProviderId
+  readonly attachWanted?: boolean
+  readonly lastServer?: string
 }
 
 /**
@@ -59,6 +71,9 @@ export interface SessionDocumentWrite {
   readonly provider?: ProviderId
   readonly jobKey?: string
   readonly text?: string
+  readonly multiMode?: 'same' | 'cross'
+  readonly multiTargets?: readonly MultiTargetSessionEntry[]
+  readonly crossView?: 'split' | 'file'
 }
 /**
  * The tabs in group order (each group's tabs in strip order), the active one's index (-1 when none of them is active),
@@ -94,6 +109,9 @@ export interface RestoredDocument {
   /** A BigQuery tab's job key, and the jobs main still has records of under it, to re-attach to once it connects. */
   readonly jobKey?: string
   readonly jobs?: readonly RestoredJob[]
+  readonly multiMode?: 'same' | 'cross'
+  readonly multiTargets?: readonly MultiTargetSessionEntry[]
+  readonly crossView?: 'split' | 'file'
 }
 /** What the next start reopens; `problems` are fixed sentences about tabs that could not reopen (their file is gone). */
 export interface RestoredSession {

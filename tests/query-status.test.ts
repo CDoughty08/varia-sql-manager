@@ -2,10 +2,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings } from '../src/shared/settings/catalog'
-import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
+import { connectionAccent } from '../src/shared/theme/connection-colors'
+import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { multiTargetSummaryText, queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
-import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
+import QueryStatusBar, { deriveMultiStatus } from '../src/renderer/src/QueryStatusBar'
 import EditorStatus, { sqlStatusChip } from '../src/renderer/src/EditorStatus'
 import { classifyQuerySourceHealth, extractBigQueryQuerySources, summarizeBigQueryWaves } from '../src/renderer/src/languages/IntelliSensePopover'
 import type { Workbench } from '../src/renderer/src/core/workbench'
@@ -154,6 +156,170 @@ describe('the query status facts\' environment tag', () => {
     const classic = renderStatus(live, 'bar', true)
     expect(classic).not.toContain('data-compact="true"')
     expect(classic).toContain('data-icon="plug"')
+  })
+
+  it('derives multi-server status without stale success after refuseReadOnly, backend loss, cancel, timeout, or IPC error', () => {
+    const staleCompleted = { queryId: 'q1', mode: 'cross' as const, status: 'completed' as const, elapsedMs: 10, targets: [] }
+    // Running always clears settled outcome.
+    expect(deriveMultiStatus(true, { status: 'failed' }, { multiSummary: staleCompleted })).toBeUndefined()
+    // After refuseReadOnly (run.status='failed', no run.multiSummary), never shows stale completed summary.
+    expect(deriveMultiStatus(false, { status: 'failed' }, { multiSummary: staleCompleted })).toBe('failed')
+    // Backend lost mid-run overrides any stale summary.
+    expect(deriveMultiStatus(false, { status: 'lost' }, { multiSummary: staleCompleted })).toBe('failed')
+    // Cancelled / timedOut runs without multiSummary map cleanly instead of falling back to stale summary.
+    expect(deriveMultiStatus(false, { status: 'cancelled' }, { multiSummary: staleCompleted })).toBe('cancelled')
+    expect(deriveMultiStatus(false, { status: 'timedOut' }, { multiSummary: staleCompleted })).toBe('timedOut')
+    // Authoritative run.multiSummary (e.g. rolledBack / commitInDoubt) is preserved when run.status is 'failed'.
+    expect(deriveMultiStatus(false, { status: 'failed', multiSummary: { ...staleCompleted, status: 'rolledBack' } }, { multiSummary: staleCompleted })).toBe('rolledBack')
+    expect(deriveMultiStatus(false, { status: 'failed', multiSummary: { ...staleCompleted, status: 'commitInDoubt' } }, undefined)).toBe('commitInDoubt')
+    // IPC error without multiSummary reports failed.
+    expect(deriveMultiStatus(false, undefined, { error: 'IPC failed' })).toBe('failed')
+  })
+
+  it('matches multi-target live phases strictly by connectionId before falling back to label', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    fixture.connections.add(
+      { id: 'c1', server: 'sql01', displayName: 'SharedName', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql01', displayName: 'SharedName', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    fixture.connections.add(
+      { id: 'c2', server: 'sql02', displayName: 'SharedName', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql02', displayName: 'SharedName', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    const tab = fixture.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'c1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'c2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    // Only c2 is in multiTargets as succeeded; c1 has a connectionId so it must NOT borrow c2's phase by matching label 'SharedName'.
+    const queries = new SnapshotStore({
+      [tab.id]: {
+        running: { queryId: 'q1', connectionId: 'c2', startedAt: 100 },
+        multiTargets: [{ targetKey: 't2', connectionId: 'c2', label: 'SharedName', provider: 'sqlserver', database: 'master', phase: 'succeeded' }]
+      }
+    })
+    const workbench = { ...fixture, queries, theme } as unknown as Workbench
+    const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
+    // Only 1 target (c2) has a live phase, not 2!
+    expect(html).toContain('Executing on 1 target (1/1 settled)')
+  })
+
+  it('R2 Finding 6: emits explicit engine-missing text on Cross-Engine tabs when all enabled targets are connected on only one engine', () => {
+    const missingBq = multiTargetSummaryText('cross', [
+      { provider: 'sqlserver', connected: true, enabled: true },
+      { provider: 'sqlserver', connected: true, enabled: true }
+    ])
+    expect(missingBq.ready).toBe(false)
+    expect(missingBq.label).toBe('2 SQL Servers + 0 BigQuery · Select a BigQuery project')
+
+    const missingSql = multiTargetSummaryText('cross', [
+      { provider: 'bigquery', connected: true, enabled: true }
+    ])
+    expect(missingSql.ready).toBe(false)
+    expect(missingSql.label).toBe('0 SQL Servers + 1 BigQuery · Select a SQL Server')
+
+    const model = queryStatusModel({
+      database: '',
+      running: false,
+      multiMode: 'cross',
+      multiTargets: [
+        { provider: 'sqlserver', connected: true, enabled: true },
+        { provider: 'sqlserver', connected: true, enabled: true }
+      ],
+      now: 1000,
+      settings: {
+        'textEditor.statusBar.executionTime': 'elapsed',
+        'textEditor.statusBar.showServer': true,
+        'textEditor.statusBar.showLogin': true,
+        'textEditor.statusBar.showDatabase': true,
+        'textEditor.statusBar.showRowCount': true
+      }
+    })
+    expect(model.tone).toBe('disconnected')
+    expect(model.text).toBe('2 SQL Servers + 0 BigQuery · Select a BigQuery project')
+    expect(model.text).not.toContain('2 of 2 connected')
+  })
+
+  it('R3 Finding 7: deduplicates identical multi.label in variant="bar" when idle while keeping the Targets segment during execution or settled outcomes', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    fixture.connections.add(
+      { id: 'c1', server: 'sql01', displayName: 'SQL One', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql01', displayName: 'SQL One', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    fixture.connections.add(
+      { id: 'c2', server: 'sql02', displayName: 'SQL Two', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql02', displayName: 'SQL Two', database: 'master', authentication: 'windows', trustServerCertificate: false }
+    )
+    const tab = fixture.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'c1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'c2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+
+    // Idle bar: model.text already shows "2 SQL Servers · Ready" -> omit duplicate query-status-server segment.
+    const idleWorkbench = { ...fixture, theme } as unknown as Workbench
+    const idleHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: idleWorkbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
+    const idleVisibleText = idleHtml.replace(/<[^>]+>/g, '')
+    expect(idleVisibleText.split('2 SQL Servers · Ready').length - 1).toBe(1)
+    expect(idleHtml).not.toContain('query-status-server')
+
+    // Settled outcome bar: model.text differs ("Query executed successfully.") -> keep query-status-server segment.
+    const queries = new SnapshotStore({
+      [tab.id]: { multiSummary: { queryId: 'q1', mode: 'same' as const, status: 'completed' as const, elapsedMs: 12, targets: [] } }
+    })
+    const settledWorkbench = { ...fixture, queries, theme } as unknown as Workbench
+    const settledHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: settledWorkbench, children: createElement(QueryStatusBar, { tab, variant: 'bar' }) }))
+    expect(settledHtml).toContain('Query executed successfully.')
+    expect(settledHtml).toContain('query-status-server')
+    expect(settledHtml).toContain('2 SQL Servers · Ready')
+  })
+
+  it('R4 Finding 1: paints QueryStatusBar edge using real connectionAccent for Production (red) and Cross-Engine (purple) fallback presets', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const activeTheme = resolveBuiltin('dark')
+    const theme = { subscribe: () => () => {}, getSnapshot: () => ({ active: activeTheme }), accent: (color?: string) => connectionAccent(color, activeTheme) }
+    fixture.connections.add(
+      { id: 'c-prod', server: 'sql-prod', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql-prod', database: 'master', authentication: 'windows', trustServerCertificate: false, environment: 'Production' }
+    )
+    fixture.connections.add(
+      { id: 'c-dev', server: 'sql-dev', database: 'master', serverVersion: '16.0', generation: 1 },
+      { server: 'sql-dev', database: 'master', authentication: 'windows', trustServerCertificate: false, environment: 'Development' }
+    )
+    fixture.connections.add(
+      { id: 'bq-dev', providerId: 'bigquery', server: 'bq-dev', database: 'ds', serverVersion: '', generation: 1 },
+      { provider: 'bigquery', projectId: 'bq-dev', defaultDataset: 'ds', environment: 'Development' } as never
+    )
+
+    const workbench = { ...fixture, theme } as unknown as Workbench
+    const prodTab = fixture.documents.openMultiQuery({
+      mode: 'same',
+      targets: [
+        { connectionId: 'c-prod', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'c-dev', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    const prodHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab: prodTab, variant: 'bar' }) }))
+    expect(prodHtml).toContain('border-top:3px solid var(--varia-connection-red)')
+
+    const crossTab = fixture.documents.openMultiQuery({
+      mode: 'cross',
+      targets: [
+        { connectionId: 'c-dev', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 'bq-dev', provider: 'bigquery', database: 'ds', enabled: true }
+      ]
+    })
+    const crossHtml = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab: crossTab, variant: 'bar' }) }))
+    expect(crossHtml).toContain('border-top:3px solid var(--varia-connection-purple)')
   })
 })
 

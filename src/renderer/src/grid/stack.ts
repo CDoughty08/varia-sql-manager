@@ -27,18 +27,28 @@ export interface StackSizing {
   readonly content?: readonly (number | undefined)[]
   /** The sets shown as their caption alone. */
   readonly collapsed?: ReadonlySet<number>
+  /** Extra fixed chrome height (e.g. multi-server notice strips) above each set's grid, added to its minimum floor. */
+  readonly extraMin?: readonly number[]
+  /** Enforce the single-set minimum floor even without extra notice strips (e.g. multi-server stack with open Summary band). */
+  readonly keepFloor?: boolean
 }
 
 /**
  * Whole-pixel heights. Without weights, a set whose content fits in its share takes its content, repeatedly, and the
  * others share the rest: h_i = max(minHeight, rest × w_i / Σw), with the rounding remainder handed out one pixel at a time
- * from the top, so equal weights give heights within 1 px of each other. One set fills the pane.
+ * from the top, so equal weights give heights within 1 px of each other. One set fills the pane (or its floor when extra
+ * chrome such as multi-server notices would starve the grid).
  */
 export function stackLayout(paneHeight: number, count: number, weights: readonly number[] | undefined, minHeight: number, sizing: StackSizing = {}): StackLayout {
   const pane = Math.max(0, Math.floor(paneHeight))
   if (count <= 0) return { heights: [], offsets: [], total: 0 }
   const collapsed = sizing.collapsed
-  if (count === 1) { const height = collapsed?.has(0) ? g.captionHeight : pane; return { heights: [height], offsets: [0], total: pane } }
+  if (count === 1) {
+    if (collapsed?.has(0)) return { heights: [g.captionHeight], offsets: [0], total: pane }
+    const extra = Math.max(0, sizing.extraMin?.[0] ?? 0)
+    const height = extra > 0 || sizing.keepFloor ? Math.max(pane, setFloors(1, minHeight, sizing)[0]) : pane
+    return { heights: [height], offsets: [0], total: Math.max(pane, height) }
+  }
   const valid = weights?.length === count && weights.every(weight => Number.isFinite(weight) && weight > 0) ? weights : undefined
   const weightOf = (index: number) => valid ? valid[index] : 1
   const content = valid ? undefined : sizing.content
@@ -87,7 +97,10 @@ export function stackLayout(paneHeight: number, count: number, weights: readonly
  */
 export function setFloors(count: number, minHeight: number, sizing: StackSizing = {}): number[] {
   const floors = new Array<number>(Math.max(0, count))
-  for (let index = 0; index < floors.length; index++) floors[index] = sizing.collapsed?.has(index) ? g.captionHeight : Math.min(minHeight, sizing.content?.[index] ?? minHeight)
+  for (let index = 0; index < floors.length; index++) {
+    const floor = minHeight + Math.max(0, sizing.extraMin?.[index] ?? 0)
+    floors[index] = sizing.collapsed?.has(index) ? g.captionHeight : Math.min(floor, sizing.content?.[index] ?? floor)
+  }
   return floors
 }
 

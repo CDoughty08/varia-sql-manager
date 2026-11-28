@@ -155,6 +155,7 @@ const api: VariaApi = {
     }
   },
   execute: options => request('query.execute', options),
+  executeMulti: options => request('query.executeMulti', options),
   cancel: (queryId, options) => request('query.cancel', { queryId, ...options?.detach ? { detach: true as const } : {} }),
   attach: params => request('query.attach', params),
   remoteQuery: params => request('results.remoteQuery', params),

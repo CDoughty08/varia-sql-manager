@@ -35,7 +35,7 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
         return line is > 0 and <= int.MaxValue ? (int)line : null;
     }
 
-    public void Add(string text, MessageKind kind = MessageKind.Info, int? line = null)
+    public void Add(string text, MessageKind kind = MessageKind.Info, int? line = null, string? targetKey = null, string? dialect = null)
     {
         lock (messages)
         {
@@ -44,13 +44,13 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
                 MarkTruncated();
                 if (kind != MessageKind.Error || lateErrors >= MaxLateErrors) return;
                 lateErrors++;
-                Store(text.Length > MaxLateCharacters ? text[..MaxLateCharacters] : text, kind, line);
+                Store(text.Length > MaxLateCharacters ? text[..MaxLateCharacters] : text, kind, line, targetKey, dialect);
                 return;
             }
             var cut = text.Length > MaxCharacters - characters;
             if (cut) text = text[..(MaxCharacters - characters)];
             characters += text.Length;
-            Store(text, kind, line);
+            Store(text, kind, line, targetKey, dialect);
             if (cut) MarkTruncated();
         }
     }
@@ -72,10 +72,10 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
         truncatedAt = messages.Count;
     }
 
-    private void Store(string text, MessageKind kind, int? line)
+    private void Store(string text, MessageKind kind, int? line, string? targetKey, string? dialect)
     {
         var entry = new MessageEntry(text, kind switch { MessageKind.Error => Error, MessageKind.Server => Server, MessageKind.Print => Print, _ => Info },
-            kind == MessageKind.Error && line is > 0 ? line : null);
+            kind == MessageKind.Error && line is > 0 ? line : null, string.IsNullOrEmpty(targetKey) ? null : targetKey, string.IsNullOrEmpty(dialect) ? null : dialect);
         messages.Add(entry);
         stored?.Invoke(entry);
     }

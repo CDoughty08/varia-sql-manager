@@ -121,4 +121,57 @@ describe('ResultsToolbar progressive disclosure chips', () => {
     expect(ws.getAttribute('aria-expanded')).toBe('false')
     expect(document.activeElement).toBe(ws)
   })
+
+  it('R5-D4-3: consumes Find in Results focus requests while Summary is active so switching to a grid never steals focus later', async () => {
+    const f = workbenchFixture()
+    mounted.add(f.dispose)
+    f.settings.choose('queryResults.grid.layout', 'tabs')
+    const tab = f.documents.create('multi.sql', 'SELECT 1', 'master')
+    const targets = [
+      { targetKey: 's1', connectionId: 'c1', provider: 'sqlserver' as const, label: 'srv-1' },
+      { targetKey: 's2', connectionId: 'c2', provider: 'sqlserver' as const, label: 'srv-2' }
+    ]
+    const set1 = descriptor(1, { index: 0, targetKey: 's1', statementSlot: 0 })
+    const set2 = descriptor(2, { index: 1, targetKey: 's2', statementSlot: 0 })
+    f.results.begin(tab.id, 'q1', undefined, { multi: { mode: 'fireAndForget', targets } })
+    await f.results.finish(tab.id, 'q1', {
+      multiSummary: {
+        status: 'completed',
+        mode: 'fireAndForget',
+        targets: targets.map((t, i) => ({ targetKey: t.targetKey, provider: t.provider, label: t.label, status: 'succeeded', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 1, elapsedMs: 10, resultSetIds: [i + 1] })),
+        resultSets: [set1, set2],
+        discardedResultSets: 0,
+        messages: [],
+        messagesTruncated: false,
+        elapsedMs: 10,
+        budget: { usedBytes: 0, globalBytes: 1024, queryBytes: 1024, generation: 1, seq: 1 },
+        completedAt: '2026-11-26T18:30:00.0000000+00:00'
+      }
+    })
+    // Summary is active by default in Tabs layout for multi-server runs, so the search box is disabled.
+    const container = document.body.appendChild(document.createElement('div'))
+    const outside = document.body.appendChild(document.createElement('button'))
+    outside.focus()
+    const root = createRoot(container)
+    mounted.add(() => act(() => root.unmount()))
+    await act(async () => {
+      root.render(createElement(WorkbenchProvider, { workbench: f as unknown as Workbench, children: createElement(ResultsToolbar, { tabId: tab.id }) }))
+    })
+    const input = container.querySelector<HTMLInputElement>('.results-search input')!
+    expect(input.disabled).toBe(true)
+
+    // Press Find in Results while Summary is active: focus request is consumed without focusing the disabled input.
+    await act(async () => { f.resultsSearch.focus(tab.id) })
+    expect(document.activeElement).toBe(outside)
+
+    // Switch to a result grid tab: search box enables, and focus MUST stay on `outside` (never stolen!).
+    const gridKey = f.results.getSnapshot()[tab.id].sets[0].key
+    await act(async () => { f.results.focusEntry(tab.id, gridKey) })
+    expect(input.disabled).toBe(false)
+    expect(document.activeElement).toBe(outside)
+
+    // Pressing Find in Results now that a grid is active DOES focus the search input.
+    await act(async () => { f.resultsSearch.focus(tab.id) })
+    expect(document.activeElement).toBe(input)
+  })
 })

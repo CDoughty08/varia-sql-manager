@@ -18,7 +18,7 @@ const field = (allowed: (input: InputTarget) => boolean) => (args?: CommandArgs)
 export function editContribution({ commands, documents, menuTargets }: Pick<Workbench, 'commands' | 'documents' | 'menuTargets'>, api: Pick<VariaApi, 'runRole'>): Disposable {
   const role = (name: RendererRole) => async () => { unwrap(await api.runRole(name)) }
   const inEditor = (action: string, fallback: RendererRole) => async () => {
-    const editor = documents.boundEditor
+    const editor = documents.activeEditors?.().find(instance => instance.hasTextFocus()) ?? documents.boundEditor
     if (editor?.hasTextFocus()) editor.trigger('menu', action, null)
     else await role(fallback)()
   }

@@ -25,11 +25,40 @@ type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections
 export function languagesContribution({ commands, documents, connections, sqlLanguage, indexCompletion, monaco, editorPeek }: LanguageWorkbench): Disposable {
   const target = (id?: string) => documents.get(id ?? documents.getSnapshot().activeId)
   const refresh = commands.register('edit.refreshIntelliSense', {
-    when: args => { const document = target(args?.tabId); return isQueryDocument(document) && !!document?.connectionId && connections.isLive(document.connectionId) },
-    unavailable: () => 'Connect this query before refreshing its IntelliSense cache.',
+    when: args => {
+      const document = target(args?.tabId)
+      if (!document || !isQueryDocument(document)) return false
+      if (document.multiMode) {
+        const model = documents.activeModel?.(document.id) ?? documents.getModel(document.id)
+        const langContext = model && documents.languageContext?.(model, id => connections.isLive(id))
+        if (!langContext?.connectionId || langContext.suspended || !connections.isLive(langContext.connectionId)) return false
+        return langContext.provider === 'sqlserver' || (langContext.provider === 'bigquery' && !!indexCompletion)
+      }
+      return !!document.connectionId && connections.isLive(document.connectionId)
+    },
+    unavailable: args => {
+      const document = target(args?.tabId)
+      if (document && isQueryDocument(document)) {
+        const model = documents.activeModel?.(document.id) ?? documents.getModel(document.id)
+        if (model && documents.languageContext?.(model, id => connections.isLive(id))?.suspended) {
+          return 'Switch to Split view for per-dialect IntelliSense and syntax checking.'
+        }
+      }
+      return 'Connect this query before refreshing its IntelliSense cache.'
+    },
     run: async args => {
       const document = target(args?.tabId)
       if (!document) return
+      if (document.multiMode) {
+        const model = documents.activeModel?.(document.id) ?? documents.getModel(document.id)
+        const langContext = model && documents.languageContext?.(model, id => connections.isLive(id))
+        if (langContext?.provider === 'bigquery') {
+          if (indexCompletion) await indexCompletion.refreshCache(document.id)
+          return
+        }
+        await sqlLanguage.refreshCache(document.id)
+        return
+      }
       if (documentProvider(document) === 'bigquery') {
         if (indexCompletion) await indexCompletion.refreshCache(document.id)
         return
@@ -45,8 +74,11 @@ export function languagesContribution({ commands, documents, connections, sqlLan
     const editor = monaco?.editor.getEditors?.().find(editor => editor.hasWidgetFocus())
     const model = editor?.getModel(), position = editor?.getPosition()
     if (!editor || !model || !position || !definitionLanguages.has(model.getLanguageId())) return undefined
-    // A GoogleSQL name resolves on its query tab's connection; BigQuery Properties' read-only Definition editor has none.
-    if (model.getLanguageId() === googleSqlLanguageId && !documents.getSnapshot().documents.some(document => documents.getModel(document.id) === model)) return undefined
+    // A GoogleSQL name resolves on its query tab's connection (including the secondary pane of a Cross-Engine Split tab);
+    // BigQuery Properties' read-only Definition editor has none.
+    if (model.getLanguageId() === googleSqlLanguageId && !documents.getSnapshot().documents.some(document =>
+      documents.ownsModel ? documents.ownsModel(document.id, model) : documents.getModel(document.id) === model
+    )) return undefined
     return { editor, model, position }
   }
   const definition = (mode: DefinitionMode) => async () => { const place = focused(); if (place && editorPeek) await editorPeek.run(mode, place) }

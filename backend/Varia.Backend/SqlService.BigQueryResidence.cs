@@ -52,6 +52,38 @@ internal sealed partial class SqlService
     /// <summary>Refuses a windowed result before a reader of stored pages does any work (REMOTE_RESULT).</summary>
     internal static ResultSetBuffer Stored(ResultSetBuffer set) => set.IsRemote ? throw RemoteRefused() : set;
 
+    /// <summary>Serializes BigQuery residence decisions across targets of one multi-server run and divides remaining budget
+    /// room across the BigQuery targets that have not yet finished ingesting results.</summary>
+    internal sealed class MultiResidenceCoordinator(int totalBigQueryTargets)
+    {
+        private readonly SemaphoreSlim gate = new(1, 1);
+        private int remainingTargets = Math.Max(1, totalBigQueryTargets);
+
+        public int RemainingTargets => Math.Max(1, Volatile.Read(ref remainingTargets));
+
+        public void TargetCompleted()
+        {
+            while (true)
+            {
+                var current = Volatile.Read(ref remainingTargets);
+                if (current <= 1) return;
+                if (Interlocked.CompareExchange(ref remainingTargets, current - 1, current) == current) return;
+            }
+        }
+
+        public async Task<IDisposable> AcquireAsync(CancellationToken token)
+        {
+            await gate.WaitAsync(token);
+            return new Release(gate);
+        }
+
+        private sealed class Release(SemaphoreSlim gate) : IDisposable
+        {
+            private int done;
+            public void Dispose() { if (Interlocked.Exchange(ref done, 1) == 0) gate.Release(); }
+        }
+    }
+
     /// <summary>
     /// Decides a result's residence after its first page (docs/bigquery.md, Residence: Deciding), before the set is
     /// announced. In memory when the rows arrived whole, under Always in memory, or when the projection from the first page's
@@ -61,7 +93,7 @@ internal sealed partial class SqlService
     /// </summary>
     private async Task<RemoteResult?> DecideResidenceAsync(QueryArgs args, BigQueryConnection connection, string project, string jobId, string? location, Job? job, bool child,
         BigQueryColumnPlan plan, BigQueryPage first, ResultSetBuffer set, QueryBudget budget, QueryMessages messages, Action<BigQueryWindow?> window, CancellationToken token,
-        int? queryMaxRows = null)
+        int? queryMaxRows = null, MultiResidenceCoordinator? residenceCoordinator = null)
     {
         var residence = ResidenceOf(args.Residence);
         var total = first.TotalRows ?? first.RowCount;
@@ -71,12 +103,17 @@ internal sealed partial class SqlService
         // The first page's rows as pages: what a row costs in the store, and the cache's first block.
         var measured = new RemoteBlockWriter(set.ResultId, set.Wires, 0);
         // Its values' read warnings go to Messages here: the column plan says each once, so no later read of this page would.
-        WriteRows(first, plan, measured, int.MaxValue, warn: text => messages.Add(text));
+        WriteRows(first, plan, measured, int.MaxValue, warn: text => messages.Add(text, targetKey: set.TargetKey, dialect: set.TargetProvider));
         var pages = measured.Finish();
         var rowCost = (double)pages.Sum(page => page.Cost) / Math.Max(1, measured.Rows);
         var wanted = Wanted(args, total);
-        var room = Math.Min(store.QueryLimit(budget) - budget.UsedBytes, store.GlobalBytes - store.UsedBytes);
-        var fits = FitsInMemory(rowCost, wanted, room);
+        bool fits;
+        using (residenceCoordinator is null ? null : await residenceCoordinator.AcquireAsync(token))
+        {
+            var room = Math.Min(store.QueryLimit(budget) - budget.UsedBytes, store.GlobalBytes - store.UsedBytes);
+            if (residenceCoordinator is not null) room /= residenceCoordinator.RemainingTargets;
+            fits = FitsInMemory(rowCost, wanted, room);
+        }
         if (residence == BigQueryResidence.Automatic && fits) return await KeepInMemoryAsync();
         var table = await DestinationAsync(connection, project, jobId, location, job, token);
         if (table is null) return null;
@@ -93,7 +130,7 @@ internal sealed partial class SqlService
         }
         remote.Seed(seed);
         if (!store.Demote(set, remote, total, bump: false)) return null;
-        if (CapNoteFor(args, total) is { } capped) messages.Add(capped);
+        if (CapNoteFor(args, total) is { } capped) messages.Add(capped, targetKey: set.TargetKey, dialect: set.TargetProvider);
         return remote;
 
         async Task<RemoteResult?> KeepInMemoryAsync()
@@ -141,8 +178,8 @@ internal sealed partial class SqlService
         if (!store.Demote(set, remote, context.TotalRows)) return false;
         events.Residence(set);
         // A load says itself that the result stays windowed; this is the query's own estimate being wrong.
-        if (!set.Budget.Loading) messages.Add("The result was larger than estimated and did not fit in memory, so it is now windowed in BigQuery: rows are read as you scroll.");
-        if (CapNoteFor(context.Args, context.TotalRows) is { } capped) messages.Add(capped);
+        if (!set.Budget.Loading) messages.Add("The result was larger than estimated and did not fit in memory, so it is now windowed in BigQuery: rows are read as you scroll.", targetKey: set.TargetKey, dialect: set.TargetProvider);
+        if (CapNoteFor(context.Args, context.TotalRows) is { } capped) messages.Add(capped, targetKey: set.TargetKey, dialect: set.TargetProvider);
         return true;
     }
 

@@ -8,11 +8,11 @@ export function messagesContribution({ commands, documents, queries, results }: 
     if (!tabId || !selected || !Number.isInteger(selected.index) || selected.index < 0) return undefined
     const tab = results.getSnapshot()[tabId], entry = tab?.messages[selected.index]
     if (tab?.queryId !== selected.queryId || entry?.kind !== 'error' || entry.line !== selected.line) return undefined
-    const line = queries.sourceLine(tabId, selected.queryId, entry.line)
-    return line === undefined ? undefined : { tabId, line, revision: documents.revision(tabId) }
+    const line = queries.sourceLine(tabId, selected.queryId, entry.line, entry.dialect)
+    return line === undefined ? undefined : { tabId, line, revision: documents.revision(tabId), ...entry.dialect ? { dialect: entry.dialect } : {} }
   }
   return commands.register('output.revealError', {
     when: args => !!location(args),
-    run: args => { const at = location(args); if (at) documents.revealLine(at.tabId, at.line, at.revision) }
+    run: args => { const at = location(args); if (at) { if (at.dialect) documents.revealLine(at.tabId, at.line, at.revision, at.dialect); else documents.revealLine(at.tabId, at.line, at.revision) } }
   })
 }

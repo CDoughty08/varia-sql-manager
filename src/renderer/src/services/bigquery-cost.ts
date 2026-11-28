@@ -11,6 +11,7 @@ import { isQueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { ConnectionService, LiveConnection } from './connections'
 import { isBigQueryConnection } from './connection-availability'
+import { disableIncompleteWarning, isIncompleteWarningEnabled } from './bigquery-cost-prompt'
 
 export const dryRunMarkerOwner = 'varia.googlesql.dryRun'
 /** The editing pause before a diagnostics dry run (docs/bigquery.md, Cost). */
@@ -39,6 +40,8 @@ export interface CostPromptRequest {
   readonly prompt: CostPrompt
   /** The connection's name, for "Don't ask again for this connection". */
   readonly connection: string
+  /** Optional connection id so an open prompt can reflect live Options/connection changes. */
+  readonly connectionId?: string
   /** The cap the job will carry (the connection's, else Options'), in bytes. */
   readonly cap?: number
   readonly thresholdBytes: number
@@ -175,7 +178,7 @@ interface Entry {
 
 export interface BigQueryCostDeps {
   readonly api: Pick<VariaApi, 'bigQueryDryRun'>
-  readonly documents: Pick<DocumentService, 'get' | 'getModel' | 'getSnapshot' | 'subscribe'>
+  readonly documents: Pick<DocumentService, 'get' | 'getModel' | 'getSnapshot' | 'subscribe'> & Partial<Pick<DocumentService, 'modelFor' | 'getCrossEngineScripts' | 'languageContext'>>
   readonly connections: Pick<ConnectionService, 'get' | 'isLive' | 'subscribe'>
   readonly settings: Settings
   readonly events: Pick<EventBus, 'subscribe'>
@@ -184,6 +187,8 @@ export interface BigQueryCostDeps {
   readonly ask: (request: CostPromptRequest, signal?: AbortSignal, stillAsks?: () => boolean, onAnswer?: (answer: CostPromptAnswer) => void) => Promise<CostPromptAnswer>
   readonly optOut: CostOptOut
   readonly schedule?: (callback: () => void, ms: number) => ReturnType<typeof setTimeout>
+  /** Multi-server BigQuery results: resolves a stored result's owning connection handle (`targetKey -> connectionId`). */
+  readonly connectionForResult?: (tabId: string, resultId: number) => string | undefined
 }
 
 /**
@@ -198,8 +203,6 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   private readonly entries = new Map<string, Entry>()
   private readonly subscriptions: (() => void)[] = []
   private disposed = false
-  /** "Don't warn me about incomplete estimates again" while its setting is being written. */
-  private incompleteOff = false
   constructor(private readonly deps: BigQueryCostDeps) {
     super(new Map())
     const reconcile = () => this.reconcile()
@@ -211,16 +214,30 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     this.reconcile()
   }
 
+  /** The tab's live BigQuery target (first enabled live BigQuery target for multi-server / Cross-Engine tabs). */
+  private bigQueryTarget(id: string): { readonly connection: LiveConnection; readonly database: string } | undefined {
+    const document = this.deps.documents.get(id)
+    if (!isQueryDocument(document) || !document) return undefined
+    if (document.multiMode) {
+      for (const target of document.multiTargets ?? []) {
+        if (!target.enabled || !target.connectionId || !this.deps.connections.isLive(target.connectionId)) continue
+        const connection = this.deps.connections.get(target.connectionId)
+        if (connection && isBigQueryConnection(connection)) return { connection, database: target.database }
+      }
+      return undefined
+    }
+    if (!document.connectionId || !this.deps.connections.isLive(document.connectionId)) return undefined
+    const connection = this.deps.connections.get(document.connectionId)
+    return connection && isBigQueryConnection(connection) ? { connection, database: document.database } : undefined
+  }
   /** The tab's live BigQuery connection, if it has one. */
   private connection(id: string): LiveConnection | undefined {
-    const document = this.deps.documents.get(id)
-    if (!isQueryDocument(document) || !document?.connectionId || !this.deps.connections.isLive(document.connectionId)) return undefined
-    const connection = this.deps.connections.get(document.connectionId)
-    return connection && isBigQueryConnection(connection) ? connection : undefined
+    return this.bigQueryTarget(id)?.connection
   }
   /** The tab's default dataset, as Execute sends it. */
   private dataset(id: string): string | undefined {
-    const database = this.deps.documents.get(id)?.database ?? ''
+    const document = this.deps.documents.get(id)
+    const database = document?.multiMode ? this.bigQueryTarget(id)?.database ?? '' : document?.database ?? ''
     return /^\w{1,1024}$/.test(database) ? database : undefined
   }
 
@@ -228,7 +245,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     if (this.disposed) return
     const open = new Set<string>()
     for (const document of this.deps.documents.getSnapshot().documents) {
-      const model = this.deps.documents.getModel(document.id)
+      const model = this.deps.documents.modelFor?.(document.id, 'bigquery') ?? this.deps.documents.getModel(document.id)
       const connection = this.connection(document.id)
       if (!connection || !model || model.isDisposed()) continue
       open.add(document.id)
@@ -239,7 +256,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
         entry = { id, model, key: '', revision: 0, content: model.onDidChangeContent(() => { const current = this.entries.get(id); if (current?.model === model) this.edited(current) }) }
         this.entries.set(id, entry)
       }
-      const key = JSON.stringify([connection.id, connection.generation, this.dataset(document.id)])
+      const key = JSON.stringify([connection.id, connection.generation, this.dataset(document.id), document.multiMode ?? '', document.crossView ?? ''])
       if (entry.key !== key) {
         // Another connection or dataset: the old figure and markers no longer apply, and nothing dry-runs until an edit.
         const first = entry.key === ''
@@ -283,6 +300,14 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
   private diagnose(entry: Entry): void {
     if (this.disposed || this.entries.get(entry.id) !== entry || entry.model.isDisposed()) return
     if (entry.running) { entry.again = true; return }
+    const document = this.deps.documents.get(entry.id)
+    if (document?.multiMode === 'cross' && document.crossView === 'file') {
+      const parsed = this.deps.documents.getCrossEngineScripts?.(entry.id)
+      if (!parsed?.ok || !parsed.bigquery.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
+      if (parsed.bigquery.length > dryRunLimits.characters) { this.clearMarkers(entry); this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
+      this.hold(entry, this.dryRun(entry, parsed.bigquery, { line: parsed.bigQueryStartLine, column: 1 }))
+      return
+    }
     const sql = entry.model.getValue()
     if (!sql.trim()) { this.clearMarkers(entry); this.put(entry.id, undefined); return }
     if (sql.length > dryRunLimits.characters) { this.clearMarkers(entry); this.put(entry.id, { phase: 'unavailable', message: `Dry runs are limited to ${dryRunLimits.characters.toLocaleString()} characters.` }); return }
@@ -311,8 +336,9 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     const checking: EstimateState = { phase: 'checking' }
     this.put(entry.id, checking)
     let response: ApiResult<BigQueryDryRunResult>
-    // The tab's id is its session's: text using the tab's temp tables or variables estimates in that session once it exists.
-    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : { noDefaultDataset: true }, sessionId: entry.id }) }
+    // Single-server tabs use their tab id as sessionId so temp tables/variables estimate in-session; multi-target tabs use ephemeral sessions.
+    const isMulti = !!this.deps.documents.get(entry.id)?.multiMode
+    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : { noDefaultDataset: true }, ...isMulti ? {} : { sessionId: entry.id } }) }
     catch (error) { response = { ok: false, error: error instanceof Error ? error.message : 'The dry run failed.' } as ApiResult<BigQueryDryRunResult> }
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
     if (!current) {
@@ -401,6 +427,19 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     return { run, ...cap !== undefined && connection.options.provider === 'bigquery' && connection.options.maximumBytesBilled === undefined ? { maximumBytesBilled: cap } : {} }
   }
 
+  /** Resolves the live BigQuery connection for a remote operation: prefers injected per-result ownership for multi-target tabs. */
+  private connectionForRemote(tabId: string, remote: RemoteDryRun): LiveConnection | undefined {
+    const mappedId = this.deps.connectionForResult?.(tabId, remote.resultId)
+    if (mappedId) {
+      if (!this.deps.connections.isLive(mappedId)) return undefined
+      const connection = this.deps.connections.get(mappedId)
+      return connection && isBigQueryConnection(connection) ? connection : undefined
+    }
+    // On multi-target tabs with per-result ownership wired, an absent mapping means the result is closed/unowned — never fall back to the first target.
+    if (this.deps.documents.get(tabId)?.multiMode && this.deps.connectionForResult) return undefined
+    return this.connection(tabId)
+  }
+
   /**
    * Before a sort, filter or value list of a windowed result runs a billed query on tab `tabId`'s connection (docs/bigquery.md,
    * Sort and filter in BigQuery): its dry run (bigquery.dryRun of the remote request, free), then the same prompts as Execute.
@@ -408,17 +447,17 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
    * declined or the work was given up. A tab off BigQuery or a failed dry run rejects with why.
    */
   async beforeRemote(tabId: string, remote: RemoteDryRun, signal?: AbortSignal): Promise<BigQueryDryRunResult | undefined> {
-    const connection = this.connection(tabId)
+    const connection = this.connectionForRemote(tabId, remote)
     if (!connection) throw new Error('The tab is no longer connected to BigQuery.')
     const response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, remote })
     if (!response.ok) throw new RemoteEstimateError(response.error, response.code)
-    if (signal?.aborted || this.disposed || this.connection(tabId)?.id !== connection.id) return undefined
+    if (signal?.aborted || this.disposed || this.connectionForRemote(tabId, remote)?.id !== connection.id) return undefined
     return await this.prompts(connection, response.value, this.entries.get(tabId), signal) ? response.value : undefined
   }
 
   /** A results.remoteQuery request's estimate alone, with no prompt (Load sample's dialog shows it as its rows change). */
   async estimateRemote(tabId: string, remote: RemoteDryRun, signal?: AbortSignal): Promise<BigQueryDryRunResult | undefined> {
-    const connection = this.connection(tabId)
+    const connection = this.connectionForRemote(tabId, remote)
     if (!connection) throw new Error('The tab is no longer connected to BigQuery.')
     const response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, remote })
     if (!response.ok) throw new RemoteEstimateError(response.error, response.code)
@@ -434,7 +473,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     // again), so the incomplete-estimate warning it was hiding still asks.
     const current = () => costPrompt(estimate, {
       askAboveThreshold: settings.get('queryExecution.bigQuery.costPrompt') && this.deps.optOut.asks(connection), thresholdBytes: threshold(),
-      warnIncomplete: settings.get('queryExecution.bigQuery.incompleteEstimateWarning') && !this.incompleteOff && !entry?.warnedIncomplete
+      warnIncomplete: isIncompleteWarningEnabled(settings) && !entry?.warnedIncomplete
     })
     // Each turn ends in an answer or a prompt found moot by another tab's answer or a settings change, which only the user
     // makes; the bound is a guard, not a limit anyone reaches.
@@ -442,15 +481,14 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
       const kind = prompt.kind
       let applied: Promise<unknown> | undefined
       const answer = await this.deps.ask({
-        prompt, connection: connection.displayName ?? connection.server, thresholdBytes: threshold(), ...this.deps.optOut.threshold(connection) ? { ownThreshold: true as const } : {}, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
+        prompt, connection: connection.displayName ?? connection.server, connectionId: connection.id, thresholdBytes: threshold(), ...this.deps.optOut.threshold(connection) ? { ownThreshold: true as const } : {}, prices: settings.get('queryExecution.bigQuery.showCost') !== 'bytes',
         ...this.cap(connection) ? { cap: this.cap(connection) } : {}, ...rerunOf ? { rerunOf } : {}
       }, signal, () => current()?.kind === kind,
       // Applied as the answer is given, before another tab's waiting prompt is checked: Don't ask again stops it too.
       given => {
         if (signal?.aborted || !given.dontAskAgain) return
         if (kind === 'threshold') { applied = this.deps.optOut.dontAsk(connection); return }
-        this.incompleteOff = true
-        applied = this.deps.settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false).finally(() => { this.incompleteOff = false })
+        applied = disableIncompleteWarning(settings, () => this.deps.settings.choose('queryExecution.bigQuery.incompleteEstimateWarning', false))
       })
       await applied?.catch(() => {})
       if (signal?.aborted) return false
@@ -500,6 +538,8 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
 
   /** Text for the editor status bar's issues segment, as SQL Server's analysis shows it. */
   status(id: string): { label: string; detail: string } | undefined {
+    const document = this.deps.documents.get(id)
+    if (document?.multiMode === 'cross' && document.crossView !== 'file' && document.activePane !== 'secondary') return undefined
     const state = this.getSnapshot().get(id)
     if (!state) return undefined
     if (state.phase === 'checking') return { label: 'Checking with BigQuery', detail: 'A free dry run is checking this query. It sends the query text to Google; nothing runs.' }

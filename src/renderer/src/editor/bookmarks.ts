@@ -3,6 +3,9 @@ import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { TextRange } from './text-ops'
 import { codiconClass } from '../../../shared/icons'
+import type { ProviderId } from '../../../shared/providers'
+
+export type BookmarkPane = 'primary' | 'secondary'
 
 /** The model calls bookmarks make: decorations live on the model, so they survive tab switches and die with it. */
 export interface BookmarkModel {
@@ -17,9 +20,21 @@ export interface BookmarkEditor {
   revealLineInCenterIfOutsideViewport(lineNumber: number): void
   focus(): void
 }
+export interface BookmarkDocumentRef {
+  readonly id: string
+  readonly multiMode?: 'same' | 'cross'
+  readonly crossView?: 'split' | 'file'
+  readonly activePane?: BookmarkPane
+}
 export interface BookmarkDocuments {
-  getSnapshot(): { readonly documents: readonly { readonly id: string }[]; readonly activeId: string }
+  getSnapshot(): { readonly documents: readonly BookmarkDocumentRef[]; readonly activeId: string }
   getModel(id: string): BookmarkModel | undefined
+  getSecondaryModel?(id: string): BookmarkModel | undefined
+  activeModel?(id: string): BookmarkModel | undefined
+  editorOf?(id: string, pane?: BookmarkPane): BookmarkEditor | undefined
+  setActivePane?(id: string, pane: BookmarkPane): void
+  revision?(id: string): number
+  revealLine?(id: string, line: number, revision: number, dialect?: ProviderId): boolean
   activate(id: string): void
   readonly boundEditor: BookmarkEditor | undefined
 }
@@ -34,81 +49,205 @@ const bookmarkOptions = {
   glyphMarginClassName: codiconClass('bookmark') + ' varia-bookmark', glyphMarginHoverMessage: { value: 'Bookmark' }
 }
 
+interface ModelBookmarks {
+  readonly model: BookmarkModel
+  ids: string[]
+}
+
+interface TabBookmarks {
+  crossView?: 'split' | 'file'
+  primary?: ModelBookmarks
+  secondary?: ModelBookmarks
+}
+
 /**
  * Edit › Bookmarks for this session: each bookmark is a whole-line decoration in the indicator margin. Next and
- * Previous go through the active query's bookmarks, then the other open queries' in tab-strip order, wrapping around;
- * the In Document variants stay in the active query. Bookmarks are not saved.
+ * Previous go through the active query's bookmarks (spanning both Transact-SQL and GoogleSQL panes on Cross-Engine
+ * Split tabs), then the other open queries' in tab-strip order, wrapping around; the In Document variants stay in the
+ * active query. Bookmarks are not saved and clear cleanly on Split ↔ File view switches.
  */
 export class BookmarkService extends SnapshotStore<BookmarkSnapshot> implements Disposable {
-  private readonly ids = new Map<string, string[]>()
+  private readonly tabs = new Map<string, TabBookmarks>()
   private readonly subscription: Disposable
   constructor(private readonly documents: BookmarkDocuments, events: Pick<EventBus, 'subscribe'>) {
     super({ counts: {} })
     this.subscription = events.subscribe(event => {
-      if (event.type === 'documents.closed' && this.ids.delete(event.tabId)) this.changed()
+      if (event.type === 'documents.closed') {
+        if (this.tabs.delete(event.tabId)) this.changed()
+      } else if (event.type === 'documents.changed') {
+        this.reconcileCrossViews()
+      }
     })
   }
+  private modelOf(tabId: string, pane: BookmarkPane): BookmarkModel | undefined {
+    return pane === 'secondary' ? this.documents.getSecondaryModel?.(tabId) : this.documents.getModel(tabId)
+  }
+  private crossViewOf(tabId: string): 'split' | 'file' | undefined {
+    const doc = this.documents.getSnapshot().documents.find(item => item.id === tabId)
+    return doc?.multiMode === 'cross' ? doc.crossView ?? 'split' : undefined
+  }
+  /** Clears stale decorations when a Cross-Engine tab toggles between Split and File view or replaces a pane model. */
+  private reconcileCrossViews(): void {
+    if (!this.tabs.size) return
+    let dirty = false
+    for (const [tabId, entry] of [...this.tabs]) {
+      const view = this.crossViewOf(tabId)
+      if (entry.crossView !== undefined && view !== undefined && entry.crossView !== view) {
+        const primary = this.modelOf(tabId, 'primary')
+        if (entry.primary && primary === entry.primary.model && entry.primary.ids.length) {
+          primary.deltaDecorations(entry.primary.ids, [])
+        }
+        const secondary = this.modelOf(tabId, 'secondary')
+        if (entry.secondary && secondary === entry.secondary.model && entry.secondary.ids.length) {
+          secondary.deltaDecorations(entry.secondary.ids, [])
+        }
+        this.tabs.delete(tabId)
+        dirty = true
+        continue
+      }
+      if (entry.primary && this.modelOf(tabId, 'primary') !== entry.primary.model) {
+        entry.primary = undefined
+        dirty = true
+      }
+      if (entry.secondary && this.modelOf(tabId, 'secondary') !== entry.secondary.model) {
+        entry.secondary = undefined
+        dirty = true
+      }
+      if (!entry.primary?.ids.length && !entry.secondary?.ids.length) {
+        this.tabs.delete(tabId)
+        dirty = true
+      }
+    }
+    if (dirty) this.changed()
+  }
+  private totalCount(entry: TabBookmarks | undefined): number {
+    return (entry?.primary?.ids.length ?? 0) + (entry?.secondary?.ids.length ?? 0)
+  }
   private changed(): void {
-    this.publish({ counts: Object.fromEntries([...this.ids].filter(([, ids]) => ids.length).map(([id, ids]) => [id, ids.length])) })
+    const counts: Record<string, number> = {}
+    for (const [tabId, entry] of this.tabs) {
+      const total = this.totalCount(entry)
+      if (total > 0) counts[tabId] = total
+    }
+    this.publish({ counts })
   }
-  /** The bookmarked lines of a document, each once: deleting lines can collapse two bookmarks onto one. */
-  lines(tabId: string): number[] {
-    const model = this.documents.getModel(tabId), ids = this.ids.get(tabId)
-    if (!model || !ids) return []
-    return [...new Set(ids.flatMap(id => { const range = model.getDecorationRange(id); return range ? [range.startLineNumber] : [] }))].sort((a, b) => a - b)
+  /** The bookmarked lines of a document's pane (defaults to primary), each once: deleting lines can collapse two bookmarks onto one. */
+  lines(tabId: string, pane: BookmarkPane = 'primary'): number[] {
+    const model = this.modelOf(tabId, pane), slot = this.tabs.get(tabId)?.[pane]
+    if (!model || !slot || slot.model !== model || !slot.ids.length) return []
+    return [...new Set(slot.ids.flatMap(id => { const range = model.getDecorationRange(id); return range ? [range.startLineNumber] : [] }))].sort((a, b) => a - b)
   }
-  /** The active document, its model and the editor showing it, or undefined when nothing is shown. */
-  private active() {
-    const tabId = this.documents.getSnapshot().activeId, model = tabId ? this.documents.getModel(tabId) : undefined, editor = this.documents.boundEditor
-    return model && editor && editor.getModel() === model ? { tabId, model, editor, line: editor.getPosition()?.lineNumber ?? 1 } : undefined
+  /** The active document, its focused pane and model, and the editor showing it, or undefined when nothing is shown. */
+  private active(): { readonly tabId: string; readonly pane: BookmarkPane; readonly model: BookmarkModel; readonly editor: BookmarkEditor; readonly line: number } | undefined {
+    const tabId = this.documents.getSnapshot().activeId
+    if (!tabId) return undefined
+    const editor = this.documents.boundEditor
+    if (!editor) return undefined
+    const editorModel = editor.getModel()
+    const secondary = this.modelOf(tabId, 'secondary')
+    const primary = this.modelOf(tabId, 'primary')
+    const expected = this.documents.activeModel?.(tabId)
+    if (secondary && editorModel === secondary && (!expected || expected === secondary)) {
+      return { tabId, pane: 'secondary', model: secondary, editor, line: editor.getPosition()?.lineNumber ?? 1 }
+    }
+    if (primary && editorModel === primary && (!expected || expected === primary)) {
+      return { tabId, pane: 'primary', model: primary, editor, line: editor.getPosition()?.lineNumber ?? 1 }
+    }
+    return undefined
   }
-  /** Adds a bookmark on the caret's line, or removes every bookmark on it. */
+  /** Adds a bookmark on the caret's line in the active pane, or removes every bookmark on it. */
   toggle(): void {
     const active = this.active()
     if (!active) return
-    const { tabId, model, editor, line } = active, ids = this.ids.get(tabId) ?? []
+    const { tabId, pane, model, editor, line } = active
+    let entry = this.tabs.get(tabId)
+    if (!entry) {
+      entry = { crossView: this.crossViewOf(tabId) }
+      this.tabs.set(tabId, entry)
+    } else if (entry.crossView === undefined) {
+      entry.crossView = this.crossViewOf(tabId)
+    }
+    const existing = entry[pane]?.model === model ? entry[pane]! : { model, ids: [] }
+    const ids = existing.ids
     const onLine = ids.filter(id => model.getDecorationRange(id)?.startLineNumber === line)
     if (onLine.length) {
       model.deltaDecorations(onLine, [])
-      this.ids.set(tabId, ids.filter(id => !onLine.includes(id)))
+      const remaining = ids.filter(id => !onLine.includes(id))
+      entry[pane] = remaining.length ? { model, ids: remaining } : undefined
+      if (!entry.primary && !entry.secondary) this.tabs.delete(tabId)
     } else {
-      if (ids.length >= maxBookmarksPerDocument) throw new Error('This document has 1,000 bookmarks; clear some first.')
+      if (this.totalCount(entry) >= maxBookmarksPerDocument) throw new Error('This document has 1,000 bookmarks; clear some first.')
       const [id] = model.deltaDecorations([], [{ range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 }, options: bookmarkOptions }])
-      this.ids.set(tabId, [...ids, id])
+      entry[pane] = { model, ids: [...ids, id] }
     }
     this.changed()
     editor.focus()
   }
-  /** Next (1) or Previous (-1) Bookmark, through every open document or only the active one. */
+  private panesOf(tabId: string): readonly BookmarkPane[] {
+    return this.modelOf(tabId, 'secondary') ? ['primary', 'secondary'] : ['primary']
+  }
+  /** Next (1) or Previous (-1) Bookmark, through every open document (and both panes on Cross-Engine Split) or only the active one. */
   go(direction: 1 | -1, scope: 'all' | 'document'): void {
     const active = this.active()
     if (!active) return
-    const { tabId, line } = active, own = this.lines(tabId)
-    const inActive = direction > 0 ? own.find(value => value > line) : own.findLast(value => value < line)
-    if (inActive !== undefined) { this.show(tabId, inActive); return }
+    const { tabId, pane, line } = active
+    const own = this.lines(tabId, pane)
+    const inPane = direction > 0 ? own.find(value => value > line) : own.findLast(value => value < line)
+    if (inPane !== undefined) { this.show(tabId, pane, inPane); return }
+    const panes = this.panesOf(tabId)
+    const paneIndex = panes.indexOf(pane)
+    const nextPaneIndex = paneIndex + direction
+    if (nextPaneIndex >= 0 && nextPaneIndex < panes.length) {
+      const siblingPane = panes[nextPaneIndex]!
+      const siblingLines = this.lines(tabId, siblingPane)
+      if (siblingLines.length) { this.show(tabId, siblingPane, direction > 0 ? siblingLines[0]! : siblingLines.at(-1)!); return }
+    }
     if (scope === 'all') {
       const tabs = this.documents.getSnapshot().documents.map(document => document.id), at = tabs.indexOf(tabId)
       for (let step = 1; step < tabs.length; step++) {
-        const other = tabs[((at + direction * step) % tabs.length + tabs.length) % tabs.length], lines = this.lines(other)
-        if (lines.length) { this.show(other, direction > 0 ? lines[0] : lines.at(-1)!); return }
+        const other = tabs[((at + direction * step) % tabs.length + tabs.length) % tabs.length]!
+        const otherPanes = direction > 0 ? this.panesOf(other) : [...this.panesOf(other)].reverse()
+        for (const otherPane of otherPanes) {
+          const lines = this.lines(other, otherPane)
+          if (lines.length) { this.show(other, otherPane, direction > 0 ? lines[0]! : lines.at(-1)!); return }
+        }
       }
     }
-    // Around to the active document's first (or last) bookmark.
-    if (own.length) this.show(tabId, direction > 0 ? own[0] : own.at(-1)!)
+    // Wrap around within the active document: check panes from the wrapping end (primary->secondary for Next, secondary->primary for Prev).
+    const wrapPanes = direction > 0 ? panes : [...panes].reverse()
+    for (const targetPane of wrapPanes) {
+      const targetLines = this.lines(tabId, targetPane)
+      if (targetLines.length) { this.show(tabId, targetPane, direction > 0 ? targetLines[0]! : targetLines.at(-1)!); return }
+    }
   }
-  private show(tabId: string, line: number): void {
+  private show(tabId: string, pane: BookmarkPane, line: number): void {
+    this.documents.setActivePane?.(tabId, pane)
     if (this.documents.getSnapshot().activeId !== tabId) this.documents.activate(tabId)
-    const editor = this.documents.boundEditor, model = this.documents.getModel(tabId)
-    if (!editor || !model || editor.getModel() !== model) return
+    const model = this.modelOf(tabId, pane)
+    if (!model) return
     const lineNumber = Math.min(line, model.getLineCount())
+    const editor = this.documents.editorOf?.(tabId, pane) ?? this.documents.boundEditor
+    if (!editor || editor.getModel() !== model) {
+      if (this.documents.revealLine && this.documents.revision) {
+        this.documents.revealLine(tabId, lineNumber, this.documents.revision(tabId), pane === 'secondary' ? 'bigquery' : 'sqlserver')
+      }
+      return
+    }
     editor.setPosition({ lineNumber, column: 1 })
     editor.revealLineInCenterIfOutsideViewport(lineNumber)
     editor.focus()
   }
-  /** Removes every bookmark in every open document. */
+  /** Removes every bookmark in every open document and pane. */
   clear(): void {
-    for (const [tabId, ids] of this.ids) this.documents.getModel(tabId)?.deltaDecorations(ids, [])
-    this.ids.clear()
+    for (const [tabId, entry] of this.tabs) {
+      if (entry.primary && this.modelOf(tabId, 'primary') === entry.primary.model) {
+        entry.primary.model.deltaDecorations(entry.primary.ids, [])
+      }
+      if (entry.secondary && this.modelOf(tabId, 'secondary') === entry.secondary.model) {
+        entry.secondary.model.deltaDecorations(entry.secondary.ids, [])
+      }
+    }
+    this.tabs.clear()
     this.changed()
   }
   dispose(): void {

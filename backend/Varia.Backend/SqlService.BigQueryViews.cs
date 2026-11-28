@@ -293,8 +293,11 @@ internal sealed partial class SqlService
             if (plan.FirstRows)
             {
                 // Free: tabledata.list reads the result table's first rows, and no job runs.
-                derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", window.Plan.Columns, window.Plan.Wires, lengths: window.Plan.Lengths, derived: true)
+                derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", window.Plan.Columns, window.Plan.Wires,
+                    lengths: window.Plan.Lengths, derived: true, targetKey: set.TargetKey, targetLabel: set.TargetLabel,
+                    targetEnvironment: set.TargetEnvironment, targetProvider: set.TargetProvider, statementSlot: set.StatementSlot)
                     ?? throw TooLarge(SampleRoom);
+                derived.RolledBackPreview = set.RolledBackPreview;
                 derived.InMemory(Math.Min(plan.SampleRows, window.TotalRows));
                 events.Opened(derived);
                 await SampleFirstRowsAsync(connection, window, plan.SampleRows, derived, set.Budget, events, warn, token);
@@ -373,10 +376,13 @@ internal sealed partial class SqlService
                     events.Job(JobEvent(project, jobId, location, "done", BigQueryTransaction.None));
                     var columns = BigQueryColumnPlan.From(page.Schema) ?? throw new RequestException("BACKEND_ERROR", "BigQuery answered the query without columns.");
                     var total = page.TotalRows ?? 0;
-                    derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires, lengths: columns.Lengths, derived: true,
-                        name: kind == "rerun" ? set.ResultName : null)
+                    derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires,
+                        lengths: columns.Lengths, derived: true, name: kind == "rerun" ? set.ResultName : null,
+                        targetKey: set.TargetKey, targetLabel: set.TargetLabel,
+                        targetEnvironment: set.TargetEnvironment, targetProvider: set.TargetProvider, statementSlot: set.StatementSlot)
                         ?? throw TooLarge(distinct ? "There is not enough result memory for this column's values. Close other results and try again."
                             : sample ? SampleRoom : "There is not enough result memory for this view. Close other results and try again.");
+                    derived.RolledBackPreview = set.RolledBackPreview;
                     BigQueryWindow? derivedWindow = null;
                     RemoteResult? windowed;
                     // Announced even when deciding fails, so the end closes a set the grid heard open.

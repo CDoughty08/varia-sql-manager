@@ -45,8 +45,14 @@ internal static class ColumnTypes
     /// <summary>Exact numerics: integers, decimals and bit, which sort and hash by numeric value.</summary>
     public static bool IsExact(ResultColumn column) => column.SortKind is Integer or Decimal or Boolean;
 
+    /// <summary>Any numeric sort kind (integers, decimals and floats; excludes boolean).</summary>
+    public static bool IsNumeric(string sortKind) => sortKind is Integer or Decimal or Float;
+
     /// <summary>Date and time kinds, whose values are instants.</summary>
     public static bool IsTemporal(ResultColumn column) => column.SortKind is Date or Time or DateTime or Timestamp;
+
+    /// <summary>Unzoned date and time kinds, which carry no timezone offset.</summary>
+    public static bool IsUnzonedTemporal(string sortKind) => sortKind is Date or Time or DateTime;
 
     /// <summary>uniqueidentifier, which sorts and hashes by its 16 bytes in SQL Server's order.</summary>
     public static bool IsGuid(ResultColumn column) => column.SortKind == Other && BaseName(column.DataType) == "uniqueidentifier";

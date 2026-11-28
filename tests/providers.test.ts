@@ -120,30 +120,42 @@ describe('targets and tab records', () => {
     expect(queryConnectionAssociationSchema.safeParse({ ...association, provider: 'bigquery', database: 'd'.repeat(1024) }).success).toBe(true)
     expect(queryConnectionAssociationSchema.safeParse({ ...association, provider: 'bigquery', database: 'd'.repeat(1025) }).success).toBe(false)
   })
-  it('session files are version 3 with a tab provider; 0.9.0\'s version 2 reads as SQL Server', () => {
+  it('session files are version 4 with multi-server targets; version 2 and version 3 read forward to version 4', () => {
     const document = { name: 'Orders.sql', kind: 'sql', eol: 'lf', dirty: true, text: 'select 1' }
-    const session = { version: 3, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [{ ...document, provider: 'bigquery', database: 'd'.repeat(1024) }] }
+    const session = { version: 4, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [{ ...document, provider: 'bigquery', database: 'd'.repeat(1024) }] }
     expect(storedSessionSchema.safeParse(session).success).toBe(true)
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'bigquery', database: 'd'.repeat(1025) }] }).success).toBe(false)
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, database: 'd'.repeat(129) }] }).success).toBe(false)
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'postgresql' }] }).success).toBe(false)
-    // A BigQuery tab's job key (docs/bigquery.md, Re-attaching to jobs) is a uuid, in version 3 only.
+    // A BigQuery tab's job key (docs/bigquery.md, Re-attaching to jobs) is a uuid, in version 3+.
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'bigquery', jobKey: randomUUID() }] }).success).toBe(true)
     expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, provider: 'bigquery', jobKey: 'not-a-key' }] }).success).toBe(false)
     expect(storedSessionSchema.safeParse({ version: 2, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [{ ...document, jobKey: randomUUID() }] }).success).toBe(false)
     const v2 = storedSessionSchema.parse({ version: 2, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [document] })
-    expect(v2.version).toBe(3)
+    expect(v2.version).toBe(4)
     expect(providerOf(v2.documents[0] as { provider?: 'sqlserver' })).toBe('sqlserver')
+    const v3 = storedSessionSchema.parse({ version: 3, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [{ ...document, provider: 'bigquery' }] })
+    expect(v3.version).toBe(4)
+    expect((v3.documents[0] as { provider?: string }).provider).toBe('bigquery')
     // A version 2 file cannot carry a provider: 0.9.0 never wrote one.
     expect(storedSessionSchema.safeParse({ version: 2, savedAt: '2026-11-01T10:00:00.000Z', activeIndex: 0, documents: [{ ...document, provider: 'sqlserver' }] }).success).toBe(false)
+    // Version 4 multiTargets bounds (1..32, per-provider database limit).
+    const multiTargets = Array.from({ length: 32 }, (_, i) => ({ provider: 'sqlserver' as const, database: `db${i}`, enabled: true }))
+    expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, multiMode: 'same', multiTargets }] }).success).toBe(true)
+    expect(storedSessionSchema.safeParse({ ...session, documents: [{ ...document, multiMode: 'same', multiTargets: [...multiTargets, { provider: 'sqlserver', database: 'db32', enabled: true }] }] }).success).toBe(false)
   })
-  it('AutoRecover records are version 2 with a provider; 0.9.0\'s version 1 reads as SQL Server', () => {
+  it('AutoRecover records are version 3 with multi-server hints; version 1 and version 2 read forward to version 3', () => {
     const record = { id: randomUUID(), owner: { instance: randomUUID(), generation: 1 }, name: 'Query 1', kind: 'sql', eol: 'lf', server: 'acme-analytics-01', savedAt: '2026-11-01T10:00:00.000Z', text: 'select 2' }
-    expect(recoveryRecordSchema.safeParse({ ...record, version: 2, provider: 'bigquery', database: 'd'.repeat(1024) }).success).toBe(true)
-    expect(recoveryRecordSchema.safeParse({ ...record, version: 2, database: 'd'.repeat(129) }).success).toBe(false)
+    expect(recoveryRecordSchema.safeParse({ ...record, version: 3, provider: 'bigquery', database: 'd'.repeat(1024) }).success).toBe(true)
+    expect(recoveryRecordSchema.safeParse({ ...record, version: 3, database: 'd'.repeat(129) }).success).toBe(false)
     expect(recoveryRecordSchema.safeParse({ ...record, version: 1, provider: 'sqlserver' }).success).toBe(false)
     const old = recoveryRecordSchema.parse({ ...record, version: 1, database: 'Sales' })
-    expect(old.version).toBe(2)
+    expect(old.version).toBe(3)
     expect('provider' in old).toBe(false)
+    const v2 = recoveryRecordSchema.parse({ ...record, version: 2, provider: 'bigquery', database: 'sales' })
+    expect(v2.version).toBe(3)
+    expect((v2 as { provider?: string }).provider).toBe('bigquery')
+    expect(recoveryRecordSchema.safeParse({ ...record, version: 3, multiMode: 'cross', crossView: 'split', multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true }, { provider: 'bigquery', database: 'analytics', enabled: true }] }).success).toBe(true)
+    expect(recoveryRecordSchema.safeParse({ ...record, version: 3, multiMode: 'same', multiTargets: [{ provider: 'sqlserver', database: 'Sales', enabled: true, targetId: randomUUID() }] }).success).toBe(false)
   })
 })

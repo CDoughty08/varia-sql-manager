@@ -1,6 +1,6 @@
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { cycleSortKeys, sortKeysBy, type SortDirection } from '../grid/sort-keys'
-import type { DiffKindName, MessageEntry, QueryEvent, QueryResult, QueryStatus, ResolvedGroupsFilter, ResolvedViewFilter, ResultColumn, ResultDescriptor, ResultsJobProgress, ResultsRemoteQueryParams, VariaApi, ViewFilter, ViewSortKey, ViewSortMode } from '../../../shared/contracts'
+import { multiQueryTargetStatuses, type DiffKindName, type MessageEntry, type QueryEvent, type QueryMultiResult, type QueryMultiStatus, type QueryResult, type QueryStatus, type ResolvedGroupsFilter, type ResolvedViewFilter, type ResultColumn, type ResultDescriptor, type ResultsJobProgress, type ResultsRemoteQueryParams, type VariaApi, type ViewFilter, type ViewSortKey, type ViewSortMode } from '../../../shared/contracts'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -15,7 +15,7 @@ import type { ResultKey } from './worker-protocol'
 import { sortKindOf } from '../../../shared/results/sort-kind'
 import { completionSentence, formatCount, plural } from './status'
 import { columnFilterKind, conditionFilter, conditionKind, sameFilterFamily, type ColumnCondition } from './column-filter'
-import { retainedPlanLimits, type PlanExecutionContext, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
+import { retainedPlanLimits, type RetainedPlansService, type SnapshotSource } from '../plans/RetainedPlansService'
 import { orderPlanEntries } from '../plans/sources'
 import { ResultOperations, type OperationTicket } from './operations'
 import { nameMeetsOthers, sameFileName, saveName, type SaveSubject } from './save-names'
@@ -25,6 +25,11 @@ import { isRemoteHandle, isRemoteView, RemoteDeclined, remoteStop, remoteOrderab
 import type { MemoryUsage } from './memory'
 import type { SampleMethod } from '../../../shared/bigquery/remote-view'
 import { sampleName } from './sample'
+import { applyMultiOutcomes, applyTargetStateEvent, initialMultiTargetStates, type BeginRunOptions, type MultiResultsSink, type MultiRunEnd, type MultiRunState, type MultiTargetLiveState } from './multi-results-contract'
+
+export type { BeginRunOptions, MultiResultsSink, MultiRunEnd, MultiRunState, MultiTargetLiveState }
+/** Sentinel entry key for a multi-server run's virtual Summary tab. */
+export const summaryEntryKey: EntryKey = '__summary__'
 
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /**
@@ -48,7 +53,7 @@ export interface ResultSetEntry {
    *  ("Sample: 1,000 of 52,341,118 rows"), so what is built from it says it is a sample. */
   readonly sample?: true
 }
-type Named = Pick<ResultSetEntry, 'label' | 'number' | 'sample'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> & Partial<Pick<ResultDescriptor, 'kind'>> }
+type Named = Pick<ResultSetEntry, 'label' | 'number' | 'sample'> & { readonly descriptor?: Pick<ResultDescriptor, 'name'> & Partial<Pick<ResultDescriptor, 'kind' | 'targetKey'>> }
 // One naming function for every results surface (docs/named-result-sets-scope.md, Where the name shows): an entry's name,
 // and apart from it its positional text, so a surface shows either or both. An unnamed result reads as it always has.
 /** An entry's positional text, "Result 4" by its number: every entry has one, named or not, and two results of one name
@@ -73,6 +78,9 @@ export const entryName = (entry: Pick<ResultSetEntry, 'label' | 'number'>): stri
 export const resultTitle = (entry: Named): string => {
   // A sample is named for what it is wherever an original result would be numbered, so its profile or copy says so.
   if (entry.sample) return entryName(entry)
+  if (entry.descriptor?.targetKey !== undefined || entry.descriptor?.kind === 'combined') {
+    return `${entryName(entry)}, ${entryNumber(entry)}`
+  }
   const name = queryName(entry)
   return name === undefined ? entryNumber(entry) : `${name}, ${entryNumber(entry)}`
 }
@@ -82,7 +90,8 @@ export const resultTitle = (entry: Named): string => {
 export const entryTitle = (entry: Named): string => entry.descriptor?.kind === 'diff' || entry.descriptor?.kind === 'pivot' ? entryName(entry) : resultTitle(entry)
 /** The positional text a named result shows beside its name ("Result 2": secondary text in a list, a caption's first fact,
  *  a tooltip), or undefined for an entry whose name already is its number or carries its source's (a Pivot, a comparison). */
-export const entrySecondary = (entry: Named): string | undefined => queryName(entry) === undefined ? undefined : entryNumber(entry)
+export const entrySecondary = (entry: Named): string | undefined =>
+  entry.sample ? undefined : queryName(entry) !== undefined || entry.descriptor?.targetKey !== undefined || entry.descriptor?.kind === 'combined' ? entryNumber(entry) : undefined
 /** A named entry's name with its number ("Totals · Result 2"), an unnamed one's name alone: for places that list results
  *  and must tell two of one name apart without room for secondary text. */
 export const numberedName = (entry: Named): string => {
@@ -98,9 +107,9 @@ export const comparedNames = (old: Named, neu: Named, sets: readonly Named[] = [
  *  Unnamed results, Pivots and comparisons keep their names, so theirs read as before. */
 export const distinctName = (entry: Named, sets: readonly Named[]): string => {
   const name = entryName(entry)
-  // Only a name the query gave takes the number: an unnamed result keeps "Result 2" even when a marker named another
-  // result "Result 2", which then reads "Result 2 (Result 1)".
-  if (queryName(entry) === undefined) return name
+  // Only a name the query gave (or a multi-server target/combined label) takes the number on collision: an unnamed
+  // single-server result keeps "Result 2" even when a marker named another result "Result 2", which then reads "Result 2 (Result 1)".
+  if (entry.sample || (queryName(entry) === undefined && entry.descriptor?.targetKey === undefined && entry.descriptor?.kind !== 'combined')) return name
   return sets.some(other => other.number !== entry.number && entryName(other) === name) ? `${name} (${entryNumber(entry)})` : name
 }
 /** An entry's accessible name: a named result's name with its number ("Totals, Result 3"), so two tabs, captions or
@@ -113,7 +122,9 @@ export const spokenName = (entry: Named): string => {
  *  sources' names are not their numbers). Only such a slot's tab and caption take the long-name ellipsis rules, so an
  *  unnamed result's are laid out exactly as they were before names. */
 export const slotNamed = (slot: Pick<ResultSlot, 'view' | 'entry' | 'sources'>): boolean =>
-  slot.view === 'table' ? queryName(slot.entry) !== undefined : slot.sources.some(source => source.name !== entryNumber(source))
+  slot.view === 'table'
+    ? queryName(slot.entry) !== undefined || slot.entry.descriptor?.targetKey !== undefined || slot.entry.descriptor?.kind === 'combined'
+    : slot.sources.some(source => source.name !== entryNumber(source))
 /** The entry of `sets` with the key, for a consumer that holds a published list (the service looks its own up in a map). */
 export const entryOf = (sets: readonly ResultSetEntry[] | undefined, key: EntryKey | undefined): ResultSetEntry | undefined =>
   key === undefined ? undefined : sets?.find(entry => entry.key === key)
@@ -135,6 +146,9 @@ export interface SourceRef { readonly key: EntryKey; readonly set: string; reado
  */
 export interface PivotProvenance {
   readonly recipe: { readonly rows: readonly number[]; readonly column?: number; readonly values: readonly { readonly aggregate: string; readonly column?: number }[] }
+  /** Source Table's column names at build time so updating over a replaced source (e.g. a rebuilt Combined view) can
+   *  remap column indices by name instead of sending stale numeric positions. */
+  readonly sourceColumns?: readonly string[]
   readonly filters: readonly ResolvedViewFilter[]
   readonly inputRows: number
   readonly truncated: boolean
@@ -227,17 +241,31 @@ export function shownFilters(tab: Pick<TabResults, 'sorts'>, key: EntryKey): rea
   return tab.sorts.get(key)?.view?.filters ?? []
 }
 /**
- * Whether a group's Pivot is out of date: the Table's resolved filters, as its grid shows them now, differ from those the
- * Pivot's last build recorded (its provenance). Row order changes no aggregate, so a sort alone does not count, nor does a
- * filter's label being named later. A Pivot with no provenance (none is published without one) is never marked.
+ * Whether a group's Pivot is out of date: the Table's stored result was replaced in place (e.g. a rebuilt Combined view)
+ * or the Table's resolved filters, as its grid shows them now, differ from those the Pivot's last build recorded (its
+ * provenance). Row order changes no aggregate, so a sort alone does not count, nor does a filter's label being named
+ * later. A Pivot with no provenance (none is published without one) is never marked.
  */
 export function pivotOutOfDate(tab: Pick<TabResults, 'sorts'>, group: Pick<ResultGroup, 'table' | 'pivot'> | undefined): boolean {
   const built = group?.pivot?.pivot
-  return !!group && !!built && !sameFilters(built.filters, shownFilters(tab, group.table.key))
+  if (!group || !built) return false
+  const sourceSet = group.pivot?.sources[0]?.set
+  if (sourceSet !== undefined && sourceSet !== setKey(group.table.entry.descriptor)) return true
+  return !sameFilters(built.filters, shownFilters(tab, group.table.key))
 }
-/** The view the Tabs layout shows: the entry whose grid last had the focus, else the run's first. While a run streams the
- *  first stays selected, since results arrive after it; a tab the user picks is focused, so it stays picked. */
-export function selectedEntry(tab: Pick<TabResults, 'sets' | 'focused'>): ResultSetEntry | undefined {
+/** Whether a tab run has multi-server summary cards to show (live or settled). */
+export const hasMultiSummary = (tab: Pick<TabResults, 'multi'> | undefined): boolean => !!tab?.multi && tab.multi.targets.length > 0
+/** Whether a multi-server run's virtual Summary tab is the active view (always true when there are 0 result sets). */
+export const isSummaryActive = (tab: Partial<Pick<TabResults, 'multi' | 'activeSummary' | 'sets' | 'focused'>> | undefined): boolean =>
+  !!tab && hasMultiSummary(tab) && (tab.activeSummary === true || tab.focused === summaryEntryKey || (tab.sets?.length ?? 0) === 0)
+/** Looks up the participating multi-server target metadata for a result entry. */
+export const targetOfEntry = (tab: Pick<TabResults, 'multi'> | undefined, entry: Pick<ResultSetEntry, 'descriptor'> | undefined): MultiTargetLiveState | undefined => {
+  const targetKey = entry?.descriptor.targetKey
+  return targetKey ? tab?.multi?.targets.find(target => target.targetKey === targetKey) : undefined
+}
+/** The view the Tabs layout shows: undefined when Summary is active, else the entry whose grid last had the focus, else the run's first. */
+export function selectedEntry(tab: Pick<TabResults, 'sets' | 'focused'> & Partial<Pick<TabResults, 'multi' | 'activeSummary'>>): ResultSetEntry | undefined {
+  if (isSummaryActive(tab)) return undefined
   return entryOf(tab.sets, tab.focused) ?? tab.sets[0]
 }
 /**
@@ -337,6 +365,20 @@ export interface TabResults {
   readonly messagesOnly?: true
   /** Windowed BigQuery results loading into memory, by entry key, and whether Stop was asked. */
   readonly loads?: ReadonlyMap<EntryKey, { readonly stopping: boolean; readonly kind?: AuxiliaryKind }>
+  /** Multi-server / cross-engine run state (live target phases + terminal outcomes + combine warnings). */
+  readonly multi?: MultiRunState
+  /** Authoritative multi-server completion summary once the run settles. */
+  readonly multiSummary?: QueryMultiResult
+  /** True when a multi-server run's virtual Summary tab is active. */
+  readonly activeSummary?: true
+  /** Combined result entries whose underlying server results changed (e.g. closed, loaded into memory, or re-run) and can be rebuilt or closed. */
+  readonly staleCombined?: ReadonlySet<EntryKey>
+  /** Combine warnings tracked per Combined entry key so rebuilding one statement slot never wipes another slot's warnings. */
+  readonly combineWarnings?: ReadonlyMap<EntryKey, readonly string[]>
+  /** Built source target count per Combined entry key, populated when Combined opens/settles and updated only on `rebuildCombined`. */
+  readonly combinedCounts?: ReadonlyMap<EntryKey, number>
+  /** Combined result entries currently rebuilding via `results.combine`. */
+  readonly combining?: ReadonlySet<EntryKey>
 }
 /** One grid's view, outside React and never in a snapshot: it survives tab switches, Ctrl+R and unmounting. */
 export interface GridViewState {
@@ -363,9 +405,9 @@ export interface TabViewState { stackScrollTop: number; weights?: ReadonlyMap<En
 /** How a view is drawn, read from its grid state: transposed or as a table, and, transposed, the column that heads its
  *  drawn columns (Using Column as Headers). */
 export interface ViewOrientation { readonly transposed: boolean; readonly headerColumn?: number }
-/** The entry kinds a view can be drawn transposed for: a query's rows and a pivot. Never a comparison (its tone column
- *  marks rows) or a plan set. */
-export const turnableKinds: ReadonlySet<string> = new Set(['rows', 'pivot'])
+/** The entry kinds a view can be drawn transposed for: a query's rows, a combined multi-server set, and a pivot. Never a
+ *  comparison (its tone column marks rows) or a plan set. */
+export const turnableKinds: ReadonlySet<string> = new Set(['rows', 'pivot', 'combined'])
 /** A mounted grid, for the commands that act on it. */
 export interface GridController {
   selectAll(): void; repaint(): void; fitColumn(column: number): void
@@ -390,8 +432,8 @@ export interface DiffGridControls {
   /** A row's tone once its tile is read; undefined when it cannot come (GridView.toneWhenRead). */
   toneWhenRead(row: number, signal: AbortSignal): Promise<string | null | undefined>
 }
-/** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
-export interface RunEnd { summary?: QueryResult; error?: string; code?: ErrorCode; notice?: string; planContext?: PlanExecutionContext }
+/** How a run ended: the summary (single or multi-server), or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
+export type RunEnd = MultiRunEnd
 /** Open Value in New Tab's outcome: whether a document opened, and what the banner says (a failure, or that it opened unformatted). */
 export interface OpenedValue { readonly opened: boolean; readonly message?: string }
 
@@ -461,6 +503,23 @@ interface Run {
   messagesOnly?: true
   /** Loads into memory running (results.remoteQuery), by entry key. Replaced, never changed in place: snapshots share it. */
   loads: ReadonlyMap<EntryKey, RunningLoad>
+  /** Multi-server / cross-engine run state. */
+  multi?: MultiRunState
+  multiSummary?: QueryMultiResult
+  /** True when a multi-server run's virtual Summary view is active. */
+  activeSummary: boolean
+  /** `rolledBackPreview` flags received via `resultSet.meta`, keyed by `setKey`, so out-of-order arrivals still apply. */
+  readonly rolledBackIds: Map<string, boolean>
+  /** Combined entries whose underlying per-server result sets changed, so UI shows Rebuild/Close. */
+  staleCombined: ReadonlySet<EntryKey>
+  /** Run-level combine warnings from `multiSummary` when no combined entries were created. */
+  baseCombineWarnings: readonly string[]
+  /** Combine warnings tracked per Combined entry key. Replaced, never mutated in place: snapshots share it. */
+  combineWarnings: ReadonlyMap<EntryKey, readonly string[]>
+  /** Built source target count per Combined entry key. Replaced, never mutated in place: snapshots share it. */
+  combinedCounts: ReadonlyMap<EntryKey, number>
+  /** In-flight `results.combine` rebuilds per combined entry key, aborted on drop or run disposal. */
+  readonly combining: Map<EntryKey, AbortController>
 }
 /** A Load into memory: its own query id (query.cancel stops it) and the subscription to its events. */
 /** A query over a windowed result its grid shows running: Load into memory (no kind), Load sample or Re-run, which `abort`
@@ -494,15 +553,25 @@ const partialView = 'The grid is sorted or filtered over only the rows that had 
 const saveCancelled = 'Saving was cancelled. The file was not written.'
 /** Main's and the backend's own sentences for a save; anything else is prefixed. */
 const saveSentences: ReadonlySet<string> = new Set<ErrorCode>(['EXPORT_FAILED', 'JOB_BUSY', 'RESULT_OPEN', 'RESULT_UNAVAILABLE', 'RESULT_NOT_FOUND'])
-const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind)
+const sameMessages = (a: readonly MessageEntry[], b: readonly MessageEntry[]) => a.length === b.length && a.every((entry, index) => entry.text === b[index].text && entry.kind === b[index].kind && entry.targetKey === b[index].targetKey && entry.dialect === b[index].dialect && entry.line === b[index].line)
 const runStatus = (summary: QueryResult): RunStatus => summary.status
+const multiRunStatus = (status: QueryMultiStatus): RunStatus => {
+  switch (status) {
+    case 'completed': return 'completed'
+    case 'completedWithErrors': case 'partialFailure': return 'completedWithErrors'
+    case 'cancelled': return 'cancelled'
+    case 'timedOut': return 'timedOut'
+    case 'rolledBack': case 'commitInDoubt': case 'failed': return 'failed'
+  }
+}
+const terminalMultiTargetPhases: ReadonlySet<string> = new Set(multiQueryTargetStatuses)
 /** What Copy and Save read: the result, or its view by id. A sort or filter in BigQuery is a result of its own (viewId 0),
  *  which they read as itself. */
 const jobSource = (handle: ResultHandle, view: ResultView | undefined): { generation: number; resultId: number; viewId?: number } =>
   isRemoteView(view) ? { generation: view.key.generation, resultId: view.key.resultId }
     : { generation: handle.key.generation, resultId: handle.key.resultId, ...view ? { viewId: view.viewId } : {} }
 /** How many sets a run made with Discard results after execution read and did not keep. */
-const discardedSets = (run: Pick<Run, 'discard' | 'summary'>): number => run.discard ? run.summary?.discardedResultSets ?? 0 : 0
+const discardedSets = (run: Pick<Run, 'discard' | 'summary' | 'multiSummary'>): number => run.discard ? (run.summary?.discardedResultSets ?? run.multiSummary?.discardedResultSets ?? 0) : 0
 /** " 3 values were truncated." after a copy or save that wrote values the backend stored cut; '' otherwise. */
 const truncatedClause = (cells: number): string => cells > 0 ? ` ${formatCount(cells)} ${cells === 1 ? 'value was' : 'values were'} truncated.` : ''
 /** What a transposed copy or save left out: the rows past those a transposed grid draws. */
@@ -544,8 +613,8 @@ export function fitsFreeMemory(projected: number | undefined, memory: Pick<Memor
   return projected <= Math.max(0, memory.globalBytes - memory.usedBytes)
 }
 
-export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
-  private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>
+export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable, MultiResultsSink {
+  private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'> & Partial<Pick<ResultClient, 'combine'>>
   private readonly events: EventBus
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'> & Partial<Pick<VariaApi, 'remoteQuery' | 'cancel'>>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
@@ -554,6 +623,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly remote?: RemoteViews
   /** How text columns sort (queryResults.grid.sortText). */
   private readonly sortText: () => ViewSortMode
+  /** Current results grid layout (queryResults.grid.layout), for layout-aware `steppable` counts. */
+  private readonly layout?: () => 'stacked' | 'tabs'
   private readonly memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
   private readonly valueNumbers = new Map<string, number>()
@@ -619,7 +690,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private minted = 0
 
   constructor(o: {
-    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'> & Partial<Pick<VariaApi, 'remoteQuery' | 'cancel'>>; events: EventBus
+    client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'> & Partial<Pick<ResultClient, 'combine'>>; api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'> & Partial<Pick<VariaApi, 'remoteQuery' | 'cancel'>>; events: EventBus
     documents?: Pick<DocumentService, 'openText'>; frame?: (callback: () => void) => void; timers?: Timers; now?: () => number; newId?: () => string; retainedPlans?: RetainedPlansService
     sortText?: () => ViewSortMode
     remote?: RemoteViews
@@ -628,6 +699,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     memory?: () => Pick<MemoryUsage, 'usedBytes' | 'globalBytes'>
     /** Calls the listener when settings change; sorted grids sort again when the text mode did. Returns the unsubscribe. */
     onSortTextChange?: (listener: () => void) => () => void
+    /** Current results grid layout ('stacked' | 'tabs'), so `steppable` counts Summary only in Tabs layout. */
+    layout?: () => 'stacked' | 'tabs'
+    /** Calls the listener when settings change so `steppable` updates when the layout toggles. Returns the unsubscribe. */
+    onLayoutChange?: (listener: () => void) => () => void
   }) {
     super({})
     this.client = o.client
@@ -637,9 +712,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.retainedPlans = o.retainedPlans
     this.remote = o.remote
     this.sortText = o.sortText ?? (() => 'value')
+    this.layout = o.layout
     this.memory = o.memory
     let sortText = this.sortText()
     if (o.onSortTextChange) this.subscriptions.push(o.onSortTextChange(() => { const next = this.sortText(); if (next !== sortText) { sortText = next; this.resort() } }))
+    let currentLayout = this.layout?.()
+    if (o.onLayoutChange) this.subscriptions.push(o.onLayoutChange(() => { const next = this.layout?.(); if (next !== currentLayout) { currentLayout = next; this.updateContext() } }))
     this.frame = o.frame ?? (callback => requestFrame(callback))
     this.timers = o.timers ?? browserTimers
     this.now = o.now ?? (() => Date.now())
@@ -654,7 +732,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** A run starts: the tab's previous results are released, its copy cancelled and its selections cleared, and the
    *  run's events are followed from now on (before the script is sent). A running save goes on (the backend leases its
    *  result), so its strip moves to the new run. */
-  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: { bare?: boolean; discard?: boolean; onJob?: (job: Extract<QueryEvent, { type: 'query.job' }>) => void } = {}): void {
+  begin(tabId: string, queryId: string, onSession?: (session: Extract<QueryEvent, { type: 'session.opened' }>) => void, o: BeginRunOptions = {}): void {
     if (this.disposed) return
     // A switch of the run this replaces is not said with the new one's end.
     this.unheardSwitches.delete(tabId)
@@ -663,26 +741,99 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // so a focused Pivot leaves the focus on its group's Table, and a focused comparison leaves none.
     // A run that ended before it returned that group passes the wish on.
     const was = this.views.get(tabId)?.focused, previous = this.runs.get(tabId)
-    const refocus = was === undefined ? previous?.refocus : previous?.slots.get(was)?.group
+    const refocus = was === undefined || was === summaryEntryKey ? previous?.refocus : previous?.slots.get(was)?.group
     this.disposeRun(tabId)
     this.clearJobNotice(tabId)
     this.selectionAnnounced.delete(tabId)
-    this.views.set(tabId, emptyView())
+    const multi: MultiRunState | undefined = o.multi && o.multi.targets.length > 0 ? { mode: o.multi.mode, targets: initialMultiTargetStates(o.multi.targets) } : undefined
+    const viewState = emptyView()
+    if (multi) viewState.focused = summaryEntryKey
+    this.views.set(tabId, viewState)
     const run: Run = {
-      tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined ? {} : { refocus },
+      tabId, bare: o.bare === true, slots: new Map(), selected: new Set(), ...refocus === undefined || multi ? {} : { refocus },
       queryId, startedAt: this.now(), status: 'running', sets: [], planSets: [], setKeys: new Set(), entries: new Map(), numbered: 0, compared: 0, setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
-      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
-      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: [], loads: new Map()
+      completedBatches: 0, totalBatches: 0, view: multi ? 'results' : 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: '', sorts: new Map(), sorting: new Map(), held: new Map(), emptied: false, discard: o.discard === true, notes: [], loads: new Map(),
+      ...multi ? { multi } : {}, activeSummary: !!multi, rolledBackIds: new Map(), staleCombined: new Set(), baseCombineWarnings: [], combineWarnings: new Map(), combinedCounts: new Map(), combining: new Map()
     }
     run.subscription = this.client.onQueryEvent(queryId, event => {
       if (event.type === 'session.opened') {
         if (this.runs.get(tabId) === run && run.status === 'running') onSession?.(event)
       } else if (event.type === 'query.job') {
         if (this.runs.get(tabId) === run && run.status === 'running') o.onJob?.(event)
+      } else if (event.type === 'multiQuery.targetState') {
+        if (this.runs.get(tabId) === run && run.status === 'running') {
+          this.updateMultiTargetState(tabId, queryId, event)
+          o.onTargetState?.(event)
+        }
+      } else if (event.type === 'resultSet.meta') {
+        if (this.runs.get(tabId) === run && run.status === 'running') {
+          this.updateResultMeta(tabId, queryId, event)
+          o.onResultMeta?.(event)
+        }
       } else this.event(tabId, run, event)
     })
     this.runs.set(tabId, run)
     this.publishNow(tabId)
+  }
+
+  /** Applies a live `multiQuery.targetState` streaming event to the active multi-server run's summary cards. */
+  updateMultiTargetState(tabId: string, queryId: string, event: Extract<QueryEvent, { type: 'multiQuery.targetState' }>): void {
+    const run = this.runs.get(tabId)
+    if (!run || run.queryId !== queryId || run.status !== 'running' || !run.multi) return
+    const existing = run.multi.targets.find(target => target.targetKey === event.targetKey)
+    if (existing
+      && existing.phase === event.phase
+      && existing.batchesCompleted === event.batchesCompleted
+      && existing.batchesTotal === event.batchesTotal
+      && existing.rowsAffected === event.rowsAffected
+      && existing.resultSetCount === event.resultSetCount
+      && existing.elapsedMs === event.elapsedMs
+      && existing.bytesProcessed === event.bytesProcessed
+      && existing.errorCode === event.errorCode
+      && existing.errorMessage === event.errorMessage) return
+    const nextTargets = applyTargetStateEvent(run.multi.targets, event)
+    run.multi = { ...run.multi, targets: nextTargets }
+    this.schedule(tabId)
+  }
+
+  /** Applies a live `resultSet.meta` event (e.g. `rolledBackPreview`) to a streaming or completed set. */
+  updateResultMeta(tabId: string, queryId: string, event: Extract<QueryEvent, { type: 'resultSet.meta' }>): void {
+    const run = this.runs.get(tabId)
+    if (!run || run.queryId !== queryId || run.status === 'closed') return
+    const key = setKey({ generation: event.generation, resultId: event.resultId })
+    if (run.rolledBackIds.get(key) === event.rolledBackPreview) {
+      const current = run.sets.find(entry => setKey(entry.descriptor) === key)
+      if (!current || current.descriptor.rolledBackPreview === event.rolledBackPreview) return
+    }
+    run.rolledBackIds.set(key, event.rolledBackPreview)
+    const index = run.sets.findIndex(entry => setKey(entry.descriptor) === key)
+    if (index >= 0) {
+      const existing = run.sets[index]
+      if (existing.descriptor.rolledBackPreview !== event.rolledBackPreview) {
+        const updated: ResultSetEntry = { ...existing, descriptor: { ...existing.descriptor, rolledBackPreview: event.rolledBackPreview } }
+        if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+        run.sets[index] = updated
+        run.entries.set(updated.key, updated)
+        run.shape = undefined
+      }
+    }
+    this.schedule(tabId)
+  }
+
+  /** Resolves the live `connectionId` for a result set inside a multi-server run (used by `BigQueryCostService`). */
+  connectionForResult(tabId: string, resultId: number): string | undefined {
+    const run = this.runs.get(tabId)
+    if (!run?.multi || run.status === 'closed' || run.status === 'lost') return undefined
+    const entry = run.sets.find(set => set.descriptor.resultId === resultId)
+    if (entry) {
+      if (!held(entry) || !entry.descriptor.targetKey) return undefined
+      const target = run.multi.targets.find(item => item.targetKey === entry.descriptor.targetKey)
+      return target?.connectionId || undefined
+    }
+    if (run.status !== 'running') return undefined
+    const byId = run.multi.targets.find(item => item.resultSetIds.includes(resultId))
+    return byId?.connectionId || undefined
   }
 
   /** The run ended. The summary settles every set (opening any whose events were dropped) and replaces the streamed
@@ -690,19 +841,99 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   finish(tabId: string, queryId: string, end: RunEnd): void | Promise<void> {
     const run = this.runs.get(tabId)
     // The tab closed before its run ended: nothing will show or close the sets the summary describes, so they go now.
-    if (!run && end.summary && !this.disposed) {
-      const sets = [...end.summary.resultSets, ...end.summary.planSets ?? []]
+    if (!run && !this.disposed) {
+      const sets = [...end.summary?.resultSets ?? [], ...end.summary?.planSets ?? [], ...end.multiSummary?.resultSets ?? []]
       if (sets.length) void this.client.release(sets.map(set => ({ generation: set.generation, resultId: set.resultId }))).catch(() => {})
     }
     if (!run || run.queryId !== queryId || run.status !== 'running') return
     run.subscription?.dispose()
     run.subscription = undefined
-    const { summary } = end
+    const { summary, multiSummary } = end
     // Switches the summary carried, and those whose own announcement the run's end now replaces, said with the run's end
     // (one announcement replaces another).
     let switchNotes: string[] = this.unheardSwitches.get(tabId) ?? []
     this.unheardSwitches.delete(tabId)
-    if (summary) {
+    if (multiSummary) {
+      const switched = multiSummary.resultSets.filter(descriptor => {
+        const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId)
+        return entry !== undefined && (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
+      })
+      run.multi = {
+        mode: multiSummary.mode,
+        status: multiSummary.status,
+        targets: applyMultiOutcomes(run.multi?.targets ?? [], multiSummary.targets),
+        ...multiSummary.combineWarnings?.length ? { combineWarnings: multiSummary.combineWarnings } : {}
+      }
+      run.multiSummary = multiSummary
+      this.client.applySummary({ resultSets: multiSummary.resultSets })
+      switchNotes = [...switchNotes, ...switched.map(descriptor => this.switched(tabId, run, descriptor, false))]
+      for (const descriptor of multiSummary.resultSets) {
+        this.opened(run, descriptor)
+        this.settle(run, descriptor)
+        if (descriptor.kind !== 'combined') run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
+      }
+      this.recordCombinedCounts(run)
+      const combinedEntries = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+      const pushUnique = (list: string[], value: string) => { if (!list.includes(value)) list.push(value) }
+      if (combinedEntries.length > 0) {
+        const perEntryMap = new Map<EntryKey, string[]>(combinedEntries.map(entry => [entry.key, []]))
+        const baseWarnings: string[] = []
+        for (const warning of multiSummary.combineWarnings ?? []) {
+          if (warning.startsWith('Combined view ') || warning.startsWith('Skipped Combined view')) {
+            pushUnique(baseWarnings, warning)
+            continue
+          }
+          const skippedMatch = /^Skipped (.+): (?:result is windowed in BigQuery\.|source result was closed\.)/.exec(warning)
+          if (skippedMatch) {
+            const label = skippedMatch[1]!
+            const matchingKeys = new Set(
+              (run.multi?.targets ?? [])
+                .filter(item => item.label === label || item.targetKey === label)
+                .map(item => item.targetKey)
+            )
+            const matched = matchingKeys.size > 0
+              ? combinedEntries.filter(entry => {
+                  const slot = entry.descriptor.statementSlot ?? 0
+                  return run.sets.some(set =>
+                    !set.sample
+                    && set.descriptor.kind === 'rows'
+                    && set.descriptor.targetKey !== undefined
+                    && matchingKeys.has(set.descriptor.targetKey)
+                    && (set.descriptor.statementSlot ?? 0) === slot
+                    && set.handle.getSnapshot().residence === 'remote'
+                  )
+                })
+              : []
+            if (matched.length > 0) {
+              for (const entry of matched) pushUnique(perEntryMap.get(entry.key)!, warning)
+            } else {
+              pushUnique(baseWarnings, warning)
+            }
+            continue
+          }
+          for (const entry of combinedEntries) pushUnique(perEntryMap.get(entry.key)!, warning)
+        }
+        run.combineWarnings = perEntryMap
+        run.baseCombineWarnings = baseWarnings
+        this.syncCombineWarnings(run)
+      } else if (multiSummary.combineWarnings?.length) {
+        const baseWarnings: string[] = []
+        for (const warning of multiSummary.combineWarnings) pushUnique(baseWarnings, warning)
+        run.baseCombineWarnings = baseWarnings
+        this.syncCombineWarnings(run)
+      }
+      this.refreshSorts(tabId, run)
+      if (!sameMessages(run.messages, multiSummary.messages)) run.messages = multiSummary.messages.slice(0, resultLimits.messages)
+      if (end.messages?.length) run.messages = [...run.messages, ...end.messages].slice(-resultLimits.messages)
+      run.messagesTruncated = multiSummary.messagesTruncated
+      run.completedBatches = multiSummary.targets.reduce((sum, target) => sum + target.batchesCompleted, 0)
+      run.totalBatches = multiSummary.targets.reduce((sum, target) => sum + target.batchesTotal, 0)
+      run.status = multiRunStatus(multiSummary.status)
+      if (run.sets.length === 0 && hasMultiSummary(run)) {
+        run.activeSummary = true
+        this.viewState(tabId).focused = summaryEntryKey
+      }
+    } else if (summary) {
       // A summary that overtook a set's residence event (which now arrives after the run, and is ignored) switches it here.
       const switched = summary.resultSets.filter(descriptor => {
         const entry = run.sets.find(set => set.descriptor.resultId === descriptor.resultId)
@@ -720,6 +951,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       }))
       this.refreshSorts(tabId, run)
       if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
+      if (end.messages?.length) run.messages = [...run.messages, ...end.messages].slice(-resultLimits.messages)
       // The error that ended the run is always in Messages, whatever the backend could keep there.
       if (summary.error && summary.status !== 'completed' && !run.messages.some(entry => entry.kind === 'error')) run.messages = [...run.messages, { text: summary.error.message, kind: 'error' }]
       run.messagesTruncated = summary.messagesTruncated
@@ -730,14 +962,20 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     } else {
       run.status = end.code === 'BACKEND_LOST' ? 'lost' : 'failed'
       run.error = end.error ?? 'The query failed.'
-      run.messages = [...run.messages, { text: run.error, kind: 'error' as const }].slice(-resultLimits.messages)
+      if (run.multi) {
+        const targets = run.multi.targets.map(target => terminalMultiTargetPhases.has(target.phase) ? target : { ...target, phase: 'failed' as const })
+        run.multi = { ...run.multi, status: 'failed', targets }
+      }
+      if (end.messages?.length) run.messages = [...run.messages, ...end.messages].slice(-resultLimits.messages)
+      else run.messages = [...run.messages, { text: run.error, kind: 'error' as const }].slice(-resultLimits.messages)
     }
     if (end.notice) run.notices = [{ text: end.notice, kind: 'info' }]
     run.endedAt = this.now()
     this.openStripFor(run, run.messages)
-    // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
+    // A run with sets (or multi-server summary cards) stays on Results even when it failed or returned 0 sets:
+    // the strip under the grids or Summary shows its errors beside them.
     // A run that discarded its sets shows the Results view's notice that it did, unless it kept a plan to show.
-    if (!run.manualView) run.view = run.sets.length ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : discardedSets(run) ? 'results' : 'messages'
+    if (!run.manualView) run.view = run.sets.length || hasMultiSummary(run) ? 'results' : run.status === 'completed' && run.planSets.length ? 'plan' : discardedSets(run) ? 'results' : 'messages'
     // A screen reader hears why there are no sets, as the Results view's notice shows it; focus does not move there.
     const discarded = discardedSets(run)
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run))
@@ -827,7 +1065,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.messagesOnly = true
     }
     run.notes = [...run.notes, entry].slice(-resultLimits.messages)
-    if (!run.manualView && !run.sets.length) run.view = 'messages'
+    if (!run.manualView && !run.sets.length && !hasMultiSummary(run)) run.view = 'messages'
     this.openStripFor(run, [entry])
     this.publishNow(tabId)
   }
@@ -1056,6 +1294,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.shape = undefined
     this.settle(run, descriptor)
     run.emptied = false
+    run.activeSummary = false
     run.view = 'results'
     this.viewState(tabId).focused = entry.key
     this.schedule(tabId)
@@ -1091,14 +1330,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.settled.delete(setKey(old.descriptor))
     }
     run.setKeys.add(setKey(descriptor))
-    // A name the query gave its result stays with it (the backend opens the rerun's set unnamed).
-    const named = old.descriptor.name !== undefined && descriptor.name === undefined ? { ...descriptor, name: old.descriptor.name } : descriptor
-    const entry: ResultSetEntry = { ...old, descriptor: named, handle: this.client.open(descriptor) }
+    // A name the query gave its result (and multi-server target/statement metadata) stays with it (the backend opens the rerun's set without them).
+    const carried: ResultDescriptor = {
+      ...descriptor,
+      ...old.descriptor.name !== undefined && descriptor.name === undefined ? { name: old.descriptor.name } : {},
+      ...old.descriptor.targetKey !== undefined && descriptor.targetKey === undefined ? { targetKey: old.descriptor.targetKey } : {},
+      ...old.descriptor.statementSlot !== undefined && descriptor.statementSlot === undefined ? { statementSlot: old.descriptor.statementSlot } : {}
+    }
+    const label = this.entryLabel(run, carried)
+    const entry: ResultSetEntry = { ...old, descriptor: carried, handle: this.client.open(descriptor), ...label === undefined ? {} : { label } }
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     run.sets[run.sets.indexOf(old)] = entry
     run.entries.set(key, entry)
     if (record) run.slots.set(key, { ...record, revision: record.revision + 1 })
     run.shape = undefined
+    this.markCombinedStaleFor(run, [old, entry])
     const grids = this.views.get(tabId)?.grids, state = grids?.get(key)
     if (grids && state) grids.set(key, carriedState(state, uniqueNames(old.descriptor.columns, descriptor.columns), descriptor.columns.length))
     this.settle(run, descriptor)
@@ -1127,6 +1373,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const revised = (descriptor.revision ?? 0) > (entry.handle.getSnapshot().revision ?? 0)
       this.client.applySummary({ ...summary, resultSets: [descriptor], planSets: [] })
       if (revised) this.switched(tabId, run, descriptor, false)
+      if (descriptor.residence !== 'remote') this.markCombinedStaleFor(run, [entry])
       this.settle(run, descriptor)
     }
     const lines = summary.messages.map(entry => ({ ...entry, text: entry.text.slice(0, wire.messages.characters) }))
@@ -1144,6 +1391,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.closedFrom = run.status
     run.status = 'closed'
     run.emptied = false
+    run.activeSummary = false
+    run.staleCombined = new Set()
+    run.baseCombineWarnings = []
+    run.combineWarnings = new Map()
+    run.combinedCounts = new Map()
     run.view = 'results'
     this.views.set(tabId, emptyView())
     this.publishNow(tabId)
@@ -1157,7 +1409,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     let closed = 0
     for (const [tabId, run] of this.runs) {
       if (run.bare || run.status === 'running' || run.status === 'closed' || isRunning?.(tabId)) continue
-      if (run.sets.length === 0 && run.planSets.length === 0) continue
+      if (run.sets.length === 0 && run.planSets.length === 0 && !hasMultiSummary(run)) continue
       this.closeResults(tabId)
       closed++
     }
@@ -1166,13 +1418,14 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /**
    * Closes one view of a run that has ended (a caption's close button, Close Result): a Table closes its group, so its
-   * Pivot goes with it; a Pivot or a comparison closes alone. What
+   * Pivot goes with it; a Pivot, Combined or comparison closes alone. What
    * closes leaves the run and its results are released (`drop`); the entries after move up and keep their keys, numbers,
-   * names and state. A comparison copied its cells, so it outlives its inputs, under its name. When what closed had the
+   * names and state. A comparison copied its cells, so it outlives its inputs, under its name. Closing a per-server result
+   * marks any Combined view covering its statement slot stale so the user can Rebuild or Close it. When what closed had the
    * focus, the next surviving item takes it, else the one before, as the view its group last showed (its Table or its
    * Pivot), so that group keeps what it remembered. The run's status, summary and row total do not change;
-   * closing its last entry marks it `emptied`. Unavailable while the query runs and in a bare run (Peek). False when there
-   * is no such entry.
+   * closing its last entry marks it `emptied` (or returns to Summary on multi-server runs). Unavailable while the query
+   * runs and in a bare run (Peek). False when there is no such entry.
    */
   removeEntry(tabId: string, key: EntryKey): boolean {
     const run = this.runs.get(tabId), entry = run?.entries.get(key)
@@ -1186,12 +1439,257 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       next = (slot?.view !== 'table' && slot?.group !== undefined ? run.sets.find(item => item.ordinal === slot.group) : undefined)
         ?? this.shownView(run, run.sets[last + 1] ?? run.sets[run.sets.indexOf(gone[0]) - 1])
     }
+    this.markCombinedStaleFor(run, gone)
     this.drop(tabId, run, gone)
-    if (view && next) { view.focused = next.key; this.select(run, next.key) }
-    if (run.sets.length === 0) run.emptied = true
+    if (view && next) { view.focused = next.key; run.activeSummary = false; this.select(run, next.key) }
+    else if (run.sets.length === 0) {
+      if (hasMultiSummary(run)) { run.activeSummary = true; this.viewState(tabId).focused = summaryEntryKey }
+      else run.emptied = true
+    }
     this.publishNow(tabId)
     return true
   }
+
+  /** Closes every result set (and its Pivot) belonging to `targetKey` in a finished multi-server run, marking any Combined
+   *  views built from those statement slots stale so the user can Rebuild or Close them. */
+  removeTargetEntries(tabId: string, targetKey: string): boolean {
+    const run = this.runs.get(tabId)
+    if (!run || run.bare || run.status === 'running' || run.status === 'closed') return false
+    const roots = run.sets.filter(entry => entry.descriptor.targetKey === targetKey && run.slots.get(entry.key)?.view === 'table')
+    if (roots.length === 0) return false
+    const goneSet = new Set<ResultSetEntry>()
+    for (const root of roots) for (const item of this.owned(run, root)) goneSet.add(item)
+    const gone = run.sets.filter(entry => goneSet.has(entry))
+    const keys = new Set(gone.map(item => item.key))
+    const view = this.views.get(tabId)
+    let next: ResultSetEntry | undefined
+    if (view?.focused !== undefined && keys.has(view.focused)) {
+      const remaining = run.sets.filter(entry => !keys.has(entry.key))
+      const last = run.sets.indexOf(gone[gone.length - 1])
+      next = this.shownView(run, run.sets.slice(last + 1).find(entry => !keys.has(entry.key)) ?? remaining.at(-1))
+    }
+    this.markCombinedStaleFor(run, gone)
+    this.drop(tabId, run, gone)
+    if (view && next) { view.focused = next.key; run.activeSummary = false; this.select(run, next.key) }
+    else if (run.sets.length === 0) {
+      if (hasMultiSummary(run)) { run.activeSummary = true; this.viewState(tabId).focused = summaryEntryKey }
+      else run.emptied = true
+    } else if (view && view.focused !== undefined && !run.entries.has(view.focused) && hasMultiSummary(run)) {
+      run.activeSummary = true
+      view.focused = summaryEntryKey
+    }
+    this.publishNow(tabId)
+    return true
+  }
+
+  /** The entries closing a multi-server target tab would release (all its statement tables and Pivots). */
+  closingTarget(tabId: string, targetKey: string): readonly ResultSetEntry[] {
+    const run = this.runs.get(tabId)
+    if (!run) return []
+    const roots = run.sets.filter(entry => entry.descriptor.targetKey === targetKey && run.slots.get(entry.key)?.view === 'table')
+    const seen = new Set<ResultSetEntry>()
+    for (const root of roots) for (const item of this.owned(run, root)) seen.add(item)
+    return run.sets.filter(entry => seen.has(entry))
+  }
+
+  /** Whether a stale Combined entry has at least two complete in-memory server source sets left to rebuild from. */
+  canRebuildCombined(tabId: string, combinedKey: EntryKey): boolean {
+    const run = this.runs.get(tabId), entry = run?.entries.get(combinedKey)
+    if (!run || !entry || entry.descriptor.kind !== 'combined' || run.status === 'running' || run.status === 'closed' || run.status === 'lost' || !this.client.combine || run.combining.has(combinedKey)) return false
+    return this.combinedSourcesOf(run, entry).length >= 2
+  }
+
+  /** Rebuilds a stale Combined entry via `results.combine` (`ResultClient.combine`) from the remaining server result sets
+   *  for its statement slot, replacing it in place and releasing the old combined buffer. */
+  async rebuildCombined(tabId: string, combinedKey: EntryKey): Promise<EntryKey | undefined> {
+    const run = this.runs.get(tabId), old = run?.entries.get(combinedKey)
+    if (!run || !old || old.descriptor.kind !== 'combined' || run.status === 'running' || run.status === 'closed' || run.status === 'lost' || !this.client.combine) return undefined
+    if (run.combining.has(combinedKey)) return undefined
+    const sources = this.combinedSourcesOf(run, old)
+    if (sources.length < 2) {
+      this.notify(tabId, 'At least two server result sets are needed to rebuild Combined.')
+      return undefined
+    }
+    const abort = new AbortController()
+    run.combining.set(combinedKey, abort)
+    this.publishNow(tabId)
+    try {
+      const result = await this.client.combine(sources.map(source => source.handle), { ...old.descriptor.name ? { statementName: old.descriptor.name } : {}, signal: abort.signal })
+      const current = this.runs.get(tabId)
+      const currentSources = current === run ? this.combinedSourcesOf(current, old) : []
+      if (
+        this.disposed
+        || abort.signal.aborted
+        || current !== run
+        || current.entries.get(combinedKey) !== old
+        || current.status === 'closed'
+        || current.status === 'running'
+        || current.status === 'lost'
+        || result.descriptor.generation !== old.descriptor.generation
+        || currentSources.length !== sources.length
+        || !sources.every((source, i) => currentSources[i] === source && held(source))
+      ) {
+        this.discard(result.descriptor)
+        return undefined
+      }
+      const anyRolledBack = sources.some(source => source.descriptor.rolledBackPreview || source.handle.getSnapshot().rolledBackPreview)
+      const nextDescriptor: ResultDescriptor = {
+        ...result.descriptor,
+        kind: 'combined',
+        ...anyRolledBack && !result.descriptor.rolledBackPreview ? { rolledBackPreview: true } : {},
+        ...old.descriptor.statementSlot !== undefined && result.descriptor.statementSlot === undefined ? { statementSlot: old.descriptor.statementSlot } : {},
+        ...old.descriptor.name !== undefined && result.descriptor.name === undefined ? { name: old.descriptor.name } : {}
+      }
+      const label = this.entryLabel(run, nextDescriptor) ?? old.label ?? 'Combined'
+      const record = run.slots.get(combinedKey)
+      if (!record) { this.discard(result.descriptor); return undefined }
+      const moved = uniqueNames(old.descriptor.columns, nextDescriptor.columns)
+      run.sorting.get(combinedKey)?.abort()
+      run.sorting.delete(combinedKey)
+      run.held.delete(combinedKey)
+      const sort = run.sorts.get(combinedKey)
+      if (sort) {
+        for (const list of new Set([...sort.filters, ...sort.applied].flatMap(item => item.list ? [item.list] : []))) void list.close()
+        const sorts = new Map(run.sorts)
+        sorts.delete(combinedKey)
+        run.sorts = sorts
+      }
+      this.controllers.delete(combinedKey)
+      this.drawing.delete(combinedKey)
+      if (this.copying && this.runs.get(this.copying.tabId) === run && this.copying.job.entry === combinedKey) this.cancelRunning(this.copying)
+      run.setKeys.delete(setKey(old.descriptor))
+      if (run.settled.has(setKey(old.descriptor))) {
+        if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+        run.settled.delete(setKey(old.descriptor))
+      }
+      run.setKeys.add(setKey(nextDescriptor))
+      const entry: ResultSetEntry = { ...old, descriptor: nextDescriptor, handle: this.client.open(nextDescriptor), label }
+      if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+      run.sets[run.sets.indexOf(old)] = entry
+      run.entries.set(combinedKey, entry)
+      run.slots.set(combinedKey, { ...record, revision: record.revision + 1 })
+      run.shape = undefined
+      if (run.staleCombined.has(combinedKey)) {
+        const nextStale = new Set(run.staleCombined)
+        nextStale.delete(combinedKey)
+        run.staleCombined = nextStale
+      }
+      if (run.multi) {
+        const nextWarnings = new Map(run.combineWarnings)
+        for (const item of run.sets) {
+          if (item.descriptor.kind === 'combined' && !nextWarnings.has(item.key)) nextWarnings.set(item.key, [])
+        }
+        nextWarnings.set(combinedKey, Array.isArray(result.warnings) ? [...result.warnings] : [])
+        run.combineWarnings = nextWarnings
+        this.syncCombineWarnings(run)
+      }
+      const rebuiltTargets = new Set<string>()
+      for (const source of sources) if (source.descriptor.targetKey) rebuiltTargets.add(source.descriptor.targetKey)
+      const nextCounts = new Map(run.combinedCounts)
+      nextCounts.set(combinedKey, rebuiltTargets.size || sources.length)
+      run.combinedCounts = nextCounts
+      const grids = this.views.get(tabId)?.grids, state = grids?.get(combinedKey)
+      if (grids && state) grids.set(combinedKey, carriedState(state, moved, nextDescriptor.columns.length))
+      this.settle(run, nextDescriptor)
+      if (run.combining.get(combinedKey) === abort) run.combining.delete(combinedKey)
+      this.publishNow(tabId)
+      this.releaseEntries(run, [old], [...this.saves.values()].flatMap(save => save.handle === old.handle && save.done ? [save.done] : []))
+      return combinedKey
+    } catch (error) {
+      const current = this.runs.get(tabId)
+      if (!abort.signal.aborted && !this.disposed && current === run && current.status !== 'closed' && current.status !== 'lost') {
+        this.notify(tabId, `Could not rebuild Combined: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return undefined
+    } finally {
+      if (run.combining.get(combinedKey) === abort) {
+        run.combining.delete(combinedKey)
+        if (!this.disposed && this.runs.get(tabId) === run) this.publishNow(tabId)
+      }
+    }
+  }
+
+  /** True when `entry` is a non-sample rows result in `combined`'s statement slot whose transaction outcome is compatible
+   *  with `combined` (never mixing `commitInDoubt`, or committed/live rows with `rolledBackPreview` rows). */
+  private isEligibleForCombined(run: Run, entry: ResultSetEntry, combined: ResultSetEntry): boolean {
+    if (entry.sample || entry.descriptor.kind !== 'rows' || entry.descriptor.targetKey === undefined) return false
+    if ((entry.descriptor.statementSlot ?? 0) !== (combined.descriptor.statementSlot ?? 0)) return false
+    const target = run.multi?.targets.find(item => item.targetKey === entry.descriptor.targetKey)
+    if (target?.phase === 'commitInDoubt') return false
+    const entryRolledBack = !!(entry.descriptor.rolledBackPreview || entry.handle.getSnapshot().rolledBackPreview)
+    const combinedRolledBack = !!(combined.descriptor.rolledBackPreview || combined.handle.getSnapshot().rolledBackPreview)
+    return entryRolledBack === combinedRolledBack
+  }
+
+  /** True when `entry` is a complete, in-memory, eligible source for `combined`. */
+  private isCombinedSource(run: Run, entry: ResultSetEntry, combined: ResultSetEntry): boolean {
+    if (!this.isEligibleForCombined(run, entry, combined)) return false
+    const snap = entry.handle.getSnapshot()
+    return snap.state === 'complete' && snap.residence !== 'remote'
+  }
+
+  private combinedSourcesOf(run: Run, combined: ResultSetEntry): ResultSetEntry[] {
+    return run.sets.filter(entry => this.isCombinedSource(run, entry, combined))
+  }
+
+  private combinedTargetCountFor(run: Run, combined: ResultSetEntry): number {
+    const seen = new Set<string>()
+    for (const entry of this.combinedSourcesOf(run, combined)) {
+      seen.add(entry.descriptor.targetKey!)
+    }
+    return seen.size
+  }
+
+  /** Records the built source server count per Combined entry while the run is opening/settling. */
+  private recordCombinedCounts(run: Run): void {
+    const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+    if (combined.length === 0) return
+    let next: Map<EntryKey, number> | undefined
+    for (const entry of combined) {
+      const count = this.combinedTargetCountFor(run, entry)
+      if (run.combinedCounts.get(entry.key) === count) continue
+      next ??= new Map(run.combinedCounts)
+      next.set(entry.key, count)
+    }
+    if (next) run.combinedCounts = next
+  }
+
+  private markCombinedStaleFor(run: Run, changedEntries: readonly ResultSetEntry[]): void {
+    const candidates = changedEntries.filter(entry => !entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined)
+    if (candidates.length === 0) return
+    let stale: Set<EntryKey> | undefined
+    for (const entry of run.sets) {
+      if (entry.descriptor.kind !== 'combined') continue
+      if (!candidates.some(changed => this.isCombinedSource(run, changed, entry))) continue
+      const combining = run.combining.get(entry.key)
+      if (combining) {
+        combining.abort()
+        run.combining.delete(entry.key)
+      }
+      if (run.staleCombined.has(entry.key)) continue
+      stale ??= new Set(run.staleCombined)
+      stale.add(entry.key)
+    }
+    if (stale) run.staleCombined = stale
+  }
+
+  private syncCombineWarnings(run: Run): void {
+    if (!run.multi) return
+    const merged: string[] = []
+    const add = (list: readonly string[] | undefined) => {
+      if (!list) return
+      for (const item of list) if (!merged.includes(item)) merged.push(item)
+    }
+    add(run.baseCombineWarnings)
+    const combined = run.sets.filter(entry => entry.descriptor.kind === 'combined')
+    for (const entry of combined) add(run.combineWarnings.get(entry.key))
+    if (merged.length > 0) run.multi = { ...run.multi, combineWarnings: merged }
+    else if (run.multi.combineWarnings !== undefined) {
+      const { combineWarnings: _dropped, ...rest } = run.multi
+      run.multi = rest
+    }
+  }
+
   /** The view of `entry`'s group that the group last showed (its Pivot while selected and built, else its Table); a
    *  comparison is itself. */
   private shownView(run: Run, entry: ResultSetEntry | undefined): ResultSetEntry | undefined {
@@ -1205,14 +1703,27 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const run = this.runs.get(tabId), entry = run?.entries.get(key)
     return run && entry ? this.owned(run, entry) : []
   }
-  /** A grid took the focus: commands that name no grid act on it (the toolbar's and the menus' Transposed toggle read its
-   *  orientation, through the publish), its group's selected view is the one it shows, and the pivot builder follows its group. */
+  /** A grid (or a multi-server run's virtual Summary view) took the focus: commands that name no grid act on it (the
+   *  toolbar's and the menus' Transposed toggle read its orientation, through the publish), its group's selected view is
+   *  the one it shows, and the pivot builder follows its group. */
   focusEntry(tabId: string, key: EntryKey): void {
-    const run = this.runs.get(tabId), record = run?.slots.get(key)
-    if (!run || !record) return
+    const run = this.runs.get(tabId)
+    if (!run) return
+    if (key === summaryEntryKey) {
+      if (!hasMultiSummary(run)) return
+      const view = this.viewState(tabId)
+      const changed = view.focused !== summaryEntryKey || !run.activeSummary
+      view.focused = summaryEntryKey
+      run.activeSummary = true
+      if (changed) this.publishNow(tabId)
+      return
+    }
+    const record = run.slots.get(key)
+    if (!record) return
     const view = this.viewState(tabId)
-    let changed = view.focused !== key
+    let changed = view.focused !== key || run.activeSummary
     view.focused = key
+    run.activeSummary = false
     if (this.select(run, key)) changed = true
     if (changed) this.publishNow(tabId)
   }
@@ -1242,10 +1753,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (!view) this.views.set(tabId, view = emptyView())
     return view
   }
-  /** The entry whose grid last had the focus, else the run's first: what a command acts on when it names no grid. */
+  /** The entry whose grid last had the focus, else the run's first (undefined when Summary is active): what a command acts on when it names no grid. */
   focusedEntry(tabId: string): ResultSetEntry | undefined {
     const run = this.runs.get(tabId), focused = this.views.get(tabId)?.focused
-    return run && ((focused === undefined ? undefined : run.entries.get(focused)) ?? run.sets[0])
+    if (!run) return undefined
+    if (run.activeSummary || focused === summaryEntryKey) return undefined
+    return (focused === undefined ? undefined : run.entries.get(focused)) ?? run.sets[0]
   }
   /** One grid's state: scroll, widths and selection. It is the entry's, wherever the entry stands. */
   gridState(tabId: string, key: EntryKey): GridViewState {
@@ -1906,7 +2419,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       case 'resultSet.opened': case 'resultSet.closed':
         this.opened(run, event.descriptor)
         this.settle(run, event.descriptor)
-        run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
+        this.recordCombinedCounts(run)
+        if (event.descriptor.kind !== 'combined') run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         if (event.descriptor.state === 'complete') this.refreshSorts(tabId, run)
         break
@@ -1927,18 +2441,55 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.schedule(tabId)
   }
 
-  /** Opens a set's handle once, keeping the sets in the backend's order; sets past the limit are not kept. */
+  /** Resolves the display label for an opened result set: multi-server target/combined labels, else the query's `#Name`. */
+  private entryLabel(run: Run, descriptor: ResultDescriptor): string | undefined {
+    if (descriptor.kind === 'combined') return descriptor.name ? `Combined · ${descriptor.name}` : 'Combined'
+    if (descriptor.targetKey && run.multi) {
+      const target = run.multi.targets.find(item => item.targetKey === descriptor.targetKey)
+      const server = target?.label ?? descriptor.targetKey
+      return descriptor.name ? `${server} · ${descriptor.name}` : server
+    }
+    return descriptor.name
+  }
+
+  /** Opens a set's handle once, keeping the sets in the backend's order; sets past the limit are not kept.
+   *  When called again with final summary metadata (e.g. `rolledBackPreview`, `targetKey`, `statementSlot`), refreshes the entry's descriptor. */
   private opened(run: Run, descriptor: ResultDescriptor): void {
     const key = setKey(descriptor)
-    if (run.setKeys.has(key) || run.sets.length >= resultLimits.sets) return
+    const rolledBack = descriptor.rolledBackPreview ?? run.rolledBackIds.get(key)
+    const normalized: ResultDescriptor = rolledBack !== undefined && descriptor.rolledBackPreview !== rolledBack
+      ? { ...descriptor, rolledBackPreview: rolledBack }
+      : descriptor
+    if (run.setKeys.has(key)) {
+      const index = run.sets.findIndex(item => setKey(item.descriptor) === key)
+      if (index >= 0) {
+        const existing = run.sets[index]
+        const nextLabel = this.entryLabel(run, normalized)
+        const changed = existing.descriptor.rolledBackPreview !== normalized.rolledBackPreview
+          || existing.descriptor.targetKey !== normalized.targetKey
+          || existing.descriptor.statementSlot !== normalized.statementSlot
+          || existing.descriptor.state !== normalized.state
+          || existing.label !== nextLabel
+        if (changed) {
+          const updated: ResultSetEntry = { ...existing, descriptor: { ...existing.descriptor, ...normalized }, ...nextLabel === undefined ? {} : { label: nextLabel } }
+          if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
+          run.sets[index] = updated
+          run.entries.set(updated.key, updated)
+          run.shape = undefined
+        }
+      }
+      return
+    }
+    if (run.sets.length >= resultLimits.sets) return
     run.setKeys.add(key)
-    const handle = this.client.open(descriptor)
+    const handle = this.client.open(normalized)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     // Sets arrive in order, so the place is almost always the end.
     let at = run.sets.length
-    while (at > 0 && (run.sets[at - 1].descriptor.index - descriptor.index || run.sets[at - 1].descriptor.resultId - descriptor.resultId) > 0) at--
-    // The query's own name for the set (a #Name marker) labels it as Varia's names label the entries it makes.
-    const entry: ResultSetEntry = { key: this.mint(), ordinal: descriptor.index + 1, number: descriptor.index + 1, descriptor, handle, ...descriptor.name === undefined ? {} : { label: descriptor.name } }
+    while (at > 0 && (run.sets[at - 1].descriptor.index - normalized.index || run.sets[at - 1].descriptor.resultId - normalized.resultId) > 0) at--
+    const label = this.entryLabel(run, normalized)
+    // The query's own name for the set (a #Name marker, or multi-server target/combined label) labels it as Varia's names label the entries it makes.
+    const entry: ResultSetEntry = { key: this.mint(), ordinal: normalized.index + 1, number: normalized.index + 1, descriptor: normalized, handle, ...label === undefined ? {} : { label } }
     run.numbered = Math.max(run.numbered, entry.number)
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
@@ -2013,7 +2564,9 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
     if (!run || run.status === 'running' || run.status === 'closed' || sources.some(source => !run.setKeys.has(source))) return refuse()
     const from = sources.map(source => run.sets.find(entry => setKey(entry.descriptor) === source)!)
-    const view: ViewKind = descriptor.kind === 'pivot' ? 'pivot' : 'comparison'
+    const rolledBack = descriptor.rolledBackPreview || from.some(source => source.descriptor.rolledBackPreview || source.handle.getSnapshot().rolledBackPreview)
+    const effectiveDescriptor: ResultDescriptor = rolledBack && !descriptor.rolledBackPreview ? { ...descriptor, rolledBackPreview: true } : descriptor
+    const view: ViewKind = effectiveDescriptor.kind === 'pivot' ? 'pivot' : 'comparison'
     const origin = from.length ? run.slots.get(from[0].key) : undefined
     // A bare run (Peek) shows its rows alone: no Pivot and no comparison.
     if (run.bare) return refuse()
@@ -2022,22 +2575,22 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const group = view === 'comparison' ? undefined : origin?.group
     const refs = from.map((source, at): SourceRef => ({ key: source.key, set: setKey(source.descriptor), number: source.number, name: o.names?.[at] ?? distinctName(source, run.sets), ...source.ordinal === undefined ? {} : { ordinal: source.ordinal } }))
     if (view === 'pivot') {
-      if (group === undefined || origin?.view !== 'table' || from[0].descriptor.kind !== 'rows') return refuse()
+      if (group === undefined || origin?.view !== 'table' || (from[0].descriptor.kind !== 'rows' && from[0].descriptor.kind !== 'combined')) return refuse()
       const replaced = run.sets.find(entry => { const slot = run.slots.get(entry.key); return slot?.view === 'pivot' && slot.group === group })
-      if (replaced) return this.replaceSet(tabId, run, replaced, descriptor, label, refs, o.pivot)
+      if (replaced) return this.replaceSet(tabId, run, replaced, effectiveDescriptor, label, refs, o.pivot)
     }
     if (run.sets.length >= resultLimits.sets) return refuse()
     run.setKeys.add(key)
     if (run.setsPublished) { run.sets = run.sets.slice(); run.setsPublished = false }
     // Numbered once, for its life: an entry that goes before it does not renumber it, nor give its number to the next.
-    const entry: ResultSetEntry = { key: this.mint(), number: ++run.numbered, descriptor, handle: this.client.open(descriptor), label }
+    const entry: ResultSetEntry = { key: this.mint(), number: ++run.numbered, descriptor: effectiveDescriptor, handle: this.client.open(effectiveDescriptor), label }
     // A group's Pivot stands directly under its Table; a comparison goes last, after the groups.
     const at = group === undefined ? run.sets.length : run.sets.findIndex(item => item.ordinal === group) + 1
     run.sets.splice(at, 0, entry)
     run.entries.set(entry.key, entry)
     run.slots.set(entry.key, { view, ...group === undefined ? {} : { group }, revision: 1, sources: refs, ...o.pivot ? { pivot: o.pivot } : {}, ...view === 'comparison' ? { made: ++run.compared } : {} })
     run.shape = undefined
-    this.settleDerived(run, key, descriptor)
+    this.settleDerived(run, key, effectiveDescriptor)
     run.emptied = false
     run.view = 'results'
     this.schedule(tabId)
@@ -2160,11 +2713,13 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     const refuse = () => { void this.client.release([{ generation: descriptor.generation, resultId: descriptor.resultId }]).catch(() => {}); return undefined }
     if (!run || !old || run.status === 'running' || run.status === 'closed' || run.setKeys.has(setKey(descriptor)) || run.slots.get(key)?.view !== 'comparison'
       || sources.length !== 2 || sources.some(source => !run.setKeys.has(source))) return refuse()
-    const refs = sources.map((source, at): SourceRef => {
-      const from = run.sets.find(entry => setKey(entry.descriptor) === source)!
-      return { key: from.key, set: source, number: from.number, name: o.names?.[at] ?? distinctName(from, run.sets), ...from.ordinal === undefined ? {} : { ordinal: from.ordinal } }
-    })
-    return this.replaceSet(tabId, run, old, descriptor, label, refs, undefined, o.moved)
+    const fromEntries = sources.map(source => run.sets.find(entry => setKey(entry.descriptor) === source)!)
+    const rolledBack = descriptor.rolledBackPreview || fromEntries.some(from => from.descriptor.rolledBackPreview || from.handle.getSnapshot().rolledBackPreview)
+    const effectiveDescriptor: ResultDescriptor = rolledBack && !descriptor.rolledBackPreview ? { ...descriptor, rolledBackPreview: true } : descriptor
+    const refs = fromEntries.map((from, at): SourceRef => ({
+      key: from.key, set: sources[at], number: from.number, name: o.names?.[at] ?? distinctName(from, run.sets), ...from.ordinal === undefined ? {} : { ordinal: from.ordinal }
+    }))
+    return this.replaceSet(tabId, run, old, effectiveDescriptor, label, refs, undefined, o.moved)
   }
 
   /** A derived set has all its rows when it is added: the stack sizes it to them, and its grid always shows a strip (what
@@ -2481,6 +3036,17 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       const key = entry.key
       run.sorting.get(key)?.abort()
       run.sorting.delete(key)
+      run.combining.get(key)?.abort()
+      run.combining.delete(key)
+      if (!entry.sample && entry.descriptor.kind === 'rows' && entry.descriptor.targetKey !== undefined && run.combining.size > 0) {
+        for (const [combinedKey, controller] of [...run.combining]) {
+          const combined = run.entries.get(combinedKey)
+          if (combined && this.isCombinedSource(run, entry, combined)) {
+            controller.abort()
+            run.combining.delete(combinedKey)
+          }
+        }
+      }
       // A sample or re-run over the result is given up with it (no reason: its lines are not wanted now). The backend also
       // cancels it on the release, but an estimate or a cost prompt still open would otherwise go on to send it.
       const load = run.loads.get(key)
@@ -2514,9 +3080,28 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       if (view.focused === key) view.focused = undefined
     }
     if (sorts) run.sorts = sorts
+    if (run.staleCombined.size) {
+      const remaining = new Set([...run.staleCombined].filter(key => !keys.has(key)))
+      if (remaining.size !== run.staleCombined.size) run.staleCombined = remaining
+    }
     if (view && collapsed) view.collapsed = collapsed
     if (view && weights) view.weights = weights
     if (entries.length) { run.sets = run.sets.filter(entry => !keys.has(entry.key)); run.setsPublished = false }
+    if (run.combineWarnings.size) {
+      let changed = false
+      const remaining = new Map(run.combineWarnings)
+      for (const key of keys) if (remaining.delete(key)) changed = true
+      if (changed) {
+        run.combineWarnings = remaining
+        this.syncCombineWarnings(run)
+      }
+    }
+    if (run.combinedCounts.size) {
+      let changed = false
+      const remaining = new Map(run.combinedCounts)
+      for (const key of keys) if (remaining.delete(key)) changed = true
+      if (changed) run.combinedCounts = remaining
+    }
     if (plans.length) run.planSets = run.planSets.filter(entry => !keys.has(entry.key))
     if (this.copying && this.runs.get(this.copying.tabId) === run && keys.has(this.copying.job.entry)) this.cancelRunning(this.copying)
     this.releaseEntries(run, gone)
@@ -2573,6 +3158,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     // A load ends with its result, which the backend stops on release: its events concern no one now.
     // A sample or re-run is given up too (no reason: its lines are not this tab's now), and its result, if one comes, released.
     for (const load of run.loads.values()) { load.subscription?.dispose(); load.abort?.abort() }
+    for (const abort of run.combining.values()) abort.abort()
+    run.combining.clear()
     this.drop(tabId, run, run.sets, run.planSets)
     this.runs.delete(tabId)
     this.operations.forget(tabId)
@@ -2637,17 +3224,44 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     }
     if (changed || Object.keys(current).length !== Object.keys(next).length) this.turnedStore.set(next)
   }
-  /** `hasResults` per tab: a set or captured plan the backend still holds, in results neither closed nor lost with the
-   *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, plan sets and comparisons). */
+  /** Counts top-level tabs for a multi-server run (Summary + optional Combined + distinct target tabs + comparisons). */
+  private multiTopCount(run: Run): number {
+    let count = 1 // Summary
+    let hasCombined = false
+    const targets = new Set<string>()
+    let extras = 0
+    for (const entry of run.sets) {
+      if (!held(entry) || entry.descriptor.kind === 'pivot') continue
+      if (entry.descriptor.kind === 'combined') hasCombined = true
+      else if (entry.descriptor.kind === 'diff') extras++
+      else if (entry.descriptor.targetKey) targets.add(entry.descriptor.targetKey)
+      else extras++
+    }
+    return count + (hasCombined ? 1 : 0) + targets.size + extras
+  }
+
+  /** Recomputes `context`, `resultSets` and `steppable` (e.g. after a layout change when no `onLayoutChange` subscription is wired). */
+  refreshContext(): void {
+    if (!this.disposed) this.updateContext()
+  }
+
+  /** `hasResults` per tab: a set, captured plan, or multi-server summary cards, in results neither closed nor lost with the
+   *  backend; and `hasResultSets`: the same, counting only the sets a grid shows (rows, combined, plan sets and comparisons). */
   private updateContext(): void {
     const results: Record<string, true> = {}, sets: Record<string, true> = {}, steppable: Record<string, true> = {}
+    const stacked = this.layout?.() === 'stacked'
     for (const [tabId, run] of this.runs) {
       if (run.status === 'closed' || run.status === 'lost') continue
       const grids = run.sets.some(held)
+      const multiSummary = hasMultiSummary(run)
       if (grids) sets[tabId] = true
-      // The Tabs layout's top row: each result (its Pivot is under it) and each comparison.
-      if (!run.bare && run.sets.filter(entry => held(entry) && entry.descriptor.kind !== 'pivot').length > 1) steppable[tabId] = true
-      if (grids || run.planSets.some(held)) results[tabId] = true
+      // In Tabs layout, Summary is a top-level tab; in Stacked layout, Summary is a band above the grids, so steppable
+      // counts held non-pivot grids without adding Summary (preventing Ctrl+PageDown from deadlocking on 1-set runs).
+      const topCount = multiSummary && !(stacked && grids)
+        ? this.multiTopCount(run)
+        : run.sets.filter(entry => held(entry) && entry.descriptor.kind !== 'pivot').length
+      if (!run.bare && topCount > 1) steppable[tabId] = true
+      if (grids || run.planSets.some(held) || multiSummary) results[tabId] = true
     }
     publishTabs(this.contextStore, results)
     publishTabs(this.setsStore, sets)
@@ -2658,15 +3272,22 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.setsPublished = true
     run.settledPublished = true
     const focused = this.views.get(run.tabId)?.focused
+    const validFocused = focused === summaryEntryKey ? hasMultiSummary(run) : focused !== undefined && run.entries.has(focused)
     return {
-      ...this.shapeOf(run), ...focused !== undefined && run.entries.has(focused) ? { focused } : {}, ...run.bare ? { bare: true as const } : {},
+      ...this.shapeOf(run), ...validFocused ? { focused } : {}, ...run.bare ? { bare: true as const } : {},
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, planSets: run.planSets,
       messages: run.notices.length || run.notes.length ? [...run.notices, ...run.messages, ...run.notes] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
       ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
       ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
       jobNotice: run.jobNotice, sorts: run.sorts, numbered: run.numbered, ...run.emptied ? { emptied: true as const } : {}, ...run.discard ? { discard: true as const } : {},
-      ...run.messagesOnly ? { messagesOnly: true as const } : {}, ...run.loads.size ? { loads: run.loads } : {}
+      ...run.messagesOnly ? { messagesOnly: true as const } : {}, ...run.loads.size ? { loads: run.loads } : {},
+      ...run.multi ? { multi: run.multi } : {}, ...run.multiSummary ? { multiSummary: run.multiSummary } : {},
+      ...run.activeSummary && hasMultiSummary(run) ? { activeSummary: true as const } : {},
+      ...run.staleCombined.size ? { staleCombined: run.staleCombined } : {},
+      ...run.combineWarnings.size ? { combineWarnings: run.combineWarnings } : {},
+      ...run.combinedCounts.size ? { combinedCounts: run.combinedCounts } : {},
+      ...run.combining.size ? { combining: new Set(run.combining.keys()) } : {}
     }
   }
 
