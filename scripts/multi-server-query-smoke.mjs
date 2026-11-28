@@ -139,13 +139,15 @@ try {
         case 'live.unsubscribe':
           return ok({ unsubscribed: true })
         case 'language.status':
-          return ok({ available: false, state: 'unavailable' })
+          return ok({ providers: [{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true, diagnostics: true }] })
         case 'language.diagnostics':
-          return ok({ diagnostics: [] })
+          return ok({ version: params.version, items: [], isIncomplete: false })
         case 'language.close':
           return ok({ closed: true })
         case 'language.refresh':
           return ok({ refreshed: true })
+        case 'explorer.indexStatus':
+          return ok({ status: { state: 'ready', databases: 1, indexed: 1, objects: 4, modules: 0, cut: 0, skipped: [], definitions: true, builtAt: '2026-11-27T12:00:00Z' } })
         case 'explorer.children': {
           const { node } = params
           if (node.type === 'object') {
