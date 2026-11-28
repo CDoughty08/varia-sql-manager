@@ -40,7 +40,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "ssis.describe", "ssis.execute", "ssis.catalogSetup", "ssis.execution", "ssis.packageRuns",
         "bigquery.account", "bigquery.projects", "bigquery.connectionProjects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "agent.profile", "agent.historyMessage", "agent.errorLogs", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel",
-        "results.diffSeek", "language.parse", "language.lookup", "explorer.indexStore.configure", "explorer.indexStore.clear"
+        "results.diffSeek", "language.parse", "language.lookup", "language.hydrate", "explorer.indexStore.configure", "explorer.indexStore.clear"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -632,6 +632,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "agent.counterValues" => await actions.CounterValuesAsync(Read<AgentCounterValuesArgs>(parameters, json), Token(context)),
         "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
         "language.lookup" => LookupIndex(Read<LanguageLookupArgs>(parameters, json)),
+        "language.hydrate" => await HydrateIndexAsync(Read<LanguageHydrateArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
@@ -649,6 +650,10 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         _ = Profile(args.ConnectionId);
         return EditorLookup.Answer(search.Lookup(args.ConnectionId), args);
     }
+
+    /// <summary>language.hydrate: free on-demand tables.get / routines.get schema hydration for referenced BigQuery objects.</summary>
+    private Task<LanguageHydrateResult> HydrateIndexAsync(LanguageHydrateArgs args, CancellationToken token) =>
+        search.HydrateBigQueryAsync(args, bigQuery, token);
 
     /// <summary>Marks the Search Objects index of a SQL Server connection stale in the database a script began in and the one it
     /// ended in (a USE between them), when its text may have changed objects (<see cref="TsqlChanges"/>). Free: nothing is read.</summary>

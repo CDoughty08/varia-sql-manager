@@ -355,14 +355,47 @@ const bigQueryIndex = {
   }
 }
 const bigQueryNamed = (names, name) => names.find(entry => entry === name) ?? names.find(entry => entry.toLowerCase() === name.toLowerCase())
-function bigQueryLookup(request) {
+const bigQueryTierProjects = [
+  { name: 'varia-fake', kind: 'bqProject', tier: 'billing' },
+  { name: 'dw-shared', kind: 'bqProject', tier: 'starred' },
+  { name: 'ml-features', kind: 'bqProject', tier: 'starred' },
+  { name: 'org-recent-mart', kind: 'bqProject', tier: 'discovered', recent: true },
+  { name: 'org-marketing-312', kind: 'bqProject', tier: 'discovered' },
+  { name: 'org-raw-09', kind: 'bqProject', tier: 'discovered', namesOnly: true, detail: 'names' }
+]
+const bigQueryTierJumpHits = [
+  { name: 'daily_revenue', kind: 'bqTable', tier: 'billing', project: 'varia-fake', dataset: 'finance' },
+  { name: 'daily_revenue_v2', kind: 'bqTable', tier: 'starred', project: 'dw-shared', dataset: 'gold' },
+  { name: 'daily_rev_mart', kind: 'bqTable', tier: 'discovered', recent: true, project: 'org-recent-mart', dataset: 'analytics' },
+  { name: 'daily_rev_raw', kind: 'bqTable', tier: 'discovered', namesOnly: true, project: 'org-raw-09', dataset: 'landing' }
+]
+function bigQueryLookup(request, tierMode = false) {
+  if (request.mode === 'jump') {
+    const query = (request.prefix ?? '').trim().toLowerCase()
+    const limit = Math.min(request.limit ?? 50, 50)
+    if (tierMode) {
+      const matched = bigQueryTierJumpHits.filter(item => item.name.toLowerCase().includes(query))
+      return { state: 'ready', path: [], items: matched.slice(0, limit), truncated: matched.length > limit }
+    }
+    const hits = []
+    for (const [project, datasets] of Object.entries(bigQueryIndex)) {
+      for (const [dataset, objects] of Object.entries(datasets)) {
+        for (const [name, entry] of Object.entries(objects)) {
+          if (name.toLowerCase().includes(query)) {
+            hits.push({ name, kind: entry.kind, tier: project === 'varia-fake' ? 'billing' : 'discovered', project, dataset })
+          }
+        }
+      }
+    }
+    return { state: 'ready', path: [], items: hits.slice(0, limit), truncated: hits.length > limit }
+  }
   const [projectName, datasetName, objectName] = request.path
   const keep = name => request.prefix === undefined || (request.exact ? name.toLowerCase() === request.prefix.toLowerCase() : name.toLowerCase().startsWith(request.prefix.toLowerCase()))
   const answer = (path, entries, object) => {
     const kept = entries.filter(entry => keep(entry.name)), limit = request.limit ?? 500
     return { state: 'ready', path, items: kept.slice(0, limit), truncated: kept.length > limit, ...object ? { object } : {} }
   }
-  if (projectName === undefined) return answer([], Object.keys(bigQueryIndex).map((name, i) => ({ name, kind: 'bqProject', tier: i === 0 ? 'billing' : 'starred' })))
+  if (projectName === undefined) return answer([], tierMode ? bigQueryTierProjects : Object.keys(bigQueryIndex).map((name, i) => ({ name, kind: 'bqProject', tier: i === 0 ? 'billing' : 'starred' })))
   const project = bigQueryNamed(Object.keys(bigQueryIndex), projectName)
   if (!project) return { state: 'absent', path: request.path, items: [], truncated: false }
   if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset', detail: 'US' })))
@@ -488,6 +521,8 @@ const explorerRows = {
   // SQL Server Agent's Proxies (AG-8b): the Proxies folder (list agentProxies, as its folder is named) lists a folder per subsystem,
   // and each subsystem (whose kind lists agentProxies too) the proxies active to it; Security › Credentials.
   agentProxies: owner => owner.kind !== 'agentProxySubsystem' ? proxySubsystems.map(subsystem => explorerObject({ kind: 'agentProxySubsystem', name: subsystem.name }, subsystem.label, { hasChildren: true })) : fakeProxies.filter(proxy => proxy.subsystems.includes(proxySubsystems.find(subsystem => subsystem.name === owner.name)?.id)).map(proxy => explorerObject({ kind: 'agentProxy', name: proxy.name }, proxy.name)),
+  agentAlerts: () => agentAlertRows.map(alert => explorerObject({ kind: 'agentAlert', name: alert.name }, alert.name, { ...alert.enabled ? {} : { status: 'disabled' } })),
+  agentOperators: () => agentOperatorRows.map(operator => explorerObject({ kind: 'agentOperator', name: operator.name }, operator.name, { ...operator.enabled ? {} : { status: 'disabled' } })),
   credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name)),
   // The Jobs folder in name order, with each job's id and a disabled job's status, as CatalogSql lists them (AG-12's chips).
   agentJobs: (_, listedEnabled = !!controlDirectory && existsSync(join(controlDirectory, 'agent-listed-enabled'))) => agentTreeJobs().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
@@ -495,7 +530,7 @@ const explorerRows = {
     // live read can dim it.
     .map(job => explorerObject({ kind: 'agentJob', name: job.name }, job.name, { jobId: job.id.toUpperCase(), ...job.enabled || listedEnabled ? {} : { status: 'disabled' } }))
 }
-const agentListings = new Set(['agentProxies', 'credentials', 'agentJobs'])
+const agentListings = new Set(['agentProxies', 'agentAlerts', 'agentOperators', 'credentials', 'agentJobs'])
 // The control file agent-extra-job: a job created elsewhere (another session's sp_add_job), which only the Jobs folder lists.
 const agentExtraJob = { id: 'a1b2c3d4-0000-4000-8000-0000000000ee', name: 'Archive', enabled: true }
 const agentTreeJobs = () => [...agentJobs, ...controlDirectory && existsSync(join(controlDirectory, 'agent-extra-job')) ? [agentExtraJob] : []]
@@ -2569,7 +2604,23 @@ async function workbench(id, method, params, credit) {
     case 'language.lookup': {
       const conn = workbenchConnections.get(params.connectionId)
       if (!conn) return fail(id, 'NOT_CONNECTED', 'The connection is no longer active.')
-      return respond(id, { index: 'ready', answers: params.requests.map(conn.bigQuery ? bigQueryLookup : sqlServerLookup) })
+      if (conn.bigQuery) {
+        const tierMode = await controlled('bq-tiers')
+        return respond(id, { index: 'ready', answers: params.requests.map(request => bigQueryLookup(request, tierMode)) })
+      }
+      return respond(id, { index: 'ready', answers: params.requests.map(sqlServerLookup) })
+    }
+    case 'language.hydrate': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.hydrate needs a BigQuery connection.')
+      const outcomes = params.targets.map(target => {
+        const project = bigQueryNamed(Object.keys(bigQueryIndex), target.project)
+        const dataset = project ? bigQueryNamed(Object.keys(bigQueryIndex[project]), target.dataset) : undefined
+        const name = dataset ? bigQueryNamed(Object.keys(bigQueryIndex[project][dataset]), target.name) : undefined
+        if (name) return { project, dataset, name, status: 'cached' }
+        if (!project && !target.allowExternal) return { project: target.project, dataset: target.dataset, name: target.name, status: 'external' }
+        return { project: target.project, dataset: target.dataset, name: target.name, status: 'notFound', code: 'NOT_FOUND' }
+      })
+      return respond(id, { outcomes })
     }
     case 'bigquery.properties': {
       if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'bigquery.properties needs a BigQuery connection.')
@@ -2961,6 +3012,18 @@ async function workbench(id, method, params, credit) {
         case 'agentSchedules': return respond(id, agentSchedulesDescribe(params))
         case 'agentProxy': return respond(id, agentProxyDocument(params))
         case 'credential': return respond(id, credentialDocument(params))
+        case 'agentProperties': return respond(id, {
+          agentProperties: {
+            settings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\\SQLSERVERAGENT', errorLogFile: 'D:\\MSSQL\\Log\\SQLAGENT.OUT', errorLoggingLevel: 3 },
+            serverNow: '2026-11-26T14:30:00', serverOffsetMinutes: 0,
+            history: {
+              total: 984, recent: 700, jobsTruncated: false,
+              jobs: [{ name: 'Backup', rows: 600, recent: 672 }, { name: 'Nightly', rows: 360, recent: 28 }, { name: 'Purge', rows: 24, recent: 0 }],
+              ages: [{ days: 0, rows: 120 }, { days: 3, rows: 350 }, { days: 30, rows: 400 }, { days: 90, rows: 114 }]
+            }
+          },
+          elapsedMs: 1
+        })
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         case 'tableProperties': return respond(id, {
           tableProperties: {
@@ -2996,6 +3059,7 @@ GO
         // The proxy and Credential documents' scripts write <secret>; the request never carries one.
         case 'agentProxy': return respond(id, { text: `USE [msdb]\nGO\nEXEC msdb.dbo.sp_${params.target.kind === 'agent' ? 'add' : 'update'}_proxy @proxy_name=N'${params.agentProxy.name ?? params.target.name}'\nGO\n`, database: 'msdb', warnings: [] })
         case 'credential': return respond(id, { text: `USE [master]\nGO\n${params.target.kind === 'server' ? 'CREATE' : 'ALTER'} CREDENTIAL [${params.credential.name ?? params.target.name}] WITH IDENTITY = N'${params.credential.identity}', SECRET = <secret>\nGO\n`, database: 'master', warnings: [] })
+        case 'agentProperties': return respond(id, { text: "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties @monitor_autostart = 1\nGO\n", database: 'msdb', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
@@ -3006,6 +3070,7 @@ GO
       if (params.action === 'agentSchedule') return respond(id, agentScheduleSave(params))
       if (params.action === 'agentProxy') return respond(id, agentProxySave(params))
       if (params.action === 'credential') return respond(id, credentialSave(params))
+      if (params.action === 'agentProperties') return respond(id, { steps: [{ status: 'done', title: params.agentPurge ? 'Delete old job history' : 'Save SQL Server Agent properties' }], messages: params.agentPurge ? ['400 history entries purged.'] : [], elapsedMs: 1 })
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
       if (params.action === 'recycleAgentErrorLog') return respond(id, agentRecycleErrorLog())

@@ -7,6 +7,7 @@ interface Props extends Pick<AriaAttributes, 'aria-describedby' | 'aria-descript
   readonly onFocus?: () => void
   readonly autoFocus?: boolean
   readonly 'data-setting'?: string
+  readonly 'data-credential-focus'?: boolean
   readonly disabled?: boolean
   /** The words beside it for each state ("True" and "False" in a property sheet); the thumb's side says it too. */
   readonly states?: { readonly on: string; readonly off: string }
@@ -18,9 +19,9 @@ interface Props extends Pick<AriaAttributes, 'aria-describedby' | 'aria-descript
  * A boolean as a switch: a checkbox with the switch role, so Space toggles it and assistive technology says on or off.
  * A `<label htmlFor={id}>` elsewhere names it. The state shows three ways: the thumb's side, the fill, and the words.
  */
-export default function Switch({ id, checked, onChange, onFocus, autoFocus, 'data-setting': dataSetting, disabled, states, changed, ...aria }: Props) {
+export default function Switch({ id, checked, onChange, onFocus, autoFocus, 'data-setting': dataSetting, 'data-credential-focus': dataCredentialFocus, disabled, states, changed, ...aria }: Props) {
   return <span className="switch-field">
-    <input id={id} className="switch" type="checkbox" role="switch" checked={checked} disabled={disabled} autoFocus={autoFocus} data-changed={changed || undefined} data-setting={dataSetting} {...aria}
+    <input id={id} className="switch" type="checkbox" role="switch" checked={checked} disabled={disabled} autoFocus={autoFocus} data-changed={changed || undefined} data-setting={dataSetting} data-credential-focus={dataCredentialFocus || undefined} {...aria}
       onFocus={onFocus} onChange={event => onChange(event.target.checked)} />
     {states && <span className="switch-state" aria-hidden="true">{checked ? states.on : states.off}</span>}
   </span>

@@ -1,5 +1,6 @@
 // Playwright-over-Electron live screenshot capture harness for SQL Server Agent polish lanes (AP-1..AP-6).
 // Usage: node scripts/capture-agent-polish.mjs --lane <ap-1|ap-2|ap-3|ap-4|ap-5|ap-6> [--out <dir>]
+import { captureAp4 } from './capture-agent-polish-lanes/ap4.mjs'
 import { electron, expect } from './fixtures/smoke.mjs'
 import { chooseExplorerMenuItem } from './fixtures/explorer-tree.mjs'
 import {
@@ -8,6 +9,8 @@ import {
 import { captureAp3 } from './capture-agent-polish-lanes/ap3.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { captureAp2 } from './capture-agent-polish-lanes/ap2.mjs'
+import { captureAp5 } from './capture-agent-polish-lanes/ap5.mjs'
+import { captureAp6 } from './capture-agent-polish-lanes/ap6.mjs'
 import react from '@vitejs/plugin-react'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -225,7 +228,10 @@ async function captureAp1(outDir, profile) {
 const lanes = {
   'ap-1': captureAp1,
   'ap-2': (outDir, profile) => captureAp2({ outDir, profile, launchMainApp, connectFakeServer, captureMatrix, expect }),
-  'ap-3': (outDir, profile) => captureAp3(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix })
+  'ap-3': (outDir, profile) => captureAp3(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix }),
+  'ap-4': captureAp4,
+  'ap-5': (outDir, profile) => captureAp5(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix }),
+  'ap-6': (outDir, profile) => captureAp6(outDir, profile, { launchMainApp, connectFakeServer, captureMatrix })
 }
 const implementedLanes = new Set(Object.keys(lanes))
 
@@ -265,7 +271,7 @@ const watchdog = setTimeout(() => {
 }, 300000)
 
 try {
-  await lanes[parsed.lane](outDir, profile)
+  await lanes[parsed.lane](outDir, profile, { captureMatrix, launchMainApp, connectFakeServer, viewports, themes })
 } finally {
   clearTimeout(watchdog)
   await rm(profile, { recursive: true, force: true }).catch(() => {})

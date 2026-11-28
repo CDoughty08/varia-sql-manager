@@ -3,13 +3,16 @@
 // this only draws it. The password fields are uncontrolled and remount empty whenever the service empties the secret slot.
 import { useState } from 'react'
 import {
-  agentProxyText, credentialText, proxyPrincipalKindLabel, subsystemLabel, type AgentProxyDocumentModel, type AgentProxyDraft, type AgentProxyField, type AgentProxyProblem, type ProxyPrincipal
+  agentProxyText, changedAgentProxyFields, credentialText, initialAgentProxyDraft, proxyPrincipalKindLabel, subsystemLabel,
+  type AgentProxyDocumentModel, type AgentProxyDraft, type AgentProxyField, type AgentProxyProblem, type ProxyPrincipal
 } from '../../../shared/actions/agent-proxy.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
+import { resizeScript, selectSection, setScriptOpen } from '../kit/document-frame'
+import { type Verb } from '../kit/DocumentFrame'
 import InlineError from '../kit/InlineError'
+import ObjectInspectorFrame, { type InspectorTab } from '../kit/ObjectInspectorFrame'
 import PasswordField from '../kit/PasswordField'
 import PropertyField, { FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
 import Skeleton from '../kit/Skeleton'
@@ -112,14 +115,14 @@ function SubsystemsSection(props: SectionProps) {
   const own = fieldText('subsystems', props)
   const base = model.proxy?.subsystems ?? []
   return <div className="agent-proxy-subsystems">
-    <fieldset className="agent-proxy-checks" aria-label="Active to the following subsystems" disabled={!editable}>
+    <div className="agent-proxy-checks" role="group" aria-label="Active to the following subsystems">
       {model.subsystems.map(subsystem => {
         const on = draft.subsystems.includes(subsystem.id), changed = !!model.proxy && on !== base.includes(subsystem.id)
         return <label key={subsystem.id} data-changed={changed || undefined}>
-          <input type="checkbox" checked={on} onChange={() => service.toggleSubsystem(state.id, subsystem.id)} /> {subsystemLabel(subsystem.name)}
+          <input type="checkbox" checked={on} disabled={!editable} onChange={() => service.toggleSubsystem(state.id, subsystem.id)} /> {subsystemLabel(subsystem.name)}
         </label>
       })}
-    </fieldset>
+    </div>
     <p className="field-note" aria-live="polite">{`${draft.subsystems.length} of ${model.subsystems.length} subsystems`}</p>
     {own.error && <p className="property-field-error" role="alert"><Icon name="error" />{own.error}</p>}
     {own.note && <p className="field-note"><Icon name="warning" />{own.note}</p>}
@@ -171,7 +174,7 @@ function ReferencesSection({ model }: Pick<SectionProps, 'model'>) {
   </div>
 }
 
-/** The proxy document: header (where it is, Reload and Save), what the last action said, then the four sections and the Script drawer. */
+/** The proxy document: header (where it is, Reload and Save), what the last action said, then the three inspector tabs and the Script drawer. */
 export default function ProxyDocument({ documentId }: { documentId: string }) {
   const { proxyDocuments } = useWorkbench()
   const { documents } = useServiceSnapshot(proxyDocuments)
@@ -179,22 +182,54 @@ export default function ProxyDocument({ documentId }: { documentId: string }) {
   if (!state) return <div className="agent-proxy-document" />
   const { model, draft } = state
   const editable = proxyDocuments.canEdit(state.id), problems = proxyDocuments.problems(state.id), problemSections = proxyDocuments.problemSections(state.id)
+  const changed = new Set<AgentProxyField>(model?.proxy && draft ? changedAgentProxyFields(initialAgentProxyDraft(model), draft) : [])
   const args = { tabId: state.id }
   const saveLabel = model?.proxy ? state.changes ? `Save · ${state.changes} ${state.changes === 1 ? 'change' : 'changes'}` : 'Save' : 'Create'
   const verbs: Verb[] = [{ command: 'agentProxy.reload', args, label: 'Reload' }, { command: 'agentProxy.save', args, label: saveLabel, emphasis: 'primary' }]
   const phaseLabel = state.phase === 'loading' ? 'Reading the proxy…' : state.phase === 'saving' ? 'Saving the proxy…' : undefined
-  const content = (section: string) => {
-    if (!model || !draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the proxy" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the proxy could not be read.' : ''}</p>
-    const props: SectionProps = { state, model, draft, editable, problems, service: proxyDocuments }
-    switch (section) {
-      case 'proxy': return <ProxySection {...props} />
-      case 'subsystems': return <SubsystemsSection {...props} />
-      case 'principals': return <PrincipalsSection {...props} />
-      case 'references': return <ReferencesSection model={model} />
-      default: return null
+  const activeTab = state.frame.section === 'subsystems' ? 'proxy' : state.frame.section
+  const loadingOrError = state.phase === 'loading'
+    ? <Skeleton rows={4} label="Reading the proxy" />
+    : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the proxy could not be read.' : ''}</p>
+  const props: SectionProps | undefined = model && draft ? { state, model, draft, editable, problems, service: proxyDocuments } : undefined
+  const tabs: InspectorTab[] = [
+    {
+      id: 'proxy',
+      title: 'Proxy & Subsystems',
+      layout: 'flow',
+      keepMounted: true,
+      modified: changed.has('name') || changed.has('credential') || changed.has('description') || changed.has('enabled') || changed.has('subsystems'),
+      problem: problemSections.has('proxy') || problemSections.has('subsystems'),
+      content: !props ? loadingOrError : <div className="agent-object-flow agent-proxy-flow">
+        <h2 className="agent-eyebrow">Proxy Identity</h2>
+        <ProxySection {...props} />
+        <h2 className="agent-eyebrow">Active Subsystems · {props.draft.subsystems.length} of {props.model.subsystems.length}</h2>
+        <SubsystemsSection {...props} />
+      </div>
+    },
+    {
+      id: 'principals',
+      title: 'Principals',
+      layout: 'flow',
+      count: draft?.principals.length,
+      modified: changed.has('principals'),
+      problem: problemSections.has('principals'),
+      content: !props ? loadingOrError : <div className="agent-object-flow agent-proxy-flow">
+        <h2 className="agent-eyebrow">Allowed Principals</h2>
+        <PrincipalsSection {...props} />
+      </div>
+    },
+    {
+      id: 'references',
+      title: 'References',
+      layout: 'flow',
+      count: model?.proxy ? (model.references?.length ?? 0) : undefined,
+      content: !props ? loadingOrError : <div className="agent-object-flow agent-proxy-flow">
+        <h2 className="agent-eyebrow">Job Steps Using This Proxy</h2>
+        <ReferencesSection model={props.model} />
+      </div>
     }
-  }
-  const sections: FrameSection[] = proxySections.map(section => ({ id: section.id, title: section.title, problem: problemSections.has(section.id), content: content(section.id) }))
+  ]
   const name = model?.proxy?.name ?? (draft?.name || 'New Proxy')
   const recovery = state.phase === 'loadFailed' || state.unread || state.error?.code === 'NOT_FOUND' ? [{ label: 'Reload', run: () => proxyDocuments.reload(state.id) }] : []
   const field = state.error?.field as AgentProxyField | undefined
@@ -207,7 +242,12 @@ export default function ProxyDocument({ documentId }: { documentId: string }) {
   </>
   const pill = model ? model.proxy ? <StatusPill tone={model.proxy.enabled ? 'success' : 'neutral'} label={model.proxy.enabled ? 'Enabled' : 'Disabled'} /> : <StatusPill tone="neutral" label="Not saved yet" /> : null
   const header = { title: name, subtitle: model?.proxy ? 'Proxy Account Properties' : 'New Proxy', crumbs: [{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'SQL Server Agent' }, { label: 'Proxies' }] }
-  return <FieldHints><DocumentFrame id={`agent-proxy-${state.id}`} {...header} state={pill} verbs={verbs} banner={banner} sections={sections} frame={state.frame}
-    onFrame={frame => proxyDocuments.setFrame(state.id, frame)} attributes={{ 'data-agent-proxy': state.id }}
-    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void proxyDocuments.deliver(state.id, destination) }} hint={<FieldHintStrip />} /></FieldHints>
+  return <FieldHints resetKey={activeTab}><ObjectInspectorFrame id={`agent-proxy-${state.id}`} surface="full" {...header} state={pill} verbs={verbs} banner={banner}
+    tabs={tabs} activeTab={activeTab} onSelectTab={id => proxyDocuments.setFrame(state.id, selectSection(state.frame, proxySections, id))}
+    attributes={{ 'data-agent-proxy': state.id }}
+    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void proxyDocuments.deliver(state.id, destination) }}
+    scriptOpen={state.frame.scriptOpen} scriptSize={state.frame.scriptSize}
+    onScriptToggle={() => proxyDocuments.setFrame(state.id, setScriptOpen(state.frame, !state.frame.scriptOpen))}
+    onScriptResize={size => proxyDocuments.setFrame(state.id, resizeScript(state.frame, size))}
+    hint={<FieldHintStrip />} /></FieldHints>
 }

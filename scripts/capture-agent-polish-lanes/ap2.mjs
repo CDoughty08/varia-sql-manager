@@ -1,6 +1,6 @@
 import { chooseExplorerMenuItem } from '../fixtures/explorer-tree.mjs'
 import {
-  documentFrame, documentTab, gridPart, inspectorPanel, inspectorTab, liveGrid, stepCardFlowGeometry
+  chooseJamMoreAction, documentFrame, documentTab, gridPart, inspectorPanel, inspectorTab, liveGrid, stepCardFlowGeometry
 } from '../fixtures/ui.mjs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -122,7 +122,7 @@ export async function captureAp2({ outDir, profile, launchMainApp, connectFakeSe
     // 6. Create several (full-height fill table + selected row details).
     await documentTab(page, 'Job Activity Monitor - server-a').click()
     await jobCell('Nightly').click()
-    await page.getByRole('toolbar', { name: 'Selected jobs', exact: true }).getByRole('button', { name: 'Create Job Like This…', exact: true }).click()
+    await chooseJamMoreAction(page, documentFrame(page, 'Job Activity Monitor'), 'Create Job Like This…')
     await documentFrame(page, 'Copy of Nightly').getByRole('button', { name: 'Create several…', exact: true }).click()
     const several = documentFrame(page, 'Create several jobs')
     await expect(documentTab(page, 'Create several jobs')).toHaveAttribute('aria-selected', 'true')

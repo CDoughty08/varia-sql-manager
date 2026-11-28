@@ -136,10 +136,16 @@ the reads held when it is made:
 
 A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQueryLookup`), which the editor reaches over
 `language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
-projects (billing first, then starred and discovered accessible projects, with `tier`, `namesOnly`, and `partial`
+projects ordered **Billing → ★ Starred → Recently Queried → Discovered** (guaranteeing Billing and Starred projects are
+never truncated behind the default 500-item page cap, with `tier`, `recent`, `namesOnly`, `indexing`, and `partial`
 markers), a project's datasets, a dataset's objects (a sharded group as its newest shard, a routine with its signature,
-and optional table summary facts `rows`, `bytes`, `partitioning`, `clustering`, and clipped `description` when detailed)
-and an object's facts and columns by field path in schema order. Index builds, scoped refreshes, and DDL-stale updates
+and optional table summary facts `rows`, `bytes`, `partitioning`, `clustering`, and clipped `description` when detailed),
+an object's facts and columns by field path in schema order, and a bounded cross-project fuzzy table jump
+(`mode: 'jump'`, up to 50 hits across RAM-indexed datasets ranked **Default dataset → Billing → ★ Starred → Recently
+Queried → Discovered**). Referenced objects whose details are not yet in RAM (Wave 3 pending, memory-capped `namesOnly`,
+or explicitly requested external/public tables) can be hydrated individually via `language.hydrate` using free REST
+`tables.get` / `routines.get` calls, cached into `DatabaseIndex` under the shared memory budget (with a short negative
+cache for 404/403 and per-connection rate limiting). Index builds, scoped refreshes, and DDL-stale updates
 invalidate the editor's `LookupCache` immediately for the affected connection. Projects, datasets and objects match
 exactly, else the one name that differs only in case; a wildcard (`events_*`, `events_2026*`) or a shard within a
 date-sharded group's range answers with the group's newest shard; the prefix matches with case, a group the wildcard

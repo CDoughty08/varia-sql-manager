@@ -9,6 +9,18 @@ internal static class EditorLookupLimits
     public const int Requests = 16, Segments = 3, SegmentChars = 1024, PrefixChars = 4608, Items = 2000, DefaultItems = 500, TotalItems = 4000, TotalBytes = 12582912;
 }
 
+/// <summary>Cross-project fuzzy jump bounds (jumpLookupLimits in src/shared/language-lookup.ts).</summary>
+internal static class JumpLookupLimits
+{
+    public const int MinPrefixChars = 2, MaxPrefixChars = 128, Items = 50, MaxScanObjects = 100_000;
+}
+
+/// <summary>language.hydrate bounds (languageHydrateLimits in src/shared/language-lookup.ts).</summary>
+internal static class LanguageHydrateLimits
+{
+    public const int Targets = 8, MaxNegativeEntries = 256, MaxPerMinute = 30, MaxConcurrent = 4;
+}
+
 internal static class EditorLookup
 {
     private static RequestException Invalid(string what) => new("INVALID_PARAMS", "Invalid language lookup: " + what);
@@ -31,7 +43,11 @@ internal static class EditorLookup
         + (item.Rows is null ? 0 : 14)
         + (item.Bytes is null ? 0 : 15)
         + (item.Partitioning is null ? 0 : 13 + StrBytes(item.Partitioning))
-        + (item.Clustering is null ? 0 : 11 + StrBytes(item.Clustering));
+        + (item.Clustering is null ? 0 : 11 + StrBytes(item.Clustering))
+        + (item.Recent is null ? 0 : 8)
+        + (item.Indexing is null ? 0 : 10)
+        + (item.Project is null ? 0 : 8 + StrBytes(item.Project))
+        + (item.Dataset is null ? 0 : 8 + StrBytes(item.Dataset));
 
     private static int ObjectBytes(LanguageLookupObject? shown) => shown is null ? 0 :
         10 + 5 + StrBytes(shown.Name) + 5 + StrBytes(shown.Kind)
@@ -61,6 +77,19 @@ internal static class EditorLookup
         foreach (var request in args.Requests)
         {
             if (request is null) throw Invalid("requests.");
+            if (request.Mode is not (null or "children" or "jump")) throw Invalid("mode.");
+            if (request.Mode == "jump")
+            {
+                if (request.Path is not { Count: 0 }) throw Invalid("jump needs an empty path.");
+                if (request.Exact == true) throw Invalid("jump does not support exact.");
+                var trimmed = request.Prefix?.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.Length < JumpLookupLimits.MinPrefixChars || request.Prefix!.Length > JumpLookupLimits.MaxPrefixChars)
+                    throw Invalid("jump prefix.");
+                if (request.Limit is < 1 or > JumpLookupLimits.Items) throw Invalid("jump limit.");
+                if (request.Dataset is not null && (request.Dataset.Length is 0 or > EditorLookupLimits.SegmentChars)) throw Invalid("dataset.");
+                continue;
+            }
+            if (request.Dataset is not null) throw Invalid("dataset.");
             if (request.Path is not { Count: <= EditorLookupLimits.Segments } || request.Path.Any(segment => segment is not { Length: > 0 and <= EditorLookupLimits.SegmentChars })) throw Invalid("path.");
             if (request.Prefix is { Length: > EditorLookupLimits.PrefixChars }) throw Invalid("prefix.");
             if (request.Exact == true && string.IsNullOrEmpty(request.Prefix)) throw Invalid("exact needs a prefix.");
@@ -347,6 +376,31 @@ internal static class EditorLookup
             remaining -= list.Count;
             return (list, truncated);
         }
+        if (request.Mode == "jump")
+        {
+            var jumpLimit = Math.Min(request.Limit ?? JumpLookupLimits.Items, left);
+            if (jumpLimit <= 0)
+            {
+                bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes([], null));
+                return new(lookup.Index == "none" ? "absent" : "ready", [], [], lookup.HasAnyHeldObject());
+            }
+            var details = request.Details == true;
+            var hits = lookup.JumpObjects(prefix.Trim(), request.Dataset, jumpLimit, out var jumpTruncated);
+            var (items, truncated) = Take(hits.Select(hit =>
+            {
+                var entry = hit.Entry;
+                var facts = BigQueryLookup.Facts(entry);
+                var ds = lookup.Dataset(hit.Project, hit.Dataset);
+                return new LanguageLookupItem(entry.Name, entry.Kind, entry.Subtype, Detail: facts?.Signature,
+                    Description: details ? facts?.Description : null, Shards: BigQueryLookup.Shards(entry),
+                    Tier: hit.Tier, NamesOnly: hit.NamesOnly ? true : null,
+                    Partial: !IsDetailed(lookup, ds, entry, facts) || facts?.ColumnsCut == true ? true : null,
+                    Rows: SafeCount(facts?.Rows), Bytes: SafeCount(facts?.Bytes),
+                    Partitioning: facts?.Partitioning, Clustering: facts?.Clustering,
+                    Recent: hit.Recent ? true : null, Project: hit.Project, Dataset: hit.Dataset);
+            }), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
+            return new(lookup.Index == "none" ? "absent" : "ready", [], items, truncated || jumpTruncated);
+        }
         switch (path.Count)
         {
             case 0:
@@ -354,7 +408,8 @@ internal static class EditorLookup
                 var names = exact ? Resolved(lookup.Projects, prefix) : lookup.Projects.Where(Keeps);
                 var (items, truncated) = Take(names.Select(name => new LanguageLookupItem(name, "bqProject", Detail: lookup.NamesOnly(name) ? "names" : null,
                     Tier: lookup.ProjectTier(name), NamesOnly: lookup.NamesOnly(name) ? true : null,
-                    Partial: lookup.ProjectState(name) == LookupState.Partial ? true : null)), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
+                    Partial: lookup.ProjectState(name) == LookupState.Partial ? true : null,
+                    Recent: lookup.IsRecent(name) ? true : null, Indexing: lookup.Wave3Pending(name) ? true : null)), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
                 return new("ready", [], items, truncated);
             }
             case 1:
@@ -399,7 +454,9 @@ internal static class EditorLookup
                 {
                     var earlyPath = lookup.Project(path[0]) is null ? [.. path] : new List<string> { dataset.Project, dataset.Dataset };
                     bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes(earlyPath, dataset.Skip?.Code));
-                    return new(State(dataset.State), earlyPath, [], false, Skip: dataset.Skip?.Code);
+                    // A dataset populated only by individual JIT-hydrated objects has no full listing, so any other object is absent.
+                    var missingState = lookup.IsHydratedOnly(dataset.Project, dataset.Dataset) ? LookupState.Absent : dataset.State;
+                    return new(State(missingState), earlyPath, [], false, Skip: dataset.Skip?.Code);
                 }
                 var facts = BigQueryLookup.Facts(entry);
                 var detailed = IsDetailed(lookup, dataset, entry, facts);
