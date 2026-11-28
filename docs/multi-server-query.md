@@ -18,12 +18,12 @@ Varia can run one query across up to 32 SQL Server instances or up to 32 BigQuer
   - quick search when more than 8 targets are listed, and
   - one-click **Reconnect** for disconnected tab targets.
 - **Drag and drop.** Dragging a server from Object Explorer onto a same-engine multi-server tab or onto the matching dialect pane of a Cross-Engine tab adds that server to the tab; holding **Ctrl** (**⌥** on macOS) over an editor inserts the server name instead.
-- **Tab and status bar cues.** Multi-server tabs display stacked server colour swatches, a target summary sublabel (`3 SQL Servers`, `2 BigQuery projects`, or `1 SQL + 2 BQ`), and a top accent border (`PROD` red when any enabled target is Production). The status bar mirrors the active target summary and environment count.
+- **Tab and status bar cues.** Multi-server tabs display stacked server colour swatches, a target summary sublabel (`3 SQL Servers`, `2 BigQuery projects`, or `1 SQL + 2 BQ`), and a top accent border (`PROD` red when any enabled target is Production). The status bar mirrors the active target summary and Production (`PROD`) target count.
 - **Single-server controls.** Single-server-only commands (execution plans, Client Statistics, Change Connection…, Change Database…, Query › Connection › Disconnect) are disabled while a multi-server tab is active.
 
 ## Run mode prompt and execution modes
 
-Pressing **Execute** (`F5`) on a same-engine tab with two or more enabled targets opens the run mode dialog (**Execute across N SQL Servers** / **Execute across N BigQuery Projects**) before anything runs. If you uncheck targets down to **1** enabled target, Execute skips the run mode dialog and runs directly as an ephemeral single-target execution (still applying BigQuery cost prompts when applicable).
+Pressing **Execute** (`F5`) on a same-engine tab with two or more enabled, connected targets opens the run mode dialog (**Execute across N SQL Servers** / **Execute across N BigQuery Projects**) before anything runs. If you uncheck targets down to **1** enabled, connected target, Execute skips the run mode dialog and runs directly as an ephemeral single-target execution (still applying BigQuery cost prompts when applicable).
 
 ### SQL Server modes
 
@@ -54,7 +54,7 @@ Open a Cross-Engine tab from Object Explorer's context menu (**New Cross-Engine 
   LIMIT 100;
   ```
 
-  Save, Save As, Hot Exit, AutoRecover, Reload, and Reopen Closed Query all persist this single `.sql` format. Switching between Split and File syncs edits through undo-safe edit operations. In File mode, T-SQL diagnostics and T-SQL-only transforms pause while live read-only checks and BigQuery cost estimates remain active.
+  Save, Save As, Hot Exit, AutoRecover, Reload, and Reopen Closed Query all persist this single `.sql` format. Switching between Split and File syncs edits through undo-safe edit operations. In File mode, per-dialect IntelliSense, T-SQL diagnostics, SQL transforms (**Toggle Brackets**, **Move Commas**), and snippets pause while live read-only checks and BigQuery cost estimates remain active.
 - **Full-pane execution.** Cross-Engine Execute always runs both dialect panes (`Both dialects` scope pill) and refuses locally if either pane is empty. Any BigQuery target exceeding its cost threshold opens a single aggregated multi-project BigQuery cost confirmation dialog.
 - **Three-layer read-only guard (`SELECT` / `WITH` only).**
   1. **Live editor diagnostics:** Debounced (150 ms) allowlist scanning marks blocked statements (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `CREATE`, `ALTER`, `DROP`, `EXEC`, `SELECT INTO`, `OPENROWSET`, `OPENQUERY`, `OPENXML`, `NEXT VALUE FOR`, etc.) with red squiggles (`varia-cross-engine-guard`) and one summary strip per pane offering **Next blocked** and **Open in SQL Server / BigQuery tab**.
