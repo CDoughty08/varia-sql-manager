@@ -10,7 +10,7 @@ import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import {
   anyResultGrid, backendReady, connectDialogWindow, crossEngineBar, crossEngineGuardStrip, crossEnginePane,
-  expectEditorShown, explorerMultiBar, messagesFilterBar, multiExecuteDialog, multiRunSummary, multiTargetPopover,
+  expectEditorShown, explorerMultiBar, gridCell, messagesFilterBar, multiExecuteDialog, multiRunSummary, multiTargetPopover,
   multiTargetTrigger, outputView, queryBarButton, quickInputBox, resultTab, submitConnect, toolbarButton
 } from './fixtures/ui.mjs'
 
@@ -21,10 +21,12 @@ const env = {
   VARIA_SMOKE_TEST: '1',
   VARIA_TEST_USER_DATA: profile,
   VARIA_BACKEND_TEST_HOOKS: '1',
+  VARIA_RESULT_BUDGET_BYTES: String(256 * 1024 * 1024),
   VARIA_TEST_BIGQUERY_ENDPOINT: 'http://127.0.0.1:9050'
 }
 delete env.ELECTRON_RUN_AS_NODE
 delete env.VARIA_TEST_BACKEND
+delete env.VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT
 const application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
 const watchdog = setTimeout(() => { console.error('Multi-server query suite exceeded its time limit.'); application.process()?.kill(); process.exit(1) }, 300_000)
 const page = await application.firstWindow()
@@ -144,6 +146,8 @@ try {
           return ok({ closed: true })
         case 'query.session.state':
           return ok({ transactionCount: 0, checked: true })
+        case 'results.visibility':
+          return ok({ applied: true })
         case 'query.executeMulti': {
           globalThis.__multiSmokeCalls.push({ mode: params.mode, targets: (params.targets ?? []).map(t => ({ label: t.label, database: t.database, dataset: t.dataset })) })
           const targets = params.targets ?? []
@@ -264,6 +268,7 @@ try {
 
   await resultTab(page, /^Combined \(2\/2\)/).click()
   await expect(anyResultGrid(page)).toHaveCount(1)
+  await expect(gridCell(anyResultGrid(page), 0, 0)).toBeVisible()
 
   await outputView(page, /^Messages/).click()
   const filterBar = messagesFilterBar(page)
@@ -320,9 +325,15 @@ try {
 
   // Toggle Dual-Dialect Split -> -- #Dialect File -> Dual-Dialect Split and verify serialization round-trip.
   await crossEngineBar(page).getByRole('button', { name: '-- #Dialect File', exact: true }).click()
-  await expect(page.locator('.monaco-editor[role="code"] .view-lines').filter({ visible: true }).first()).toContainText('#Dialect="sqlserver"')
+  const fileView = page.locator('.monaco-editor[role="code"] .view-lines').filter({ visible: true }).first()
+  await expect(fileView).toContainText('#Dialect="sqlserver"')
+  await expect(fileView).toContainText('SELECT TOP 5 1 AS Id;')
+  await expect(fileView).toContainText('#Dialect="bigquery"')
+  await expect(fileView).toContainText('SELECT 1 AS Id LIMIT 5;')
   await crossEngineBar(page).getByRole('button', { name: 'Dual-Dialect Split', exact: true }).click()
   await expect(sqlPane).toBeVisible()
+  await expect(sqlPane.locator('.monaco-editor[role="code"] .view-lines').first()).toContainText('SELECT TOP 5 1 AS Id;')
+  await expect(bqPane.locator('.monaco-editor[role="code"] .view-lines').first()).toContainText('SELECT 1 AS Id LIMIT 5;')
 
   // Layer 2 Read-Only Guard blocks DELETE with zero IPC sent and logs READ_ONLY_VIOLATION.
   const callsBeforeBlocked = await application.evaluate(() => globalThis.__multiSmokeCalls.length)

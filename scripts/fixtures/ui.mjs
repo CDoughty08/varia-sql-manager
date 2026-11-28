@@ -850,7 +850,7 @@ export const resultSplitters = page => outputPane(page).getByRole('separator', {
 
 /** The row of result and comparison tabs, and one tab in it by its name ("Result 2", "Differences: Result 1 → Result 2"). */
 export const resultTabs = page => outputPane(page).getByRole('tablist', { name: 'Results and comparisons', exact: true })
-export const resultTab = (page, name) => resultTabs(page).getByRole('tab', { name, exact: true })
+export const resultTab = (page, name) => resultTabs(page).getByRole('tab', named(name))
 /** The selected result's view tabs ("Views of Result 2"), and one by its name: Table, Plan set, or "Pivot of Result 2". */
 export const viewTabs = page => outputPane(page).getByRole('tablist', { name: /^Views of / })
 export const viewTab = (page, name) => viewTabs(page).getByRole('tab', { name, exact: true })

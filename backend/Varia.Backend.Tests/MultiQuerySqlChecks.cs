@@ -33,9 +33,9 @@ internal static class MultiQuerySqlChecks
             (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
 
         var secondary = await Call<ConnectionInfo>("connections.connect", live("tempdb"));
+        var sessionId = Guid.NewGuid().ToString();
         try
         {
-            var sessionId = Guid.NewGuid().ToString();
             var t1 = new MultiQueryTargetArgs("t-master", primary.Id, "srv-master", "Development", "master");
             var t2 = new MultiQueryTargetArgs("t-tempdb", secondary.Id, "srv-tempdb", "Development", "tempdb");
 
@@ -53,9 +53,12 @@ internal static class MultiQuerySqlChecks
             if (combined is not null)
             {
                 var rows = LiveResultChecks.RowsOf(service.Results, combined);
+                var servers = rows.Select(r => r.ElementAtOrDefault(0)).OrderBy(x => x, StringComparer.Ordinal).ToArray();
                 var dbs = rows.Select(r => r.ElementAtOrDefault(1)).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
-                check(rows.Count == 2 && dbs.SequenceEqual(["master", "tempdb"]) && rows.All(r => r.ElementAtOrDefault(2) == "42"),
-                    "live auto-combined result preserves _target metadata and row values from both SQL databases");
+                check(combined.Columns.Count == 3 && combined.Columns[0].Name == "_server"
+                    && rows.Count == 2 && servers.SequenceEqual(["srv-master", "srv-tempdb"])
+                    && dbs.SequenceEqual(["master", "tempdb"]) && rows.All(r => r.ElementAtOrDefault(2) == "42"),
+                    "live auto-combined result preserves _server metadata and row values from both SQL databases");
                 var rebuilt = await Call<ResultsCombineResult>("results.combine", new ResultsCombineArgs(
                     [.. rowSets.Select(set => set.ResultId)], "LiveRebuild"));
                 check(rebuilt.Descriptor.Kind == "combined" && rebuilt.Descriptor.RowsRead == 2,
@@ -65,9 +68,10 @@ internal static class MultiQuerySqlChecks
             // 2. Sequential rollout stops on first failing target and skips remaining peers.
             var seq = await Call<QueryMultiResult>("query.executeMulti", new QueryMultiArgs(
                 Guid.NewGuid().ToString(), sessionId, "fireAndForget", [t1, t2],
-                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, Sequential: true, AutoCombine: false,
+                MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, Sequential: true, AutoCombine: false, StopOnError: true,
                 Sql: "IF DB_NAME() = N'master' RAISERROR(N'varia-live-seq-stop', 16, 1); SELECT 1 AS Ok;"));
-            check(seq.Targets.Count == 2 && seq.Targets[0].Status == "failed" && seq.Targets[1].Status == "skipped",
+            check(seq.Targets.Count == 2 && seq.Targets[0].Status == "failed" && seq.Targets[0].Error?.Code == "SQL_ERROR"
+                && seq.Targets[1].Status == "skipped",
                 "live sequential fire-and-forget stops after the first failing target and marks subsequent targets skipped");
 
             // 3. Coordinated transaction pre-flight rejects two connections targeting the same physical SQL Server.
@@ -97,13 +101,15 @@ internal static class MultiQuerySqlChecks
                 MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, AutoCombine: false,
                 Sql: "SELECT 99 AS PreviewVal;\nGO\nRAISERROR(N'varia-live-rollback', 16, 1);"));
             var previewSet = rolledBack.ResultSets.SingleOrDefault(set => set.Kind == "rows");
-            check(rolledBack.Status == "rolledBack" && rolledBack.Targets.Count == 1
-                && rolledBack.Targets[0].Status == "rolledBack" && previewSet is not null && previewSet.RolledBackPreview == true
+            check(rolledBack.Status == "failed" && rolledBack.Targets.Count == 1
+                && rolledBack.Targets[0].Status == "failed" && rolledBack.Targets[0].Error?.Code == "SQL_ERROR"
+                && previewSet is not null && previewSet.RolledBackPreview == true
                 && LiveResultChecks.RowsOf(service.Results, previewSet) is [["99"]],
                 "live coordinated transaction rollback on batch error marks streamed SELECT result sets as rolledBackPreview");
         }
         finally
         {
+            service.Results.ReleaseSession(sessionId);
             await Call<object>("connections.disconnect", new ConnectionArgs(secondary.Id));
         }
     }

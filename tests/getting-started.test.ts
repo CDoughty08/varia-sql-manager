@@ -104,6 +104,8 @@ describe('contextual references', () => {
     expect(lessonShortcut('output.compareNextDifference', 'resultsGrid', platform, rules)).toBeUndefined()
     expect(lessonShortcut('explorer.toggleMultiSelect', 'explorerServer', platform, rules)).toBe('Space')
     expect(lessonShortcut('explorer.toggleMultiSelect', 'queryEditor', platform, rules)).toBeUndefined()
+    const remappedExplorer = [...rules.filter(rule => rule.command !== 'explorer.toggleMultiSelect'), resolveKeybinding('explorer.toggleMultiSelect', { key: 'shift+space', when: 'explorerFocus && explorerServerFocus' }, platform)!]
+    expect(lessonShortcut('explorer.toggleMultiSelect', 'explorerServer', platform, remappedExplorer)).toBe(platform === 'darwin' ? '⇧Space' : 'Shift+Space')
     expect(lessonShortcut('query.execute', 'queryEditor', platform, rules.filter(rule => rule.command !== 'query.execute'))).toBeUndefined()
     const remapped = [...rules.filter(rule => rule.command !== 'query.execute'), resolveKeybinding('query.execute', { key: 'mod+shift+enter', when: 'editorFocus || queryBarFocus' }, platform)!]
     expect(lessonShortcut('query.execute', 'queryEditor', platform, remapped)).toBe(platform === 'darwin' ? '⇧⌘↩' : 'Ctrl+Shift+Enter')
@@ -127,6 +129,7 @@ describe('contextual references', () => {
   it('derives command paths, dynamic titles and setting values from the real catalogs', () => {
     expect(lessonCommand('query.execute', 'win32', defaultSettings)).toEqual({ title: 'Execute', path: 'Query › Execute' })
     expect(lessonCommand('output.copy', 'win32', defaultSettings).path).toBe('Results context menu › Copy')
+    expect(lessonCommand('explorer.newMultiServerQuery', 'win32', defaultSettings).path).toBe('Object Explorer context menu › New Multi-Server Query')
     expect(settingValueLabel('queryResults.grid.copyColumnHeaders', { ...defaultSettings, 'queryResults.grid.copyColumnHeaders': true })).toBe('On')
   })
 })

@@ -125,7 +125,7 @@ through a small preload API that main verifies, and query results stay in backen
 
 | Area | Docs |
 | --- | --- |
-| Editor | [Language services](docs/language-services.md), [commands](docs/commands.md), [gestures](docs/gestures.md), [editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md), [popout windows](docs/popout-windows.md) |
+| Editor | [Language services](docs/language-services.md), [commands](docs/commands.md), [gestures](docs/gestures.md), [editor groups](docs/editor-groups.md), [hot exit](docs/hot-exit.md), [popout windows](docs/popout-windows.md), [multi-server and Cross-Engine queries](docs/multi-server-query.md), [BigQuery](docs/bigquery.md) |
 | Results | [Result grid tools](docs/results-tools.md), [named results](docs/named-result-sets-scope.md), [execution plans](docs/execution-plans.md) |
 | Objects | [Object Explorer](docs/object-explorer.md), [connections](docs/connections-explorer.md), [object actions](docs/object-actions.md), [Search Objects](docs/object-search.md), [scripting](docs/scripting.md), [Table Designer](docs/table-designer.md) |
 | Monitoring | [Activity Monitor](docs/activity-monitor.md), [live data](docs/live.md), [Integration Services](docs/integration-services.md), [SQL Server Agent](docs/sql-server-agent.md) |

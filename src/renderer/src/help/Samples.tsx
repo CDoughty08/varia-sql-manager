@@ -126,9 +126,11 @@ export function MultiServerSample() {
     ? (violations.length > 0
       ? `Blocked before sending (${violations.length} violation on Line ${violations[0]!.line}): ${violations[0]!.message}`
       : 'Read-only check passed: both dialect panes run together.')
-    : scenario.provider === 'bigquery' && classification.blocksBigQueryTransaction
+    : scenario.provider === 'bigquery' && classification.hasBigQueryPermanentDdl
       ? 'Coordinated Transaction is disabled for permanent BigQuery DDL. Varia pre-selects Fire and Forget with Pre-flight Dry Run (free) and Sequential rollout.'
-      : 'Coordinated Transaction is available: all servers commit together if every target succeeds, or all roll back together if any target fails.'
+      : scenario.provider === 'bigquery' && classification.blocksBigQueryTransaction
+        ? 'Coordinated Transaction is disabled for this BigQuery statement. Run it with Fire and Forget instead.'
+        : 'Coordinated Transaction is available: all servers commit together if every target succeeds, or all roll back together if any target fails.'
   return <figure className="help-sample"><figcaption>Sample · how Varia classifies statements before multi-server execution</figcaption>
     <div className="help-sample-controls" role="group" aria-label="Sample multi-server scenario">{multiServerSampleScenarios.map(item =>
       <button key={item.id} type="button" aria-pressed={item.id === scenario.id} onClick={() => setScenarioId(item.id)}>{item.label}</button>)}</div>
