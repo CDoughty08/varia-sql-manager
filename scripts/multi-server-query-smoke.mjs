@@ -27,14 +27,9 @@ const env = {
 delete env.ELECTRON_RUN_AS_NODE
 delete env.VARIA_TEST_BACKEND
 delete env.VARIA_TEST_BIGQUERY_STORAGE_ENDPOINT
-const application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
-const watchdog = setTimeout(() => { console.error('Multi-server query suite exceeded its time limit.'); application.process()?.kill(); process.exit(1) }, 300_000)
-const page = await application.firstWindow()
-page.setDefaultTimeout(30000)
-const failures = []
-page.on('pageerror', error => failures.push(error.message))
-
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+let application, watchdog, page
+const failures = []
 
 async function setEditorValue(text, container = page) {
   const editor = container.locator('.monaco-editor[role="code"] .view-lines').filter({ visible: true }).first()
@@ -44,6 +39,13 @@ async function setEditorValue(text, container = page) {
 }
 
 try {
+  application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
+  watchdog = setTimeout(() => { console.error('Multi-server query suite exceeded its time limit.'); application?.process()?.kill(); process.exit(1) }, 300_000)
+  watchdog.unref?.()
+  page = await application.firstWindow()
+  page.setDefaultTimeout(30000)
+  page.on('pageerror', error => failures.push(error.message))
+
   await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expectEditorShown(page)
   await application.evaluate(({ BrowserWindow, dialog }) => {
@@ -102,27 +104,46 @@ try {
         }
         case 'connections.disconnect':
           return ok({ disconnected: true })
-        case 'databases.list':
+        case 'connections.identity':
+          return ok({})
+        case 'databases.list': {
+          const info = byConnId.get(params.connectionId)
+          if (info?.isBq) {
+            return ok([
+              { name: 'sales_prod', isSystem: false, isSnapshot: false },
+              { name: 'warehouse_stage', isSystem: false, isSnapshot: false }
+            ])
+          }
           return ok([
             { name: 'OrdersDB', isSystem: false, isSnapshot: false },
             { name: 'OrdersDB_Stage', isSystem: false, isSnapshot: false },
             { name: 'Analytics', isSystem: false, isSnapshot: false },
             { name: 'master', isSystem: true, isSnapshot: false }
           ])
+        }
         case 'bigquery.account':
           return ok({ kind: 'emulator', account: 'analytics@corp.iam.gserviceaccount.com' })
         case 'bigquery.projects':
+        case 'bigquery.connectionProjects':
           return ok({ projects: [] })
-        case 'bigquery.datasets':
-          return ok([
-            { name: 'sales_prod', location: 'US' },
-            { name: 'warehouse_stage', location: 'US' }
-          ])
+        case 'bigquery.indexEstimate':
+          return ok({ bytesProcessed: 0 })
         case 'bigquery.dryRun': {
           const info = byConnId.get(params.connectionId)
           const bytes = info?.key === 'bq-analytics-01' ? Math.round(14.6 * GiB) : Math.round(2.4 * GiB)
           return ok({ bytesProcessed: bytes })
         }
+        case 'live.subscribe':
+          return ok({ subscriptionId: crypto.randomUUID(), intervalMs: 10000 })
+        case 'live.unsubscribe':
+          return ok({ unsubscribed: true })
+        case 'language.status':
+          return ok({ available: false, state: 'unavailable' })
+        case 'language.diagnostics':
+          return ok({ diagnostics: [] })
+        case 'language.close':
+        case 'language.refresh':
+          return ok({ closed: true })
         case 'explorer.children': {
           const { node } = params
           if (node.type === 'object') {
@@ -149,7 +170,11 @@ try {
         case 'results.visibility':
           return ok({ applied: true })
         case 'query.executeMulti': {
-          globalThis.__multiSmokeCalls.push({ mode: params.mode, targets: (params.targets ?? []).map(t => ({ label: t.label, database: t.database, dataset: t.dataset })) })
+          globalThis.__multiSmokeCalls.push({
+            mode: params.mode,
+            scripts: params.scripts,
+            targets: (params.targets ?? []).map(t => ({ label: t.label, database: t.database, dataset: t.dataset }))
+          })
           const targets = params.targets ?? []
           const mode = params.mode ?? 'transaction'
           const resultSets = []
@@ -360,14 +385,17 @@ try {
   await expect(multiRunSummary(page)).toBeVisible()
   const lastCross = await application.evaluate(() => globalThis.__multiSmokeCalls.at(-1))
   expect(lastCross.mode).toBe('crossEngineReadOnly')
+  expect(lastCross.targets.map(t => t.label)).toEqual(expect.arrayContaining(['prod-sql-east-01', 'bq-analytics-01']))
+  expect(lastCross.scripts?.sqlserver).toContain('SELECT TOP 5 1 AS Id;')
+  expect(lastCross.scripts?.bigquery).toContain('SELECT 1 AS Id LIMIT 5;')
 
   expect(failures).toEqual([])
   console.log('Multi-server & Cross-Engine smoke checks passed.')
 } catch (error) {
-  await page.screenshot({ path: resolve('artifacts', 'multi-server-query-failure.png') }).catch(() => {})
+  await page?.screenshot({ path: resolve('artifacts', 'multi-server-query-failure.png') }).catch(() => {})
   throw error
 } finally {
   clearTimeout(watchdog)
-  await application.close().catch(() => {})
+  await application?.close().catch(() => {})
   await rm(profile, { recursive: true, force: true }).catch(() => {})
 }

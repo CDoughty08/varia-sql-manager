@@ -11,13 +11,13 @@ Varia can run one query across up to 32 SQL Server instances or up to 32 BigQuer
 
 ## Managing targets on a query tab
 
-- **Target picker.** Multi-server tabs replace the single server/database dropdowns in the query bar and classic toolbar with a target summary trigger (for example `3 SQL Servers` with a `2 PROD` tag, announced as `3 SQL Servers (2 PROD)`). Opening it displays the **Query Targets** (or **Cross-Engine Targets**) popover with:
+- **Target picker.** Multi-server tabs replace the single server/database dropdowns in the query bar and classic toolbar with a target summary trigger (for example `3 SQL Servers` with a `2 PROD` tag, announced as `Targets: 3 SQL Servers (2 PROD)`). Opening it displays the **Query Targets** (or **Cross-Engine Targets**) popover with:
   - checkboxes to enable or disable any connected server of the matching engine (or both engines in Cross-Engine tabs),
   - per-server database or default dataset selectors (lazy-loaded with bounded concurrency and locked while executing),
-  - **Apply database to all** whenever two or more enabled SQL Server targets share a database name,
+  - **Apply database to all** (or **Apply `<database>` to all** when only one database matches) whenever all enabled live SQL Server targets (two or more) share a database name,
   - quick search when more than 8 targets are listed, and
   - one-click **Reconnect** for disconnected tab targets.
-- **Drag and drop.** Dragging a server from Object Explorer onto a same-engine multi-server tab or onto the matching dialect pane of a Cross-Engine tab adds that server to the tab; holding **Ctrl** (**⌥** on macOS) over an editor inserts the quoted server name instead.
+- **Drag and drop.** Dragging a server from Object Explorer onto a same-engine multi-server tab or onto the matching dialect pane of a Cross-Engine tab adds that server to the tab; holding **Ctrl** (**⌥** on macOS) over an editor inserts the server name instead.
 - **Tab and status bar cues.** Multi-server tabs display stacked server colour swatches, a target summary sublabel (`3 SQL Servers`, `2 BigQuery projects`, or `1 SQL + 2 BQ`), and a top accent border (`PROD` red when any enabled target is Production). The status bar mirrors the active target summary and environment count.
 - **Single-server controls.** Single-server-only commands (execution plans, Client Statistics, Change Connection…, Change Database…, Query › Connection › Disconnect) are disabled while a multi-server tab is active.
 
@@ -28,7 +28,7 @@ Pressing **Execute** (`F5`) on a same-engine tab with two or more enabled target
 ### SQL Server modes
 
 - **Coordinated Transaction (All succeed or all roll back).** Opens an unpooled ephemeral connection per server with `SET XACT_ABORT ON; BEGIN TRANSACTION` (no MSDTC required), verifies `XACT_STATE()`, `@@TRANCOUNT`, and `CURRENT_TRANSACTION_ID()` (on SQL Server 2016+ and Azure SQL) after every batch, waits at a two-stage barrier, and commits all servers only when every server succeeds. If any server fails, times out, disconnects, or is cancelled, all peers roll back.
-  - **Pre-flight guards:** Rejects duplicate connections pointing to the same physical SQL Server instance (preventing self-deadlock), explicit `COMMIT`/`ROLLBACK` statements without savepoints, and non-transactional statements (`CREATE/ALTER/DROP DATABASE`, `BACKUP`/`RESTORE`, `DBCC`, `RECONFIGURE`, Full-Text/Availability Group/Resource Pool DDL, `ALTER SERVER CONFIGURATION`, `SHUTDOWN`, `KILL`).
+  - **Pre-flight guards:** Rejects duplicate connections pointing to the same physical SQL Server instance (preventing self-deadlock), explicit `COMMIT` statements, `ROLLBACK` statements without a literal savepoint name, and non-transactional statements (`CREATE/ALTER/DROP DATABASE`, `BACKUP`/`RESTORE`, `DBCC`, `RECONFIGURE`, Full-Text/Availability Group/Resource Pool DDL, `ALTER SERVER CONFIGURATION`, `SHUTDOWN`, `KILL`).
   - **Commit in doubt:** A target that drops during the final `COMMIT` phase or commits its own transaction out-of-band during Phase 1 is reported as **Commit in doubt** rather than falsely claiming rollback.
 - **Fire and Forget (Independent execution, no rollback).** Runs independently across targets (in parallel up to 8 at a time by default) with optional **Sequential rollout (stop on first error)** and **Stop on first batch error per server**. If an ephemeral connection still has an open transaction after the last batch, Varia rolls it back before closing the connection and logs a notice in Messages.
 
@@ -81,5 +81,5 @@ Open a Cross-Engine tab from Object Explorer's context menu (**New Cross-Engine 
 
 - **Offline .NET checks:** `MultiQuerySql`, `MultiQueryBigQuery`, `ResultCombiner`, and `Packed ResultCombiner` in `backend/Varia.Backend.Tests/`.
 - **Live SQL Server checks:** `MultiQuery` in `backend/Varia.Backend.Tests/MultiQuerySqlChecks.cs` (fire-and-forget fan-out + `autoCombine` + `results.combine`, sequential stop-on-first-error, duplicate-physical-server self-deadlock pre-flight refusal, and coordinated transaction commit & rollback with `rolledBackPreview`).
-- **Unit and UI tests:** `tests/multi-query-classifier.test.ts`, `tests/explorer-multiselect.test.ts`, `tests/multi-query-lifecycle.test.ts`, `tests/cross-engine-guard.test.ts`, `tests/multi-execute-dialog.test.ts`, `tests/multi-query-execution.test.ts`, and `tests/multi-results-compositing.test.ts`.
+- **Unit and UI tests:** `tests/multi-query-contracts.test.ts`, `tests/multi-query-classifier.test.ts`, `tests/explorer-multiselect.test.ts`, `tests/multi-query-lifecycle.test.ts`, `tests/cross-engine-guard.test.ts`, `tests/multi-execute-dialog.test.ts`, `tests/multi-query-execution.test.ts`, `tests/multi-results-compositing.test.ts`, and `tests/multi-query-integration.test.ts`.
 - **Electron smoke suite:** `scripts/multi-server-query-smoke.mjs` (registered in `npm run test:smoke` and `scripts/smoke-shards.mjs`).

@@ -53,16 +53,19 @@ internal static class MultiQuerySqlChecks
             if (combined is not null)
             {
                 var rows = LiveResultChecks.RowsOf(service.Results, combined);
-                var servers = rows.Select(r => r.ElementAtOrDefault(0)).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-                var dbs = rows.Select(r => r.ElementAtOrDefault(1)).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+                var paired = rows
+                    .Select(r => (Server: r.ElementAtOrDefault(0), Db: r.ElementAtOrDefault(1), Answer: r.ElementAtOrDefault(2)))
+                    .OrderBy(r => r.Server, StringComparer.Ordinal)
+                    .ToArray();
                 check(combined.Columns.Count == 3 && combined.Columns[0].Name == "_server"
-                    && rows.Count == 2 && servers.SequenceEqual(["srv-master", "srv-tempdb"])
-                    && dbs.SequenceEqual(["master", "tempdb"]) && rows.All(r => r.ElementAtOrDefault(2) == "42"),
-                    "live auto-combined result preserves _server metadata and row values from both SQL databases");
+                    && paired.Length == 2
+                    && paired[0] == ("srv-master", "master", "42")
+                    && paired[1] == ("srv-tempdb", "tempdb", "42"),
+                    "live auto-combined result pairs _server metadata with each SQL database's own row values");
                 var rebuilt = await Call<ResultsCombineResult>("results.combine", new ResultsCombineArgs(
                     [.. rowSets.Select(set => set.ResultId)], "LiveRebuild"));
-                check(rebuilt.Descriptor.Kind == "combined" && rebuilt.Descriptor.RowsRead == 2,
-                    "live results.combine rebuilds a combined result set from two live SQL Server result sets");
+                check(rebuilt.Descriptor.Kind == "combined" && rebuilt.Descriptor.Name == "LiveRebuild" && rebuilt.Descriptor.RowsRead == 2,
+                    "live results.combine rebuilds a named combined result set from two live SQL Server result sets");
             }
 
             // 2. Sequential rollout stops on first failing target and skips remaining peers.
@@ -70,8 +73,8 @@ internal static class MultiQuerySqlChecks
                 Guid.NewGuid().ToString(), sessionId, "fireAndForget", [t1, t2],
                 MaxRows: 100, TimeoutSeconds: 15, MaxResultSets: 10, Sequential: true, AutoCombine: false, StopOnError: true,
                 Sql: "IF DB_NAME() = N'master' RAISERROR(N'varia-live-seq-stop', 16, 1); SELECT 1 AS Ok;"));
-            check(seq.Targets.Count == 2 && seq.Targets[0].Status == "failed" && seq.Targets[0].Error?.Code == "SQL_ERROR"
-                && seq.Targets[1].Status == "skipped",
+            check(seq.Status == "failed" && seq.Targets.Count == 2 && seq.Targets[0].Status == "failed"
+                && seq.Targets[0].Error?.Code == "SQL_ERROR" && seq.Targets[1].Status == "skipped",
                 "live sequential fire-and-forget stops after the first failing target and marks subsequent targets skipped");
 
             // 3. Coordinated transaction pre-flight rejects two connections targeting the same physical SQL Server.
@@ -106,6 +109,9 @@ internal static class MultiQuerySqlChecks
                 && previewSet is not null && previewSet.RolledBackPreview == true
                 && LiveResultChecks.RowsOf(service.Results, previewSet) is [["99"]],
                 "live coordinated transaction rollback on batch error marks streamed SELECT result sets as rolledBackPreview");
+
+            check(service.ActiveEphemeralSqlConnections == 0,
+                "live multi-query executions release every ephemeral SQL Server connection on completion");
         }
         finally
         {
