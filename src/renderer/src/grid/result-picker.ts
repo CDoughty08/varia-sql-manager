@@ -279,7 +279,7 @@ export function pickerRows(tab: Pick<TabResults, 'groups' | 'comparisons' | 'sor
   }
   for (const group of tab.groups) {
     const name = entryName(group.table.entry)
-    const detail = group.planSet ? 'Plan set' : group.table.entry.descriptor.kind === 'combined' ? 'Combined' : 'Table'
+    const detail = group.planSet ? 'Plan set' : group.table.entry.descriptor?.kind === 'combined' ? 'Combined' : 'Table'
     const number = entrySecondary(group.table.entry)
     const named = number ? `${name}, ${number}` : name, words = number ? `${name} ${number}` : name
     rows.push({ key: group.table.key, name, ...number ? { number } : {}, label: `${named}, ${detail}`, detail, kind: group.planSet ? 'plan' : 'table', text: `${words} ${detail}`.toLowerCase() })
