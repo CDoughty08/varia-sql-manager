@@ -1,5 +1,5 @@
 // SQL Server Agent's Schedules document (AG-6c, docs/agent-ui-rethink.md › rx-schedules-doc): the toolbar (filter, All / Unused / Disabled,
-// New schedule, Duplicate, Delete, Refresh), the schedules' grid with an Enabled box that saves at once, and beside it the selected
+// New schedule, Duplicate, Delete, Refresh), the schedules' grid with an Enabled switch that saves at once, and beside it the selected
 // schedule's editor (the job document's ScheduleEditor), the jobs that use it with Attach and Detach, and "Save · n changes"; or, with
 // Timeline chosen (AG-14), SchedulesTimeline: when the jobs run over the next 24 hours or 7 days. SchedulesService keeps every state; this
 // only draws it.
@@ -86,7 +86,7 @@ function Detail({ state, service }: { readonly state: SchedulesState; readonly s
         <button type="button" className="danger" onClick={() => { void service.confirmDelete(state.id) }}>Delete</button>
         <button type="button" onClick={() => service.cancelDelete(state.id)}>Cancel</button>
       </div>}
-      <p className="field-note">Edits to the selected schedule save on their own, guarded by its version; the grid's Enabled box saves at once.</p>
+      <p className="field-note">Edits to the selected schedule save on their own, guarded by its version; the grid's Enabled switch saves at once.</p>
     </div>
   </div>
 }
@@ -101,7 +101,7 @@ interface GridProps {
   readonly service: SchedulesService
   /** The read the rows came from: whether each is read-only follows it. */
   readonly model: AgentSchedulesModel
-  /** Whether the login is in SQLAgentOperatorRole, read after the schedules (AG-10): its Enabled boxes follow the answer. */
+  /** Whether the login is in SQLAgentOperatorRole, read after the schedules (AG-10): its Enabled switches follow the answer. */
   readonly operatorRole: boolean
 }
 const ScheduleGrid = memo(function ScheduleGrid({ documentId, rows, selected: current, edited, busy, service, model }: GridProps) {

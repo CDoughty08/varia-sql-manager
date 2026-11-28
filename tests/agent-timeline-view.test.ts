@@ -159,4 +159,60 @@ describe('the Timeline view', () => {
     expect(forced.get('transition')).toBe('none')
     expect(forced.get('outline-color')).toBe('Highlight')
   })
+
+  it('omits axis tick labels near the right edge so partial times are never clipped while keeping tick marks intact', () => {
+    const { timeline, axis } = view(864)
+    const ticks = () => [...axis.querySelectorAll<HTMLElement>('.agent-timeline-tick')].filter(tick => !tick.hidden)
+
+    // With now = 14:30:00 and 24h at 864px, the 14:00 tick sits at 23.5/24 * 864 = 846px (18px from right edge < 44px clearance).
+    const dayTicks = ticks()
+    const rightmost = dayTicks[dayTicks.length - 1]
+    expect(rightmost.style.left).toMatch(/^97\.9/)
+    expect(rightmost.textContent).toBe('')
+    expect(dayTicks[dayTicks.length - 2].textContent).toBe('12:00')
+
+    // When zoomed/shifted so the 14:00 tick has >= 44px clearance from the right edge, its label renders in full.
+    timeline.setViewport({ start: 23 * 3_600 - 1_800, seconds: 7_200 })
+    timeline.draw()
+    const zoomedTicks = ticks()
+    expect(zoomedTicks.some(tick => tick.textContent === '14:00')).toBe(true)
+
+    // On a 7-day window, weekday-prefixed labels near the right edge also clear their text when within label clearance.
+    const weekModel = timelineModel({ now: { date: 20261122, time: 10000 }, seconds: 7 * 86_400, jobs: [job('A', 'Backup', 1_260, { activeStartTime: 10000 }, 1)] })
+    timeline.setModel(weekModel)
+    timeline.setViewport({ start: 0, seconds: 7 * 86_400 })
+    timeline.draw()
+    const weekTicks = ticks()
+    const lastWeekTick = weekTicks[weekTicks.length - 1]
+    expect(lastWeekTick.textContent).toBe('')
+    expect(weekTicks[weekTicks.length - 2].textContent).toMatch(/^[A-Z][a-z]{2} \d{2}:\d{2}$/)
+  })
+
+  it('uses live offsetWidth instead of static clearance when layout metrics exist', () => {
+    let mockTickWidth = 0
+    const spy = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList?.contains('agent-timeline-tick') && this.textContent ? mockTickWidth : 0
+    })
+    cleanups.push(() => spy.mockRestore())
+
+    const ticks = (axis: HTMLElement) => [...axis.querySelectorAll<HTMLElement>('.agent-timeline-tick')].filter(tick => !tick.hidden)
+
+    // (a) A fitting label inside [width - clearance, width - measured] stays visible (14:00 at 23.5/24 * 1600 = 1566.67, clearance = 44, measured = 31 -> 1566.67 + 31 <= 1600).
+    mockTickWidth = 31
+    const wide = view(1600)
+    const wideTicks = ticks(wide.axis)
+    const wideLast = wideTicks[wideTicks.length - 1]
+    expect(wideLast.hidden).toBe(false)
+    expect(wideLast.textContent).toBe('14:00')
+
+    // (b) An oversized label exceeding 1.5 * clearance (measured = 96 > 66; 12:00 at 21.5/24 * 864 = 774 -> 774 + 96 > 864) gets blanked cleanly while keeping the tick element visible.
+    mockTickWidth = 96
+    const scaled = view(864)
+    const scaledTicks = ticks(scaled.axis)
+    expect(scaledTicks[scaledTicks.length - 1].hidden).toBe(false)
+    expect(scaledTicks[scaledTicks.length - 1].textContent).toBe('')
+    expect(scaledTicks[scaledTicks.length - 2].hidden).toBe(false)
+    expect(scaledTicks[scaledTicks.length - 2].textContent).toBe('')
+    expect(scaledTicks[scaledTicks.length - 3].textContent).toBe('10:00')
+  })
 })
