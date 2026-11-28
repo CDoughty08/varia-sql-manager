@@ -592,7 +592,11 @@ export function scheduleRuns(schedule: AgentScheduleTiming & { readonly enabled?
   const times = timesOfDay(schedule)
   let cycle: ScheduleCycle = {}
   if ((schedule.freqType === freq.weekly || schedule.freqType === freq.monthly) && cycleStep(schedule) > 1) {
-    const first = walkRuns({ ...schedule, freqRecurrenceFactor: 1 }, times, {}, anchor ? momentSeconds(anchor) : fromSeconds, 1, undefined)[0]
+    // SQL Server Agent picks the candidate day from max(anchor date, start date) ignoring time of day; when that day is
+    // today and its window has already passed, it advances by freqRecurrenceFactor (seen live on 2026-11-28 03:28 for
+    // "every 3 months on day 28 at 03:00" -> 2027-02-28 03:00, while day 1 -> 2026-12-01 00:00).
+    const anchorDayStart = Math.floor((anchor ? momentSeconds(anchor) : fromSeconds) / 86_400) * 86_400
+    const first = walkRuns({ ...schedule, freqRecurrenceFactor: 1 }, times, {}, anchorDayStart, 1, undefined)[0]
     if (first === undefined) return []
     const day = Math.floor(first / 86_400)
     cycle = schedule.freqType === freq.weekly ? { week: weekOf(day) } : { month: monthOf(dateOfDay(day)) }

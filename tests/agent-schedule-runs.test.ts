@@ -52,6 +52,12 @@ describe('next runs as a live SQL Server Agent computes them', () => {
     ]
     expect(more.map(shape => `${shape.label}: ${next(shape, later)}`)).toEqual(more.map(shape => `${shape.label}: ${shape.agent}`))
     expect(next({ label: '', timing: relative(3, 2, 2, 20261201), agent: '' }, later)).toBe('Tue 2026-12-08 03:00')
+    // When today is the scheduled day and its time has already passed, Agent anchors the cycle on today and advances by
+    // freqRecurrenceFactor (live on 2026-11-28 03:28: every 3 months on day 28 at 03:00 -> 2027-02-28, while day 1 -> 2026-12-01).
+    const day28After = { date: 20261128, time: 32825 }
+    expect(next({ label: '', timing: monthly(28, 3, 20260820), agent: '' }, day28After)).toBe('Sun 2027-02-28 03:00')
+    expect(next({ label: '', timing: { ...monthly(1, 2, 20260901), activeStartTime: 0 }, agent: '' }, day28After)).toBe('Tue 2026-12-01 00:00')
+    expect(next({ label: '', timing: weekly(2, 2, 20261111, 30000), agent: '' }, now)).toBe('Mon 2026-12-07 03:00')
   })
   it('carries a daily window past midnight only after a day it runs, and ends other windows at midnight', () => {
     // Now is 19:52:17, inside the morning part of a 20:33 to 20:32 window.

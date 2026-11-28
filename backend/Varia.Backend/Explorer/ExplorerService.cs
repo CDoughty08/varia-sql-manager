@@ -501,6 +501,12 @@ internal sealed partial class ExplorerService : IDisposable
         {
             return failed(ExplorerErrors.From(error, phase, subject, database));
         }
+        // SqlClient's TdsParserStateObject.ExecuteFlush can throw InvalidOperationException ("Operation cancelled by user.")
+        // instead of OperationCanceledException when cancellation races with flushing the RPC packet (seen on Windows LPC).
+        catch (InvalidOperationException error) when (token.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("The operation was cancelled.", error, token);
+        }
         catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" or "AUTH_IDENTITY")
         {
             return failed(ExplorerErrors.SignIn(error));
