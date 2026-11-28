@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { completeFromIndex } from '../src/shared/completion/complete'
 import { definitionFromIndex, IndexUnavailableError } from '../src/shared/completion/definition'
-import { escapeMarkdown, hoverFromIndex } from '../src/shared/completion/hover'
+import { escapeMarkdown, hoverFromIndex, sqlObjectMarkdown } from '../src/shared/completion/hover'
 import { LookupCache, lookupCacheLimits } from '../src/shared/completion/lookup-cache'
 import type { CompletionItem, CompletionSite, IndexLookup, ScopeSource } from '../src/shared/completion/model'
 import { googleSqlDialect, quoteGoogleSqlName } from '../src/shared/googlesql/dialect'
@@ -597,6 +597,25 @@ describe('GoogleSQL scope reader', () => {
     expect(readGoogleSqlHover(call.text, call.offset)).toMatchObject({ parts: ['COUNT'], object: false, scope: { sources: [] } })
     const text = at("SELECT 'or|ders'")
     expect(readGoogleSqlHover(text.text, text.offset)).toBeUndefined()
+  })
+
+  it('escapes standalone carriage returns in Markdown, appends CTE >40 col footer, and includes project tier/namesOnly on table alias hover', async () => {
+    expect(escapeMarkdown('line1\rline2\r\nline3\nline4')).toBe('line1 line2 line3 line4')
+
+    const cols = Array.from({ length: 45 }, (_, i) => `${i + 1} AS c${i + 1}`).join(', ')
+    const cteHoverPos = at(`WITH wide AS (SELECT ${cols}) SELECT * FROM wi|de`)
+    const cteHover = await hoverFromIndex(readGoogleSqlHover(cteHoverPos.text, cteHoverPos.offset)!, dialect, fakeLookup())
+    expect(cteHover?.markdown).toContain('and 5 more columns')
+
+    const aliasHoverPos = at('SELECT |o.id FROM sales.orders o')
+    const tierLookup = fakeLookup()
+    const aliasHover = await hoverFromIndex(readGoogleSqlHover(aliasHoverPos.text, aliasHoverPos.offset)!, dialect, async requests => {
+      const answers = await tierLookup(requests)
+      return answers?.map(ans => ans.path.length === 0
+        ? { ...ans, items: ans.items.map(item => ({ ...item, tier: 'billing' as const })) }
+        : ans)
+    })
+    expect(aliasHover?.markdown).toContain('**orders** · Table · Billing')
   })
 })
 
@@ -1224,6 +1243,122 @@ describe('hover from the index', () => {
 
   it('escapes every Markdown character in names', () => {
     expect(escapeMarkdown('a|b*c_[d](e)`f`')).toBe('a\\|b\\*c\\_\\[d\\]\\(e\\)\\`f\\`')
+  })
+
+  it('supports 3-level BigQuery hover: Project (tier & counts), Dataset (location & counts), and Table (description & nested STRUCT field counts)', async () => {
+    const richLookup: IndexLookup = async requests => requests.map(request => {
+      const key = request.path.join('.')
+      if (key === '') {
+        const all: LanguageLookupItem[] = [
+          { name: 'varia-alpha', kind: 'bqProject', tier: 'billing' },
+          { name: 'dw-shared', kind: 'bqProject', tier: 'starred' },
+          { name: 'org-raw', kind: 'bqProject', tier: 'discovered', namesOnly: true, detail: 'names' }
+        ]
+        const filtered = request.prefix ? all.filter(i => request.exact ? i.name === request.prefix : i.name.startsWith(request.prefix!)) : all
+        return { state: 'ready', path: [], items: filtered, truncated: false }
+      }
+      if (key === 'dw-shared') {
+        const all: LanguageLookupItem[] = [
+          { name: 'gold', kind: 'bqDataset', detail: 'US' },
+          { name: 'silver', kind: 'bqDataset', detail: 'EU' }
+        ]
+        const filtered = request.prefix ? all.filter(i => request.exact ? i.name === request.prefix : i.name.startsWith(request.prefix!)) : all
+        return { state: 'ready', path: ['dw-shared'], items: filtered, truncated: false }
+      }
+      if (key === 'org-raw') return { state: 'partial', path: ['org-raw'], items: [{ name: 'landing', kind: 'bqDataset' }], truncated: false }
+      if (key === 'dw-shared.gold') {
+        return {
+          state: 'ready', path: ['dw-shared', 'gold'], truncated: false,
+          items: [
+            { name: 'orders', kind: 'bqTable' },
+            { name: 'customers', kind: 'bqTable' },
+            { name: 'daily_view', kind: 'bqView' },
+            { name: 'to_cents', kind: 'bqRoutine' }
+          ]
+        }
+      }
+      if (key === 'dw-shared.gold.orders') {
+        return {
+          state: 'ready', path: ['dw-shared', 'gold', 'orders'], truncated: false,
+          object: {
+            name: 'orders', kind: 'bqTable', detailed: true, rows: 1_234_567, bytes: 5 * 1024 ** 3,
+            partitioning: 'DAY on placed', clustering: 'customer_id',
+            description: 'Core ecommerce order ledger | updated hourly.'
+          },
+          items: [
+            { name: 'id', kind: 'bqColumn', type: 'INT64', nullable: false },
+            { name: 'address', kind: 'bqColumn', type: 'STRUCT', subtype: 'struct', nullable: true },
+            { name: 'address.city', kind: 'bqColumn', type: 'STRING', nullable: true },
+            { name: 'address.state', kind: 'bqColumn', type: 'STRING', nullable: true },
+            { name: 'address.geo', kind: 'bqColumn', type: 'GEOGRAPHY', nullable: true }
+          ]
+        }
+      }
+      return { state: 'absent', path: [...request.path], items: [], truncated: false }
+    })
+
+    const hoverRich = async (source: string) => {
+      const { text, offset } = at(source)
+      const found = readGoogleSqlHover(text, offset)
+      return found && hoverFromIndex(found, dialect, richLookup)
+    }
+
+    // Level 1: Project hover (★ Starred + discovered names-only)
+    const projHover = await hoverRich('SELECT * FROM `dw-sh|ared.gold.orders`')
+    expect(projHover?.markdown).toContain('**dw\\-shared** · ★ Starred project')
+    expect(projHover?.markdown).toContain('2 datasets')
+    expect(projHover?.markdown).toContain('gold, silver')
+    expect(projHover?.markdown).toContain('Ctrl\\+Shift\\+R')
+
+    const cappedProjHover = await hoverRich('SELECT * FROM `org-r|aw.landing.events`')
+    expect(cappedProjHover?.markdown).toContain('**org\\-raw** · Discovered project')
+    expect(cappedProjHover?.markdown).toContain('Names only (memory cap)')
+    expect(cappedProjHover?.markdown).toContain('Star in Object Explorer')
+
+    // Unknown project returns undefined
+    expect(await hoverRich('SELECT * FROM `no-such-pr|oj.ds.tbl`')).toBeUndefined()
+
+    // Level 2: Dataset hover (location + counts by kind)
+    const dsHover = await hoverRich('SELECT * FROM `dw-shared.go|ld.orders`')
+    expect(dsHover?.markdown).toContain('**gold** · Dataset · US · ★ Starred')
+    expect(dsHover?.markdown).toContain('2 tables · 1 view · 1 routine')
+    expect(dsHover?.markdown).toContain('orders, customers, daily\\_view, to\\_cents')
+
+    // Level 3: Table hover (PR #738 tier + escaped description + nested STRUCT field count summary)
+    const tblHover = await hoverRich('SELECT * FROM `dw-shared.gold.ord|ers`')
+    expect(tblHover?.markdown).toContain('**orders** · Table · ★ Starred')
+    expect(tblHover?.markdown).toContain('Core ecommerce order ledger \\| updated hourly\\.')
+    expect(tblHover?.markdown).toContain('| address | STRUCT · 3 fields: city, state, geo |')
+    expect(tblHover?.markdown).not.toContain('address\\.city')
+  })
+
+  it('formats SQL Server IndexLookup summaries with PK/UK/Identity markers, indexes, and foreign keys', () => {
+    const md = sqlObjectMarkdown(
+      ['SalesDB', 'dbo', 'Orders'],
+      { name: 'Orders', kind: 'table', detailed: true },
+      [
+        { name: 'OrderId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+        { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+        { name: 'Code|1', kind: 'column', type: 'nvarchar(40)', nullable: false, detail: 'UK' },
+        { name: 'PK_Orders', kind: 'key', subtype: 'primary', detail: '(OrderId)' },
+        { name: 'UQ_Orders_Code', kind: 'key', subtype: 'unique', detail: '(Code|1)' },
+        { name: 'IX_Orders_Customer', kind: 'index', subtype: 'nonclustered', detail: '(CustomerId)' },
+        { name: 'FK_Orders_Customers', kind: 'foreignKey', subtype: 'outgoing', detail: '(CustomerId) → dbo.Customers(Id)' },
+        { name: 'FK_Lines_Orders', kind: 'foreignKey', subtype: 'incoming', detail: 'dbo.OrderLines(OrderId) → (OrderId)' }
+      ],
+      false
+    )
+    expect(md).toContain('**dbo\\.Orders** · Table')
+    expect(md).toContain('\\[SalesDB\\]\\.\\[dbo\\]\\.\\[Orders\\]')
+    expect(md).toContain('PK \\(OrderId\\)')
+    expect(md).toContain('1 unique key')
+    expect(md).toContain('1 index')
+    expect(md).toContain('| OrderId | int · NOT NULL · PK · IDENTITY |')
+    expect(md).toContain('| Code\\|1 | nvarchar\\(40\\) · NOT NULL · UK |')
+    expect(md).toContain('**Keys & Indexes**')
+    expect(md).toContain('**Foreign Keys**')
+    expect(md).toContain('→ \\(CustomerId\\) → dbo\\.Customers\\(Id\\)')
+    expect(md).toContain('← dbo\\.OrderLines\\(OrderId\\) → \\(OrderId\\)')
   })
 })
 
