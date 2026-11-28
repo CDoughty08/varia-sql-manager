@@ -4,8 +4,10 @@
 
 A marker comment just before a statement names its result set: `/* #Name="Sample Query" */` or
 `-- #Name="Open orders"` (`#Name` in any case, name in double quotes, inner quotes doubled, at most 128 characters).
-Unnamed results keep their numbers, so naming one never renumbers another. Markers stacked before one `EXEC` name its
-result sets in order, when no later statement in the batch can return a set. To SQL Server a marker is an ordinary comment.
+BigQuery (GoogleSQL) queries and scripts also accept `# #Name="Open orders"` and `#Name="Open orders"` comments.
+Unnamed results keep their numbers, so naming one never renumbers another. Markers stacked before one SQL Server `EXEC`
+name its result sets in order, when no later statement in the batch can return a set; before a single BigQuery query,
+the last marker wins and earlier ones are noted in Messages. To the server a marker is an ordinary comment.
 
 A name is applied only when the batch's text shows which result set the statement returns. Messages says why one was
 not (put `GO` between statements to name both) when the marker is inside `BEGIN … END`, a branch or a loop; after an

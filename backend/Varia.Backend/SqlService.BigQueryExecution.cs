@@ -76,7 +76,9 @@ internal sealed partial class SqlService
         // SQL Server's options have no BigQuery meaning; main refuses them first (methods.ts, providerOptionsAllow).
         if (args.StopOnError || args.IncludeActualPlan || args.IncludeLivePlan || args.IncludeClientStatistics)
             throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error, actual and live plans and client statistics are not available for BigQuery connections.");
-        var dataset = args.Dataset ?? connection.Options.Dataset;
+        if (args.NoDefaultDataset && args.Dataset is not null)
+            throw new RequestException("INVALID_PARAMS", "A query cannot name both a dataset and no default dataset.");
+        var dataset = args.NoDefaultDataset ? null : args.Dataset ?? connection.Options.Dataset;
         if (dataset is not null && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (args.JobKey is not null && !BigQueryLimits.Uuid().IsMatch(args.JobKey)) throw new RequestException("INVALID_PARAMS", "The job key is not valid.");
@@ -173,6 +175,23 @@ internal sealed partial class SqlService
         // The rows the script's result sets have kept so far: Maximum rows counts over every result set of the execution, as
         // SQL Server's reader does, so a later SELECT keeps only what is left.
         long keptRows = 0;
+        // Named result sets (#Name="…", BigQueryResultNames.cs): planned once from the submitted (or re-attached) SQL text,
+        // applied to single queries and script children, with bounded informational notes in Messages.
+        var nameNotes = new ResultNameNotes(text => messages.Add(text));
+        BigQueryResultNamePlan? namePlan = null;
+        BigQueryResultNameBinder? nameBinder = null;
+        var isScript = false;
+        var scriptListedAll = true;
+        var scriptListingFailed = false;
+        var scriptHasChildren = false;
+        void PrepareNames(string? sql, int startLine)
+        {
+            if (namePlan is not null || attach?.Detached == true) return;
+            namePlan = BigQueryResultNamePlan.Build(sql, startLine);
+            if (namePlan is null) return;
+            foreach (var note in namePlan.Notes) nameNotes.Add(note);
+            if (namePlan.Slots.Count > 0) nameBinder = new BigQueryResultNameBinder(namePlan);
+        }
         // Stop (or the timeout) cancels the job in BigQuery too, best-effort; the session's next job waits for its DONE. Asked
         // once, from the token and again where the run sees the cancellation: a cancel whose continuations run inline can
         // unwind the run and dispose the registration before its callback runs (callbacks run newest first).
@@ -192,22 +211,29 @@ internal sealed partial class SqlService
         using var stopJob = token.Register(StopJob);
 
         // One finished child of a script: a SELECT's rows as the next result set, a DML's row count, a DDL's sentence.
-        async Task ChildAsync(BigQueryChild child)
+        async Task ChildAsync(BigQueryChild child, bool incompleteListing)
         {
-            if (child.Error is not null) return;
+            if (child.Error is not null) { nameBinder?.NoteChildError(); return; }
             succeededChildren++;
             var statement = child.StatementType;
             if (statement == "SELECT")
             {
-                if (args.DiscardResults || sets.Count >= args.MaxResultSets) { discarded++; return; }
+                if (args.DiscardResults) { nameBinder?.TakeChild(child, incompleteListing, discarded: true); discarded++; return; }
+                if (sets.Count >= args.MaxResultSets) { nameBinder?.RefusedChild(child, incompleteListing, "the run kept no more result sets"); discarded++; return; }
                 var first = await bigQuery.QueryResultsAsync(connection, project, child.Id, child.Location ?? location, null, BigQueryFirstPageRows, 0, token);
                 var childPlan = BigQueryColumnPlan.From(first.Schema);
                 var rows = first.TotalRows ?? 0;
-                if (childPlan is null) { first.Dispose(); return; }
+                if (childPlan is null)
+                {
+                    nameBinder?.StopPositional("a SELECT statement returned no columns, so the place of later result sets is unknown");
+                    first.Dispose();
+                    return;
+                }
                 if (childPlan.TruncatedColumns)
                     messages.Add("The result has " + childPlan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
-                var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths);
-                if (set is null) { first.Dispose(); discarded++; return; }
+                var childName = nameBinder?.TakeChild(child, incompleteListing);
+                var set = store.Open(budget!, sets.Count, 1, 1, "rows", childPlan.Columns, childPlan.Wires, lengths: childPlan.Lengths, name: childName);
+                if (set is null) { nameBinder?.RefusedLast("result memory kept no more result sets"); first.Dispose(); discarded++; return; }
                 // What Maximum rows leaves this result set. With nothing left it stays in memory and keeps no rows (counted from
                 // BigQuery's total, marked as cut by the row limit), since a window's MaxRows of 0 would show every row.
                 var left = args.MaxRows > 0 ? args.MaxRows - keptRows : long.MaxValue;
@@ -257,7 +283,7 @@ internal sealed partial class SqlService
                 if (!child.Done) break;
                 readChildren.Add(child.Id);
                 // A child's rows that fail to read fail the query, unlike a listing that fails: its set is cut short.
-                try { await ChildAsync(child); }
+                try { await ChildAsync(child, incompleteListing: !listed.Complete); }
                 catch (Exception error) when (!token.IsCancellationRequested) { throw new ChildReadFailure(error); }
             }
             return listed;
@@ -368,8 +394,14 @@ internal sealed partial class SqlService
                     + (own.Status?.State == "DONE" ? ", which finished meanwhile." : ", which is still running."));
                 if (attach.Detached) messages.Add("The job was left running: Varia waits for it to finish, holding the tab's BigQuery session, and reads no results.");
                 events.Job(JobEvent(project, jobId, location, own.Status?.State == "DONE" ? "done" : "running", startState));
+                // Re-attaching recovers #Name markers from the job's own SQL text when BigQuery reports it (1-based).
+                PrepareNames(own.Configuration?.Query?.Query, 1);
             }
-            else location = await TabLocationAsync(session, connection, dataset, token);
+            else
+            {
+                location = await TabLocationAsync(session, connection, dataset, token);
+                PrepareNames(args.Sql, args.StartLine);
+            }
             for (var attempt = 1; attach is null; attempt++)
             {
                 sessionJob = session.Id is not null;
@@ -461,6 +493,7 @@ internal sealed partial class SqlService
                 session.ActiveJob = false;
                 session.FollowsJob = false;
                 var finished = await bigQuery.GetJobAsync(connection, project, jobId, location, token);
+                if (attach is not null) PrepareNames(finished.Configuration?.Query?.Query, 1);
                 // A re-attach that did not adopt the job's session (another tab uses it, or adoptSession was false) never takes
                 // it over when the job finishes: closing this tab would end the other tab's session.
                 if (attach is null || sessionJob) BigQueryService.CaptureSession(session, finished, location);
@@ -468,6 +501,7 @@ internal sealed partial class SqlService
                 var statement = summary.StatementType;
                 // A script's children: the rest are read now, and the full listing decides the transaction.
                 var script = statement == "SCRIPT" || readChildren.Count > 0 || finished.Statistics?.NumChildJobs > 0;
+                isScript = script;
                 List<BigQueryChild>? children = null;
                 var listedAll = false;
                 if (script)
@@ -475,6 +509,9 @@ internal sealed partial class SqlService
                     try { (children, listedAll) = await ChildrenAsync(full: true); }
                     // A listing that fails leaves the children unread: the parent's own rows are shown, and the summary says so.
                     catch (Exception error) when (!token.IsCancellationRequested && error is not (BigQueryJobException or ChildReadFailure)) { children = null; }
+                    scriptListedAll = listedAll;
+                    scriptListingFailed = children is null;
+                    scriptHasChildren = children is { Count: > 0 };
                 }
                 // DDL changes what the Search Objects index holds: its datasets are re-read by the next stale-only build.
                 // A re-attached job ran under its own default dataset (its configuration's), not this tab's.
@@ -514,14 +551,16 @@ internal sealed partial class SqlService
                     if (plan is not null && args.DiscardResults)
                     {
                         // Statistics only: nothing is read back; the rows are counted from BigQuery's total.
+                        nameBinder?.DiscardSingle(script);
                         discarded = 1;
                     }
                     else if (plan is not null)
                     {
                         if (plan.TruncatedColumns)
                             messages.Add("The result has " + plan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.");
-                        currentSet = store.Open(budget, 0, 1, 1, "rows", plan.Columns, plan.Wires, lengths: plan.Lengths);
-                        if (currentSet is null) discarded = 1;
+                        var resultName = nameBinder?.TakeSingle(script, listingFailed: script && children is null, noChildren: script && children is { Count: 0 });
+                        currentSet = store.Open(budget, 0, 1, 1, "rows", plan.Columns, plan.Wires, lengths: plan.Lengths, name: resultName);
+                        if (currentSet is null) { nameBinder?.RefusedLast("result memory kept no more result sets"); discarded = 1; }
                         else
                         {
                             sets.Add(currentSet);
@@ -666,6 +705,13 @@ internal sealed partial class SqlService
             bigQueryTabs.TryRemove(args.SessionId, out _);
             running.Ended.TrySetResult();
         }
+        if (nameBinder is not null && status is not ("detached" or "superseded") && attach?.Detached != true)
+        {
+            var ended = status == "failed" ? "the run failed before its result set arrived"
+                : status is "cancelled" or "timedOut" ? "the run stopped before its result set arrived" : null;
+            foreach (var note in nameBinder.Unapplied(ended, isScript, scriptListedAll, scriptListingFailed, scriptHasChildren)) nameNotes.Add(note);
+        }
+        nameNotes.Finish();
         if (summary is not null && BigQueryCost.Summary(summary, args.Prices != false) is { } cost) messages.Add(cost);
         var output = messages.Snapshot();
         void Note(string text) => output.Add(new(text, QueryMessages.Info));

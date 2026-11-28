@@ -27,6 +27,8 @@ internal sealed partial class SqlService
         // As Execute: SQL Server's options have no BigQuery meaning, and the tab's dataset is echoed back only when it is one.
         if (query.StopOnError || query.IncludeActualPlan || query.IncludeLivePlan || query.IncludeClientStatistics)
             throw new RequestException("UNSUPPORTED_PROVIDER", "Stop on error, actual and live plans and client statistics are not available for BigQuery connections.");
+        if (query.NoDefaultDataset && query.Dataset is not null)
+            throw new RequestException("INVALID_PARAMS", "A query cannot name both a dataset and no default dataset.");
         if (query.Dataset is { } tabDataset && !BqNames.IsDataset(tabDataset))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         // Bounded as Execute bounds them, though a preview's rows are always read into memory (its 1,000 rows).
@@ -120,8 +122,9 @@ internal sealed partial class SqlService
         if (PreviewStopNote(descriptors.Select(set => set.Truncated)) is { } note) output.Add(new(note, QueryMessages.Info));
         if (context is not null) context.Unsent = () => store.Release(descriptors.Select(set => set.ResultId));
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
-        // The tab's dataset as Execute reports it (its own, else the connection's): the previewed table may be in another project.
-        return new(descriptors, 0, output, -1, watch.ElapsedMilliseconds, status, failure, status is "completed" ? 1 : 0, 1, query.Dataset ?? connection.Options.Dataset ?? "", messages.Truncated,
+        // The tab's dataset as Execute reports it (its own, else the connection's unless cleared): the previewed table may be in another project.
+        return new(descriptors, 0, output, -1, watch.ElapsedMilliseconds, status, failure, status is "completed" ? 1 : 0, 1,
+            query.NoDefaultDataset ? "" : query.Dataset ?? connection.Options.Dataset ?? "", messages.Truncated,
             SummaryBudget(budget?.StoppedBytes), completedAt);
     }
 

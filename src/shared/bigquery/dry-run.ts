@@ -18,7 +18,7 @@ export type IncompleteReason = typeof incompleteReasons[number]
  * `sessionId` is the tab's (query.execute's): when the tab already has a BigQuery session the text is dry-run in it, so its
  * temp tables and variables resolve. The backend never creates a session for an estimate.
  */
-export type BigQueryDryRunRequest = { connectionId: string; sql: string; dataset?: string; sessionId?: string } | { connectionId: string; remote: RemoteDryRun }
+export type BigQueryDryRunRequest = { connectionId: string; sql: string; dataset?: string; noDefaultDataset?: true; sessionId?: string } | { connectionId: string; remote: RemoteDryRun }
 export interface BigQueryDryRunResult {
   bytesProcessed: number
   incomplete?: IncompleteReason
@@ -30,7 +30,8 @@ export interface BigQueryDryRunResult {
 }
 
 export const bigQueryDryRunRequestSchema = z.union([
-  z.object({ connectionId: z.uuid(), sql: z.string().min(1).max(dryRunLimits.characters), dataset: bigQueryDatasetSchema.optional(), sessionId: z.uuid().optional() }).strict(),
+  z.object({ connectionId: z.uuid(), sql: z.string().min(1).max(dryRunLimits.characters), dataset: bigQueryDatasetSchema.optional(), noDefaultDataset: z.literal(true).optional(), sessionId: z.uuid().optional() }).strict()
+    .refine(params => !(params.dataset !== undefined && params.noDefaultDataset), 'A dry run cannot name both a dataset and no default dataset.'),
   z.object({ connectionId: z.uuid(), remote: remoteDryRunSchema }).strict()
 ])
 export const bigQueryDryRunResultSchema = z.object({

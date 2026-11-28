@@ -264,7 +264,7 @@ internal static class SearchCostChecks
         var progress = new List<int>();
         var outcomes = new System.Collections.Concurrent.ConcurrentDictionary<int, ObjectIndexSkip?>();
         string[] names = ["a", "b", "c", "d", "e", "f"];
-        await ObjectSearchService.ReadDatabasesAsync(names, new ObjectIndexLimits().Total, async (name, _) =>
+        await ObjectSearchService.ReadDatabasesAsync<ObjectIndexSkip?>(names, new ObjectIndexLimits().Total, async (name, _) =>
         {
             var now = Interlocked.Increment(ref running);
             InterlockedMax(ref most, now);
@@ -287,7 +287,7 @@ internal static class SearchCostChecks
         Exception? failure = null;
         try
         {
-            await ObjectSearchService.ReadDatabasesAsync(["slow", "broken", "never"], 2, async (name, loop) =>
+            await ObjectSearchService.ReadDatabasesAsync<ObjectIndexSkip?>(["slow", "broken", "never"], 2, async (name, loop) =>
             {
                 if (name == "slow")
                 {
@@ -308,7 +308,7 @@ internal static class SearchCostChecks
         var started = 0;
         var stopped = false;
         watch.Restart();
-        var build = ObjectSearchService.ReadDatabasesAsync(["a", "b", "c"], 2, async (_, loop) =>
+        var build = ObjectSearchService.ReadDatabasesAsync<ObjectIndexSkip?>(["a", "b", "c"], 2, async (_, loop) =>
         {
             if (Interlocked.Increment(ref started) == 2) stop.Cancel();
             await Task.Delay(TimeSpan.FromSeconds(60), loop);

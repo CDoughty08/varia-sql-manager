@@ -76,7 +76,7 @@ describe('catalogue providers', () => {
 
   it('declares both engines on the provider-neutral commands and keeps the SQL Server ones to SQL Server', () => {
     const both: CommandId[] = ['file.new', 'file.save', 'file.close', 'edit.undo', 'edit.find', 'edit.commentLines', 'output.copy', 'output.saveResultsAs', 'output.pivot', 'query.execute', 'query.cancel', 'layout.reset', 'workbench.showCommands', 'preferences.options', 'help.about', 'backend.restart', 'explorer.collapseAll',
-      'explorer.refresh', 'explorer.scriptAs', 'explorer.scriptCreateToNewQuery', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab', 'edit.commasToFront', 'edit.commasToEnd']
+      'explorer.refresh', 'explorer.scriptAs', 'explorer.scriptCreateToNewQuery', 'edit.refreshIntelliSense', 'edit.goToDefinition', 'edit.peekDefinition', 'edit.openPeekTab', 'edit.commasToFront', 'edit.commasToEnd']
     const sqlServer: CommandId[] = ['query.newSpWho', 'query.estimatePlan', 'query.includeActualPlan', 'edit.toggleBrackets', 'edit.insertSnippet', 'window.plan', 'activity.open', 'explorer.modify', 'help.clearEntraTokenCache', 'connection.connect']
     // BigQuery's own Object Explorer commands.
     for (const id of ['explorer.previewRows', 'explorer.bigQueryProperties'] as const) expect(commandProviders(id), id).toEqual(['bigquery'])

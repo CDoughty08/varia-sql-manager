@@ -7,6 +7,7 @@ import { onUnexpectedError } from '../core/errors'
 import { useConnectionAccent, useServiceSelector, useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import EmptyState from '../kit/EmptyState'
+import { formatAge } from '../kit/format'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import EnvironmentTag from '../EnvironmentTag'
 import { isBigQueryConnection, isLiveConnection } from '../services/connection-availability'
@@ -141,10 +142,54 @@ export function indexMemoryNote(statuses: readonly (ObjectIndexStatus | undefine
     + `Raise ${limit.label} in Tools › Options › ${pagePath(limit.page).map(page => page.title).join(' › ')}, then rebuild the index.`
 }
 
+/** How old the part of a BigQuery index loaded from the saved index is, while no listing has checked it: "saved 2 h ago,
+ *  checking" while the build that checks it runs, "saved 2 h ago, not checked" once it ended without (a listing that failed). */
+export function savedIndexText(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined, now: number = Date.now()): string {
+  // A full build's progress says what it has still to check (nothing once all is checked); a refresh or a stale-only build
+  // checks none of it, so the last status's word stands.
+  const full = !!entry?.requestId && !!entry.full
+  const checking = full && entry?.savedAt !== undefined
+  const savedAt = full ? entry?.savedAt : status?.savedAt
+  const at = savedAt === undefined ? Number.NaN : Date.parse(savedAt)
+  if (!Number.isFinite(at)) return ''
+  return `saved ${formatAge(now - at)}, ${checking ? 'checking' : 'not checked'}`
+}
+
+/**
+ * How fresh a finished index is (docs/object-search.md, Freshness), in four states: checked ("saved 2 h ago · checked just now"),
+ * checking (a check runs), may have changed (units DDL marked, or a search found due by age, that no check has read yet) and not
+ * verified (SQL Server reads with no fingerprint to check them by). "saved" is a read the saved index held, "read" one made since
+ * the connection opened. Empty when the status says nothing of it. Ages are worked out as the line draws (no timer redraws it).
+ */
+export function freshnessText(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined, now: number = Date.now()): string {
+  if (!status || status.state === 'none') return ''
+  const unit = status.provider === 'bigquery' ? 'dataset' : 'database'
+  const age = (at: string | undefined) => { const time = at === undefined ? Number.NaN : Date.parse(at); return Number.isFinite(time) ? formatAge(now - time) : undefined }
+  const parts: string[] = []
+  // BigQuery's loaded datasets not yet listed already give the age (savedIndexText).
+  const read = status.savedAt === undefined ? age(status.readAt) : undefined
+  if (read) parts.push(`${status.saved ? 'saved' : 'read'} ${read}`)
+  const checked = age(status.checkedAt)
+  if (status.checking || (entry?.checking && entry.requestId)) parts.push('checking')
+  else if (status.stale) parts.push(`${count(status.stale, unit)} may have changed`)
+  else if (checked) parts.push(`checked ${checked}`)
+  // BigQuery's loaded datasets not yet listed say so in savedIndexText.
+  if (status.unverified && status.provider !== 'bigquery') parts.push(`${count(status.unverified, unit)} not verified`)
+  return parts.join(' · ')
+}
+
+/** The index line's tooltip: the times freshnessText words as ages, on the local clock. */
+export function freshnessTitle(status: ObjectIndexStatus | undefined): string | undefined {
+  const at = (label: string, value: string | undefined) => { const time = value === undefined ? Number.NaN : Date.parse(value); return Number.isFinite(time) ? [`${label} ${new Date(time).toLocaleString()}`] : [] }
+  const lines = [...at(status?.saved ? 'Saved' : 'Read', status?.readAt), ...at('Checked', status?.checkedAt)]
+  return lines.length ? lines.join('\n') : undefined
+}
+
 /** What the index holds, for the summary line. */
-export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
-  if (status?.provider === 'bigquery' || entry?.phase) return bigQueryIndexSummary(entry, status)
-  if (entry?.requestId) return `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'database')} (${count(entry.objects, 'object')} so far)…`
+export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined, now: number = Date.now()): string {
+  if (status?.provider === 'bigquery' || entry?.phase) return bigQueryIndexSummary(entry, status, now)
+  // A check keeps what is held searchable: the line says what the index holds, and that it is checking.
+  if (entry?.requestId && !(entry.checking && status && status.state !== 'none')) return `Indexing ${numbers.format(entry.done)} of ${count(entry.total, 'database')} (${count(entry.objects, 'object')} so far)…`
   if (entry?.error) return `The index could not be built: ${entry.error}`
   if (!status || status.state === 'none') return 'This server has no index yet.'
   // The server's own objects are reported under an empty database name; a database kept without its children is still indexed.
@@ -155,19 +200,22 @@ export function indexSummary(entry: IndexEntry | undefined, status: ObjectIndexS
   const skipped = (status.stopped ? ' · build stopped' : '') + (databases ? ` · ${count(databases, 'database')} skipped` : '') + (server ? ' · server objects skipped' : '') + (agent ? ' · SQL Server Agent objects skipped' : '')
     + (partial ? ` · columns and other children left out of ${count(partial, 'large database')}` : '') + leftOutText(status)
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
-  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}`
+  const fresh = freshnessText(entry, status, now)
+  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'database')}${skipped}${fresh ? ` · ${fresh}` : ''}`
 }
 
 /** A BigQuery index's summary: datasets in place of databases, the pass a build is in (projects, names, then details), how
  *  many projects it covers, and the projects read by name only. */
-export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): string {
+export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined, now: number = Date.now()): string {
   if (entry?.requestId && entry.phase === 'estimate') return 'Estimating the billed INFORMATION_SCHEMA read of the index’s details…'
+  // What was loaded from the saved index is searchable while the build checks it: the line says how old it is.
+  const saved = savedIndexText(entry, status, now)
   // While BigQuery refuses calls for its rate they wait and retry, so the build slows rather than fails.
-  const limited = entry?.throttled ? ' BigQuery is rate limiting the calls, which retry.' : ''
-  if (entry?.requestId && entry.phase === 'projects') return 'Discovering accessible BigQuery projects…' + limited
-  if (entry?.requestId) return (entry.phase === 'details'
+  const notes = (saved ? ` Index ${saved}.` : '') + (entry?.throttled ? ' BigQuery is rate limiting the calls, which retry.' : '')
+  if (entry?.requestId && entry.phase === 'projects') return 'Discovering accessible BigQuery projects…' + notes
+  if (entry?.requestId && !(entry.checking && status && status.state !== 'none')) return (entry.phase === 'details'
     ? `Reading details of ${numbers.format(entry.done)} of ${count(entry.total, 'object')}…`
-    : `Indexing ${numbers.format(entry.done)} of ${entry.growing ? 'about ' : ''}${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`) + limited
+    : `Indexing ${numbers.format(entry.done)} of ${entry.growing ? 'about ' : ''}${count(entry.total, 'dataset')} (${count(entry.objects, 'object')} so far)…`) + notes
   if (entry?.error) return `The index could not be built: ${entry.error}`
   if (!status || status.state === 'none') return 'This connection has no index yet.'
   const partial = status.skipped.filter(skip => skip.code === childrenLeftOut).length
@@ -184,14 +232,15 @@ export function bigQueryIndexSummary(entry: IndexEntry | undefined, status: Obje
   const globalNote = (listTruncated ? ' · project list truncated' : '') + (memoryStopped ? ' · index memory limit reached' : '') + (discoveryFailed ? ' · project discovery skipped' : '')
   const skipped = (status.stopped ? ' · build stopped' : '') + globalNote + (projects ? ` · ${count(projects, 'project')} skipped` : '') + (datasets ? ` · ${count(datasets, 'dataset')} skipped` : '')
     + (details ? ` · details missing in ${count(details, 'dataset')}` : '') + (partial ? ` · columns left out of ${count(partial, 'large dataset')}` : '')
-    + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '') + leftOutText(status)
+    + (namesOnly ? ` · names only in ${count(namesOnly, 'project')}` : '') + leftOutText(status) + (saved ? ` · ${saved}` : '')
   // The billed bulk path: where it read, and a location whose queries failed (its datasets were read with the free calls instead).
   const bulk = status.bulk
   const billed = bulk ? (bulk.locations ? ` · details read with INFORMATION_SCHEMA in ${count(bulk.locations, 'location')}` : '')
     + (bulk.failed ? ` · the billed read failed in ${count(bulk.failed, 'location')}${bulk.code ? ` (${bulk.code})` : ''}, read with free calls instead` : '') : ''
   const modules = status.definitions ? `, ${count(status.modules, 'definition')}` : ' (names only)'
   const across = status.projects && status.projects > 1 ? ` across ${count(status.projects, 'project')}` : ''
-  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${across}${skipped}${billed}`
+  const fresh = freshnessText(entry, status, now)
+  return `Index: ${count(status.objects, 'object')}${modules} in ${count(status.indexed, 'dataset')}${across}${skipped}${billed}${fresh ? ` · ${fresh}` : ''}`
 }
 
 /**
@@ -211,12 +260,12 @@ export function unindexedServers(servers: readonly string[], indexes: Readonly<R
  *  databases skipped, or names only). A healthy index's detail is a click away. */
 export function indexIncomplete(entry: IndexEntry | undefined, status: ObjectIndexStatus | undefined): boolean {
   return !!entry?.requestId || !!entry?.error || !status || status.state !== 'ready' || !!status.skipped.length || !status.definitions || !!status.namesOnly?.length || !!status.stopped
-    || !!status.leftOut
+    || !!status.leftOut || !!status.savedAt || !!status.checking || !!status.stale || !!status.unverified
 }
 
 /** What a finished server index leaves out, in a few words, or undefined when it holds everything (a build still running is
  *  reported apart, as indexing). */
-export function indexGap(entry: IndexEntry): string | undefined {
+export function indexGap(entry: IndexEntry, now: number = Date.now()): string | undefined {
   if (entry.requestId) return undefined
   if (entry.error) return 'index could not be built'
   const status = entry.status
@@ -243,7 +292,10 @@ export function indexGap(entry: IndexEntry): string | undefined {
     partial ? `children left out of ${count(partial, bigQuery ? 'dataset' : 'database')}` : '',
     namesOnly ? `names only in ${count(namesOnly, 'project')}` : '',
     status.leftOut ? `${count(status.leftOut, 'definition')} left out (not enough index memory)` : '',
-    status.definitions ? '' : 'names only'
+    status.definitions ? '' : 'names only',
+    savedIndexText(entry, status, now),
+    status.stale ? `${count(status.stale, bigQuery ? 'dataset' : 'database')} may have changed` : '',
+    status.unverified && !bigQuery ? `${count(status.unverified, 'database')} not verified` : ''
   ].filter(Boolean)
   return gaps.length ? gaps.join(', ') : undefined
 }
@@ -709,13 +761,13 @@ export default function SearchPanel({ searchId, layout, inputRef, onLeave, optio
       {showHits && <>
         {pane ? <PaneSearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} providers={providers} />
           : <SearchFilters id={searchId} scope={state.scope} types={state.types} onScope={scope => set({ scope })} onTypes={types => set({ types })} options={options} providers={providers} />}
-        {(!pane || indexNotice) && <p className="object-search-index">{indexText}{buildIndex}</p>}
+        {(!pane || indexNotice) && <p className="object-search-index" title={spanning ? undefined : freshnessTitle(index)}>{indexText}{buildIndex}</p>}
         {!pane && memoryNote && <p className="object-search-index">{memoryNote}</p>}
       </>}
       {pane ? <div className="object-search-pane-status">
         <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? paneSummary : ''}</p>
         {showHits && <SearchPopover label="Search and index details" title="Search details" icon="info" compact>
-          <p className="object-search-index">{indexText}</p>{memoryNote && <p className="object-search-index">{memoryNote}</p>}{summary && <p className="object-search-index">{summary}</p>}
+          <p className="object-search-index" title={freshnessTitle(index)}>{indexText}</p>{memoryNote && <p className="object-search-index">{memoryNote}</p>}{summary && <p className="object-search-index">{summary}</p>}
         </SearchPopover>}
       </div> : <div className="object-search-tab-status">
         <p className={`object-search-summary${state.error || result?.problem ? ' error' : ''}`} role="status">{showHits ? summary : ''}</p>

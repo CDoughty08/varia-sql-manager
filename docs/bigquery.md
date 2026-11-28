@@ -177,10 +177,13 @@ BigQuery's rule refuses are dropped, and a location that is not a location id is
 ## Execution
 
 `query.execute` on a BigQuery handle runs the editor's text as one query job (`SqlService.BigQueryExecution.cs`). It
-takes an optional `dataset` (the query's default dataset; the connection's when absent) and ignores `database`. SQL
-Server's options (stop on error, actual and live plans, client statistics) are refused with `UNSUPPORTED_PROVIDER`, in
-main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
-and leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens Connect and, once the
+takes an optional `dataset` (the query's default dataset; the connection's when absent) or `noDefaultDataset: true`
+(explicitly clears the connection's default dataset; mutually exclusive with `dataset` and refused on SQL Server) and
+ignores `database`. SQL Server's options (stop on error, actual and live plans, client statistics) are refused with
+`UNSUPPORTED_PROVIDER`, in main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A
+BigQuery query tab sends its dataset (or `noDefaultDataset: true` when the user cleared the connection's default) and
+leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens
+Connect and, once the
 connection is ready, runs the query as a SQL Server tab does, through the same estimate and cost prompt. A restored tab whose job has
 not re-attached yet only attaches, so that job's session and results come back first; Execute then runs as usual.
 
@@ -231,6 +234,20 @@ final listing says that earlier statements' results may be missing and leaves th
 it. Early results show while the script runs. A listing that fails between polls stops the early reads (`jobs.list`
 needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
 rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
+
+### Named result sets
+
+BigQuery queries and scripts support `#Name="…"` marker comments just before a query statement (`SELECT`, `WITH`, `FROM`
+pipe syntax, or a parenthesized query) without altering the SQL sent to BigQuery
+([Named result sets › BigQuery](named-result-sets-scope.md#bigquery-googlesql)). Markers work in `-- #Name="…"`,
+`/* #Name="…" */`, `# #Name="…"` and bare `#Name="…"` comments (requiring `=` after `#Name`, so `#Names` and prose
+comments like `#Name: orders` are ignored). Single queries keep their name whether in memory, read via Storage Read,
+windowed in BigQuery, loaded into memory, re-run in place, or re-attached via `query.attach`. Multi-statement scripts
+match child jobs using `statistics.scriptStatistics.stackFrames` (`startLine`/`startColumn`, without keeping child SQL
+text), with a safe positional fallback when stack frames are absent and no control-flow or dynamic statement precedes the
+query. Markers on or inside `IF`, `LOOP`, `WHILE`, `REPEAT`, `FOR`, `BEGIN … END`, `CASE`, `CALL` or `EXECUTE IMMEDIATE`,
+on non-result statements, on oversized scripts (> 262,144 characters), or when child jobs cannot be listed leave the
+result unnamed and emit bounded informational notes in Messages (up to 20 per run).
 
 ### Sessions
 
@@ -848,8 +865,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
     cost prompts. **Re-attach** on a running one does the same and adopts its session, so Stop cancels it. A tab that
     already holds the job is focused instead. Both need the job's creator, who alone can read its result table.
   - **Open SQL in New Tab** and **Re-run** open the job's whole SQL in a new query tab on the connection, with the job's
-    default dataset when it is in the billing project; Re-run then executes it with the usual cost prompts, unless the SQL
-    was longer than Varia reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
+    default dataset when it is in the billing project. When the job's default dataset lived in another project, the tab
+    opens with no default dataset and a notice instead of executing, so unqualified table names never fall back to the
+    connection's dataset; otherwise Re-run executes it with the usual cost prompts, unless the SQL was longer than Varia
+    reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
     or CREATE OR REPLACE TABLE, a script, or a statement BigQuery did not name) and when another user ran it (it runs as you); the cost prompts name the job too
     ("Re-run this job?"). Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
     Cancel Executing Query.
@@ -998,7 +1017,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Copy of a whole column across blocks, Save Results As streaming every row, Load into memory in place, and Automatically,
   by size keeping the same small result in memory. `scripts/bigquery-explorer-smoke.mjs` drives Object Explorer against the
   same fake with `objects` (a table, a view, a routine and a model): the folders and objects, Columns with a STRUCT's
-  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties.
+  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties; then, after a
+  backend restart, a search finds the saved index's objects while the dataset's `tables.list` is held, with no
+  object's details read again (docs/object-search.md, Reloading a BigQuery index).
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
   REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
   it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the

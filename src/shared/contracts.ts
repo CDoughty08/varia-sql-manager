@@ -186,6 +186,8 @@ export interface QueryOptions {
   database?: string
   /** A BigQuery query's default dataset, ≤ 1,024 characters (the connection's when absent); SQL Server refuses it. */
   dataset?: string
+  /** BigQuery: run with no default dataset even when the connection sets one (mutually exclusive with `dataset`); SQL Server refuses it. */
+  noDefaultDataset?: true
   sql: string
   queryId: string
   /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */

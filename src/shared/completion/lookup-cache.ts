@@ -30,6 +30,7 @@ export function answerFrom(entry: Entry, request: LanguageLookupPath): LanguageL
 export class LookupCache {
   private readonly entries = new Map<string, Entry[]>()
   private count = 0
+  private generation = 0
   /** The index's state in the last answer: none, building or ready. */
   index?: LanguageLookupResult['index']
 
@@ -42,9 +43,11 @@ export class LookupCache {
     const answers: (LanguageLookupAnswer | undefined)[] = requests.map(request => this.find(request, now))
     const missing = requests.filter((_, index) => !answers[index])
     if (!missing.length) return answers as LanguageLookupAnswer[]
+    const generation = this.generation
     const result = await this.ask(missing, caller)
     if (!result) return undefined
-    this.index = result.index
+    const current = generation === this.generation
+    if (current) this.index = result.index
     let next = 0
     for (let index = 0; index < requests.length; index++) {
       if (answers[index]) continue
@@ -53,12 +56,12 @@ export class LookupCache {
       answers[index] = answer
       // An answer the backend's total cut short of its own limit is not kept: asked alone, it would hold more.
       const short = answer.truncated && answer.items.length < (requests[index].limit ?? languageLookupLimits.defaultItems)
-      if (result.index === 'ready' && answer.state !== 'building' && !short) this.keep(requests[index], answer, this.now())
+      if (current && result.index === 'ready' && answer.state !== 'building' && !short) this.keep(requests[index], answer, this.now())
     }
     return answers as LanguageLookupAnswer[]
   }
 
-  clear(): void { this.entries.clear(); this.count = 0; this.index = undefined }
+  clear(): void { this.entries.clear(); this.count = 0; this.index = undefined; this.generation++ }
 
   private find(request: LanguageLookupPath, now: number): LanguageLookupAnswer | undefined {
     const kept = this.entries.get(pathKey(request.path))
