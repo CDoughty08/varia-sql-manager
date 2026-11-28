@@ -66,7 +66,11 @@ The detail is in object-search.md. These are the facts the lanes depend on.
   projects' details, and 1/2 for discovered projects' details. A read that does not fit loses its definitions first,
   then its children (`CHILDREN_LEFT_OUT`), and then the whole unit (`TOO_LARGE`).
 - **Searches.** Name and definition search scan every unit of the connection linearly, with a 5 s budget, and return a
-  ranked, capped result. SQL Server completion is SQL Tools' (`IndexLookup` has no production caller yet).
+  ranked, capped result.
+- **SQL Server editor lookups.** SQL Server completion lists are SQL Tools', but the lazy schema preview drawers read
+  the index: `SqlLanguageService.resolveSuggestion` calls `language.lookup` through `LookupCache` with `details` on
+  three-part paths, `EditorLookup.OneSql` answers from `IndexLookup` with columns, parameters, keys and
+  `ObjectDetails`, and `IntelliSensePopover` shows the source as the index in memory.
 - **BigQuery editor lookups.** Completion and hover are `language.lookup`, with a 10 s deadline, over the projects,
   datasets and objects a path names.
   - It runs on the backend's `Metadata` lane (`SqlService.LaneOf`), although it makes no network call. That lane's 8
@@ -158,6 +162,10 @@ The detail is in object-search.md. These are the facts the lanes depend on.
   first Children range, on the same path as cold definitions.
 - **No key store, or saving off.** A part with no saved copy is never dropped. This covers no key store, saving off,
   and a write still queued. When such a part does not fit, today's rules leave it out.
+- **Refused for disk space** is different: there is a disk, it is just full. A unit whose save is refused for space
+  keeps only its names (under the cap). Its children and definitions are released at once and marked left out for
+  disk space, so refused units never pin memory the cache needs for units that are on disk. They are read again when
+  used once space frees (Storage, Use, holders and the sweep).
 
 ### Work that needs a cold part
 
@@ -190,20 +198,31 @@ one unit at a time.
 - **`Apply` off the request path.** `TableRead` and `RoutineRead` only queue the fresh details, and
   `bigquery.properties` answers at once. A background job drops details whose digest matches, then loads the
   dataset's cold parts and rebuilds.
-  - **Queued per unit, not per connection.** Pending details are kept in the store, keyed by unit and object, a newer
-    one replacing the older. Two connections of one process applying details to different tables of one dataset add to
-    one set, and neither overwrites the other.
-  - **Bounded.** At most 1,000 objects per connection. Past that, the oldest dataset's details are dropped and the
-    dataset gets a due mark for the background re-read.
+  - **Every object knows when its details were fetched.** Every `tables.get` and `routines.get` takes a fetch number
+    from the store's shared counter before it runs (Storage, Generations), whichever path asks: `Apply`, pass 2,
+    `DetailAsync`, hydrate or the 4 h re-read. The number is kept per object in its Names facts (8 bytes), and an
+    object only listed carries its read's sequence. Details are therefore ordered per object, across processes.
+  - **Newer wins per object.** Any save that combines details (an `Apply`, a merge, a re-apply) keeps, for each object,
+    the details with the higher fetch number. An older detail never overwrites a newer one, whichever commits first.
+  - **Queued per unit, not per connection.** Pending details live in `ObjectSearchService`, not in `IndexStore`, keyed
+    by unit and object, a newer fetch replacing an older one. Two connections of one process applying details to
+    different tables of one dataset add to one set, and neither overwrites the other. `ObjectSearchService` does the
+    rebuild under its own reservations; the store only swaps.
+  - **Bounded.** At most 1,000 pending objects across the service, charged to the build allowance. Past that, the
+    oldest dataset's details are dropped and the dataset gets a due mark for the background re-read.
   - **During a build** the job waits instead of being refused (`Apply` is refused today while `state.Building`). It runs
     once the build ends, and is dropped only if the build re-read those details itself.
   - **Saved over the generation it was built on.** The rebuild applies every pending detail to the newest held copy
-    and saves it only if the unit's stored generation is still the one that copy came from (Storage, Generations). On a
-    mismatch it loads the stored generation, applies the pending details again and retries.
-  - **Applied details outlive a slower read.** A detail stays in the store after its save commits, marked with the
-    sequence that save had. A later save whose read began before that detail was fetched (its sequence is lower than
-    the detail's fetch number) re-applies it before committing. A detail is dropped only once a save whose read began
-    after it commits, so a read already in flight never brings back older columns.
+    and saves it only if the unit's stored generation is still the one that copy came from (Storage, Generations).
+  - **Retried on a mismatch.** On a mismatch it adopts the stored generation and keeps only the pending details whose
+    fetch number is above that object's stored one; the rest are dropped, as the store already has them or newer. If
+    any are left it retries. If the stored row is a tombstone, the details are dropped and the unit is treated as marked.
+  - **Dropped once saved.** A detail leaves the queue when a save that includes it commits. Nothing re-applies it
+    afterwards, so no two processes trade re-applies.
+  - **A slower read can't undo it.** The stored header keeps the highest fetch number applied to the unit (`applied`).
+    A read whose sequence is below it began before some applied detail was fetched, so its swap fails (Storage, The
+    swap is atomic). It then adopts the stored generation, merges by the per-object rule, and retries with the
+    generation check, carrying its own, newer listing.
 - **The 4 h background re-read** (`SweepDatasetAsync`) chooses what to get from the hot names and facts only
   (`Facts.Detailed`), not from `EntriesOf`, which today it calls before a pass of about 33 minutes. It compares each
   fetched object's digest with the one in Names. Only at the end of the pass, and only if a digest differs, does it
@@ -274,9 +293,21 @@ parts with no saved copy, texts other units share), a build waits for queued wri
 left-out rules. Builds in flight plus queued writes stay within the allowance. Three things sit outside that bound and
 are still within the limit: a unit read alone (Building inside the limit), which has its own bound; and two kinds of
 unit that are already charged and counted once, as held: fully hot units announced to the store again, which are
-written first, and units refused for disk space, held until space frees.
+written first, and the names of units refused for disk space.
 
-**Charges per tier.** Each unit records what each tier has charged, and eviction gives back only that tier's charge.
+**Charges per tier.** A tier's own structures (entries, `Pooled` slots, `ObjectDetails`, facts, lookup arrays,
+ownership maps) are charged to that tier, and eviction gives back exactly that. Pooled texts can't be split that way:
+`StringPool` charges a text once, to whoever acquires it first, and frees it when its last reference goes. So:
+
+- eviction counts what `StringPool.Release` actually gave back, as it does today;
+- **the names cap counts texts exactly.** `StringPool.Entry` gains a `NamesRefs` count beside `Refs`, incremented by
+  Names tiers only, and the pool keeps the total bytes of entries with `NamesRefs > 0`. The cap compares Names'
+  structures plus that total, so 300k unique object names never escape it, at O(1) per acquire and release.
+
+**The limit reaches the backend at once.** Today `objectExplorer.search.memoryLimitMiB` is sent only inside
+`explorer.index` when a build starts, so a change in Tools › Options does nothing until the next build. A main-only
+control method, `explorer.index.setMemoryLimit`, mirrors `results.setMemoryLimit`: main sends it at backend start and
+on every change, it is added in the five places with no renderer schema, and lowering it evicts at once.
 
 **Rebuild credit.** A rebuild may reuse its predecessor's hot charge as credit, never a tier already evicted. The
 predecessor is pinned while the build runs. Pinning is atomic with the lookup (`GetAndPin` under
@@ -294,32 +325,49 @@ The saved index moves from one file per unit into one SQLite database per store 
 main, the no-key-store rule, the 30-day rule and the unencrypted setting stay.
 
 - **The dependency.** `Microsoft.Data.Sqlite.Core` with `SQLitePCLRaw.bundle_e_sqlite3`, which ships a native
-  `e_sqlite3` for win-x64, win-arm64, linux-x64, linux-arm64, osx-x64 and osx-arm64. SQLite is public domain and the
-  Microsoft packages are MIT and Apache-2.0. T-1 checks the backend publish on all three operating systems, the CI
-  lanes, macOS signing of the native library, and the WSL smoke. The project's own no-license rule is untouched.
+  `e_sqlite3`. SQLite is public domain and the Microsoft packages are MIT and Apache-2.0; the project's own no-license
+  rule is untouched. T-1's packaging checklist:
+  - the backend's `RuntimeIdentifiers` are win-x64, linux-x64, osx-arm64 and osx-x64, and only those natives ship;
+  - `tests/backend-restore.test.ts`' lockfile parity and its rule of no runtime-pack downloads on a plain restore
+    still pass with the new packages;
+  - `SQLitePCL.Batteries_V2.Init()` runs once at backend start, before the store opens;
+  - `build/backend-check.cjs` asserts `e_sqlite3.dll`, `libe_sqlite3.so` or `libe_sqlite3.dylib` is present for the
+    target RID, and electron-builder signs `libe_sqlite3.dylib` inside `extraResources` on macOS;
+  - the CI lanes and the WSL smoke run against the published backend.
 - **The file.** `index.db`, with its `-wal` and `-shm` files, in the existing `SearchIndex` folder. Development builds'
   `.vidx` files and their temp files (including `RF*.TMP` left by `File.Replace`) are deleted once when the store
-  first opens. The folder's name check (`IndexStoreLimits.FolderName`) still guards it.
+  first opens. The folder's name check (`IndexStoreLimits.FolderName`) still guards it, and the store refuses to open
+  any of the three files if it is a link.
 - **Settings.** `journal_mode=WAL`, `synchronous=NORMAL` (decision D14), `busy_timeout=5000`,
   `auto_vacuum=INCREMENTAL`, `temp_store=MEMORY`, foreign keys on. T-1 picks the page size from its bench.
-- **Connections.** One writer connection on the store's thread, and reader connections that WAL never blocks behind
+- **Transactions.** Every write transaction (counter bumps, blocks, swaps, `used_at`, holders, heartbeats, sweeps,
+  Clear) is `BEGIN IMMEDIATE`, never Microsoft.Data.Sqlite's default deferred one. A deferred transaction that reads
+  `meta` and then writes gets `SQLITE_BUSY_SNAPSHOT` at once, ignoring `busy_timeout`. `SQLITE_BUSY` and
+  `SQLITE_LOCKED` are retried a bounded number of times with backoff, then fail as a value.
+- **No snapshot outlives a slice.** No reader or transaction is held across an IPC round trip or longer than one
+  slice of about 100 ms, so WAL checkpoints are never pinned and the `-wal` file stays small. Scans page by key
+  (Searching cold parts).
+- **Connections.** One writer connection on the store's thread, whose queue puts short counter bumps ahead of block
+  writes, sweeps and `incremental_vacuum`, so 32 BigQuery readers taking sequence numbers never wait behind bulk
+  writes (`UPDATE meta SET counter = counter + 1 RETURNING counter`). Reader connections that WAL never blocks behind
   the writer, in three pools: 2 for cold scans, 2 for interactive loads (hover, Go To Definition, completion,
   Properties, Peek, the details pane), and 2 for background loads (merges, the `Apply` job, the 4 h re-read, pass 1 of
   changed datasets, adopting newer generations, hydrate). Background loads never take an interactive reader.
 - **Constant SQL.** The store's statements are constant text with values as parameters, in one class (`IndexDbSql`)
   with its own offline lint, like `ObjectSearchSql`'s. architecture.md's list of SQL paths gains it.
 
-**The schema** (schema version 1, final for 0.10.0):
+**The schema** (schema version 1, frozen when 0.10.0 ships; decision D7). Until then a lane may bump it, since
+development builds already delete an incompatible store.
 
 | Table | Holds |
 | --- | --- |
-| `meta` | The schema version, a random store id, the store epoch, a key check (an AEAD tag over the store id, so a wrong key is told at open), and one counter that hands out both listing sequences and generations |
-| `units` | One row per unit: its id (an HMAC of scope and unit under the names key, 32 bytes), its scope's HMAC, the current generation, the listing sequence it carries, the generation's salt (in clear), its sealed header (stub, sync, listing identity and digest, tiers, kind mask, sizes), its stored bytes, when it was saved and last used, and flags (too large for the disk limit, tombstone) |
-| `parts` | One row per stored block: unit id, generation, section, block number, and the sealed block. A unique index on (unit, generation, section, block) |
+| `meta` | The schema version, a random store id, the store epoch, a key check (an AEAD tag over the store id, so a wrong key is told at open), a retired flag, and one counter that hands out listing sequences, fetch numbers and generations |
+| `units` | One row per unit: its id (an HMAC of scope and unit under the names key, 32 bytes), its scope's HMAC (indexed), the current generation, the listing sequence it carries, the highest fetch number applied (`applied`), the generation's salt (in clear), its sealed header (stub, sync, listing identity and digest, tiers, kind mask, sizes), its Names section inline when it fits one block, its stored bytes, when it was saved and last used, and flags (too large for the disk limit, tombstone) |
+| `parts` | One row per stored block of the other sections, and of Names when it needs more than one block: unit id, generation, section, block number, and the sealed block. An ordinary rowid table (SQLite advises against `WITHOUT ROWID` for large rows), with a unique index on (unit, generation, section, block) |
 | `writes` | One row per write in progress: unit id, generation, process id and start time, added in the write's first transaction and removed by its swap |
 | `processes` | Each Varia process's random id and heartbeat time |
 | `holders` | Which units each live process holds for a connected source |
-| `filters` | T-7's filters, if T-7 is needed, sealed like blocks |
+| `filters` | T-7's filters, if T-7 is needed: unit id, generation, block number and the sealed filter. Sealed under a "filters" HKDF subkey and the generation's salt, with the block's position as nonce and the same associated data as blocks. Written, swapped, swept and cleared with their generation |
 
 **Keys and sealing.**
 
@@ -336,7 +384,15 @@ main, the no-key-store rule, the 30-day rule and the unencrypted setting stay.
   beside it, for integrity against damage only, so it adds nothing a reader of the file could not compute. Row ids are
   still HMACs under the names key derived from main's store key, as file names are today (`IndexStore.cs:240`).
 - **What the database reveals** is what the folder reveals today: how many units, their sizes, and when each was saved
-  and used. Freed pages may hold old ciphertext until reused or vacuumed, never plaintext.
+  and used. In encrypted mode, freed pages may hold old ciphertext until reused or vacuumed, never plaintext. In
+  unencrypted mode they may hold old compressed text, so switching from unencrypted to encrypted or off, or a key
+  reset, retires the store instead of deleting rows:
+  - in the old file it moves the epoch and sets a retired flag, so every other process sees it at its next slice and
+    closes its connections;
+  - it creates the new store under a new file name (`index-<epoch>.db`, which `meta` of the new store and the folder
+    scan agree on);
+  - the old files are deleted once no live process has them open. On Windows a delete refused by an open handle is
+    retried at the next start; on Linux and macOS no process reads the unlinked file, because each closed on the flag.
 
 **Sections and blocks.** A unit's sections are Names, Listing, Children range 1, Children range 2 and Definitions. Each
 is stored as blocks, one row each, so any section, range or block is read on its own.
@@ -350,26 +406,35 @@ is stored as blocks, one row each, so any section, range or block is read on its
   descriptions, often more than half the section. Part loads read both ranges.
 - **Definitions:** blocks of about 1 MiB of text, each with its own ownership map, so a scan or a T-7 filter can skip
   a block by itself.
-- **Oversized texts.** A definition larger than a block, up to 1,000,000 characters, gets a block of its own. That
-  includes a raw UTF-16 string that `PackedText` can't pack (an unpaired surrogate), stored raw at up to 2 MB and
-  flagged. Scans read it through SQLite's incremental blob reads (`SqliteBlob`), in a bounded window (Searching cold
-  parts).
+- **Oversized texts.** A definition larger than a block, up to `ObjectIndexLimits.DefinitionChars` (1,000,000
+  characters), gets a block of its own. That includes a raw UTF-16 string that `PackedText` can't pack (an unpaired
+  surrogate), stored raw at up to 2 MB and flagged. A block is always read, authenticated and unpacked whole: GCM
+  output can't be trusted before its tag is checked, and at most 2 MB fits each scan's 8 MiB share of the scratch.
 - **Empty sections** have no rows. The header lists the blocks each section has, so a missing block is told from an
   empty section.
 
 **Generations and the newer-listing rule.**
 
-- **Writes in two steps.** A save takes its new generation number from `meta`'s counter, so no two processes ever
-  write the same generation, and records itself in `writes`. It writes the generation's blocks in several short
-  transactions. They are invisible while `units` still points at the old generation. A last short transaction makes
-  it current (`UPDATE units SET generation = @new, … WHERE id = @id AND …`, or an `INSERT` for a unit with no row),
-  removes its `writes` row and deletes the old generation's rows. The writer lock is never held for a whole unit.
+- **Writes in two steps.** A save's first transaction takes its new generation number from `meta`'s counter, so no
+  two processes ever write the same generation, and inserts its `writes` row. It writes the generation's blocks in
+  several short transactions. They are invisible while `units` still points at the old generation. A last short
+  transaction makes it current with one statement,
+  `INSERT INTO units … ON CONFLICT(id) DO UPDATE SET … WHERE <the swap rule>`, so a unit with no row and a unit with
+  one follow the same rule. It removes its `writes` row and deletes the old generation's rows. The writer lock is never
+  held for a whole unit.
 - **Orphans.** Blocks belong to a write in progress while its `writes` row exists. The sweep removes a write's blocks
   only when its process's heartbeat is dead, or when it started over an hour ago, and blocks with neither a current
   `units` generation nor a `writes` row. A first save of a new unit is therefore never swept while it writes.
 - **The epoch fences every write.** Each write transaction (blocks, swap, `used_at`, holders) checks `meta.epoch` and
   the key check in the same transaction. On a mismatch, after a Clear or a key reset by another process, it aborts and
   drops its blocks, so no write straddling a Clear brings a unit back.
+- **Reads see the epoch too.** Every read slice reads `meta.epoch` in the same snapshot. A moved epoch means a Clear
+  or key reset, which the process handles as one (its saved state is gone, and the key check tells it whether its key
+  still opens the store), never as a run of missing or damaged units.
+- **Reads begun before the store is configured.** `explorer.indexStore.configure` can arrive after a build has
+  started (the OS key store may be slow). Such a read has no sequence, so it is saved with sequence 0 and only if the
+  unit has no row at all. If a row or tombstone exists it is not saved, and the next check's fingerprint or listing
+  decides.
 - **One sequence for every process.** When a read or a re-listing starts, it takes the next number from the same
   counter in a short transaction. Every process shares the counter, so listings compare by number: the higher wins.
   There are no clocks and no ties, and a clock stepped back changes nothing.
@@ -377,14 +442,27 @@ is stored as blocks, one row each, so any section, range or block is read on its
   carries the number of the listing it was built on: BigQuery's pass 2 carries its pass 1's, a changed-listing merge
   carries that listing's, a SQL selective re-read carries its fingerprint check's, and `Apply` and `language.hydrate`,
   which list nothing, carry their predecessor's.
-- **The swap is atomic.** A save makes itself current only
-  `WHERE sequence < @mine OR (sequence = @mine AND generation = @expected)`. An older read never replaces a newer one,
-  in one process or across many, and a save carrying the stored listing's number (pass 2 after a saved pass 1, a
-  re-read, `Apply`, hydrate) replaces only the generation it was built on. On a mismatch at an equal number it adopts
-  the stored generation and applies its pending details again (Work that needs a cold part).
-- **Tombstones.** A DDL mark that deletes a unit's rows leaves a `units` row with no generation and a sequence taken
-  at the mark. A read begun before the mark carries a lower number and fails the swap, in every process, even though
-  the stale marks themselves live in each process's memory.
+- **The swap is atomic.** A read's save makes itself current only
+  `WHERE (sequence < @mine AND applied < @mine) OR (sequence = @mine AND generation = @expected)`, or, after merging
+  applied details, `WHERE generation = @expected`. An older read never replaces a newer one, in one process or across
+  many, and a save carrying the stored listing's number (pass 2 after a saved pass 1, a SQL re-read) replaces only the
+  generation it was built on. `Apply` and hydrate are an `UPDATE … WHERE generation = @expected AND tombstone = 0`
+  only, keeping the stored sequence. They never insert, so they can't bring back a unit whose row is gone. Only a
+  read's save inserts, and a pre-configure read only as described above.
+- **Tombstones.** A tombstone is a `units` row with no generation and no stored bytes. Its sequence depends on why:
+  - **a DDL mark** upserts one whether or not the unit has a row (a just-created dataset has none), with the sequence
+    `max(the old one, a number taken at the mark)`. A read begun before the mark carries a lower number and fails the
+    swap in every process, even though stale marks live in each process's memory;
+  - **pushed out for space, a refused save, a damaged block** keep the unit's old sequence. No newer information came
+    with them, so the retry of a refused save, or pass 2 after a refused pass 1, still passes the swap, while an
+    in-flight read older than what was stored still fails it;
+  - **the 30-day sweep** removes rows outright, since no read runs that long.
+
+  Tombstones free no space, so the disk sweep never removes them. They expire after 24 hours, longer than any read can
+  run, and in-memory copies can't outlast them unnoticed: see the next bullet.
+- **Copies follow tombstones.** At each heartbeat a process reads the tombstones of the units it holds. One whose
+  sequence is above the held copy's counts as a mark of that unit: its cold parts and pending details are dropped and
+  it is read whole at its next use. A held copy is never saved again without a new read.
 - **The stale check stays.** The store's existing stale marks (`StaleSeen`, `StoreSeen`) still refuse a read begun
   before a DDL mark of its dataset.
 - **Copies follow the store.** When another connection or process makes a newer generation current, the index adopts
@@ -393,9 +471,11 @@ is stored as blocks, one row each, so any section, range or block is read on its
 - **Part loads name their generation.** A cold part loads only from the generation its names came from. If that
   generation is gone, the deleted-cold-part rule applies.
 
-**Startup.** A connect reads its scope's `units` rows in one query and its names blocks in one ordered query, from one
-file. Nothing is touched. The opening sweep is SQL over `units` and reads no blocks. T-1 benches this with 5,000 small
-datasets on Windows with Defender on, against today's three opens per file.
+**Startup.** A connect reads its scope's `units` rows through the scope index in one query. Most units' Names are
+inline in those rows, so 5,000 small datasets are one compact scan of small rows that never touches the large `parts`
+tree. Only units whose Names need several blocks read `parts`. Nothing is touched. The opening sweep is SQL over
+`units` and reads no blocks. T-1 benches this with 5,000 small datasets on Windows with Defender on, against today's
+three opens per file.
 
 **Use, holders and the sweep** (decision D3).
 
@@ -407,9 +487,11 @@ datasets on Windows with Defender on, against today's three opens per file.
   disconnected, whichever process saved it.
 - **The sweep's order**, in one transaction: units unused for 30 days; then units no live process holds, least recently
   used first; then held units unused for 10 minutes, least recently used first.
-- **If everything on disk was used in the last 10 minutes,** a save is refused for disk space. The unit stays in memory
-  as parts with no saved copy, under today's left-out rules if it doesn't fit, and the index line suggests raising
-  **Saved index disk limit**. Saves are tried again when space frees or files age past 10 minutes.
+- **If everything on disk was used in the last 10 minutes,** a save is refused for disk space. The unit keeps only its
+  names in memory, its children and definitions are released and marked left out for disk space (Tiers), and the
+  index line suggests raising **Saved index disk limit**. A names-only unit is never saved as it is (No rebuild from a
+  partial unit): once space frees or units age past 10 minutes, it is read whole at its next use and saved then.
+- **Units pushed out for space** become tombstones (Generations), never bare deletions.
 - **The deleted-cold-part rule.** A cold part whose rows are gone (pushed out for space, Clear in another process, a
   damaged block) is left out until used. No background build, check or re-read reads it again. A use of it, or any save
   of its unit, reads the unit whole from the server first. The index line says how many units are left out, and
@@ -417,13 +499,15 @@ datasets on Windows with Defender on, against today's three opens per file.
 - **Size.** The limit counts the stored bytes of current generations, against net growth (new minus the generation it
   replaces). Freed pages are given back with `PRAGMA incremental_vacuum` in small steps on the background lane. The
   Memory panel shows both stored bytes and the file's size.
-- **A refused save never leaves a stale unit.** In the same transaction that refuses it, the store deletes the unit's
-  current generation only `WHERE sequence <= @mine`. A newer generation from another connection or process is never
-  deleted, and an older one is never left to load.
+- **A refused save never leaves a stale unit.** In the same transaction that refuses it, the store turns the unit's
+  current generation into a tombstone only `WHERE sequence <= @mine`. A newer generation from another connection or
+  process is never removed, and an older one is never left to load.
 - **A unit larger than the disk limit by itself** is flagged after its first refused write. It is not written again
-  until the limit grows or the unit is read again, and its parts stay in memory under today's left-out rules.
+  until the limit grows, and like every refused unit it keeps only its names in memory.
 
-**Damage.** At open, `PRAGMA quick_check` runs on the background lane. A failed check, or `SQLITE_CORRUPT` from any
+**Damage.** At open, `PRAGMA quick_check(meta)` and `PRAGMA quick_check(units)` run on the background lane, which
+take milliseconds. A whole-database check would read every page of a 2 GiB file at each start, and the `parts` rows
+are already guarded by each block's authentication tag and by `SQLITE_CORRUPT` on access. A failed check, or `SQLITE_CORRUPT` from any
 statement, closes the store. The database and its `-wal` and `-shm` are moved aside (one kept, as unreadable
 preferences files are) and a new one is made, and every cold part falls under the deleted-cold-part rule. A block that
 fails authentication deletes only its unit.
@@ -551,14 +635,21 @@ connect.
 - **Requests with details.** An object list or jump that asks for details (`mode: "jump"`, a two-part path with
   `details`) needs table descriptions, so it loads Children and answers `loading` meanwhile.
 - **A unit past the names cap** answers `loading` the same way while its names load.
-- **SQL Server completion** is SQL Tools', so nothing changes there until the index serves it.
+- **SQL Server's preview drawers** get the same handling. `EditorLookup.OneSql` reads columns, parameters, keys and
+  `ObjectDetails`, which are all Children, so a three-part lookup with `details` on a database whose Children are cold
+  loads them and answers `loading` meanwhile. `SqlLanguageService.resolveSuggestion` never caches `loading` in its
+  `LookupCache`. Monaco resolves an item once, so the drawer's lookup sends the `wait` flag, bounded like hover's, and
+  if the wait times out `IntelliSensePopover` says the index is loading that database instead of showing an empty
+  drawer, until the next suggest session asks again. SQL Server's completion lists stay SQL Tools'.
 
 ### Clear, key reset and saving off
 
 - **Clear Saved Search Indexes starts over** (decision D6):
   - first the backend sends a new `explorer.index.invalidated` event (connection ids and the reason) and closes the
     store epoch, so part loads already in flight fail cleanly;
-  - then one transaction deletes every unit and part row and moves the epoch;
+  - then one transaction deletes every unit and part row and moves the epoch, and the store gives the space back at
+    once (`PRAGMA wal_checkpoint(TRUNCATE)`, then `incremental_vacuum`), so the file shrinks when the dialog says the
+    indexes are deleted. In unencrypted mode the store is retired and made again instead (Keys and sealing);
   - every unit that had a cold part, or was past the names cap, is dropped from memory. Fully hot units stay, and are
     announced to the store again;
   - the renderer answers the event by running `explorer.index` for each connected source as on a first connect. The
@@ -584,8 +675,13 @@ connect.
   - At most 2 cold scans read at once across all connections, sharing the scratch share.
   - A unit whose stub rules out the search (no definitions, no detail children, none of the kinds filtered on) is
     skipped without a read.
-  - The scan reads a scope's blocks in one ordered query, so 5,000 datasets are one sequential read of one file, not
-    5,000 opens. T-5 benches a child-name scan over 5,000 datasets on Windows.
+  - **Short slices.** The scan pages through a scope's blocks by key (unit, generation, section, block), a slice of
+    about 100 ms or a byte budget at a time, and releases its reader between slices and between
+    `explorer.search.more` calls. No snapshot is held across an IPC round trip, so an idle Search Objects tab never
+    pins a WAL checkpoint or a reader connection.
+  - **Pinned to the hot phase's generations.** The hot phase records each unit's generation. A slice reads only that
+    generation; if it was replaced meanwhile, the unit is skipped and the search is marked partial.
+  - T-5 benches a child-name scan over 5,000 datasets on Windows.
 - **No hit twice.**
   - The hot phase records, per unit, which tiers it searched hot. The cold scan covers only the others, even if they
     were evicted meanwhile.
@@ -593,14 +689,9 @@ connect.
     matched, the hit was counted in the hot phase: it becomes a patch, or nothing, never a second row.
   - A computed column found in both cold Children and cold Definitions is emitted once, by its owner.
   - No two rows share a `serverHitKey`.
-- **Streaming windows** for oversized blocks, never holding a block whole:
-  - literal search: an overlap of at least `max(length + 2, 160)` characters, so a match and its preview never fall
-    on a seam;
-  - wildcards and single-line regex: windows end at line breaks, so a match never spans a seam. `SearchMatcher`'s
-    padding then matches whole words, `^` and `$` as it does today;
-  - multi-line regex (`(?s)`) on an oversized block: the block is read whole if it fits the scan's share, and
-    otherwise reported as skipped for that pattern;
-  - previews track running line and column numbers across windows.
+- **Whole blocks only.** Every block, oversized ones included, is authenticated and unpacked whole into the scan's
+  scratch before it is searched (Storage, Sections and blocks). There are no windows or seams, so `SearchMatcher`
+  works exactly as it does in memory, multi-line regex included.
 - **`explorer.search.more`** continues a search by its `explorer.search` request id and returns the next bounded batch,
   with progress. It is added in all five places and in `Providers.cs`' `BothMethods`, with string and size limits, a
   per-method deadline and the pending-request cap.
@@ -667,10 +758,10 @@ connect.
 | K5 | A queued resource-set save is not withdrawn when its set is dropped | `IndexStore` queue; the set is shared (`ResourceCatalog`) | Withdraw it when the last connection releases the set | G-1 |
 | K6 | The resource set's fingerprint and the statistics checksums use `CHECKSUM_AGG(BINARY_CHECKSUM(...))` | `ObjectSearchSql.cs:266`, `:193` | Summed row hashes, as the database fingerprint uses | G-2 |
 | K7 | Weak hashes: 32-bit row hashes are summed, and the listing's row checksum is `BINARY_CHECKSUM` | `ObjectSearchSql.cs:190`, `:225` | 64-bit row hashes summed as two 32-bit halves in bigint (safe below 2^31 rows). Each object's statistics hash (`sk`, now summed row hashes) folds into its `ob` row hash, and the separate aggregate `ss` goes: statistics are indexed only for tables and views, and `ss`, which has no `ObjectTypes` filter, also counts table types' and internal tables' (Query Store) statistics, which would make K11's sums never match. One 8-byte hash per object is then the same in the fingerprint, the listing (rows of 28 bytes, fitting the 32 MiB `Extra` limit up to about 1.2M rows) and the batch's first result set. `HASHBYTES` runs once per row through `CROSS APPLY`. Bench the cost on the 300k database | G-2 |
-| K8 | A permission change (VIEW DEFINITION, a column grant, a role or group membership, a server permission, ownership) changes what the login sees without changing a hashed row | Permissions are not hashed. GRANT, REVOKE and DENY run from Varia are marked (`TsqlChanges.cs:15`); changes made elsewhere are missed | A permissions hash in the sync over `sys.user_token` (the login's principals: user, `public`, Windows and Entra groups, and every nested role, readable with `public` alone, so a low-privilege login's nested roles are seen), the `sys.database_permissions` rows whose grantee is in it, `sys.fn_my_permissions(NULL, 'DATABASE')`, and `sys.fn_my_permissions(NULL, 'SERVER')` only where the session has a server scope (not Azure SQL Database, and not a contained user: `ServerProfile.ServerScopeInMaster`). No `INSERT`, so `ObjectSearchSql.Lint()` passes. **Ownership** joins the object's own hash: `COALESCE(o.principal_id, s.principal_id)` in `ob`, the listing and the batch, and the schema's owner in `NamedObjects`' `'SC'` row. `ALTER AUTHORIZATION` therefore shows as a changed object and is re-read. **Token age:** `sys.user_token` is fixed when a session logs in, so the fingerprint's pool uses a 15-minute connection lifetime, and a membership change is seen within one check after. A permissions mismatch reads the database whole. The new literals join `FingerprintLiterals`. A live check grants and revokes a nested role | G-2 |
+| K8 | A permission change (VIEW DEFINITION, a column grant, a role or group membership, a server permission, ownership) changes what the login sees without changing a hashed row | Permissions are not hashed. GRANT, REVOKE and DENY run from Varia are marked (`TsqlChanges.cs:15`); changes made elsewhere are missed | A permissions hash in the sync over `sys.user_token` (the login's principals: user, `public`, Windows and Entra groups, and every nested role, readable with `public` alone, so a low-privilege login's nested roles are seen), the `sys.database_permissions` rows whose grantee is in it, `sys.fn_my_permissions(NULL, 'DATABASE')`, and `sys.fn_my_permissions(NULL, 'SERVER')` only where the session has a server scope (not Azure SQL Database, and not a contained user: `ServerProfile.ServerScopeInMaster`). No `INSERT`, so `ObjectSearchSql.Lint()` passes. **Ownership** joins the object's own hash: `COALESCE(o.principal_id, s.principal_id)` in `ob`, the listing and the batch, and the schema's owner in `NamedObjects`' `'SC'` row. `ALTER AUTHORIZATION` therefore shows as a changed object and is re-read. **Token age:** `sys.user_token` is fixed when a session logs in, and SqlClient retires an expired pooled connection only when it is returned. So the fingerprint check gets a pool of its own (its own application name, so Object Explorer's pool is untouched) with a 15-minute connection lifetime, and a membership change is seen within two checks, up to about 30 minutes, which is documented. A permissions mismatch reads the database whole. The new literals join `FingerprintLiterals`. A live check grants and revokes a nested role | G-2 |
 | K9 | Adding the `microsoft_database_tools_support` extended property hides an object but changes no hashed row | `ObjectSearchSql.cs:124` joins `sys.extended_properties` unhashed | Hash the property (class 1, `minor_id = 0`, that name) into the object's own row hash in `ob`, the listing and the batch, so a selective re-read sees which object it hid | G-2 |
 | K10 | A selective re-read misses foreign keys and history tables whose visibility follows an object it re-reads | `SqlReloadPlan` re-reads only changed ids, and a key whose referenced table was hidden was stored with `Referenced` -1 (`ObjectDetails.cs:149`) | One constant query on its own path adds to `plan.Units` and `plan.Reread`: the parent tables of keys whose `referenced_object_id` is re-read (the batch reads key columns by `fk.parent_object_id`, `ObjectSearchSql.cs:147`), and the history tables of re-read current tables (the batch joins `cur.history_table_id = o.object_id`, `:123`), guarded by `r.Band >= 13` as that join is. Memory's links (`loaded.Table.Via`) add history tables that were dropped or swapped, which the server no longer reports. `plan.Worth` is checked again after the additions. `DatabaseReader.Seed` keeps a kept current table's id mapping, so a history table that becomes visible links up. Checks for each case | G-2 |
-| K11 | Uncommitted DDL rolled back during a read is saved as verified | The read runs READ UNCOMMITTED and the fingerprints READ COMMITTED, so before and after match | **Objects:** the batch's first result sets return the server-side row hash (K7), and the read is verified only when the sums of its rows (kept rows' stored hashes plus re-read rows') equal the committed aggregates (bumping `BatchShape` and `SqlSync.Version`). **Children and definitions:** `DatabaseReader` counts the raw rows each result set streams, before any of its own filtering, with each definition's byte length capped at 2,000,000 per row (`ReadText`'s 1,000,000-character cap). The post-read check takes committed counts and capped lengths with exactly the batch's `FROM` and `WHERE`, built from the same constants, so filters never cause a mismatch. It covers `sys.columns`, `sys.indexes`, `sys.parameters`, and the definitions of `sys.sql_modules` (database DDL triggers included), `sys.check_constraints`, `sys.default_constraints`, `sys.computed_columns` and `sys.plan_guides`, with empty strings counted as the batch reads them. A read with parts left out verifies only what it read, and its sync is marked so the next mismatch reads it whole. **Residue, documented:** a rolled-back change that keeps every count and length can still be saved until the next fingerprint. Checks run on a database with heaps, graph and ledger tables, Query Store and DDL triggers, and on master and msdb | G-2 |
+| K11 | Uncommitted DDL rolled back during a read is saved as verified | The read runs READ UNCOMMITTED and the fingerprints READ COMMITTED, so before and after match | **Objects:** the batch's first result sets return the server-side row hash (K7), and the read is verified only when the sums of its rows (kept rows' stored hashes plus re-read rows') equal the committed aggregates (bumping `BatchShape` and `SqlSync.Version`). **Children and definitions:** `DatabaseReader` counts the raw rows each result set streams, before any of its own filtering, with each definition's byte length capped at 2,000,000 per row (`ReadText`'s 1,000,000-character cap). The post-read check takes committed counts and capped lengths with exactly the batch's `FROM` and `WHERE`, built from the same constants, so filters never cause a mismatch. It covers `sys.columns`, `sys.indexes`, `sys.index_columns`, `sys.foreign_key_columns` (so `CREATE INDEX … WITH (DROP_EXISTING = ON)` with an unchanged index count is still seen), `sys.parameters`, and the definitions of `sys.sql_modules` (database DDL triggers included), `sys.check_constraints`, `sys.default_constraints`, `sys.computed_columns` and `sys.plan_guides`, with empty strings counted as the batch reads them. A read with parts left out verifies only what it read, and its sync is marked so the next mismatch reads it whole. **Residue, documented:** a rolled-back change that keeps every count and length can still be saved until the next fingerprint. Checks run on a database with heaps, graph and ledger tables, Query Store and DDL triggers, and on master and msdb. **Cost:** G-2 benches the post-read counts and `DATALENGTH` sums on the 300k database with realistic module bodies against the 15 s `FingerprintBudget` before K11 ships, and if it doesn't fit, sums only the definitions the read actually streamed | G-2 |
 | K12 | `SET CONTAINMENT = PARTIAL` changes the catalog collation without changing the identity | The identity lacks containment | Add `containment` to the identity | G-2 |
 | K13 | DDL that names another database, runs after an intermediate `USE`, or is server-level, is missed until a due search | `MarkIndexStale` (`SqlService.cs:655`) marks only the start and end databases, and nothing for server-level DDL | `TsqlChanges` scans the whole script, outside comments and strings: every `USE`; three-part names (`OtherDb.dbo.Obj`) and `OtherDb..Obj`, never four-part linked-server names; `ALTER`, `DROP` and `RESTORE DATABASE <db>`, which mark that database and the server's own objects; other server-level DDL (logins, server roles, endpoints, linked servers, server triggers), which marks the server's own objects through `MarkSqlStale(connectionId, null)`; and Agent's procedures (`sp_add_job` and the rest), which mark Agent. Database DDL also makes the next check list databases again (`Listed`). **Names match without case** where an exact match misses, in `MarkSqlStale` (`Freshness.cs:65`) and `CheckSqlAsync` (`:199`, `:242`); if two listed names differ only by case, both are marked | G-3 |
 | K14 | Ctrl+Shift+R on a SQL Server tab rebuilds only SQL Tools' cache and never checks the index | `contributions/languages.ts` calls `sqlLanguage.refreshCache` for SQL Server. BigQuery is covered on `main` by `IndexCompletionService.refreshCache` (up to 16 scopes from 32 statements, scoped `explorer.index` refreshes that read details) | SQL Server: also check the tab's database in the index (fingerprint, then a selective re-read if it changed). BigQuery stays as it is (decision D8). T-3b checks scoped refreshes with cold parts, for dataset scopes and for project-only scopes, which read every dataset and run `Spread` | G-3 |
@@ -695,7 +786,9 @@ Kept as they are:
 ## Lanes
 
 Every lane ships in 0.10.0 (decision D12), and the release waits until every row below is Done. The G lanes are
-independent of each other and of tiering, and can start at once, beside T-1. The T lanes are stacked, one PR each, each
+independent of each other and can start at once, beside T-1. G-1, G-2 and G-3 land before the T lanes that build on
+them: T-2 and T-3a rely on G-1's credit and `Extra` fixes (K20, K21), and T-3b on G-1's marks (K1, K3), G-2's sync
+and listing shape (K7, K11) and G-3's refresh (K14). The T lanes are stacked, one PR each, each
 in its own session. The cache is three PRs so each stays reviewable: T-3a (the core), then T-3b (rebuilds) and T-3c
 (editor lookups) side by side. Every lane gets adversarial review rounds until one finds nothing above low. UI changes
 come with screenshots for the owner, and T-5 and T-6 update a mock first.
@@ -707,13 +800,13 @@ come with screenshots for the owner, and T-5 and T-6 update a mock first.
 | G-3 | Editor and scripts: K13, K14 | — | Proposed |
 | G-4 | Live version matrix: K15 | G-2 | Proposed |
 | G-5 | Test tooling: K16, K17 | — | Proposed |
-| T-1 | The SQLite store, final for the release (D7, D16): the dependency and its packaging on all three operating systems and in CI; the schema; `IndexDbSql` and its lint; keys, salts, nonces and associated data; the unencrypted mode; sections and blocks (Names, Listing, Children's two ranges with block-local strings, Definitions with per-block ownership, oversized and raw texts, empty sections); generations from the shared counter, two-step writes with `writes` rows, orphan rules and epoch fencing; the shared sequence, atomic swaps and tombstones; the three reader pools; `synchronous=NORMAL` (D14); one-query startup; `used_at` batching, heartbeats and holders; the sweep in SQL, refused saves and the too-large flag; damage and quarantine; deleting development builds' files; architecture.md's SQL paths. Benches: 5,000 small datasets' startup and child-name scan on Windows with Defender, the 300k database in memory for D4, names-tier bytes per object for D1, saves per second; K18 | — | Proposed |
-| T-2 | Building inside the limit: the 256 MiB minimum in `objectSearchLimits` and `ObjectIndexLimits`, with the settings parser clamping a stored value below it to 256 MiB before validation (today an out-of-range value is dropped to the default), a test for it, and the settings catalogue regenerated; the shares table and names-cap formula; reader shares and outgrowing; read alone with its own bound and write-queue reservation; builds waiting only between units; due marks only once room has grown; the write-queue bound; `pendingPass2` (D14); K22 | T-1 | Proposed |
-| T-3a | The cache core: immutable, leased sibling tiers; split lookups; stubs with the kind mask, in `BigQueryLookup` and its jump, wave and has-object paths; the names cap enforced outside `Put`; per-tier charges; eviction in strict least-recently-used order with recency across connections, leased tiers skipped; reservations for lookup arrays and resource definitions; the ledger's own lock; leases released outside the store's gate; lowering the limit evicts; part loads by generation; adopting newer generations; the listing outside "fully hot"; `BuiltAt` remapping in `BigQueryReader`; Clear, the `explorer.index.invalidated` event and epochs; resource sets kept across rebuilds (K19); floors folded into the cache; the eviction bench over 5,000 small units | T-2 | Proposed |
-| T-3b | Rebuilds with cold parts: merges, `Apply`, `language.hydrate` and the 4 h re-read loading every cold part first; the partial-unit check; whole reads when parts can't all be made hot; pass 1 deciding "unchanged" from Names facts or the stub; `Known` only where it carries; `Apply` off the request path, queued per unit with its bound, waiting out builds, saved over its generation with pending details re-applied; the details digest; requests with details loading Children; scoped refreshes with cold parts (K14); whole-project marks (D13) | T-3a | Proposed |
-| T-3c | Editor lookups: the slotless `Lookup` lane, for `language.lookup` and `language.hydrate`; hydrate un-recording `error` and `throttled` targets; `loading` and `wait` in all five places; the async lookup path; the renderer's waiting counter; `batchedJump`, `keepJumpCache`, `classifyLookupTargets` and `definition.ts` handling `loading`; hydrate waiting for cold loads within its budget | T-3a | Proposed |
+| T-1 | The SQLite store (D7, D16): the dependency and its packaging checklist (RIDs, restore parity, `Batteries_V2.Init`, `backend-check.cjs`, macOS signing); the schema; `IndexDbSql` and its lint; keys, salts, nonces and associated data; the unencrypted mode; sections and blocks (Names, Listing, Children's two ranges with block-local strings, Definitions with per-block ownership, oversized and raw texts, empty sections); generations from the shared counter, two-step writes with `writes` rows, orphan rules and epoch fencing; the shared sequence, the `INSERT … ON CONFLICT` swap for reads and update-only swaps for `Apply` and hydrate; tombstones by cause (DDL marks upserted, removals at the old sequence, 24 h expiry) and adopted at each heartbeat; retiring a store under a new file name; epoch checks on reads; pre-configure reads; `BEGIN IMMEDIATE` with bounded retry; counter bumps ahead of bulk writes; no snapshot across a slice; the three reader pools; `synchronous=NORMAL` (D14); inline Names and the scope index; one-query startup; `used_at` batching, heartbeats and holders; the sweep in SQL, refused saves and the too-large flag; `quick_check` of `meta` and `units`, damage and quarantine; Clear's checkpoint and vacuum, and new files after unencrypted mode or a key reset; link checks; deleting development builds' files; architecture.md's SQL paths. Benches: 5,000 small datasets' startup and child-name scan on Windows with Defender, the 300k database in memory for D4, names-tier bytes per object for D1, saves per second; K18 | — | Proposed |
+| T-2 | Building inside the limit: the 256 MiB minimum in `objectSearchLimits` and `ObjectIndexLimits`, with the settings parser clamping a stored value below it to 256 MiB before validation (today an out-of-range value is dropped to the default), a test for it, and the settings catalogue regenerated; `explorer.index.setMemoryLimit` from main at start and on change; the shares table and names-cap formula; reader shares and outgrowing; read alone with its own bound and write-queue reservation; builds waiting only between units; due marks only once room has grown; the write-queue bound; `pendingPass2` (D14); K22 | T-1, G-1 | Proposed |
+| T-3a | The cache core: immutable, leased sibling tiers; split lookups; stubs with the kind mask, in `BigQueryLookup` and its jump, wave and has-object paths; the names cap enforced outside `Put` and counted exactly through `StringPool`'s `NamesRefs`; per-tier structural charges; disk-refused units keeping names only; eviction in strict least-recently-used order with recency across connections, leased tiers skipped; reservations for lookup arrays and resource definitions; the ledger's own lock; leases released outside the store's gate; lowering the limit evicts; part loads by generation; adopting newer generations; the listing outside "fully hot"; `BuiltAt` remapping in `BigQueryReader`; Clear, the `explorer.index.invalidated` event and epochs; resource sets kept across rebuilds (K19); floors folded into the cache; the eviction bench over 5,000 small units | T-2, G-1 | Proposed |
+| T-3b | Rebuilds with cold parts: merges, `Apply`, `language.hydrate` and the 4 h re-read loading every cold part first; the partial-unit check; whole reads when parts can't all be made hot; pass 1 deciding "unchanged" from Names facts or the stub; `Known` only where it carries; `Apply` off the request path, queued per unit with its bound, waiting out builds, with fetch numbers taken before each get, pending details held in `ObjectSearchService`, saved over its generation, per-object fetch numbers in Names facts with newer-wins merging, dropped once saved, and a slower read's swap failing below `applied`; the details digest; requests with details loading Children; scoped refreshes with cold parts (K14); whole-project marks (D13) | T-3a, G-1, G-2, G-3 | Proposed |
+| T-3c | Editor lookups: the slotless `Lookup` lane, for `language.lookup` and `language.hydrate`; hydrate un-recording `error` and `throttled` targets; `loading` and `wait` in all five places; the async lookup path; the renderer's waiting counter; `batchedJump`, `keepJumpCache`, `classifyLookupTargets` and `definition.ts` handling `loading`; SQL Server's preview drawers (`EditorLookup.OneSql`, `SqlLanguageService.resolveSuggestion`, `IntelliSensePopover`) loading Children and not caching `loading`; hydrate waiting for cold loads within its budget | T-3a | Proposed |
 | T-4 | Reload by tier, BigQuery and SQL Server: every saved unit's names at connect under the cap, the rest when used (through T-3c), pass 2 sharing the allowance, and SQL Server's re-read of left-out definitions under the admission rule instead of `budget.Free >= NamesReserveBytes + loaded.Bytes` | T-3b, T-3c | Proposed |
-| T-5 | Cold search: `explorer.search.more`, `explorer.search.close` and `surface` in all five places, `BothMethods` and `cancellableRequests`; live searches only for Search Objects tabs, capped and dropped with their window; leases dropped after the hot phase; at most 2 scans; stub skips; one ordered read per scope; no hit twice; streaming windows; the On disk group, its cap and All servers subgroups with scroll anchoring; hits that never move; patches; Ctrl+Q and the explorer box with their note and a full-query `open()` (D15); the 2 GiB and 5,000-unit benches; the results mock | T-3a | Proposed |
+| T-5 | Cold search: `explorer.search.more`, `explorer.search.close` and `surface` in all five places, `BothMethods` and `cancellableRequests`; live searches only for Search Objects tabs, capped and dropped with their window; leases dropped after the hot phase; at most 2 scans; stub skips; short keyset slices pinned to the hot phase's generations; no hit twice; whole-block reads; the On disk group, its cap and All servers subgroups with scroll anchoring; hits that never move; patches; Ctrl+Q and the explorer box with their note and a full-query `open()` (D15); the 2 GiB and 5,000-unit benches; the results mock | T-3a | Proposed |
 | T-6 | The disk as a use-driven cache in the product: the index line's left-out and disk-limit states; the Memory panel (`SqlService.ReportIndexMemory` reporting when memory shrinks, and `IndexMemoryReport` naming stubs, hot listings, leased evicted tiers, scratch and pending writes); Options wording; docs, CHANGELOG, guide impact, screenshots | T-3c, T-4, T-5 | Proposed |
 | T-7 | Per-block trigram filters for the cold scan, only if T-5's bench says it is too slow: sealed in the `filters` table, bypassed for short, fuzzy and literal-free searches | T-5 | Proposed |
 
@@ -721,18 +814,18 @@ come with screenshots for the owner, and T-5 and T-6 update a mock first.
 
 | # | Question | Recommendation |
 | --- | --- | --- |
-| D1 | Object names (not columns) always in memory with BigQuery's lean facts, capped at `min(limit / 2, what the other shares leave)` across all connections by recency, units past the cap searched on disk, SQL Server's listing as its own cold tier, and only table descriptions moved to Children? | Yes. Instant object search is the feature, and keeping the listing (up to 32 MiB a database) and descriptions out keeps 300k–500k objects inside the cap at the default limit. T-1 measures bytes per object on the 300k database and on fake BigQuery projects before the cap is fixed |
+| D1 | Object names (not columns) always in memory with BigQuery's lean facts, capped at `min(limit / 2, what the other shares leave)` across all connections by recency, units past the cap searched on disk, SQL Server's listing as its own cold tier, and only table descriptions moved to Children? | Yes. Instant object search is the feature, `StringPool`'s `NamesRefs` makes the cap count names' texts exactly, and keeping the listing (up to 32 MiB a database) and descriptions out keeps 300k–500k objects inside the cap at the default limit. T-1 measures bytes per object on the 300k database and on fake BigQuery projects before the cap is fixed |
 | D2 | Cold names, children and definitions searched on disk, with hits streaming in under their own deadline (30 s by default, with Stop)? | Yes. Keeping all definitions in memory would leave little to tier |
-| D3 | The disk limit stays hard, and the disk works as a cache driven by use: after units unused for 30 days and units no live process holds, a save may push out a held unit unused for 10 minutes. A just-saved unit counts as used, so when everything was used in the last 10 minutes a save is refused and the index line suggests a larger limit. Pushed-out parts are read again only when used? | Yes. Use and holders are rows in the store, so every process sees the same order, the disk never wedges, and churn follows use with no loop. Keep 2 GiB until T-1 gives bytes per object, then revisit in T-6 |
+| D3 | The disk limit stays hard, and the disk works as a cache driven by use: after units unused for 30 days and units no live process holds, a save may push out a held unit unused for 10 minutes. A just-saved unit counts as used, so when everything was used in the last 10 minutes a save is refused and the index line suggests a larger limit. Pushed-out parts are read again only when used? | Yes. Use and holders are rows in the store, so every process sees the same order, the disk never wedges, and churn follows use with no loop. A refused or pushed-out unit keeps only its names in memory and leaves a tombstone, so a full disk never pins memory or lets an older read back in. Keep 2 GiB until T-1 gives bytes per object, then revisit in T-6 |
 | D4 | A build allowance of `min(limit / 4, 256 MiB)`, shared by readers that lend unused share, an interactive reserve of `min(32 MiB, limit / 8)`, scratch of `min(16 MiB, limit / 16)`, a unit that outgrows the allowance read alone with up to `limit / 2` and its write reserved, and no streaming builder? | Yes, if T-1's measurement of the 300k database fits; otherwise revisit before T-2. Lending share stops BigQuery's 32 readers aborting each other |
 | D5 | Hits found on disk shown as an **On disk** group below the hot hits (a subgroup per server under All servers), with an exact name match moved to the top only before the user has interacted? | Yes. Hits already shown never move, and selection follows `serverHitKey` |
 | D6 | Clear (and a new key, or saving off) starts over: the backend sends `explorer.index.invalidated` before deleting anything, units that had parts on disk are dropped, and the renderer rebuilds each connected source as on a first connect, costing a first build's BigQuery calls, with the dialog saying so? | Yes. Clear is rare and deliberate. The event is needed because only the renderer knows which projects to read |
-| D7 | The store's schema version 1 is the only saved format 0.10.0 ships, with T-1 holding everything the later lanes read (tiers, both Children ranges with block-local strings, per-block ownership, oversized and raw texts, generations, the sequence, the kind mask, the details digest, the `filters` table), so nothing changes after T-1? | Yes. T-1's review checks the schema against T-3a's, T-3b's and T-5's sections. Development builds' files are deleted once |
+| D7 | The store's schema version 1 is the only saved format 0.10.0 ships, frozen at release rather than at T-1: T-1 aims to hold everything the later lanes read (tiers, both Children ranges with block-local strings, per-block ownership, oversized and raw texts, generations, the sequence, tombstones, the kind mask, the details digest, the `filters` table), and a later pre-release lane may still bump it? | Yes. T-1's review checks the schema against T-3a's, T-3b's and T-5's sections, but a column T-3b or T-5 finds it needs costs nothing before release, since development builds delete an incompatible store |
 | D8 | Ctrl+Shift+R on SQL Server also checks the tab's database in the index, and BigQuery keeps `main`'s scoped refresh unchanged? | Yes. SQL Server's check costs one row, and BigQuery's refresh already catches in-place changes |
 | D9 | SQL Server 2016: test it on your machine, or accept it as untested beside containers for 2017–2022? | Containers for 2017–2022 now, and 2016 once on your machine before release |
 | D10 | **Index memory limit** keeps its name and 512 MiB default, with its minimum raised from 64 to 256 MiB? | **Decided by the owner.** A saved value below 256 MiB is clamped to 256 MiB when read, not dropped to the default, and the description says the rest of the index stays on disk |
 | D11 | K8's server-scope permissions only where the session has a server scope: not on Azure SQL Database and not for contained users, with Azure SQL Database checked live once against one you provide? | Yes. Until then, Azure SQL Database and contained users are documented as checked at database scope only |
-| D12 | Every lane ships in 0.10.0, and the release waits for the last one? | Yes, as you asked. T-7 may turn out empty. G-4 and G-5 change no format or behaviour, so they are the only lanes that could slip to a patch release without harm, if you ever choose to |
+| D12 | Every lane ships in 0.10.0, and the release waits for the last one? | Yes, as you asked, with G-1, G-2 and G-3 landed first, since T-2, T-3a and T-3b build on their fixes. T-7 may turn out empty. G-4 and G-5 change no format or behaviour, so they are the only lanes that could slip to a patch release without harm, if you ever choose to |
 | D13 | A BigQuery whole-project DDL mark stops deleting the project's saved datasets and reading every dataset whole, and re-lists each dataset instead, leaving what a listing can't see (`ALTER VIEW`, in-place `ALTER TABLE`, older date shards) to the background re-read's pace? | Yes. Today one unresolved script costs a whole project's details calls, hundreds of thousands on your project. It stays in T-3b, since it relies on the shared sequence and re-list marks |
 | D14 | SQLite with `synchronous=NORMAL` in WAL (no device flush on every commit), and BigQuery's pass 1 kept out of the write queue while pass 2 will reach it? | Yes. The store is a cache that can be rebuilt: WAL with `NORMAL` never corrupts, and a power loss loses at most the last commits, which are read again once. T-2 records saves per second and how many datasets were written twice |
 | D15 | Only Search Objects tabs scan the disk. Ctrl+Q searches names in memory, and Object Explorer's box everything in memory under its filters, both with a note and a link carrying the full query whenever something relevant is on disk? | Yes. Those surfaces must stay instant, and the note says why a definition or column hit is only found in Search Objects |
