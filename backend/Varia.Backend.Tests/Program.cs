@@ -128,6 +128,7 @@ if (args is ["--bigquery-checks"])
     await BigQueryExplorerChecks.RunAsync(Collect);
     await BigQueryIndexChecks.RunAsync(Collect);
     await BigQueryJobHistoryChecks.RunAsync(Collect);
+    await BigQueryResultNameChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -203,6 +204,12 @@ if (args is ["--result-name-checks"])
 {
     await ResultNameChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " result name checks.");
+    return;
+}
+if (args is ["--bigquery-result-name-checks"])
+{
+    await BigQueryResultNameChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery result name checks.");
     return;
 }
 // BigQuery against the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (CI: live group 1, docs/ci.md); never a real project.
@@ -554,6 +561,7 @@ if (liveGroup is null)
         ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("BigQueryIndex", () => BigQueryIndexChecks.RunAsync(Check)),
         ("BigQueryJobHistory", () => BigQueryJobHistoryChecks.RunAsync(Check)),
+        ("BigQueryResultName", () => BigQueryResultNameChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("FloatExact", Sync(() => FloatExactChecks.Run(Check))),
