@@ -631,7 +631,7 @@ export interface ResultsPivotParams { resultId: number; rows: number[]; column?:
 export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; columnGroups: number; approximate: boolean }
 /** results.combine: combines 2 to 32 complete `rows` results of one multi-server query into a `combined` result. */
 export interface ResultsCombineParams { resultIds: number[]; statementName?: string }
-export interface ResultsCombineResult { descriptor: ResultDescriptor }
+export interface ResultsCombineResult { descriptor: ResultDescriptor; warnings?: string[] }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */

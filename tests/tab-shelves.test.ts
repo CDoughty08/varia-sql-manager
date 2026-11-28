@@ -1,11 +1,16 @@
 // @vitest-environment happy-dom
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DockviewGroupPanel } from 'dockview-react'
 import { GestureService } from '../src/renderer/src/core/gestures'
 import { SnapshotStore } from '../src/renderer/src/core/store'
 import type { Workbench } from '../src/renderer/src/core/workbench'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { QueryTab } from '../src/renderer/src/documents'
-import { TabShelfLayout, type ShelfFeedback, type ShelfState } from '../src/renderer/src/editor-groups/TabShelves'
+import TabShelves, { TabShelfLayout, type ShelfFeedback, type ShelfState } from '../src/renderer/src/editor-groups/TabShelves'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 class TestStore<T> extends SnapshotStore<T> {
   set(value: T): void { this.publish(value) }
@@ -778,5 +783,115 @@ describe('editor group tab shelves', () => {
     flushFrames()
     expect(view.wheel(18, 40).defaultPrevented).toBe(false)
     expect(view.changed).toHaveBeenCalledTimes(updates)
+  })
+
+  it('re-emits shelf state when a hidden tab changes multiMode, enabled target count, or file path', () => {
+    const view = fixture(0, 6)
+    view.resize(570, 864)
+    view.layout.setRows(false, 2)
+    expect(view.shelf(false).hidden.map(tab => tab.id)).toEqual(['q4', 'q5', 'q6'])
+
+    const updateHidden = (patch: Partial<QueryTab>) => {
+      const next = view.documents.getSnapshot().map(tab => tab.id === 'q6' ? { ...tab, ...patch } : tab)
+      view.documents.set(next)
+      flushFrames()
+    }
+
+    let calls = view.changed.mock.calls.length
+    // Change to same-engine multi-server with 2 enabled targets.
+    updateHidden({
+      multiMode: 'same',
+      multiTargets: [
+        { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 's2', provider: 'sqlserver', database: 'master', enabled: true }
+      ]
+    })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+
+    // Toggle a target off (enabled count 2 -> 1).
+    updateHidden({
+      multiTargets: [
+        { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: true },
+        { connectionId: 's2', provider: 'sqlserver', database: 'master', enabled: false }
+      ]
+    })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+
+    // Switch multiMode same -> cross.
+    updateHidden({ multiMode: 'cross' })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+
+    // Update file path on hidden tab.
+    updateHidden({ file: { id: 'f1', name: 'audit.sql', path: 'C:/queries/audit.sql', encoding: 'utf8', readOnly: false } })
+    expect(view.changed).toHaveBeenCalledTimes(++calls)
+    expect(view.shelf(false).hidden.find(tab => tab.id === 'q6')?.file?.path).toBe('C:/queries/audit.sql')
+  })
+
+  it('formats singular and plural target counts cleanly in overflow tooltips (1 target vs 0/2 targets)', async () => {
+    const view = fixture(0, 6, { pinned: 1, unpinned: 2 })
+    // Dispose the fixture's standalone layout before mounting TabShelves on the same group.
+    view.layout.dispose()
+    view.documents.set(view.tabs.map(tab => {
+      if (tab.id === 'q4') {
+        return {
+          ...tab,
+          multiMode: 'same',
+          multiTargets: [
+            { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: true },
+            { connectionId: 's2', provider: 'sqlserver', database: 'master', enabled: false }
+          ]
+        }
+      }
+      if (tab.id === 'q5') {
+        return {
+          ...tab,
+          multiMode: 'same',
+          multiTargets: [
+            { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: true },
+            { connectionId: 's2', provider: 'sqlserver', database: 'master', enabled: true }
+          ]
+        }
+      }
+      if (tab.id === 'q6') {
+        return {
+          ...tab,
+          multiMode: 'same',
+          multiTargets: [
+            { connectionId: 's1', provider: 'sqlserver', database: 'master', enabled: false }
+          ]
+        }
+      }
+      return tab
+    }))
+
+    const workbench = {
+      editorGroups: view.editorGroups,
+      documents: { get: (id: string) => view.documents.getSnapshot().find(tab => tab.id === id), subscribe: view.documents.subscribe },
+      tabRename: view.tabRename,
+      theme: view.theme,
+      keybindings: view.keybindings,
+      gestures: new GestureService('win32')
+    } as unknown as Workbench
+
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const origHidePopover = HTMLElement.prototype.hidePopover
+    HTMLElement.prototype.hidePopover = vi.fn()
+    try {
+      await act(async () => {
+        root.render(createElement(WorkbenchProvider, { workbench, children: createElement(TabShelves, { group: view.group as unknown as DockviewGroupPanel }) }))
+      })
+      const overflowButtons = [...view.list.querySelectorAll<HTMLButtonElement>('.query-shelf-overflow button')]
+      expect(overflowButtons.map(button => [button.textContent, button.title])).toEqual([
+        ['Query 4', 'Query 4 · 1 target'],
+        ['Query 5', 'Query 5 · 2 targets'],
+        ['Query 6', 'Query 6 · 0 targets']
+      ])
+    } finally {
+      HTMLElement.prototype.hidePopover = origHidePopover
+      act(() => { root.unmount() })
+      host.remove()
+    }
   })
 })

@@ -231,7 +231,7 @@ keys it uses are listed below.
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
 | Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | ⌃⌥⇟ | `hasResultSets` | — |
 | Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | ⌃⌥⇞ | `hasResultSets` | — |
-| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`resultsFocus && multipleResults`) | Ctrl+1 (`resultsFocus && multipleResults`) | ⌘1 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`resultsFocus && multipleResults`) | Ctrl+1 (`resultsFocus && multipleResults`) | ⌘1 (`resultsFocus && multipleResults`) | `hasResults` | — |
 | Go to Result 2 | `output.goToResult2` | Ctrl+2 (`resultsFocus && multipleResults`) | Ctrl+2 (`resultsFocus && multipleResults`) | ⌘2 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 3 | `output.goToResult3` | Ctrl+3 (`resultsFocus && multipleResults`) | Ctrl+3 (`resultsFocus && multipleResults`) | ⌘3 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 4 | `output.goToResult4` | Ctrl+4 (`resultsFocus && multipleResults`) | Ctrl+4 (`resultsFocus && multipleResults`) | ⌘4 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
@@ -239,10 +239,10 @@ keys it uses are listed below.
 | Go to Result 6 | `output.goToResult6` | Ctrl+6 (`resultsFocus && multipleResults`) | Ctrl+6 (`resultsFocus && multipleResults`) | ⌘6 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 7 | `output.goToResult7` | Ctrl+7 (`resultsFocus && multipleResults`) | Ctrl+7 (`resultsFocus && multipleResults`) | ⌘7 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 8 | `output.goToResult8` | Ctrl+8 (`resultsFocus && multipleResults`) | Ctrl+8 (`resultsFocus && multipleResults`) | ⌘8 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
-| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`resultsFocus && multipleResults`) | Ctrl+9 (`resultsFocus && multipleResults`) | ⌘9 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`resultsFocus && multipleResults`) | Ctrl+9 (`resultsFocus && multipleResults`) | ⌘9 (`resultsFocus && multipleResults`) | `hasResults` | — |
 | Next Result View | `output.nextResultView` | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | ⌃⌥⇧⇟ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
 | Previous Result View | `output.previousResultView` | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | ⌃⌥⇧⇞ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
-| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result…; Results toolbar › More results tools › Go to Result… |
+| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResults` | Window › Go to Result…; Results toolbar › More results tools › Go to Result… |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size; Results toolbar › More results tools › Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 | Copy Operator (not in the palette) | `plan.copyOperator` | Ctrl+C * (`planOutlineFocus`) | Ctrl+C * (`planOutlineFocus`) | ⌘C * (`planOutlineFocus`) | Always | Execution plan outline context menu › Copy |
@@ -280,7 +280,7 @@ keys it uses are listed below.
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | Object Explorer header › More actions › Group by Schema |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query; Search Objects result context menu › New Query |
 | New Multi-Server Query | `explorer.newMultiServerQuery` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › New Multi-Server Query |
-| New Cross-Engine SELECT… | `explorer.newCrossEngineQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Cross-Engine SELECT… |
+| New Cross-Engine SELECT… | `explorer.newCrossEngineQuery` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › New Cross-Engine SELECT… |
 | Refresh Selected | `explorer.refreshSelected` | — | — | — | `hasConnection` | Object Explorer context menu › Refresh Selected |
 | Clear Selection | `explorer.clearMultiSelect` | — | — | — | `hasConnection` | Object Explorer context menu › Clear Selection |
 | Disconnect Selected | `explorer.disconnectSelected` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect Selected |

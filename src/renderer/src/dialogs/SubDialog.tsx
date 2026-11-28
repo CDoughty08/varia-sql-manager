@@ -26,6 +26,10 @@ export interface SubDialogProps {
    *  Cancel takes focus as it opens, and OK runs only from its own button, as for a destructive OK, without the danger style. */
   readonly alert?: boolean
   readonly describedBy?: string
+  /** When false, suppresses per-instance focus capture/return (managed by an outer modal queue wrapper). */
+  readonly manageReturnFocus?: boolean
+  /** Invoked on mount right before initial focus is placed (after any closing modal's cleanup has restored focus). */
+  readonly onBeforeInitialFocus?: () => void
   readonly children: ReactNode
 }
 
@@ -34,20 +38,24 @@ export interface SubDialogProps {
  * OK and Cancel. Tab stays inside it, and Escape and Enter are handled here, so only this dialog closes; focus returns
  * to where it was.
  */
-export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, alternative, alert, describedBy, children }: SubDialogProps) {
+export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, destructive, alternative, alert, describedBy, manageReturnFocus = true, onBeforeInitialFocus, children }: SubDialogProps) {
   const { ownerDocument } = useDialogWindow()
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
   // Read while rendering, before the dialog takes focus.
-  const returnFocus = useRef(focusToReturn())
+  const returnFocus = useRef(manageReturnFocus ? focusToReturn() : null)
+  const beforeInitialFocusRef = useRef(onBeforeInitialFocus)
+  beforeInitialFocusRef.current = onBeforeInitialFocus
   useEffect(() => {
+    beforeInitialFocusRef.current?.()
     const doc = form.current?.ownerDocument ?? ownerDocument
     const target = (destructive || alert ? cancel.current : null) ?? (initialFocus ? doc.getElementById(initialFocus) : null) ?? form.current?.querySelector<HTMLElement>('input:not(:disabled), select:not(:disabled), button:not(:disabled)')
     target?.focus()
+    if (!manageReturnFocus) return
     const previous = returnFocus.current
     return () => returnFocusTo(previous)
-  }, [initialFocus, destructive, alert, ownerDocument])
+  }, [initialFocus, destructive, alert, ownerDocument, manageReturnFocus])
   // OK disabled while its work runs (Killing…) drops focus to the page: keep it in the dialog, where Tab and Escape work.
   useEffect(() => {
     const doc = form.current?.ownerDocument ?? ownerDocument
@@ -61,9 +69,10 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     if (event.key === 'Escape') { event.preventDefault(); onCancel() }
     else if (event.key === 'Enter') {
       // A button presses itself and a drop-down list opens; a list box (Select Database Owner's) chooses, as OK does.
-      // A destructive OK runs only from its own button.
-      if (isElement(event.target) && (event.target.tagName === 'BUTTON' || (event.target.tagName === 'SELECT' && (event.target as HTMLSelectElement).size <= 1)) || destructive || alert) return
+      // A destructive or alert OK runs only from its own button: prevent implicit form submission from inputs/checkboxes.
+      if (isElement(event.target) && (event.target.tagName === 'BUTTON' || (event.target.tagName === 'SELECT' && (event.target as HTMLSelectElement).size <= 1))) return
       event.preventDefault()
+      if (destructive || alert) return
       if (!okDisabled) onOk()
     }
   }

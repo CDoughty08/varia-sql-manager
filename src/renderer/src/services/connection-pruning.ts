@@ -14,7 +14,10 @@ export function bindConnectionPruning({ registry, documents, api, ready }: {
     if (!restored || disposed || pruning || documents.getSnapshot().busy) return
     pruning = true
     try {
-      const references = new Set(documents.getSnapshot().documents.flatMap(document => document.targetId ? [document.targetId] : []))
+      const references = new Set(documents.getSnapshot().documents.flatMap(document => [
+        ...document.targetId ? [document.targetId] : [],
+        ...(document.multiTargets ?? []).flatMap(target => target.targetId ? [target.targetId] : [])
+      ]))
       const ids = registry.pruneUnreferenced(references)
       if (ids.length) void api.pruneConnectionTargets(ids).catch(() => {})
     } finally { pruning = false }

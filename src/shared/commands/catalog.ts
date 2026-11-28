@@ -513,7 +513,7 @@ export const commandCatalog = {
   },
   'explorer.newCrossEngineQuery': {
     title: 'New Cross-Engine SELECT…', category: 'Object Explorer', icon: 'split-horizontal', keywords: ['cross', 'engine', 'sqlserver', 'bigquery', 'select', 'query'],
-    precondition: '!documentBusy', unavailableHint: 'Wait for the open document task to finish.', providers: both,
+    precondition: 'hasConnection && !documentBusy', unavailableHint: 'Connect to a server first.', providers: both,
     menus: [{ menu: 'explorer.context', group: '1_query', order: 12, mnemonic: 'n', when: "explorerNode == 'server' && !explorerServerLost" }]
   },
   'explorer.refreshSelected': {
@@ -1504,7 +1504,7 @@ export const commandCatalog = {
     keybindings: [{ key: 'ctrl+alt+pageup', allowRepeat: true }, { win: 'ctrl+pageup', linux: 'ctrl+pageup', when: 'resultsFocus && multipleResults', allowRepeat: true }]
   },
   'output.goToResult1': {
-    title: 'Go to Result 1', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResultSets', providers: both,
+    title: 'Go to Result 1', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'grid'], precondition: 'hasResults', providers: both,
     unavailableHint: 'Run a query with a result first.', keybindings: [{ key: 'mod+1', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToResult2': {
@@ -1536,7 +1536,7 @@ export const commandCatalog = {
     unavailableHint: 'Run a query with 8 results first.', keybindings: [{ key: 'mod+8', when: 'resultsFocus && multipleResults' }]
   },
   'output.goToLastResult': {
-    title: 'Go to Last Result', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'end', 'grid'], precondition: 'hasResultSets', providers: both,
+    title: 'Go to Last Result', category: 'Query', keywords: ['tab', 'result', 'jump', 'switch', 'end', 'grid'], precondition: 'hasResults', providers: both,
     unavailableHint: 'Run a query with results first.', keybindings: [{ key: 'mod+9', when: 'resultsFocus && multipleResults' }]
   },
   'output.nextResultView': {
@@ -1548,7 +1548,7 @@ export const commandCatalog = {
     unavailableHint: 'Show results as tabs and build a Pivot of the result first.', keybindings: [{ key: 'ctrl+alt+shift+pageup', when: '!textInputFocus', allowRepeat: true }]
   },
   'output.goToResult': {
-    title: 'Go to Result…', category: 'Query', icon: 'search', keywords: ['tab', 'result', 'overflow', 'picker', 'list', 'find', 'pivot', 'comparison', 'jump'], precondition: 'resultsTabs && hasResultSets', providers: both,
+    title: 'Go to Result…', category: 'Query', icon: 'search', keywords: ['tab', 'result', 'overflow', 'picker', 'list', 'find', 'pivot', 'comparison', 'jump'], precondition: 'resultsTabs && hasResults', providers: both,
     unavailableHint: 'Show results as tabs, with results to go to.', keybindings: [{ key: 'mod+shift+o' }], menus: [{ menu: 'window', group: '1_panes', order: 10, mnemonic: 'g' }, { menu: 'output.tools', group: '1_layout', order: 2, mnemonic: 'g' }]
   },
   'output.toggleRowSize': {

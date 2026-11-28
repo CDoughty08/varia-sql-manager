@@ -893,7 +893,7 @@ export class ResultsPortHost {
       }
       const descriptor: ResultDescriptor = { ...parsed.data.descriptor, generation }
       if (generation === this.generation) this.own([descriptor])
-      this.post({ t: 'end', rid, ok: true, result: { descriptor } })
+      this.post({ t: 'end', rid, ok: true, result: { descriptor, ...(parsed.data.warnings?.length ? { warnings: parsed.data.warnings } : {}) } })
     }, error => {
       if (this.port !== port || this.sorting.get(rid) !== combine) return
       this.sorting.delete(rid)

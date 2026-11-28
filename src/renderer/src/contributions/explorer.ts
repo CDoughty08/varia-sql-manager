@@ -6,6 +6,7 @@ import { bigQueryPreviewRows } from '../../../shared/bigquery/objects'
 import { mergeProjects } from '../bigquery-connect-form'
 import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
+import type { MultiDocumentTarget } from '../documents'
 import { explorerNodeOf, filterable, objectNodeOf, peekPropertiesOf, type ExplorerMenuNode } from '../menus/targets'
 import type { QuickPickItem } from '../quickinput/QuickInputService'
 import type { LiveConnection } from '../services/connections'
@@ -27,10 +28,11 @@ const bigQueryPrincipalOf = (connection: LiveConnection | undefined): string | u
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch, quickInput, bigQueryStarred }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus, settings, peek, peekTabs, dependencies, queries, bigQueryProperties, objectSearch, quickInput, bigQueryStarred, disconnectCoordinator, notifications }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>
   & { queries?: Pick<Workbench['queries'], 'execute'>; bigQueryProperties?: Pick<Workbench['bigQueryProperties'], 'canOpen' | 'open'> }
   & { objectSearch?: Pick<Workbench['objectSearch'], 'refreshNode'> & Partial<Pick<Workbench['objectSearch'], 'refreshBigQuery'>> }
   & { quickInput?: Pick<Workbench['quickInput'], 'show' | 'setAnswer' | 'hide' | 'setMessage'>; bigQueryStarred?: Pick<Workbench['bigQueryStarred'], 'starredFor' | 'isStarred' | 'setStarred'> }
+  & { disconnectCoordinator?: Pick<Workbench['disconnectCoordinator'], 'disconnectMany'>; notifications?: Pick<Workbench['notifications'], 'notify'> }
   & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'>; settings?: Pick<Workbench['settings'], 'toggle'>; peek?: Pick<Workbench['peek'], 'canPeek' | 'peek' | 'getSnapshot' | 'close' | 'refresh'>
     peekTabs?: Pick<Workbench['peekTabs'], 'canOpen' | 'open' | 'view'>; dependencies?: Pick<Workbench['dependencies'], 'canOpen' | 'open'> },
   api: Pick<VariaApi, 'writeClipboardText'> & Partial<Pick<VariaApi, 'bigQueryConnectionProjects' | 'explorerChildren' | 'explorerCancel'>>): Disposable {
@@ -359,9 +361,168 @@ export function explorerContribution({ commands, documents, connections, explore
       when: args => !!peekPropertiesOf(args)?.text,
       run: async args => { const text = peekPropertiesOf(args)?.text; if (text) unwrap(await api.writeClipboardText(text)) }
     }),
-    ...(['explorer.toggleMultiSelect', 'explorer.newMultiServerQuery', 'explorer.newCrossEngineQuery', 'explorer.refreshSelected', 'explorer.clearMultiSelect', 'explorer.disconnectSelected', 'explorer.selectAllSqlServers', 'explorer.selectAllBigQueryProjects'] as const).map(id =>
-      commands.register(id, { when: () => false, run: () => {} })
-    )
+    // Multi-server selection & Cross-Engine query commands.
+    commands.register('explorer.toggleMultiSelect', {
+      when: args => { const node = nodeOf(args); return live(node) && node.kind === 'server' },
+      run: args => {
+        const node = nodeOf(args)
+        if (!live(node) || node.kind !== 'server') return
+        const outcome = explorer.toggleMultiSelect(node.id, { silentNotice: !!notifications })
+        if (outcome.notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: outcome.notice })
+      }
+    }),
+    commands.register('explorer.newMultiServerQuery', {
+      when: () => explorer.multiSelectedTargets().length >= 2,
+      unavailable: () => !explorer.getSnapshot().canMultiSelect
+        ? 'Connect two or more servers of the same engine first.'
+        : 'Select two or more servers of the same engine in Object Explorer.',
+      run: () => {
+        const selected = explorer.multiSelectedTargets()
+        if (selected.length < 2) return
+        const limited = selected.slice(0, 32)
+        if (selected.length > 32) {
+          const noun = limited[0]!.provider === 'bigquery' ? 'BigQuery projects' : 'SQL Servers'
+          notifications?.notify({
+            severity: 'info',
+            key: 'explorer.multiSelect.engineLock',
+            message: `Multi-Server queries support at most 32 targets. Opened with the first 32 of ${selected.length} selected ${noun}.`
+          })
+        }
+        const provider = limited[0]!.provider
+        const targets: MultiDocumentTarget[] = limited.map(target => ({
+          ...target.targetId ? { targetId: target.targetId, attachWanted: true } : {},
+          connectionId: target.connectionId,
+          database: target.database,
+          enabled: true,
+          provider: target.provider,
+          lastServer: target.label
+        }))
+        documents.openMultiQuery({ mode: 'same', provider, targets })
+        frame(() => documents.boundEditor?.focus())
+      }
+    }),
+    commands.register('explorer.newCrossEngineQuery', {
+      when: args => {
+        const node = nodeOf(args)
+        if (args?.target && args.target.kind !== 'explorerTools') return live(node) && node.kind === 'server'
+        return explorer.multiSelectedTargets().length > 0 || (live(node) && node.kind === 'server') || connections.live().length > 0
+      },
+      unavailable: () => connections.live().length === 0 ? 'Connect to a server first.' : undefined,
+      run: args => {
+        const node = nodeOf(args)
+        const multi = explorer.multiSelectedTargets()
+        const liveConnections = connections.live()
+        const providerOf = (connection: LiveConnection) => connection.providerId === 'bigquery' ? 'bigquery' as const : 'sqlserver' as const
+        const hasLiveSql = liveConnections.some(connection => providerOf(connection) === 'sqlserver')
+        const hasLiveBq = liveConnections.some(connection => providerOf(connection) === 'bigquery')
+        const seeded: MultiDocumentTarget[] = []
+        const seen = new Set<string>()
+        const addConnection = (connection: LiveConnection, max = 32) => {
+          if (seen.has(connection.id) || seeded.length >= max) return
+          seen.add(connection.id)
+          const provider = providerOf(connection)
+          seeded.push({
+            ...connection.targetId ? { targetId: connection.targetId, attachWanted: true } : {},
+            connectionId: connection.id,
+            database: connection.database,
+            enabled: true,
+            provider,
+            lastServer: connection.displayName || connection.server
+          })
+        }
+        const useMulti = multi.length >= 2 && (!node || multi.some(item => item.rowId === node.id))
+        if (useMulti) {
+          const multiProvider = multi[0]!.provider
+          const hasOppositeLive = multiProvider === 'bigquery' ? hasLiveSql : hasLiveBq
+          const primaryCap = hasOppositeLive ? 31 : 32
+          for (const target of multi) {
+            const connection = connections.get(target.connectionId)
+            if (connection && connections.isLive(connection.id)) addConnection(connection, primaryCap)
+          }
+        } else if (live(node) && node.kind === 'server') {
+          const connection = connections.get(node.connectionId)
+          if (connection) addConnection(connection)
+        }
+        // Also include connected live server(s) of the other engine (or all connected servers if invoked from the palette).
+        const seededProviders = new Set(seeded.map(item => item.provider))
+        if (seededProviders.size === 0 && hasLiveSql && hasLiveBq) {
+          const firstSql = liveConnections.find(connection => providerOf(connection) === 'sqlserver')
+          const firstBq = liveConnections.find(connection => providerOf(connection) === 'bigquery')
+          if (firstSql) addConnection(firstSql)
+          if (firstBq) addConnection(firstBq)
+        }
+        for (const connection of liveConnections) {
+          const provider = providerOf(connection)
+          if (seededProviders.size === 0 || !seededProviders.has(provider)) addConnection(connection)
+        }
+        if (!seeded.length) return
+        documents.openMultiQuery({ mode: 'cross', targets: seeded })
+        frame(() => documents.boundEditor?.focus())
+      }
+    }),
+    commands.register('explorer.refreshSelected', {
+      when: () => explorer.multiSelectedTargets().length >= 2,
+      unavailable: () => connections.live().length === 0
+        ? 'Connect to a server first.'
+        : 'Select two or more servers in Object Explorer to refresh together.',
+      run: () => {
+        for (const target of explorer.multiSelectedTargets()) {
+          explorer.refresh(target.rowId)
+          explorerStatus?.refresh(target.connectionId)
+          objectSearch?.refreshNode(target.connectionId, { type: 'object', object: { kind: 'server' } })
+        }
+      }
+    }),
+    commands.register('explorer.clearMultiSelect', {
+      when: () => explorer.getSnapshot().multiSelected.length > 0,
+      unavailable: () => connections.live().length === 0
+        ? 'Connect to a server first.'
+        : 'No servers are currently selected in Object Explorer.',
+      run: () => explorer.clearMultiSelect()
+    }),
+    commands.register('explorer.disconnectSelected', {
+      when: () => {
+        if (!disconnectCoordinator) return false
+        const selected = explorer.multiSelectedTargets()
+        return selected.length >= 2 && selected.some(target => !!target.targetId)
+      },
+      unavailable: () => connections.live().length === 0
+        ? 'Connect to a server first.'
+        : 'Select two or more servers in Object Explorer to disconnect together.',
+      run: async () => {
+        const selected = explorer.multiSelectedTargets()
+        if (selected.length < 2 || !disconnectCoordinator) return
+        const targetIds = selected.map(target => target.targetId).filter((id): id is string => !!id)
+        if (!targetIds.length) return
+        const outcomes = await disconnectCoordinator.disconnectMany(targetIds)
+        let firstError: string | undefined
+        let firstWarning: string | undefined
+        for (const outcome of outcomes.values()) {
+          if ('error' in outcome && outcome.error) { firstError = outcome.error; break }
+          if (!firstWarning && 'warning' in outcome && outcome.warning) firstWarning = outcome.warning
+        }
+        if (firstError) commands.reportError(firstError)
+        else if (firstWarning) commands.reportWarning(firstWarning)
+      }
+    }),
+    commands.register('explorer.selectAllSqlServers', {
+      when: () => explorer.rootIds.filter(id => explorer.serverProvider(id) === 'sqlserver' && !explorer.node(id)?.lost && connections.isLive(explorer.node(id)?.connectionId ?? '')).length >= 2,
+      unavailable: () => 'Connect two or more SQL Servers to select all.',
+      run: () => {
+        explorer.selectAllServersByProvider('sqlserver', { silentNotice: !!notifications })
+        const notice = explorer.getSnapshot().multiSelectNotice
+        if (notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: notice })
+      }
+    }),
+    commands.register('explorer.selectAllBigQueryProjects', {
+      when: () => explorer.rootIds.filter(id => explorer.serverProvider(id) === 'bigquery' && !explorer.node(id)?.lost && connections.isLive(explorer.node(id)?.connectionId ?? '')).length >= 2,
+      unavailable: () => 'Connect two or more BigQuery projects to select all.',
+      run: () => {
+        explorer.selectAllServersByProvider('bigquery', { silentNotice: !!notifications })
+        const notice = explorer.getSnapshot().multiSelectNotice
+        if (notice) notifications?.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message: notice })
+      }
+    })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

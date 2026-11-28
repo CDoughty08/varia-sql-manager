@@ -177,7 +177,7 @@ internal sealed record QueryMultiResult(string Status, string Mode, List<MultiTa
     int DiscardedResultSets, List<MessageEntry> Messages, bool MessagesTruncated, long ElapsedMs, ResultBudget Budget, string CompletedAt,
     List<string>? CombineWarnings = null);
 internal sealed record ResultsCombineArgs(uint[] ResultIds, string? StatementName = null);
-internal sealed record ResultsCombineResult(ResultDescriptor Descriptor);
+internal sealed record ResultsCombineResult(ResultDescriptor Descriptor, IReadOnlyList<string>? Warnings = null);
 internal sealed record ResultSetMetaEvent(uint ResultId, bool RolledBackPreview)
 {
     [JsonPropertyOrder(-1)] public string Type => "resultSet.meta";

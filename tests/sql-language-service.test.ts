@@ -1313,4 +1313,32 @@ describe('SQL language features in Peek', () => {
     expect(await f.hover.provideHover(model, position, token())).toBeNull()
     expect(f.api.languageHover).toHaveBeenCalledOnce()
   })
+
+  it('R5 D1 #1: rejects definition() with Split-view guidance in Cross-Engine File mode instead of connectFirst', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    f.addConnection('bq-1', 'bigquery')
+    const tab = f.documents.openMultiQuery({
+      mode: 'cross',
+      crossView: 'file',
+      name: 'Cross.sql',
+      sql: 'SELECT * FROM dbo.Customer',
+      bigQuerySql: 'SELECT 1',
+      targets: [
+        { connectionId: 'sql-1', provider: 'sqlserver', database: 'Sales', enabled: true },
+        { connectionId: 'bq-1', provider: 'bigquery', database: 'analytics', enabled: true }
+      ]
+    })
+
+    await expect(f.service.definition(f.model(tab.id), position)).rejects.toThrow('Switch to Split view for per-dialect IntelliSense and syntax checking.')
+    expect(f.api.languageDefinition).not.toHaveBeenCalled()
+
+    // Switching back to Split view restores Go to Definition on the SQL Server pane.
+    expect(f.documents.setCrossView(tab.id, 'split')).toEqual({ ok: true })
+    const found: LanguageDefinition = { database: 'Sales', schema: 'dbo', name: 'Customer', kind: 'table', range: { start: { line: 0, character: 14 }, end: { line: 0, character: 26 } } }
+    f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: found })
+    expect(await f.service.definition(f.model(tab.id), { lineNumber: 1, column: 20 } as Monaco.Position)).toEqual({ connectionId: 'sql-1', definition: found })
+    expect(f.api.languageDefinition).toHaveBeenCalledOnce()
+    expect(f.api.languageDefinition.mock.calls[0]![0]).toMatchObject({ context: { connectionId: 'sql-1', database: 'Sales' } })
+  })
 })

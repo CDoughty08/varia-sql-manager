@@ -30,8 +30,8 @@ describe('the stored transpose is gone', () => {
     const ask = (body: object) => portRequestSchema.safeParse({ rid: 1, generation: 1, resultId: 2, ...body }).success
     expect(ask({ t: 'pivot', rows: [], values: [{ aggregate: 'count' }] })).toBe(true)
     expect([ask({ t: 'transpose' }), ask({ t: 'transpose', viewId: 3, rows: [[0, 1]], headerColumn: 0 })]).toEqual([false, false])
-    expect(['rows', 'executionPlan', 'diff', 'pivot', 'transpose'].map(kind => backendDescriptorSchema.safeParse(descriptor(kind)).success)).toEqual([true, true, true, true, false])
-    expect([...turnableKinds].sort()).toEqual(['pivot', 'rows'])
+    expect(['rows', 'executionPlan', 'diff', 'pivot', 'combined', 'transpose'].map(kind => backendDescriptorSchema.safeParse(descriptor(kind)).success)).toEqual([true, true, true, true, true, false])
+    expect([...turnableKinds].sort()).toEqual(['combined', 'pivot', 'rows'])
   })
 
   it("is no request of a result's handle or the results worker, and leaves only the rows a transposed grid draws as its limit", () => {

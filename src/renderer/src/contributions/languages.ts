@@ -24,8 +24,39 @@ type LanguageWorkbench = Pick<Workbench, 'commands' | 'documents' | 'connections
 export function languagesContribution({ commands, documents, connections, sqlLanguage, monaco, editorPeek }: LanguageWorkbench): Disposable {
   const target = (id?: string) => documents.get(id ?? documents.getSnapshot().activeId)
   const refresh = commands.register('edit.refreshIntelliSense', {
-    when: args => { const document = target(args?.tabId); return isQueryDocument(document) && !!document?.connectionId && connections.isLive(document.connectionId) },
-    unavailable: () => 'Connect this query before refreshing its IntelliSense cache.',
+    when: args => {
+      const document = target(args?.tabId)
+      if (!document || !isQueryDocument(document)) return false
+      if (document.multiMode) {
+        if (document.multiMode === 'cross' && document.crossView !== 'file' && document.activePane === 'secondary') return false
+        const model = documents.activeModel?.(document.id) ?? documents.getModel(document.id)
+        const langContext = model && documents.languageContext?.(model, id => connections.isLive(id))
+        return !!langContext?.connectionId && !langContext.suspended && langContext.provider === 'sqlserver' && connections.isLive(langContext.connectionId)
+      }
+      return !!document.connectionId
+        && connections.isLive(document.connectionId)
+        && document.provider !== 'bigquery'
+        && connections.get(document.connectionId)?.providerId !== 'bigquery'
+    },
+    unavailable: args => {
+      const document = target(args?.tabId)
+      if (document && isQueryDocument(document)) {
+        const model = documents.getModel(document.id)
+        if (model && documents.languageContext?.(model, id => connections.isLive(id))?.suspended) {
+          return 'Switch to Split view for per-dialect IntelliSense and syntax checking.'
+        }
+        if (document.multiMode === 'cross' && document.crossView !== 'file' && document.activePane === 'secondary') {
+          return 'Focus the Transact-SQL pane to refresh SQL Server IntelliSense cache.'
+        }
+        const isBq = document.multiMode === 'same'
+          ? (document.provider === 'bigquery' || document.multiTargets?.some(t => t.enabled && t.provider === 'bigquery'))
+          : (document.provider === 'bigquery' || (document.connectionId ? connections.get(document.connectionId)?.providerId === 'bigquery' : false))
+        if (isBq) {
+          return 'Refresh Local Cache is available for SQL Server queries only.'
+        }
+      }
+      return 'Connect this query before refreshing its IntelliSense cache.'
+    },
     run: async args => { const document = target(args?.tabId); if (document) await sqlLanguage.refreshCache(document.id) }
   })
   const next = commands.register('edit.nextSqlIssue', { run: () => triggerEditorAction(documents, 'editor.action.marker.next') })
@@ -36,8 +67,11 @@ export function languagesContribution({ commands, documents, connections, sqlLan
     const editor = monaco?.editor.getEditors?.().find(editor => editor.hasWidgetFocus())
     const model = editor?.getModel(), position = editor?.getPosition()
     if (!editor || !model || !position || !definitionLanguages.has(model.getLanguageId())) return undefined
-    // A GoogleSQL name resolves on its query tab's connection; BigQuery Properties' read-only Definition editor has none.
-    if (model.getLanguageId() === googleSqlLanguageId && !documents.getSnapshot().documents.some(document => documents.getModel(document.id) === model)) return undefined
+    // A GoogleSQL name resolves on its query tab's connection (including the secondary pane of a Cross-Engine Split tab);
+    // BigQuery Properties' read-only Definition editor has none.
+    if (model.getLanguageId() === googleSqlLanguageId && !documents.getSnapshot().documents.some(document =>
+      documents.ownsModel ? documents.ownsModel(document.id, model) : documents.getModel(document.id) === model
+    )) return undefined
     return { editor, model, position }
   }
   const definition = (mode: DefinitionMode) => async () => { const place = focused(); if (place && editorPeek) await editorPeek.run(mode, place) }

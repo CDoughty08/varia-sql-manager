@@ -182,7 +182,7 @@ explorer.context, for a server
   New &Query  -++-
   Ac&tivity Monitor  ⌥⌘A  -++-
   Searc&h Objects…  -+++
-  &New Cross-Engine SELECT…  ----
+  &New Cross-Engine SELECT…  -++-
   ---
   Copy N&ame  -+++
   ---

@@ -343,4 +343,51 @@ describe('database rename hooks', () => {
     expect(tabs.withTransactions).toHaveLength(ownTabReads)
     expect(transactionState).toHaveBeenCalledTimes(ownTabReads)
   })
+  it('R2 Finding 8: ignores BigQuery connections and Cross-Engine BigQuery targets even when project and dataset match SQL Server names', async () => {
+    const updateMultiTarget = vi.fn()
+    const rehome = vi.fn()
+    const documents = [
+      {
+        id: 'cross-1',
+        name: 'Cross.sql',
+        kind: 'sql',
+        multiMode: 'cross' as const,
+        multiTargets: [
+          { connectionId: 'sql-1', provider: 'sqlserver' as const, database: 'AppData', enabled: true },
+          { connectionId: 'bq-1', provider: 'bigquery' as const, database: 'AppData', enabled: true }
+        ]
+      }
+    ]
+    const hooks = databaseRenameHooks({
+      documents: { getSnapshot: () => ({ documents }), updateMultiTarget } as never,
+      queries: {
+        getSnapshot: () => ({
+          'cross-1': { running: { queryId: 'q1', connectionId: 'bq-1', connectionIds: ['bq-1'], multi: true, startedAt: 1 } }
+        }),
+        transactionState: vi.fn(async () => ({ transactions: 0 }))
+      } as never,
+      connections: {
+        getSnapshot: () => [
+          { id: 'sql-1', server: 'shared-name', providerId: 'sqlserver' },
+          { id: 'bq-1', server: 'shared-name', providerId: 'bigquery' }
+        ],
+        subscribe: () => () => {},
+        rehome
+      } as never,
+      targets: { changeDatabase: vi.fn() },
+      properties: { databaseRenamed: vi.fn() }
+    })
+
+    // Only bq-1 is in running.connectionIds; BigQuery target must NOT be counted as an active SQL Server transaction!
+    expect(await hooks.tabs('sql-1', 'AppData')).toEqual({ count: 0, withTransactions: [] })
+
+    hooks.renamed('sql-1', 'AppData', 'Sales')
+    expect(updateMultiTarget).toHaveBeenCalledTimes(1)
+    const predicate = updateMultiTarget.mock.calls[0]![1] as (target: { provider: string; connectionId?: string; database: string }) => boolean
+    expect(predicate(documents[0]!.multiTargets[0]!)).toBe(true)
+    expect(predicate(documents[0]!.multiTargets[1]!)).toBe(false)
+    const rehomedIds = rehome.mock.calls[0]![0] as ReadonlySet<string>
+    expect(rehomedIds.has('sql-1')).toBe(true)
+    expect(rehomedIds.has('bq-1')).toBe(false)
+  })
 })

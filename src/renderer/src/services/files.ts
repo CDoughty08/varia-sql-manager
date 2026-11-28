@@ -1,5 +1,6 @@
 import type { ApiResult, DocumentKind, OpenedFiles, OpenSqlFile, SqlFile, VariaApi } from '../../../shared/contracts'
 import { lineEndingLabel } from '../../../shared/files/encoding'
+import { parseCrossEngineSql } from '../../../shared/multi-query'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import type { QueryDocument } from '../documents'
@@ -90,7 +91,12 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         const existing = this.documents.getSnapshot().documents.find(document => document.file?.id === file.id)
         if (existing) { this.documents.activate(existing.id); continue }
         if (file.kind === 'sqlplan') this.documents.openText({ name: file.name, text: file.content, kind: file.kind, file: registeredFile(file), eol: file.eol })
-        else this.documents.create(file.name, file.content, target?.database || this.documents.defaultDatabase(target?.connectionId), target?.connectionId, false, registeredFile(file), file.eol)
+        else if (parseCrossEngineSql(file.content).ok) {
+          // Canonical -- #Dialect file: auto-activate Cross-Engine Split without inheriting the active single-server tab's target/connection.
+          this.documents.openMultiQuery({
+            mode: 'cross', targets: [], name: file.name, sql: file.content, crossView: 'split', unsaved: false, file: registeredFile(file), eol: file.eol
+          })
+        } else this.documents.create(file.name, file.content, target?.database || this.documents.defaultDatabase(target?.connectionId), target?.connectionId, false, registeredFile(file), file.eol)
         if (file.mixedEol) mixed.push(`Line endings in ${file.name} were mixed; it will be saved with ${lineEndingLabel(file.eol)} line endings.`)
       }
     } finally { await this.releaseUnclaimed(files) }
@@ -374,9 +380,9 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
         if (this.disposed) return
         if (this.documents.get(document.id)) approved.set(document.id, this.documents.revision(document.id))
       }
-      // A kept BigQuery tab's job keeps running and re-attaches at the next start (docs/bigquery.md, Quitting Varia leaves
-      // jobs running): it is not asked about, and its session is not ended. Main keeps the kept tabs' records meanwhile.
-      const keptQueries = [...kept ?? []].flatMap(id => { const document = this.documents.get(id); return document && !document.kind && document.provider === 'bigquery' ? [document] : [] })
+      // A kept single-server BigQuery tab's job keeps running and re-attaches at the next start (docs/bigquery.md, Quitting Varia leaves
+      // jobs running): it is not asked about, and its session is not ended. Multi-target tabs are excluded so Quit always prompts to cancel them.
+      const keptQueries = [...kept ?? []].flatMap(id => { const document = this.documents.get(id); return document && !document.kind && !document.multiMode && document.provider === 'bigquery' ? [document] : [] })
       const keys = keptQueries.flatMap(document => document.jobKey ? [document.jobKey] : [])
       if (keys.length && this.api.keepJobsAtQuit) { const held = await this.api.keepJobsAtQuit(keys); if (!held.ok) throw new Error(held.error) }
       const keptHolding = new Set((await Promise.all(keptQueries.map(async document => await this.queries.holdsJob?.(document.id) ? [document.id] : []))).flat())

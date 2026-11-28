@@ -2,7 +2,7 @@ import type * as Monaco from 'monaco-editor'
 import { languageLimits, type LanguageDiagnostic } from '../../../shared/language-service'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
-import { isQueryDocument } from '../documents'
+import { documentProvider, isQueryDocument } from '../documents'
 import { isWelcomeQuery, mayBeWelcomeQuery, type DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import type { BackendStateService } from '../services/backend'
@@ -69,9 +69,11 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
         }) }
         this.entries.set(id, entry)
       }
-      const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
+      const langContext = this.documents.languageContext(model, id => this.connections.isLive(id))
+      const connectionId = langContext?.connectionId ?? (!document.multiMode ? document.connectionId : undefined)
+      const connection = connectionId ? this.connections.get(connectionId) : undefined
       const backend = this.backend?.getSnapshot().state
-      const key = JSON.stringify([document.connectionId, document.database, connection?.providerId, connection?.generation, connection?.lost,
+      const key = JSON.stringify([connectionId, langContext?.database ?? document.database, langContext?.suspended, document.multiMode, document.crossView, connection?.providerId, connection?.generation, connection?.lost,
         this.settings.enabled(), backend?.status, backend && 'generation' in backend ? backend.generation : undefined, this.language.diagnosticsEpoch(document.id),
         this.language.getSnapshot().activities.get(document.id) === 'refreshing',
         this.language.getSnapshot().status?.providers.find(provider => provider.id === (connection?.providerId ?? 'sqlserver'))])
@@ -87,11 +89,14 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     if (entry.model.getValueLength() > languageLimits.documentCharacters) return `SQL analysis is limited to ${languageLimits.documentCharacters.toLocaleString()} characters.`
     const document = this.documents.get(entry.id)
     if (!document) return 'This query has closed.'
-    if (document.connectionId && !this.connections.isLive(document.connectionId)) return 'Reconnect this query to restore SQL analysis.'
+    const langContext = this.documents.languageContext(entry.model, id => this.connections.isLive(id))
+    if (langContext?.suspended || (document.multiMode === 'cross' && document.crossView === 'file')) return 'Switch to Split view for per-dialect IntelliSense and syntax checking.'
+    const connectionId = langContext?.connectionId ?? (!document.multiMode ? document.connectionId : undefined)
+    if (connectionId && !this.connections.isLive(connectionId)) return 'Reconnect this query to restore SQL analysis.'
     if (this.backend && this.backend.getSnapshot().state.status !== 'ready') return 'SQL analysis will resume when the backend is ready.'
     if (this.language.getSnapshot().activities.get(entry.id) === 'refreshing') return 'SQL analysis will resume after the IntelliSense cache refresh.'
     if (this.language.isForegroundBusy(entry.id)) return 'SQL analysis will resume after IntelliSense finishes.'
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
+    const connection = connectionId ? this.connections.get(connectionId) : undefined
     const provider = this.language.getSnapshot().status?.providers.find(value => value.id === (connection?.providerId ?? 'sqlserver'))
     if (provider && (!provider.configured || !provider.diagnostics)) return provider.reason ?? 'This language provider does not support SQL analysis.'
     return
@@ -189,6 +194,7 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     this.publish({ documents })
   }
   status(id: string): { label: string; detail: string } | undefined {
+    if (documentProvider(this.documents.get(id)) === 'bigquery') return
     const value = this.getSnapshot().documents.get(id)
     if (!value) return
     if (value.phase === 'paused') return { label: 'SQL analysis paused', detail: value.detail ?? '' }
