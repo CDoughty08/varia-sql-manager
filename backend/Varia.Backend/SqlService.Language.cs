@@ -1,4 +1,3 @@
-using Microsoft.Data.SqlClient;
 using System.Text.Json;
 using Varia.Backend.Explorer;
 using Varia.Backend.Language;
@@ -31,8 +30,8 @@ internal sealed partial class SqlService
         }
     }
 
-    /// <summary>Resolves the active database for an in-process ScriptDom + IndexLookup request (completion, hover, refresh).
-    /// Verifies the connection exists and supports SQL Login, Windows, and Microsoft Entra ID authentication.</summary>
+    /// <summary>Resolves the active database for an in-process ScriptDom + IndexLookup request (completion, hover,
+    /// diagnostics, refresh). Verifies the connection exists and supports SQL Login, Windows, and Microsoft Entra ID.</summary>
     internal string? LanguageActiveDatabase(LanguageContext context)
     {
         if (context.ConnectionId is null) return context.Database;
@@ -75,20 +74,5 @@ internal sealed partial class SqlService
             // Otherwise a concurrent index build or freshness check superseded this check; the index is already being refreshed.
             return true;
         }
-    }
-
-    /// <summary>Resolves only an existing Varia connection for SQL Tools Service diagnostics (Phase 2 retires STS completely).
-    /// Entra's token providers live in this backend and cannot be inherited by SQL Tools Service's separate process.</summary>
-    internal string? LanguageConnectionString(LanguageContext context)
-    {
-        if (context.ConnectionId is null) return null;
-        if (!connections.TryGetValue(context.ConnectionId, out var text)) throw new RequestException("NOT_CONNECTED", "Connect this query before requesting database IntelliSense.");
-        var builder = new SqlConnectionStringBuilder(text);
-        if (builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword))
-            throw new RequestException("AUTH_UNSUPPORTED", "SQL error checking (SQL Tools Service) is not yet available for Microsoft Entra ID connections. Completion, hover and cache refresh are active via ScriptDom + Index.");
-        builder.InitialCatalog = context.Database ?? DatabaseOf(context.ConnectionId, text) ?? builder.InitialCatalog;
-        builder.ApplicationName = "Varia SQL Manager IntelliSense";
-        builder.Pooling = false;
-        return builder.ConnectionString;
     }
 }

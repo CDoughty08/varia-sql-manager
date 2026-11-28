@@ -105,7 +105,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private backendGeneration?: number
   /** The last complete completion answer: one document's at a time, the one being typed in. */
   private completionCache?: CompletionCache
-  /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero STS/SQL round-trips). */
+  /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero SQL round-trips). */
   private readonly lookupCaches = new Map<string, LookupCache>()
   private readonly indexSignatures = new Map<string, string>()
   private indexStateStore?: IndexStateStore
@@ -376,8 +376,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
    * Go to Definition: the object the name at `position` stands for, from `language.definition` on the model's own connection
    * and database (a query document's or a Peek model's). Null when nothing matches; undefined when it was superseded (a newer
    * request for the same document, or `token`), Peek's in-flight cap is full, or an edit or context change made the answer
-   * stale. A query with no live connection, one too large to send, and a failure throw their message. It needs no SQL Tools
-   * Service, so it serves every connection, and opens no backend document.
+   * stale. A query with no live connection, one too large to send, and a failure throw their message. It runs in-process
+   * against the connection, serves every authentication mode, and opens no backend document.
    */
   async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, token: Monaco.CancellationToken = noCancellation): Promise<FoundDefinition | null | undefined> {
     if (!this.api.languageDefinition || token.isCancellationRequested) return
@@ -441,7 +441,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString()} characters.` }
     if (connection && !isLiveConnection(connection)) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
-    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use ScriptDom + Search Objects index for this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available via ScriptDom. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
+    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion, hover and error checking use ScriptDom + Search Objects index for this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion, hover and syntax checking are available via ScriptDom. Connect this query for schema suggestions and object checks. Ctrl+Space opens suggestions.' }
   }
   /** The connection and database a served model's requests use: its query document's, or its Peek model's. */
   private source(documentId: string): { connectionId?: string; database?: string } | undefined {

@@ -6,8 +6,9 @@ using Varia.Backend.Language;
 
 namespace Varia.Backend.Tests;
 
-/// <summary>Opt-in checks against the actual SQL Tools Service and a disposable development SQL Server. Only this
-/// run's two uniquely named, marked scratch databases are created or dropped; no existing scratch objects are swept.</summary>
+/// <summary>Opt-in checks against the in-process ScriptDom + IndexLookup language service and a disposable development
+/// SQL Server. Only this run's two uniquely named, marked scratch databases are created or dropped; no existing scratch
+/// objects are swept.</summary>
 internal static class SqlLanguageLiveChecks
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -77,7 +78,7 @@ internal static class SqlLanguageLiveChecks
             using var service = new SqlService();
             async Task<T> Call<T>(string method, object parameters) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(parameters, Json), Json);
             var status = await Call<LanguageStatus>("language.status", new { });
-            check(status.Providers.Single(provider => provider.Id == "sqlserver") is { Configured: true, Refresh: true }, "actual SQL Tools Service executable and cache refresh are configured for live tests");
+            check(status.Providers.Single(provider => provider.Id == "sqlserver") is { Configured: true, Completion: true, Hover: true, Refresh: true, Diagnostics: true }, "in-process SQL language provider is configured for completion, hover, diagnostics, and refresh");
             var firstConnection = await Call<ConnectionInfo>("connections.connect", Options(firstDatabase));
             var secondConnection = await Call<ConnectionInfo>("connections.connect", Options(secondDatabase));
             // Build Search Objects index for both scratch connections (as the Electron workbench does on connect).
@@ -101,14 +102,14 @@ internal static class SqlLanguageLiveChecks
             await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(masterConnection.Id), Json), Json);
             var wideDocument = Guid.NewGuid().ToString();
             var wide = await Complete(Request(wideDocument, 1, "SELECT w. FROM dbo.WideLanguageFixture AS w;", firstConnection, "SELECT w.".Length));
-            check(wide.Items.Count == SqlToolsLanguageService.MaxCompletionItems && wide.IsIncomplete, "wide live catalogs still respect the completion response cap");
+            check(wide.Items.Count == TsqlLanguageService.MaxCompletionItems && wide.IsIncomplete, "wide live catalogs still respect the completion response cap");
             var widePrefix = await Complete(Request(wideDocument, 2, "SELECT w.Zzz FROM dbo.WideLanguageFixture AS w;", firstConnection, "SELECT w.Zzz".Length));
             var wideExact = await Complete(Request(wideDocument, 3, "SELECT w.ZzzTail FROM dbo.WideLanguageFixture AS w;", firstConnection, "SELECT w.ZzzTail".Length));
-            check(Has(widePrefix, "ZzzTail") && Has(wideExact, "ZzzTail"), "prefix and exact completion retain a live column beyond STS's first 500 declarations");
+            check(Has(widePrefix, "ZzzTail") && Has(wideExact, "ZzzTail"), "prefix and exact completion retain a live column beyond the first 500 declarations");
             await Call<LanguageCloseResult>("language.close", new LanguageCloseArgs(wideDocument));
             var tableRequest = Request(firstId, 1, "SELECT * FROM dbo.Lang", firstConnection);
             var tables = await Complete(tableRequest);
-            check(tables.Items.Any(item => item.Label.Contains("LanguageFixture", StringComparison.OrdinalIgnoreCase)), "real SQL Tools Service completes a fixture table from live database metadata");
+            check(tables.Items.Any(item => item.Label.Contains("LanguageFixture", StringComparison.OrdinalIgnoreCase)), "in-process language service completes a fixture table from live database metadata");
             const string select = "SELECT f. FROM dbo.LanguageFixture AS f";
             var firstRequest = Request(firstId, 2, select, firstConnection, "SELECT f.".Length);
             var firstColumns = await Complete(firstRequest);
@@ -126,7 +127,7 @@ internal static class SqlLanguageLiveChecks
             const string hoverText = "SELECT f.FirstOnly FROM dbo.LanguageFixture AS f";
             var hover = await Call<LanguageHover?>("language.hover", Request(firstId, 4, hoverText, firstConnection, "SELECT f.First".Length));
             check(hover is not null && hover.Contents.Contains("FirstOnly", StringComparison.OrdinalIgnoreCase) && hover.Contents.Contains("int", StringComparison.OrdinalIgnoreCase),
-                "real SQL Tools Service hover describes the live fixture column and its type");
+                "in-process hover describes the live fixture column and its type");
 
             // Go to Definition: language.definition on the query's own connection and database, through Object Explorer's pool.
             var definitionFixtures = new[]
@@ -156,7 +157,7 @@ internal static class SqlLanguageLiveChecks
                 && await Definition("SELECT * FROM [NoSuchDatabase_" + Guid.NewGuid().ToString("N") + "].dbo.LanguageFixture", "LanguageFixture") is null,
                 "an unknown object or database answers null, not an error");
             launchedProcesses = LanguageProcesses().Except(initialProcesses).ToHashSet();
-            check(launchedProcesses.Count == 0, "in-process ScriptDom completion and hover launch zero SQL Tools Service processes");
+            check(launchedProcesses.Count == 0, "in-process ScriptDom completion, hover, and diagnostics launch zero external language-server processes");
 
             // Keep real query-tab state open while a separate connection changes this run's fixture schema. A
             // language refresh must never achieve freshness by restarting the backend or closing its SQL sessions.
@@ -172,7 +173,7 @@ internal static class SqlLanguageLiveChecks
             var siblingDuringRefresh = await Complete(secondRequest);
             check((await refresh).Refreshed && Has(siblingDuringRefresh, "SecondOnly") && !Has(siblingDuringRefresh, "RefreshedOnly"),
                 "targeted cache refresh completes while an unrelated database continues serving its own metadata");
-            check(LanguageProcesses().Except(initialProcesses).ToHashSet().Count == 0, "in-process cache refresh launches zero SQL Tools Service processes");
+            check(LanguageProcesses().Except(initialProcesses).ToHashSet().Count == 0, "in-process cache refresh launches zero external language-server processes");
             var refreshedColumns = await Complete(Request(firstId, 5, select, firstConnection, "SELECT f.".Length));
             check(Has(refreshedColumns, "RefreshedOnly") && Has(refreshedColumns, "FirstOnly"), "one completion after refresh exposes the newly added live column");
             const string refreshedHoverText = "SELECT f.RefreshedOnly FROM dbo.LanguageFixture AS f";
@@ -209,14 +210,12 @@ internal static class SqlLanguageLiveChecks
                 "closing one language document releases its external metadata sessions");
             check(Has(await Complete(secondRequest), "SecondOnly"), "closing another document leaves the remaining database document usable");
             await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(secondConnection.Id), Json), Json);
-            check(await Released(secondDatabase), "disconnecting a backend connection releases SQL Tools Service metadata sessions");
+            check(await Released(secondDatabase), "disconnecting a backend connection leaves zero external metadata sessions");
             await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(firstConnection.Id), Json), Json);
             Console.WriteLine("SQL language live metadata, edits, isolation, hover, targeted refresh, query state and cleanup verified.");
         }
         finally { await scratch.DisposeAsync(); }
-        var exit = Stopwatch.StartNew();
-        while (LanguageProcesses().Overlaps(launchedProcesses) && exit.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(50);
-        check(!LanguageProcesses().Overlaps(launchedProcesses), "backend disposal terminates the actual SQL Tools Service child process");
+        check(LanguageProcesses().Except(initialProcesses).Count() == 0, "in-process SQL language services never spawn external language-server child processes");
         foreach (var database in new[] { firstDatabase, secondDatabase }.OfType<string>())
         {
             await using var gone = new SqlCommand("SELECT CASE WHEN DB_ID(@name) IS NULL THEN 1 ELSE 0 END;", probe);

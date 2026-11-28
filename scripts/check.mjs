@@ -44,8 +44,7 @@ export const steps = {
   'Offline .NET checks': 'dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release',
   'vitest (Release backend)': `npx vitest run ${needsBackend.join(' ')}`,
   'Release backend': 'dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Release --nologo -v q',
-  'Prepare Electron': 'npm run electron:prepare -- --install',
-  'Prepare SQL Tools Service': 'npm run sqltools:prepare'
+  'Prepare Electron': 'npm run electron:prepare -- --install'
 }
 
 /**
@@ -53,7 +52,7 @@ export const steps = {
  * outcome, so one failure hides nothing) or `{ gate, then }` (`then` only if `gate` passed: nothing runs on a failed build).
  */
 export function plan({ cpus, build = false, skip = [] }) {
-  if (build) return { all: ['Release backend', 'electron-vite build', 'Prepare Electron', ...(skip.includes('sqltools') ? [] : ['Prepare SQL Tools Service'])] }
+  if (build) return { all: ['Release backend', 'electron-vite build', 'Prepare Electron'] }
   const wide = cpus >= 8
   const typecheck = skip.includes('typecheck') ? [] : ['Type check']
   const viteBuild = skip.includes('build') ? [] : ['electron-vite build']
@@ -88,7 +87,7 @@ export function vitestWorkers(cpus) {
 const laneEnv = {}
 
 /** The lanes VARIA_CHECK_SKIP may leave out, by the name it takes. */
-export const skippable = { typecheck: 'Type check', sqltools: 'Prepare SQL Tools Service', build: 'electron-vite build' }
+export const skippable = { typecheck: 'Type check', build: 'electron-vite build' }
 
 /** VARIA_CHECK_SCOPE: '' / 'full' runs every Vitest and offline .NET suite; 'os' runs only OS-sensitive suites on CI Windows/macOS. */
 export function parseScope(value = '') {

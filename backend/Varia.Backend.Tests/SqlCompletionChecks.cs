@@ -36,7 +36,7 @@ internal static class SqlCompletionChecks
             var cursor = marked.IndexOf('|');
             var text = marked.Remove(cursor, 1);
             var req = new LanguageRequest(Guid.NewGuid().ToString(), 1, text, new("sqlserver", Guid.NewGuid().ToString(), "Sales"),
-                SqlToolsLanguageService.EndPosition(text[..cursor]));
+                TsqlLanguageService.EndPosition(text[..cursor]));
             return TsqlCompletionService.Complete(req, lookup, "Sales");
         }
         static bool Has(LanguageCompletionResult r, string label) => r.Items.Any(i => i.Label == label);
@@ -85,7 +85,7 @@ internal static class SqlCompletionChecks
 
         // Wide table 500-item cap + prefix match beyond first 500 declarations
         var wideBlank = Complete("SELECT w.| FROM dbo.WideFixture w");
-        check(wideBlank.Items.Count == SqlToolsLanguageService.MaxCompletionItems && wideBlank.IsIncomplete,
+        check(wideBlank.Items.Count == TsqlLanguageService.MaxCompletionItems && wideBlank.IsIncomplete,
             "wide table completion respects the 500-item response cap and marks incomplete");
         var widePrefix = Complete("SELECT w.Zzz| FROM dbo.WideFixture w");
         check(widePrefix.Items[0].Label == "[ZzzTail]" && widePrefix.Items[0].FilterText == "ZzzTail",
@@ -121,7 +121,7 @@ internal static class SqlCompletionChecks
         // Hostile ANSI `||` concat chain (SQL Server 2025) must be bounded before TSql180Parser.Parse so it never overflows the stack!
         var concatChain = "SELECT 'a'" + string.Concat(Enumerable.Repeat("||'a'", 7_500)) + " FROM dbo.LeftFixture t";
         var concatTokens = new Microsoft.SqlServer.TransactSql.ScriptDom.TSql180Parser(true).GetTokenStream(new StringReader(concatChain), out _);
-        check(!SqlToolsLanguageService.BoundedCompletionSyntax(concatTokens),
+        check(!TsqlLanguageService.BoundedCompletionSyntax(concatTokens),
             "BoundedCompletionSyntax rejects deeply chained || string concatenation before ScriptDom AST parsing");
         var concatResult = TsqlCompletionService.Complete(
             new LanguageRequest(Guid.NewGuid().ToString("D"), 1, concatChain, new("sqlserver", null, "Sales"), new(0, 7)),
@@ -132,7 +132,7 @@ internal static class SqlCompletionChecks
         // Hostile chained method calls `x.m().m()...` (balanced parens) must also be bounded and never overflow the stack!
         var methodChain = "SELECT x" + string.Concat(Enumerable.Repeat(".m()", 3_500)) + " FROM dbo.LeftFixture t";
         var methodTokens = new Microsoft.SqlServer.TransactSql.ScriptDom.TSql180Parser(true).GetTokenStream(new StringReader(methodChain), out _);
-        check(!SqlToolsLanguageService.BoundedCompletionSyntax(methodTokens),
+        check(!TsqlLanguageService.BoundedCompletionSyntax(methodTokens),
             "BoundedCompletionSyntax rejects deeply chained method calls (.m().m()...) before ScriptDom AST parsing");
         var methodResult = TsqlCompletionService.Complete(
             new LanguageRequest(Guid.NewGuid().ToString("D"), 1, methodChain, new("sqlserver", null, "Sales"), new(0, 7)),
@@ -148,7 +148,7 @@ internal static class SqlCompletionChecks
     {
         var cursor = marked.IndexOf('|');
         var text = marked.Remove(cursor, 1);
-        var ctx = TsqlScopeReader.ReadCompletion(text, SqlToolsLanguageService.EndPosition(text[..cursor]), "Sales");
+        var ctx = TsqlScopeReader.ReadCompletion(text, TsqlLanguageService.EndPosition(text[..cursor]), "Sales");
         var actual = ctx.Sources.Concat(ctx.OuterSources).Select(s => s.RawQualifier).ToArray();
         check(actual.SequenceEqual(expected), $"SQL completion AST ({name}): got [{string.Join(", ", actual)}]");
     }

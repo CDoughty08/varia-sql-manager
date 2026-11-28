@@ -12,7 +12,7 @@ import { deferred, documentFixture } from './fixtures/documents'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()); vi.useRealTimers() })
-const error = { range: { start: { line: 0, character: 7 }, end: { line: 0, character: 14 } }, message: 'Invalid column.', severity: 1, code: '207', source: 'SQL Tools Service' }
+const error = { range: { start: { line: 0, character: 7 }, end: { line: 0, character: 14 } }, message: 'Invalid column.', severity: 1, code: 'SQL207', source: 'sqlserver' }
 const warning = { ...error, message: 'A provider warning.', severity: 2 }
 class Backend extends SnapshotStore<BackendSnapshot> { set(state: BackendSnapshot['state']) { this.publish({ state }) } }
 function fixture() {
@@ -129,7 +129,7 @@ describe('versioned SQL diagnostics markers', () => {
     await vi.advanceTimersByTimeAsync(1)
     expect(f.language.diagnostics).toHaveBeenCalledOnce()
     expect(f.markers(tab.id)).toEqual([
-      expect.objectContaining({ startLineNumber: 1, startColumn: 8, endColumn: 15, severity: 8, code: '207', modelVersionId: 3 }),
+      expect.objectContaining({ startLineNumber: 1, startColumn: 8, endColumn: 15, severity: 8, code: 'SQL207', modelVersionId: 3 }),
       expect.objectContaining({ message: warning.message, severity: 4 })
     ])
     expect(f.setModelMarkers.mock.calls.every(call => call[1] === sqlDiagnosticOwner)).toBe(true)
@@ -362,17 +362,45 @@ describe('versioned SQL diagnostics markers', () => {
     f.model(tab.id).edit('SELECT MissingX'); await f.tick()
     expect(f.markers(tab.id)).toHaveLength(2)
   })
-  it('pauses STS diagnostics cleanly on Microsoft Entra ID connections without firing failing analysis calls', async () => {
+  it('runs live diagnostics on Microsoft Entra ID connections without pausing', async () => {
     const f = fixture()
     f.connections.add(
       { id: 'entra-1', providerId: 'sqlserver', generation: 1, server: 'contoso.database.windows.net', database: 'SalesDB', serverVersion: '16.0', principalId: 'entra:t:u' } satisfies ConnectionInfo,
       { server: 'contoso.database.windows.net', database: 'SalesDB', authentication: 'entraMfa', trustServerCertificate: false })
-    const tab = f.documents.create('entra.sql', 'SELECT * FROM dbo.Orders', 'SalesDB', 'entra-1')
+    const tab = f.documents.create('entra.sql', 'SELECT Missing FROM dbo.Orders', 'SalesDB', 'entra-1')
     await f.tick()
-    expect(f.language.diagnostics).not.toHaveBeenCalled()
-    expect(f.service.status(tab.id)).toEqual({
-      label: 'SQL analysis paused',
-      detail: 'SQL error checking is not available for Microsoft Entra ID connections yet. Completion and hover are active via ScriptDom + Index.'
+    expect(f.language.diagnostics).toHaveBeenCalledOnce()
+    expect(f.markers(tab.id)).toHaveLength(2)
+    expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error, 1 warning')
+  })
+  it('re-runs diagnostics automatically when a connection Search Objects index finishes building or refreshes', async () => {
+    const f = fixture()
+    f.addConnection('conn-1')
+    type IndexSnap = { readonly indexes: Record<string, { readonly connectionId: string; readonly requestId?: string; readonly status?: { readonly state: 'none' | 'building' | 'ready'; readonly databases: number; readonly indexed: number; readonly objects: number; readonly modules: number; readonly cut: number; readonly skipped: readonly unknown[]; readonly definitions: boolean; readonly builtAt?: string } }> }
+    class TestIndexStore extends SnapshotStore<IndexSnap> { set(next: IndexSnap) { this.publish(next) } }
+    const indexStore = new TestIndexStore({
+      indexes: { 'conn-1': { connectionId: 'conn-1', requestId: 'build-1' } }
     })
+    f.service.bindIndexState(indexStore as never)
+    const tab = f.documents.create('indexed.sql', 'SELECT Missing FROM dbo.Orders', 'master', 'conn-1')
+    f.language.diagnostics.mockResolvedValueOnce({ version: 1, items: [], isIncomplete: false })
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(1)
+    expect(f.service.status(tab.id)?.label).toBe('SQL: no issues')
+
+    // Index finishes building -> SqlDiagnosticsService automatically re-runs diagnostics to upgrade to catalog binding.
+    f.language.diagnostics.mockResolvedValueOnce({ version: 1, items: [error], isIncomplete: false })
+    indexStore.set({
+      indexes: {
+        'conn-1': {
+          connectionId: 'conn-1',
+          status: { state: 'ready', databases: 1, indexed: 1, objects: 42, modules: 0, cut: 0, skipped: [], definitions: true, builtAt: '2026-11-28T05:00:00Z' }
+        }
+      }
+    })
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
+    expect(f.markers(tab.id)).toHaveLength(1)
+    expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error')
   })
 })

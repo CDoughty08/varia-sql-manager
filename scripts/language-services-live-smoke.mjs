@@ -4,7 +4,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises'
 import { appendFileSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-// Real Monaco -> preload -> backend -> bundled SQL Tools Service -> SQL Server. This suite reads system metadata only.
+// Real Monaco -> preload -> backend -> ScriptDom + IndexLookup -> SQL Server. This suite reads system metadata only.
 const server = process.env.VARIA_TEST_SQL_SERVER
 if (!server) throw new Error('Set VARIA_TEST_SQL_SERVER before running the live language UI check.')
 const username = process.env.VARIA_TEST_SQL_USER, password = process.env.VARIA_TEST_SQL_PASSWORD
@@ -130,7 +130,7 @@ async function moveEditor(name, action) {
 try {
   const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
   // The same bundled-path resolver used by a normal launch must supply the actual runtime.
-  for (const name of ['ELECTRON_RUN_AS_NODE', 'VARIA_TEST_BACKEND', 'VARIA_SQLTOOLS_SERVICE_PATH', 'VARIA_SQLTOOLS_SERVICE_SOURCE']) delete env[name]
+  for (const name of ['ELECTRON_RUN_AS_NODE', 'VARIA_TEST_BACKEND']) delete env[name]
   application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
   page = await application.firstWindow()
   page.setDefaultTimeout(30000)

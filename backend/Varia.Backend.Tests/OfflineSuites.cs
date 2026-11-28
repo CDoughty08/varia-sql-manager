@@ -43,7 +43,7 @@ static class OfflineSuites
         ["BigQueryExecution.ViewsCopySave"] = 6.0, ["Packer"] = 5.8, ["RoomPool"] = 5.6, ["Restore"] = 5.5, ["Page"] = 5.5,
         ["Seam"] = 5.1, ["LiveTable"] = 5.0, ["Plan"] = 4.8, ["ActionProgress"] = 4.6, ["ServerFiles"] = 4.2,
         ["SqlLanguageDiagnostics"] = 4.2, ["BigQueryExecution.Core"] = 4.0, ["ActivityAction"] = 4.0, ["Agent"] = 3.9,
-        ["BigQueryIndex"] = 3.9, ["TypedForm"] = 3.7, ["LspTransport"] = 3.4, ["Login"] = 3.0, ["Entra"] = 2.5,
+        ["BigQueryIndex"] = 3.9, ["TypedForm"] = 3.7, ["Login"] = 3.0, ["Entra"] = 2.5,
         ["ResultSearch"] = 2.3, ["Peek"] = 2.2, ["TransposedText"] = 2.1, ["Action"] = 1.7, ["Diff"] = 1.6, ["Scripting"] = 1.6,
         ["SqlCompletion"] = 1.0, ["Unlock"] = 0.7, ["LoginAction"] = 0.7, ["OperationProgress"] = 0.5, ["ActivitySource"] = 0.4,
     };

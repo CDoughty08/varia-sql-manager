@@ -256,8 +256,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         entra = EntraService.Shared;
         search = new ObjectSearchService(this);
         this.bigQuery.ObjectDetails = search;
-        language = new LanguageServiceBroker([new SqlToolsLanguageService(
-            LanguageConnectionString,
+        language = new LanguageServiceBroker([new TsqlLanguageService(
             indexLookup: search.Lookup,
             activeDatabase: LanguageActiveDatabase,
             refreshIndex: RefreshLanguageIndexAsync,

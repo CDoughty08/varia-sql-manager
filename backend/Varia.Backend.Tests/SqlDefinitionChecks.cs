@@ -247,7 +247,7 @@ internal static class SqlDefinitionChecks
         LanguageRequest Request(string text = "SELECT * FROM dbo.T", LanguageContext? context = null, LanguagePosition? position = null) =>
             new(Guid.NewGuid().ToString(), 1, text, context ?? new("sqlserver", connection, "Sales"), position ?? new(0, 16));
         check(await Code(() => service.ResolveAsync(Request() with { DocumentId = "not-a-guid" }, default)) == "INVALID_PARAMS", "a definition request needs a document UUID");
-        check(await Code(() => service.ResolveAsync(Request(new string('x', SqlToolsLanguageService.MaxTextCharacters + 1)), default)) == "INVALID_PARAMS", "the backend bounds the document itself");
+        check(await Code(() => service.ResolveAsync(Request(new string('x', TsqlLanguageService.MaxTextCharacters + 1)), default)) == "INVALID_PARAMS", "the backend bounds the document itself");
         check(await Code(() => service.ResolveAsync(Request(context: new("sqlserver", connection, new string('d', 129))), default)) == "INVALID_PARAMS", "the database name is bounded by sysname");
         check(await Code(() => service.ResolveAsync(Request(position: new(4, 0)), default)) == "INVALID_PARAMS", "the position must be inside the document");
         check(await Code(() => service.ResolveAsync(Request(context: new("postgresql", connection)), default)) == "INVALID_PARAMS", "only the SQL Server provider resolves definitions");

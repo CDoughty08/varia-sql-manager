@@ -460,7 +460,7 @@ describe('SQL language editor integration', () => {
     // A range outside the model is not believed.
     f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: { ...found, range: { start: { line: 3, character: 0 }, end: { line: 3, character: 2 } } } })
     expect(await f.service.definition(f.model(tab.id), at)).toBeNull()
-    // Definition needs no SQL Tools Service (no backend document to close), but it needs a connection.
+    // Definition opens no backend document to close, but it needs a connection.
     expect(f.api.languageClose).not.toHaveBeenCalled()
     const offline = f.documents.create('b.sql', 'SELECT * FROM dbo.Customer', 'master')
     await expect(f.service.definition(f.model(offline.id), at)).rejects.toThrow(definitionErrors.connectFirst)
@@ -488,7 +488,7 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageDefinition).toHaveBeenCalledTimes(2)
   })
 
-  it('serves definition without a configured SQL Tools Service, and drops an answer an edit made stale', async () => {
+  it('serves definition without a configured language provider, and drops an answer an edit made stale', async () => {
     const f = await fixture({ providers: [{ id: 'sqlserver', configured: false, completion: false, hover: false, reason: 'not installed' }] }); f.addConnection('connection-a')
     const tab = f.documents.create('a.sql', 'EXEC dbo.Load', 'Sales', 'connection-a')
     const answer = deferred<ApiResult<LanguageDefinition>>()

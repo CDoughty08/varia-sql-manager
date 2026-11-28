@@ -155,7 +155,7 @@ jobs:
           else
             node scripts/ci-docker.mjs start-sql --name varia-sql-2 --port 1433 --name varia-sql-3 --port 1434 --agent --memory-mb 3072 --detach
           fi
-      # Only slot 1 runs node (live vitest, bundled SQL Tools Service and Kerberos); slot 2 runs only dotnet.
+      # Only slot 1 runs node (live vitest and Kerberos); slot 2 runs only dotnet.
       - uses: actions/setup-node@v7
         if: matrix.slot == 1
         with:
@@ -194,13 +194,11 @@ jobs:
         if: matrix.slot == 1 && (success() || failure())
         timeout-minutes: 5
         run: npx vitest run tests/*-live.test.ts
-      - name: Bundled SQL language service against SQL Server
+      - name: SQL language service against SQL Server
         # Runs after other checks fail too, provided their Release build exists; the SQL container is disposable.
         if: matrix.slot == 1 && (success() || failure()) && hashFiles('backend/Varia.Backend.Tests/bin/Release/net11.0/Varia.Backend.Tests.dll') != ''
         timeout-minutes: 5
-        run: |
-          node scripts/prepare-sqltools-service.mjs --rid linux-x64
-          dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live
+        run: dotnet run --no-build --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --sql-language-live
       - name: BigQuery against its emulator
         # BigQuery in emulator mode against goccy/bigquery-emulator 0.8.1, pinned by digest (docs/bigquery.md, Testing):
         # anonymous credentials, so no Google project or credential is ever involved. Its gRPC port (9060) serves the Storage
@@ -275,9 +273,6 @@ jobs:
       - name: Build the app and the Release backend
         id: build
         timeout-minutes: 10
-        env:
-          # Only shard 3 runs language-services-live-smoke.mjs; the other shards do not launch the bundled SQL Tools Service.
-          VARIA_CHECK_SKIP: ${{ matrix.shard != 3 && 'sqltools' || '' }}
         run: npm run build:smoke
       - name: Prepare the Electron sandbox and display
         id: display
@@ -354,8 +349,6 @@ jobs:
       - name: Build the app and the Release backend
         id: build
         timeout-minutes: 10
-        env:
-          VARIA_CHECK_SKIP: sqltools
         run: npm run build:smoke
       - name: Electron smoke tests
         timeout-minutes: 25
@@ -400,8 +393,6 @@ jobs:
       - name: Build the app and the Release backend
         id: build
         timeout-minutes: 10
-        env:
-          VARIA_CHECK_SKIP: sqltools
         run: npm run build:smoke
       - name: Prepare the Electron sandbox and display
         id: display

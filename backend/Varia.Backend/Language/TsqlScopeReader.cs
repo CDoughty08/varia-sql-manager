@@ -156,7 +156,7 @@ internal static class TsqlScopeReader
         }
     }
 
-    private static T RunOnParseThread<T>(Func<T> action, CancellationToken cancellationToken) =>
+    internal static T RunOnParseThread<T>(Func<T> action, CancellationToken cancellationToken) =>
         ScriptDomWorker.Value.Invoke(action, cancellationToken);
 
     private static readonly HashSet<TSqlTokenType> StatementStarters =
@@ -171,9 +171,9 @@ internal static class TsqlScopeReader
     internal static TsqlCompletionContext ReadCompletion(string text, LanguagePosition position, string? defaultDatabase, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var cursor = SqlToolsLanguageService.CompletionOffset(text, position);
+        var cursor = TsqlLanguageService.CompletionOffset(text, position);
         var emptyRange = new LanguageRange(position, position);
-        if (cursor < 0 || text.Length > SqlToolsLanguageService.MaxTextCharacters)
+        if (cursor < 0 || text.Length > TsqlLanguageService.MaxTextCharacters)
             return EmptyCompletion(emptyRange, defaultDatabase);
 
         var parser = new TSql180Parser(initialQuotedIdentifiers: true);
@@ -255,8 +255,8 @@ internal static class TsqlScopeReader
     internal static TsqlHoverContext? ReadHover(string text, LanguagePosition position, string? defaultDatabase, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var cursor = SqlToolsLanguageService.CompletionOffset(text, position);
-        if (cursor < 0 || text.Length > SqlToolsLanguageService.MaxTextCharacters) return null;
+        var cursor = TsqlLanguageService.CompletionOffset(text, position);
+        if (cursor < 0 || text.Length > TsqlLanguageService.MaxTextCharacters) return null;
 
         var parser = new TSql180Parser(initialQuotedIdentifiers: true);
         var tokens = parser.GetTokenStream(new StringReader(text), out _);
@@ -900,7 +900,7 @@ internal static class TsqlScopeReader
             var snippet = text[tokens[startIdx].Offset..endOffset];
             var parser = new TSql180Parser(initialQuotedIdentifiers: true);
             var stmtTokens = parser.GetTokenStream(new StringReader(snippet), out var errors);
-            if (errors.Count == 0 && SqlToolsLanguageService.BoundedCompletionSyntax(stmtTokens))
+            if (errors.Count == 0 && TsqlLanguageService.BoundedCompletionSyntax(stmtTokens))
             {
                 var parsedTable = RunOnParseThread(() =>
                 {
@@ -1250,7 +1250,7 @@ internal static class TsqlScopeReader
         {
             cancellationToken.ThrowIfCancellationRequested();
             var tokens = parser.GetTokenStream(new StringReader(candidate.Text), out var errors);
-            if (errors.Count != 0 || !SqlToolsLanguageService.BoundedCompletionSyntax(tokens)) continue;
+            if (errors.Count != 0 || !TsqlLanguageService.BoundedCompletionSyntax(tokens)) continue;
             var extracted = RunOnParseThread(() =>
             {
                 var fragment = parser.Parse(tokens, out var parseErrors);

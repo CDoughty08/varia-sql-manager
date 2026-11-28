@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Microsoft.Data.SqlClient;
 using Varia.Backend.Explorer;
 using Varia.Backend.Language;
 using Varia.Backend.Search;
@@ -18,33 +17,27 @@ internal static class SqlLanguageChecks
         catch (RequestException error) { return error.Code; }
     }
     private static LanguageRequest Request(string? id = null, int version = 1, string text = "SELECT ", LanguageContext? context = null) =>
-        new(id ?? Guid.NewGuid().ToString(), version, text, context ?? new("sqlserver"), SqlToolsLanguageService.EndPosition(text));
+        new(id ?? Guid.NewGuid().ToString(), version, text, context ?? new("sqlserver"), TsqlLanguageService.EndPosition(text));
 
     public static async Task RunAsync(Action<bool, string> check)
     {
-        RuntimeResolution(check);
-
-        // Even when the STS runtime path is invalid, in-process ScriptDom completion/hover/refresh stay configured & working,
-        // while diagnostics accurately reports unavailable without launching a process.
-        using (var missing = new SqlToolsLanguageService(_ => null, "relative-untrusted.exe"))
+        using (var standalone = new TsqlLanguageService())
         {
-            var status = missing.Status();
-            check(status.Configured && status.Completion && status.Hover && status.Refresh && !status.Diagnostics
-                && status.Reason!.Contains("absolute path"),
-                "SQL language status keeps ScriptDom completion/hover configured when STS diagnostics path is invalid");
-            var offline = await missing.CompleteAsync(Request(text: "SELECT @@ROW"), default);
+            var status = standalone.Status();
+            check(status.Configured && status.Completion && status.Hover && status.Refresh && status.Diagnostics && status.Reason is null,
+                "in-process SQL language provider reports configured for completion, hover, refresh, and diagnostics with no external dependency");
+            var offline = await standalone.CompleteAsync(Request(text: "SELECT @@ROW"), default);
             check(offline.Items.Any(i => i.Label == "@@ROWCOUNT"),
-                "in-process ScriptDom completion works even when STS diagnostic executable is unavailable");
-            check(await Code(async () => await missing.DiagnosticsAsync(new(Guid.NewGuid().ToString(), 1, "SELECT 1", new("sqlserver")), default)) == "BACKEND_UNAVAILABLE",
-                "diagnostics fails without launching a process when STS executable is unavailable");
+                "in-process ScriptDom completion works offline");
+            var offlineDiag = await standalone.DiagnosticsAsync(new(Guid.NewGuid().ToString(), 1, "SELECT ( FROM dbo.T", new("sqlserver")), default);
+            check(offlineDiag.Items.Count > 0 && offlineDiag.Items[0].Source == "sqlserver",
+                "in-process ScriptDom syntax diagnostics work offline");
         }
 
-        check(SqlToolsLanguageService.PositionInText("a\r\n🙂\rx\ny", new(1, 2))
-            && !SqlToolsLanguageService.PositionInText("a\r\n🙂\rx\ny", new(1, 3))
-            && SqlToolsLanguageService.EndPosition("a\r\n🙂\rx\ny") == new LanguagePosition(3, 1), "language positions use UTF-16 and treat CRLF as one line break");
+        check(TsqlLanguageService.PositionInText("a\r\n🙂\rx\ny", new(1, 2))
+            && !TsqlLanguageService.PositionInText("a\r\n🙂\rx\ny", new(1, 3))
+            && TsqlLanguageService.EndPosition("a\r\n🙂\rx\ny") == new LanguagePosition(3, 1), "language positions use UTF-16 and treat CRLF as one line break");
 
-        // Verify zero STS child processes are spawned for completion, hover, and refresh.
-        var spawnedClients = 0;
         var refreshCalls = 0;
         var budget = new IndexBudget(1 << 20);
         var connIndex = new ConnectionIndex(budget);
@@ -58,44 +51,44 @@ internal static class SqlLanguageChecks
 
         var id = Guid.NewGuid().ToString();
         var connectionId = Guid.NewGuid().ToString();
-        var settings = "Server=unused;Database=One;User ID=test;Password=private-secret;Encrypt=Strict;Host Name In Certificate=db.example";
-        using (var sql = new SqlToolsLanguageService(
-            _ => settings,
-            createClient: _ => { Interlocked.Increment(ref spawnedClients); throw new InvalidOperationException("Completion/hover/refresh must never spawn an STS child."); },
+        using (var sql = new TsqlLanguageService(
             indexLookup: cid => cid == connectionId ? lookup : null,
             refreshIndex: (_, _) => { Interlocked.Increment(ref refreshCalls); return Task.FromResult(true); }))
         {
             var request = Request(id, text: "SELECT * FROM dbo.Peop", context: new("sqlserver", connectionId, "One"));
             var first = await sql.CompleteAsync(request, default);
-            check(first.Items.Any(item => item.Label == "[People]" && item.TextEdit?.NewText == "[People]") && spawnedClients == 0,
-                "in-process SQL completion resolves indexed tables with bracketed text edits and spawns zero STS processes");
+            check(first.Items.Any(item => item.Label == "[People]" && item.TextEdit?.NewText == "[People]"),
+                "in-process SQL completion resolves indexed tables with bracketed text edits");
 
             var hoverReq = new LanguageRequest(id, 2, "SELECT p.PersonId FROM dbo.People AS p", new("sqlserver", connectionId, "One"), new(0, 12));
             var freshHover = await sql.HoverAsync(hoverReq, default);
-            check(freshHover is not null && freshHover.Contents.Contains("PersonId", StringComparison.Ordinal) && spawnedClients == 0,
-                "in-process SQL hover describes indexed columns and spawns zero STS processes");
+            check(freshHover is not null && freshHover.Contents.Contains("PersonId", StringComparison.Ordinal),
+                "in-process SQL hover describes indexed columns");
 
             check(await Code(async () => await sql.CompleteAsync(request, default)) == "STALE", "SQL provider refuses a stale version before publishing completion");
             check(await Code(async () => await sql.CompleteAsync(hoverReq with { Text = "different", Position = new(0, 0) }, default)) == "STALE",
                 "SQL provider refuses different text under an already accepted version");
 
             var otherDb = await sql.HoverAsync(new(id, 3, "SELECT o.OrderId FROM dbo.Orders AS o", new("sqlserver", connectionId, "Two"), new(0, 12)), default);
-            check(otherDb is not null && otherDb.Contents.Contains("OrderId", StringComparison.Ordinal) && spawnedClients == 0,
-                "switching database reads that database from IndexLookup in-process without spawning STS");
+            check(otherDb is not null && otherDb.Contents.Contains("OrderId", StringComparison.Ordinal),
+                "switching database reads that database from IndexLookup in-process");
 
             var refreshed = await sql.RefreshAsync(new(id, 3, "SELECT o.OrderId FROM dbo.Orders AS o", new("sqlserver", connectionId, "Two")), default);
-            check(refreshed.Refreshed && refreshCalls == 1 && spawnedClients == 0,
-                "SQL Server cache refresh invokes index refresh in-process without spawning an STS completion child");
+            check(refreshed.Refreshed && refreshCalls == 1,
+                "SQL Server cache refresh invokes index refresh in-process");
             check(!(await sql.RefreshAsync(new(Guid.NewGuid().ToString(), 1, "SELECT 1", new("sqlserver")), default)).Refreshed && refreshCalls == 1,
                 "disconnected refresh reports no database cache without invoking index refresh");
             check(await Code(async () => await sql.RefreshAsync(new(id, 2, "SELECT o.OrderId FROM dbo.Orders AS o", new("sqlserver", connectionId, "Two")), default)) == "STALE"
                 && await Code(async () => await sql.RefreshAsync(new(id, 3, "SELECT o.OrderId FROM dbo.Orders AS o", new("sqlserver", connectionId, "One")), default)) == "STALE",
                 "stale versions and mismatched contexts are refused before any refresh runs");
 
+            var diagBad = await sql.DiagnosticsAsync(new(id, 4, "SELECT o.MissingOrderCol FROM dbo.Orders AS o", new("sqlserver", connectionId, "Two")), default);
+            check(diagBad.Version == 4 && diagBad.Items.Any(i => i.Code == "SQL207" && i.Message.Contains("MissingOrderCol", StringComparison.Ordinal)),
+                "in-process SQL diagnostics report unknown columns against the active database in IndexLookup");
+
             check((await sql.CloseAsync(id, default)).Closed && !(await sql.CloseAsync(id, default)).Closed, "closing SQL language documents releases lifecycle state and is idempotent");
             var reopened = await sql.CompleteAsync(Request(id, 1, "SELECT * FROM dbo.Peop", new("sqlserver", connectionId, "One")), default);
             check(reopened.Items.Any(i => i.Label == "[People]"), "closed document IDs can reopen with a fresh version sequence");
-            check(spawnedClients == 0, "zero STS processes were created across all completion, hover, refresh, and close calls");
         }
         connIndex.Dispose();
 
@@ -120,7 +113,7 @@ internal static class SqlLanguageChecks
 
         await BrokerLifecycleChecks(check);
 
-        check(await Code(() => { SqlToolsLanguageService.Validate(Request(text: new string('x', 250_001))); return Task.CompletedTask; }) == "INVALID_PARAMS",
+        check(await Code(() => { TsqlLanguageService.Validate(Request(text: new string('x', 250_001))); return Task.CompletedTask; }) == "INVALID_PARAMS",
             "backend independently bounds SQL language documents");
 
         using var service = new SqlService();
@@ -132,20 +125,14 @@ internal static class SqlLanguageChecks
         }
         catch (JsonException) { check(true, "language status rejects unexpected properties for ProtocolHost's INVALID_PARAMS response"); }
 
-        var registered = service.Register(settings, ServerProfile.Fallback("16.0"), "One");
-        var inherited = new SqlConnectionStringBuilder(service.LanguageConnectionString(new("sqlserver", registered, "Other;Name"))!);
-        check(inherited.InitialCatalog == "Other;Name" && inherited.Encrypt == SqlConnectionEncryptOption.Strict && inherited.Password == "private-secret"
-            && inherited.HostNameInCertificate == "db.example" && !inherited.Pooling,
-            "language diagnostic settings preserve auth and certificate requirements while safely overriding the selected database");
-
-        // Microsoft Entra ID: unlocked for ScriptDom + IndexLookup completion & hover; diagnostics still returns AUTH_UNSUPPORTED until PR-6.
+        // Microsoft Entra ID: completion, hover, AND live diagnostics all work end-to-end via ScriptDom + IndexLookup.
         var entra = service.Register("Server=unused;Authentication=Active Directory Interactive", ServerProfile.Fallback("16.0"), "EntraDb");
         var entraTable = new IndexedObject("table", "tables", "dbo", "EntraCustomers");
         var entraCol = new IndexedObject("column", "columns", null, "TenantName", "table", "dbo", "EntraCustomers");
         service.Search.Held(entra).Put(new DatabaseIndex("EntraDb", ObjectTable.Of([entraTable, entraCol]), 0, 0, 0) { CaseSensitive = false });
 
         check(service.LanguageActiveDatabase(new("sqlserver", entra)) == "EntraDb",
-            "Microsoft Entra ID resolves active database for in-process ScriptDom completion and hover");
+            "Microsoft Entra ID resolves active database for in-process ScriptDom completion, hover, and diagnostics");
         var entraDoc = Guid.NewGuid().ToString();
         var entraComp = (LanguageCompletionResult)await service.DispatchAsync("language.complete", Element(new LanguageRequest(
             entraDoc, 1, "SELECT c. FROM dbo.EntraCustomers AS c", new("sqlserver", entra, "EntraDb"), new(0, 9))), strict);
@@ -155,8 +142,10 @@ internal static class SqlLanguageChecks
             entraDoc, 2, "SELECT c.TenantName FROM dbo.EntraCustomers AS c", new("sqlserver", entra, "EntraDb"), new(0, 12))), strict);
         check(entraHover is not null && entraHover.Contents.Contains("TenantName", StringComparison.Ordinal) && entraHover.Contents.Contains("EntraCustomers", StringComparison.Ordinal),
             "Microsoft Entra ID SQL Server connections serve column hover via ScriptDom + IndexLookup");
-        check(await Code(() => { service.LanguageConnectionString(new("sqlserver", entra)); return Task.CompletedTask; }) == "AUTH_UNSUPPORTED",
-            "STS diagnostic connection string still refuses Entra ID until Phase 2 replaces STS diagnostics");
+        var entraDiag = (LanguageDiagnosticResult)await service.DispatchAsync("language.diagnostics", Element(new LanguageRefreshRequest(
+            entraDoc, 3, "SELECT c.MissingCol FROM dbo.EntraCustomers AS c", new("sqlserver", entra, "EntraDb"))), strict);
+        check(entraDiag.Items.Any(i => i.Code == "SQL207" && i.Message.Contains("MissingCol", StringComparison.Ordinal)),
+            "Microsoft Entra ID SQL Server connections serve live catalog-binding diagnostics via ScriptDom + IndexLookup");
         check(service.LaneOf("language.close") == Varia.Backend.Protocol.RequestLane.Control, "language close can cancel requests without waiting for a metadata lane");
         check(service.LaneOf("language.refresh") == Varia.Backend.Protocol.RequestLane.Control, "language refresh can supersede a pending completion without waiting for a metadata lane");
     }
@@ -227,35 +216,6 @@ internal static class SqlLanguageChecks
         }
     }
 
-    private static void RuntimeResolution(Action<bool, string> check)
-    {
-        var directory = Path.Combine(Path.GetTempPath(), "varia-sqltools-runtime-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            var backend = Path.Combine(directory, "backend", "Varia.Backend", "bin", "Debug", "net11.0");
-            var source = Path.Combine(directory, "artifacts", "sqltools-service", "win-x64", "MicrosoftSqlToolsServiceLayer.exe");
-            Directory.CreateDirectory(Path.GetDirectoryName(source)!);
-            File.WriteAllText(source, "path fixture only");
-            var runtime = SqlToolsRuntime.Bundled(backend, "win", "x64");
-            check(runtime.ExecutablePath == source && !runtime.IsOverride && runtime.UnavailableReason() is null,
-                "direct source backend resolves the prepared host RID runtime without environment configuration");
-            check(runtime.Arguments.SequenceEqual(new[] { "--parent-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), "--tracing-level", "Off" }),
-                "production SQL Tools launch disables implicit disk logs that could contain SQL or exception details");
-            var installedBackend = Path.Combine(directory, "resources", "backend");
-            var installed = Path.Combine(directory, "resources", "sqltools-service", "MicrosoftSqlToolsServiceLayer");
-            Directory.CreateDirectory(Path.GetDirectoryName(installed)!);
-            File.WriteAllText(installed, "path fixture only");
-            check(SqlToolsRuntime.Bundled(installedBackend, "osx", "arm64").ExecutablePath == installed,
-                "installed backend resolves its sibling bundled runtime");
-            check(SqlToolsRuntime.Resolve("missing-explicit-override.exe").IsOverride
-                && SqlToolsRuntime.Resolve("missing-explicit-override.exe").ExecutablePath == "missing-explicit-override.exe",
-                "an explicit invalid runtime override never falls back to bundled files");
-            check(new SqlToolsRuntime(Path.Combine(directory, "missing"), false).UnavailableReason()!.Contains("Reinstall Varia"),
-                "missing bundled runtime explains repair without requiring an environment variable");
-        }
-        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
-    }
-
     private sealed class StubProvider(string id) : ILanguageServiceProvider
     {
         public string Id { get; } = id;
@@ -284,7 +244,7 @@ internal static class SqlLanguageChecks
             Interlocked.Increment(ref Closes);
             return new(true);
         }
-        public Task ForgetConnectionAsync(string connectionId) => Task.CompletedTask;
+        public Task ForgetConnectionAsync(string id) => Task.CompletedTask;
         public void Reset() => Interlocked.Increment(ref Resets);
         public void Dispose() { CloseRelease?.TrySetResult(); CompleteRelease?.TrySetResult(); }
     }

@@ -36,8 +36,9 @@ describe('Release builds', () => {
     // Everything electron-builder, the fuses and the packaged smoke tests read, and nothing every pull request touches:
     // the smoke selectors (scripts/fixtures/ui.mjs) and main's index changed in a third of recent pull requests.
     for (const path of ['.github/workflows/release.yml', '.github/workflows/package.yml', 'electron-builder.yml', 'build/**', 'package-lock.json', 'scripts/packaged-smoke.mjs', 'scripts/packaged-contents.mjs', 'scripts/package-prepare.mjs', 'scripts/portable-smoke.mjs', 'scripts/windows-installer-smoke.ps1', 'scripts/update-manifest.mjs', 'src/main/app-protocol.ts', 'src/main/backend/spawn-spec.ts', 'src/main/update-install.ts', 'src/main/update-staging.ts', 'backend/Varia.Updater/**', 'scripts/appimage-check.mjs']) expect(releasePaths).toContain(path)
-    expect(releasePaths).toContain('src/main/backend/sqltools-runtime.ts')
     expect(releasePaths).toContain('scripts/prepare-electron.mjs')
+    expect(releasePaths).not.toContain('src/main/backend/sqltools-runtime.ts')
+    expect(releasePaths).not.toContain('scripts/prepare-sqltools-service.mjs')
     for (const path of releasePaths) expect(path, path).not.toMatch(/^(src\/\*\*|src\/main\/index\.ts|scripts\/fixtures|package\.json|tests\/)/)
   })
   it('keeps complete packaging on every main push so cancellation cannot discard unfinished code validation', () => {
@@ -90,7 +91,8 @@ describe('Release builds', () => {
     expect(pack).toContain("node scripts/package-prepare.mjs --rid ${{ inputs.rid }} ${{ runner.os == 'Windows' && '--updater' || '' }}")
     expect(prepareScript).toContain('dotnet publish backend/Varia.Backend/Varia.Backend.csproj -c Release -r ${rid} --self-contained true -p:RestoreLockedMode=true -o artifacts/release-backend')
     expect(prepareScript).toContain('dotnet publish backend/Varia.Updater/Varia.Updater.csproj -c Release -r ${rid} -o artifacts/updater')
-    expect(prepareScript).toContain('npm run sqltools:prepare -- --rid ${rid}')
+    expect(prepareScript).not.toContain('sqltools')
+    expect(readFileSync('electron-builder.yml', 'utf8')).not.toContain('sqltools')
     expect(pack).toContain('"dist/Varia-SQL-Manager-$version-win-x64.zip", "dist/win-unpacked/resources/updater/Varia.Updater.exe"')
     const windows = release.slice(release.indexOf('rid: win-x64'), release.indexOf('- runner: ubuntu'))
     expect(windows).toMatch(/target: --win nsis portable zip --x64\n/)
@@ -104,14 +106,14 @@ describe('Release builds', () => {
     expect(readFileSync('scripts/windows-installer-smoke.ps1', 'utf8')).toMatch(/'\/S', '\/currentuser', "_\?=\$installDir"[\s\S]*Test-Path -LiteralPath \$exe[\s\S]*Test-Path -LiteralPath \$root\) \{ throw/)
     // electron-builder only warns about a missing extraResources folder: packaging refuses instead.
     const { updaterProblem } = createRequire(import.meta.url)('../build/updater-check.cjs')
-    expect(readFileSync('build/sqltools-service-check.cjs', 'utf8')).toMatch(/updaterProblem\(context\.electronPlatformName, context\.packager\.projectDir\)\n {2}if \(problem\) throw new Error\(problem\)/)
+    expect(readFileSync('build/before-pack.cjs', 'utf8')).toMatch(/updaterProblem\(context\.electronPlatformName, context\.packager\.projectDir\)\n {2}if \(problem\) throw new Error\(problem\)/)
     expect(updaterProblem('win32', join('artifacts', 'no-such-project'))).toMatch(/dotnet publish backend\/Varia\.Updater/)
     expect(updaterProblem('linux', join('artifacts', 'no-such-project'))).toBeNull()
     expect(updaterProblem('darwin', join('artifacts', 'no-such-project'))).toBeNull()
     // The same for the backend: without its self-contained publish for the target, the app fails at launch (spawn ENOENT).
     const { backendFramework, backendProblem } = createRequire(import.meta.url)('../build/backend-check.cjs')
     expect(backendFramework('.')).toBe(JSON.parse(readFileSync('global.json', 'utf8')).sdk.version.split('.').slice(0, 2).join('.'))
-    expect(readFileSync('build/sqltools-service-check.cjs', 'utf8')).toMatch(/const backend = backendProblem\(rid, context\.packager\.projectDir\)\n {2}if \(backend\) throw new Error\(backend\)\n(?:.*\n)*.*prepareSqlToolsService\(\{ rid,/)
+    expect(readFileSync('build/before-pack.cjs', 'utf8')).toMatch(/const backend = backendProblem\(rid, context\.packager\.projectDir\)\n {2}if \(backend\) throw new Error\(backend\)/)
     const project = mkdtempSync(join(tmpdir(), 'varia-backend-check-')), published = join(project, 'artifacts', 'release-backend')
     mkdirSync(join(project, 'backend', 'Varia.Backend'), { recursive: true })
     writeFileSync(join(project, 'backend', 'Varia.Backend', 'Varia.Backend.csproj'), '<TargetFramework>net11.0</TargetFramework>')

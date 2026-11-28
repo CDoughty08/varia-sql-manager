@@ -142,12 +142,12 @@ internal static class TsqlCompletionService
             .ThenBy(x => x.c.Item.SortText ?? x.c.Item.Label, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.idx);
 
-        var items = new List<LanguageCompletionItem>(Math.Min(candidates.Count, SqlToolsLanguageService.MaxCompletionItems));
+        var items = new List<LanguageCompletionItem>(Math.Min(candidates.Count, TsqlLanguageService.MaxCompletionItems));
         var totalChars = 0;
 
         foreach (var entry in ordered)
         {
-            if (items.Count >= SqlToolsLanguageService.MaxCompletionItems)
+            if (items.Count >= TsqlLanguageService.MaxCompletionItems)
             {
                 incomplete = true;
                 break;
