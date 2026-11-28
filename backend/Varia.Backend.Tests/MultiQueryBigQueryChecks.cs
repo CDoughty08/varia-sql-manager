@@ -1709,6 +1709,52 @@ internal static class MultiQueryBigQueryChecks
             check(abBq.Aborts.Count == abortsBefore && abPhase1.Result.ResultSets.All(s => s.RolledBackPreview),
                 $"IsAbandoned()==true skips BigQuery ABORT_SESSION HTTP call while marking RolledBackPreview (aborts={abBq.Aborts.Count - abortsBefore})");
         }
+
+        // 3. NoDefaultDataset suppresses connection.Options.Dataset in BigQueryMultiRunner (and invalid Dataset+NoDefaultDataset is refused),
+        //    and GoogleSQL -- #Name="..." markers propagate ResultName through BigQueryMultiRunner.
+        {
+            var ndBq = new BigQuerySessionChecks.Bq();
+            ndBq.Statements["-- #Name=\"NamedBqMulti\"\nSELECT 1 AS a"] = "SELECT";
+            var ndFake = ndBq.Fake();
+            using var ndSvc = NewService(ndFake);
+            var ndConnId = await ConnectGoogleAsync(ndSvc, key, location: "US", dataset: "sales");
+            var ndRunner = new BigQueryMultiRunner(ndSvc);
+            var ndBudget = ndSvc.Results.BeginQuery(Guid.NewGuid().ToString());
+            using var ndEvents = new QueryEventSink(null);
+            var ndMessages = new QueryMessages(ndEvents.Message);
+            var ndCtx = MakeContext("bq-nd", ndConnId, "fireAndForget", "-- #Name=\"NamedBqMulti\"\nSELECT 1 AS a", ndBudget, ndMessages, ndEvents, preflightDryRun: true) with
+            {
+                Target = new MultiQueryTargetArgs("bq-nd", ndConnId, "BQ nd", NoDefaultDataset: true)
+            };
+            var pre = await ndRunner.PreflightAsync([ndCtx], CancellationToken.None);
+            var ph1 = await ndRunner.ExecutePhase1Async(ndCtx, CancellationToken.None);
+            var sawNonNullDefaultDataset = ndFake.Seen
+                .Where(r => r.Method == "POST" && r.Url.EndsWith("/jobs", StringComparison.Ordinal) && r.Body.Contains("NamedBqMulti", StringComparison.Ordinal))
+                .Any(r => r.Body.Contains("\"defaultDataset\"", StringComparison.Ordinal));
+            check(pre.Count == 1 && pre[0].Passed && ph1.Result.Outcome.Status == "succeeded" && !sawNonNullDefaultDataset,
+                $"BigQueryMultiRunner NoDefaultDataset suppresses connection.Options.Dataset (pre={pre.FirstOrDefault()?.Passed}, status={ph1.Result.Outcome.Status}, sawDefault={sawNonNullDefaultDataset})");
+            check(ph1.Result.ResultSets.Count == 1 && ph1.Result.ResultSets[0].ResultName == "NamedBqMulti",
+                $"BigQueryMultiRunner applies GoogleSQL #Name marker to ResultDescriptor (count={ph1.Result.ResultSets.Count}, name={ph1.Result.ResultSets.FirstOrDefault()?.ResultName})");
+
+            var (mixCode, _, _) = await DispatchAsync(ndSvc, "query.executeMulti", new JsonObject
+            {
+                ["queryId"] = Guid.NewGuid().ToString(),
+                ["sessionId"] = Guid.NewGuid().ToString(),
+                ["mode"] = "fireAndForget",
+                ["sql"] = "SELECT 1",
+                ["maxRows"] = 100,
+                ["timeoutSeconds"] = 30,
+                ["targets"] = new JsonArray(new JsonObject
+                {
+                    ["targetKey"] = "bq-bad",
+                    ["connectionId"] = ndConnId,
+                    ["label"] = "BQ bad",
+                    ["dataset"] = "sales",
+                    ["noDefaultDataset"] = true
+                })
+            });
+            check(mixCode == "INVALID_PARAMS", $"query.executeMulti rejects dataset + noDefaultDataset ({mixCode})");
+        }
     }
 
     static SqlService NewService(BigQueryFake fake)

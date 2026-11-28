@@ -44,8 +44,11 @@ const multiQueryTargetSchema = z.object({
   environment: environmentSchema.optional(),
   database: database.optional(),
   dataset: dataset.optional(),
+  noDefaultDataset: z.literal(true).optional(),
   maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional()
-}).strict().refine(target => target.database === undefined || (target.dataset === undefined && target.maximumBytesBilled === undefined), 'A target cannot mix SQL Server and BigQuery options.')
+}).strict()
+  .refine(target => target.database === undefined || (target.dataset === undefined && target.noDefaultDataset === undefined && target.maximumBytesBilled === undefined), 'A target cannot mix SQL Server and BigQuery options.')
+  .refine(target => !(target.dataset !== undefined && target.noDefaultDataset), 'A target cannot name both a dataset and no default dataset.')
 
 const multiQueryScriptsSchema = z.object({
   sqlserver: z.string().min(1).max(maxScriptCharacters, tooLargeScript).refine(value => value.trim().length > 0),

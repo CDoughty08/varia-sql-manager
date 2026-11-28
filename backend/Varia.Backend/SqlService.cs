@@ -716,6 +716,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>Marks the Search Objects index of a SQL Server connection stale in the database a script began in and the one it
     /// ended in (a USE between them), when its text may have changed objects (<see cref="TsqlChanges"/>). Free: nothing is read.</summary>
+    internal void MarkSqlIndexStale(string connectionId, string sql, string? started, string? ended) =>
+        MarkIndexStale(connectionId, sql, started, ended);
+
     private void MarkIndexStale(string connectionId, string sql, string? started, string? ended)
     {
         if (!TsqlChanges.MayChangeObjects(sql)) return;
@@ -3004,7 +3007,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 || (target.Database is not null && (string.IsNullOrWhiteSpace(target.Database) || target.Database.Length > 128))
                 || (target.Dataset is not null && (target.Dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(target.Dataset)))
                 || target.MaximumBytesBilled is < 1 or > MaxSafeInteger
-                || (target.Database is not null && (target.Dataset is not null || target.MaximumBytesBilled is not null)))
+                || (target.Database is not null && (target.Dataset is not null || target.NoDefaultDataset || target.MaximumBytesBilled is not null))
+                || (target.Dataset is not null && target.NoDefaultDataset))
                 throw new RequestException("INVALID_PARAMS", "One or more multi-server targets are invalid.");
             if (!seenConnections.Add(target.ConnectionId) || !seenKeys.Add(target.TargetKey))
                 throw new RequestException("INVALID_PARAMS", "Multi-server targets must have distinct connections and target keys.");
@@ -3022,7 +3026,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             else if (connections.ContainsKey(target.ConnectionId))
             {
                 hasSqlServer = true;
-                if (target.Dataset is not null || target.MaximumBytesBilled is not null)
+                if (target.Dataset is not null || target.NoDefaultDataset || target.MaximumBytesBilled is not null)
                     throw new RequestException("UNSUPPORTED_PROVIDER", "A dataset and maximum bytes billed apply only to BigQuery targets.");
             }
             else

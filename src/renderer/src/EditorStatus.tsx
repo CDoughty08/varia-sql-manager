@@ -96,7 +96,8 @@ export default function EditorStatus() {
   const bigQueryIssues = isQueryDocument(active) ? bigQueryCost.status(active.id) : undefined
   const issues = isQueryDocument(active) ? bigQueryIssues ?? sqlDiagnostics.status(active.id) : undefined
   const sqlChip = sqlStatusChip(language, issues)
-  const isBigQuery = !!(bigQueryLanguage || bigQueryIssues)
+  const isCrossFile = active.multiMode === 'cross' && active.crossView === 'file'
+  const isBigQuery = !!bigQueryLanguage || (!!bigQueryIssues && !isCrossFile)
   const sqlSetting = isBigQuery ? 'textEditor.googleSql.dryRunDiagnostics' : 'textEditor.sql.errorChecking'
   return <span className="editor-status">
     <span className="editor-status-group editor-status-caret">

@@ -277,7 +277,7 @@ function resolveLiveTargets(
       label,
       ...environment ? { environment } : {},
       ...database ? { database } : {},
-      ...dataset ? { dataset } : {},
+      ...provider === 'bigquery' ? (dataset ? { dataset } : { noDefaultDataset: true as const }) : {},
       ...cap !== undefined ? { maximumBytesBilled: cap } : {}
     }
 
@@ -303,7 +303,7 @@ async function dryRunTarget(
     const response = await api.bigQueryDryRun({
       connectionId: target.connection.id,
       sql,
-      ...target.item.dataset ? { dataset: target.item.dataset } : {}
+      ...target.item.dataset ? { dataset: target.item.dataset } : { noDefaultDataset: true }
     })
     return response.ok ? response.value : undefined
   } catch {

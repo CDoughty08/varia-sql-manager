@@ -772,7 +772,7 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
           label,
           ...connection.environment ? { environment: connection.environment } : {},
           ...database ? { database } : {},
-          ...dataset ? { dataset } : {},
+          ...provider === 'bigquery' ? (dataset ? { dataset } : { noDefaultDataset: true as const }) : {},
           ...cap !== undefined ? { maximumBytesBilled: cap } : {}
         })
         identities.push({

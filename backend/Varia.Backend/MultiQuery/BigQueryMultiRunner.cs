@@ -116,7 +116,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
             return outcome;
         }
 
-        var dataset = ctx.Target.Dataset ?? connection.Options.Dataset;
+        var dataset = ctx.Target.NoDefaultDataset ? null : ctx.Target.Dataset ?? connection.Options.Dataset;
         var location = await service.ResolveBigQueryLocationAsync(connection, dataset, token);
         long? estimatedBytes = null;
         var dryRan = false;
@@ -224,13 +224,41 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
         var leaseTransferred = false;
         var isTransaction = target.Mode == "transaction";
         var project = connection.Options.Project;
-        var dataset = target.Target.Dataset ?? connection.Options.Dataset;
+        var dataset = target.Target.NoDefaultDataset ? null : target.Target.Dataset ?? connection.Options.Dataset;
         var cap = connection.Options.MaximumBytesBilled ?? target.Target.MaximumBytesBilled;
         var targetArgs = TargetQueryArgs(target, dataset, cap);
         var sets = new List<ResultSetBuffer>();
         var readChildren = new HashSet<string>(StringComparer.Ordinal);
         var roomWaited = new SqlService.RoomWaited();
         Action<string> warn = text => target.Messages.Add(text, MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
+        var nameNotes = new ResultNameNotes(text => target.Messages.Add(text, MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery));
+        BigQueryResultNameBinder? nameBinder = null;
+        var namesPrepared = false;
+        var namesFlushed = false;
+        var isScript = false;
+        var scriptListedAll = true;
+        var scriptListingFailed = false;
+        var scriptHasChildren = false;
+        void PrepareNames()
+        {
+            if (namesPrepared) return;
+            namesPrepared = true;
+            var namePlan = BigQueryResultNamePlan.Build(target.Sql, target.StartLine);
+            if (namePlan is null) return;
+            foreach (var note in namePlan.Notes) nameNotes.Add(note);
+            if (namePlan.Slots.Count > 0) nameBinder = new BigQueryResultNameBinder(namePlan);
+        }
+        void FlushNameNotes(string? ended)
+        {
+            if (namesFlushed) return;
+            namesFlushed = true;
+            if (nameBinder is not null)
+            {
+                foreach (var note in nameBinder.Unapplied(ended, isScript, scriptListedAll, scriptListingFailed, scriptHasChildren))
+                    nameNotes.Add(note);
+            }
+            nameNotes.Finish();
+        }
 
         ResultSetBuffer? currentSet = null;
         BigQueryTabSession? session = null;
@@ -274,9 +302,9 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
             }
         }
 
-        async Task ChildAsync(BigQueryChild child)
+        async Task ChildAsync(BigQueryChild child, bool incompleteListing)
         {
-            if (child.Error is not null) return;
+            if (child.Error is not null) { nameBinder?.NoteChildError(); return; }
             succeededChildren++;
             var statement = child.StatementType;
             if (statement == "SELECT")
@@ -284,6 +312,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 var slot = statementSlot++;
                 if (target.DiscardResults)
                 {
+                    nameBinder?.TakeChild(child, incompleteListing, discarded: true);
                     discarded++;
                     target.Quota.RecordDiscarded();
                     return;
@@ -291,7 +320,12 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 var first = await service.ReadBigQueryChildFirstPageAsync(connection, project, child.Id, child.Location ?? location, token);
                 var childPlan = BigQueryColumnPlan.From(first.Schema);
                 var rows = first.TotalRows ?? 0;
-                if (childPlan is null) { first.Dispose(); return; }
+                if (childPlan is null)
+                {
+                    nameBinder?.StopPositional("a SELECT statement returned no columns, so the place of later result sets is unknown");
+                    first.Dispose();
+                    return;
+                }
                 if (childPlan.TruncatedColumns)
                     target.Messages.Add("The result has " + childPlan.SchemaColumns.ToString("N0", CultureInfo.InvariantCulture) + " columns; the first " + PageBuilder.MaxColumns.ToString("N0", CultureInfo.InvariantCulture) + " are shown.",
                         MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
@@ -299,6 +333,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 var descriptorBytes = EstimateDescriptorBytes(childPlan.Columns);
                 if (!target.Quota.TryAllocate(descriptorBytes, out var index, out var oversize))
                 {
+                    nameBinder?.RefusedChild(child, incompleteListing, "the run kept no more result sets");
                     first.Dispose();
                     discarded++;
                     target.Quota.RecordDiscarded();
@@ -307,11 +342,13 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                             MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
                     return;
                 }
+                var childName = nameBinder?.TakeChild(child, incompleteListing);
                 var set = service.Results.Open(target.Budget, index, 1, 1, "rows", childPlan.Columns, childPlan.Wires,
-                    lengths: childPlan.Lengths, targetKey: target.Target.TargetKey, targetLabel: target.Target.Label,
+                    lengths: childPlan.Lengths, name: childName, targetKey: target.Target.TargetKey, targetLabel: target.Target.Label,
                     targetEnvironment: target.Target.Environment, targetProvider: Providers.BigQuery, statementSlot: slot < 1000 ? slot : null);
                 if (set is null)
                 {
+                    nameBinder?.RefusedLast("result memory kept no more result sets");
                     target.Quota.Release(index, descriptorBytes);
                     first.Dispose();
                     discarded++;
@@ -349,18 +386,18 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
         {
             var listed = await bigQuery.ChildrenAsync(connection, project, jobId, full ? null : readChildren, token);
             if (!readRows || (!full && !listed.Complete)) return listed;
-            await ReadChildrenAsync(listed.Children);
+            await ReadChildrenAsync(listed.Children, incompleteListing: !listed.Complete);
             return listed;
         }
 
-        async Task ReadChildrenAsync(List<BigQueryChild> listedChildren)
+        async Task ReadChildrenAsync(List<BigQueryChild> listedChildren, bool incompleteListing)
         {
             foreach (var child in listedChildren)
             {
                 if (readChildren.Contains(child.Id)) continue;
                 if (!child.Done) break;
                 readChildren.Add(child.Id);
-                try { await ChildAsync(child); }
+                try { await ChildAsync(child, incompleteListing); }
                 catch (Exception error) when (!token.IsCancellationRequested) { throw new ChildReadFailure(error); }
             }
         }
@@ -392,6 +429,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 if (blockers.Count > 0)
                     return FailEarly(new("INVALID_SCRIPT", blockers[0].Message, Line: OffsetLine(target.StartLine, blockers[0].Line)));
             }
+            PrepareNames();
 
             if (!state.ResolvedLocations.TryGetValue(target.Target.TargetKey, out location))
             {
@@ -557,6 +595,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 summary = SqlService.JobSummary(project, location, jobId, finished);
                 var statement = summary.StatementType;
                 var script = statement == "SCRIPT" || readChildren.Count > 0 || finished.Statistics?.NumChildJobs > 0;
+                isScript = script;
                 List<BigQueryChild>? children = null;
                 var listedAll = false;
                 if (script)
@@ -572,6 +611,9 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                         children = null;
                         listedAll = false;
                     }
+                    scriptListedAll = listedAll;
+                    scriptListingFailed = children is null;
+                    scriptHasChildren = children is { Count: > 0 };
                 }
                 service.MarkBigQueryIndex(target.Target.ConnectionId, connection, finished, statement, children, listedAll, project, dataset, target.Sql);
                 indexMarked = true;
@@ -616,6 +658,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                     // A statement inside the script committed before the coordinated barrier: mark commitInDoubt and abort peers.
                     if (session?.Id is { } sid && !target.IsAbandoned())
                         await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location);
+                    FlushNameNotes("the run stopped before its result set arrived");
                     var inDoubtError = new MultiTargetError("SQL_ERROR",
                         "A statement executed COMMIT TRANSACTION before the coordinated barrier, so changes on this BigQuery target may already be committed.");
                     target.Messages.Add(inDoubtError.Message, MessageKind.Error, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
@@ -630,6 +673,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 {
                     if (session.Id is { } sid && !target.IsAbandoned())
                         await bigQuery.AbortEphemeralSessionAsync(connection, sid, session.Location);
+                    FlushNameNotes("the run failed before its result set arrived");
                     if (BigQueryCost.Summary(summary, target.Prices != false) is { } failCost)
                         target.Messages.Add(failCost, MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
                     var reason = session.Transaction == BigQueryTransaction.Unknown
@@ -648,12 +692,12 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                 {
                     if (jobFailed is not null)
                     {
-                        try { await ReadChildrenAsync(children); }
+                        try { await ReadChildrenAsync(children, incompleteListing: !listedAll); }
                         catch (Exception ex) when (ex is not OutOfMemoryException) { }
                     }
                     else
                     {
-                        await ReadChildrenAsync(children);
+                        await ReadChildrenAsync(children, incompleteListing: !listedAll);
                     }
                 }
 
@@ -684,6 +728,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                     if (page?.NumDmlAffectedRows is { } affected) recordsAffected = affected;
                     if (plan is not null && target.DiscardResults)
                     {
+                        nameBinder?.DiscardSingle(script);
                         discarded++;
                         target.Quota.RecordDiscarded();
                     }
@@ -695,6 +740,8 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                         var descriptorBytes = EstimateDescriptorBytes(plan.Columns);
                         if (!target.Quota.TryAllocate(descriptorBytes, out var index, out var oversize))
                         {
+                            if (nameBinder?.TakeSingle(script, listingFailed: script && children is null, noChildren: script && children is { Count: 0 }) is not null)
+                                nameBinder.RefusedLast("the run kept no more result sets");
                             discarded++;
                             target.Quota.RecordDiscarded();
                             if (oversize)
@@ -704,11 +751,13 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                         else
                         {
                             var slot = statementSlot++;
+                            var resultName = nameBinder?.TakeSingle(script, listingFailed: script && children is null, noChildren: script && children is { Count: 0 });
                             currentSet = service.Results.Open(target.Budget, index, 1, 1, "rows", plan.Columns, plan.Wires,
-                                lengths: plan.Lengths, targetKey: target.Target.TargetKey, targetLabel: target.Target.Label,
+                                lengths: plan.Lengths, name: resultName, targetKey: target.Target.TargetKey, targetLabel: target.Target.Label,
                                 targetEnvironment: target.Target.Environment, targetProvider: Providers.BigQuery, statementSlot: slot < 1000 ? slot : null);
                             if (currentSet is null)
                             {
+                                nameBinder?.RefusedLast("result memory kept no more result sets");
                                 target.Quota.Release(index, descriptorBytes);
                                 discarded++;
                                 target.Quota.RecordDiscarded();
@@ -740,6 +789,7 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
                             MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
                 }
 
+                FlushNameNotes(ended: null);
                 if (BigQueryCost.Summary(summary, target.Prices != false) is { } cost)
                     target.Messages.Add(cost, MessageKind.Info, targetKey: target.Target.TargetKey, dialect: Providers.BigQuery);
 
@@ -922,6 +972,10 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
             if (isTransaction && status != "commitInDoubt" && sets.Count > 0)
                 MarkRolledBackPreview(sets, target.Events);
 
+            var endedReason = status == "failed" ? "the run failed before its result set arrived"
+                : status is "cancelled" or "timedOut" or "rolledBack" ? "the run stopped before its result set arrived" : null;
+            FlushNameNotes(endedReason);
+
             EmitTargetState(target, status, 0, 1, recordsAffected, sets.Count, watch.ElapsedMilliseconds, summary?.BytesProcessed, targetError);
             var outcome = new MultiTargetOutcome(target.Target.TargetKey, Providers.BigQuery, target.Target.Label, status,
                 0, 1, recordsAffected, watch.ElapsedMilliseconds, [.. sets.Select(s => s.ResultId)], target.Target.Environment,
@@ -1013,7 +1067,8 @@ internal sealed class BigQueryMultiRunner(SqlService service, CrossEngineRunner?
         Residence: ctx.Residence,
         WindowCacheMiB: ctx.WindowCacheMiB,
         Preview: null,
-        JobKey: ctx.JobKey);
+        JobKey: ctx.JobKey,
+        NoDefaultDataset: ctx.Target.NoDefaultDataset);
 
     private sealed class BigQueryPhase2Handle(
         BigQueryService bigQuery,

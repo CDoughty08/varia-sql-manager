@@ -284,7 +284,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
     const targets = Array.isArray(options.targets) ? options.targets : []
     if (provider === 'bigquery') return options.stopOnError === undefined && targets.every(target => target?.database === undefined)
     return options.preflightDryRun === undefined && options.prices === undefined && options.residence === undefined && options.windowCacheMiB === undefined
-      && targets.every(target => target?.dataset === undefined && target?.maximumBytesBilled === undefined)
+      && targets.every(target => target?.dataset === undefined && target?.noDefaultDataset === undefined && target?.maximumBytesBilled === undefined)
   }
   if (method !== 'query.execute') return true
   const options = params as Partial<BackendMethods['query.execute']['params']>

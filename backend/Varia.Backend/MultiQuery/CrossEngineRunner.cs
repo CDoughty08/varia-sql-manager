@@ -143,7 +143,7 @@ internal sealed class CrossEngineRunner(SqlService service, IReadOnlySqlValidato
         if (connection is null || lease is null)
             return (new(target.Target.TargetKey, false, new MultiTargetError("NOT_CONNECTED", "The BigQuery connection is no longer open.")), null);
 
-        var dataset = target.Target.Dataset ?? connection.Options.Dataset;
+        var dataset = target.Target.NoDefaultDataset ? null : target.Target.Dataset ?? connection.Options.Dataset;
         var location = await service.ResolveBigQueryLocationAsync(connection, dataset, token);
 
         BigQueryEstimate estimate;

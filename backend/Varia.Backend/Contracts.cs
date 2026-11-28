@@ -175,7 +175,7 @@ internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int Discar
     BigQuery.BigQueryJobSummary? Job = null, long? IndexStale = null);
 
 internal sealed record MultiQueryTargetArgs(string TargetKey, string ConnectionId, string Label, string? Environment = null, string? Database = null,
-    string? Dataset = null, long? MaximumBytesBilled = null);
+    string? Dataset = null, long? MaximumBytesBilled = null, bool NoDefaultDataset = false);
 /// <summary>Property names Sqlserver and Bigquery intentionally use lowercase 's'/'q' after the first letter so
 /// JsonNamingPolicy.CamelCase maps them to "sqlserver" and "bigquery" under UnmappedMemberHandling.Disallow.</summary>
 internal sealed record MultiQueryScripts(string Sqlserver, string Bigquery);

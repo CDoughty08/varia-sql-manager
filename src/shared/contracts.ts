@@ -229,6 +229,7 @@ export interface MultiQueryTarget {
   environment?: string
   database?: string
   dataset?: string
+  noDefaultDataset?: true
   maximumBytesBilled?: number
 }
 export interface MultiQueryScripts { sqlserver: string; bigquery: string }

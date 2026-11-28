@@ -624,7 +624,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
         multiMode: 'same', multiTargets: targets
       }
       const subscription = model.onDidChangeContent(() => this.handleModelContentChange(id, model))
-      this.entries.set(id, { model, subscription, retiredSecondaryVersions: 0, viewState, edits: 0 })
+      this.entries.set(id, { model, subscription, retiredSecondaryVersions: 0, viewState, edits: model.getVersionId() })
       this.insertDocument(document)
       return document
     }
@@ -664,7 +664,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.entries.set(id, {
       model, subscription,
       ...secondary ? { secondaryModel: secondary.model, secondarySubscription: secondary.subscription, savedSecondaryVersionId: dirty ? null : secondary.model.getAlternativeVersionId() } : {},
-      retiredSecondaryVersions: 0, viewState, ...secondaryViewState ? { secondaryViewState } : {}, edits: 0
+      retiredSecondaryVersions: 0, viewState, ...secondaryViewState ? { secondaryViewState } : {}, edits: model.getVersionId() + (secondary?.model.getVersionId() ?? 0)
     })
     this.insertDocument(document)
     return document

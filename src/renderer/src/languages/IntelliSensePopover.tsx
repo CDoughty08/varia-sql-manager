@@ -225,7 +225,10 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
     ;(target ?? triggerRef.current)?.focus({ preventScroll: true })
   }, [triggerRef])
 
-  const connection = active.connectionId ? liveConnections.find(entry => entry.id === active.connectionId) : undefined
+  const model = documents.modelFor ? documents.modelFor(active.id, isBigQuery ? 'bigquery' : 'sqlserver') : documents.getModel(active.id)
+  const langContext = model ? documents.languageContext?.(model, id => liveConnections.some(entry => entry.id === id && isLiveConnection(entry))) : undefined
+  const connectionId = langContext ? (langContext.suspended ? undefined : langContext.connectionId) : active.connectionId
+  const connection = connectionId ? liveConnections.find(entry => entry.id === connectionId) : undefined
   const connected = !!connection && isLiveConnection(connection)
   const indexEntry = connection ? searchSnap.indexes[connection.id] : undefined
   const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
@@ -234,12 +237,13 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
     return starredSnap.byPrincipal[principal] ?? []
   }, [isBigQuery, principal, starredSnap])
 
-  const defaultDataset = /^\w{1,1024}$/.test(active.database ?? '') ? active.database : undefined
+  const rawDatabase = langContext ? langContext.database : active.database
+  const defaultDataset = /^\w{1,1024}$/.test(rawDatabase ?? '') ? rawDatabase : undefined
   const querySources = useMemo(() => {
     if (!open || !isBigQuery || !connection || !isBigQueryConnection(connection)) return []
-    const text = documents.getModel(active.id)?.getValue() ?? ''
+    const text = model?.getValue() ?? ''
     return extractBigQueryQuerySources(text, connection.server, defaultDataset)
-  }, [open, isBigQuery, connection, documents, active.id, defaultDataset])
+  }, [open, isBigQuery, connection, model, defaultDataset])
 
   useEffect(() => {
     if (!open || !isBigQuery || !connected || !querySources.length || typeof indexCompletion.lookupDocument !== 'function') {

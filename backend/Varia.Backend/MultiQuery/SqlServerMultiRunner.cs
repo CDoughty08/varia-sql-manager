@@ -471,6 +471,8 @@ internal sealed class SqlServerMultiRunner(
         var transferredToPhase2 = false;
         var supportsTxId = false;
         long? startTxId = null;
+        string? startedDatabase = target.Target.Database;
+        string? endedDatabase = target.Target.Database;
 
         try
         {
@@ -483,6 +485,9 @@ internal sealed class SqlServerMultiRunner(
             connection = service.CreateConnection(target.Target.ConnectionId, target.Target.Database, stateful: true);
             connection.FireInfoMessageEventOnUserErrors = false;
             await service.OpenConnectionAsync(connection, token).ConfigureAwait(false);
+            if (string.IsNullOrEmpty(startedDatabase) && !string.IsNullOrEmpty(connection.Database))
+                startedDatabase = connection.Database;
+            endedDatabase = !string.IsNullOrEmpty(connection.Database) ? connection.Database : startedDatabase;
 
             // Run SessionPrologue + LoginSql to establish SSMS defaults and capture SPID/login.
             await using (var prologue = connection.CreateCommand())
@@ -1168,8 +1173,9 @@ internal sealed class SqlServerMultiRunner(
         // In Transaction mode, if Phase 1 succeeded cleanly and token is not cancelled, hand off to Phase 2 handle.
         if (isTransaction && status == "succeeded" && failure is null && !commitInDoubt && !token.IsCancellationRequested && connection is not null)
         {
+            if (!string.IsNullOrEmpty(connection.Database)) endedDatabase = connection.Database;
             watch.Stop();
-            var handle = new SqlServerPhase2Handle(service, connection, onInfo, sets, target, ReleaseEphemeralConnectionSlot);
+            var handle = new SqlServerPhase2Handle(service, connection, onInfo, sets, target, startedDatabase, endedDatabase, ReleaseEphemeralConnectionSlot);
             transferredToPhase2 = true;
             target.Events.TargetState(new MultiQueryTargetStateEvent(
                 targetKey, "atBarrier", completed, totalBatches, rowsAffected, sets.Count, watch.ElapsedMilliseconds));
@@ -1193,6 +1199,8 @@ internal sealed class SqlServerMultiRunner(
             // Clean up connection and release ephemeral slot on every non-handoff exit (including unexpected exceptions).
             if (!transferredToPhase2)
             {
+                if (connection is not null && !string.IsNullOrEmpty(connection.Database))
+                    endedDatabase = connection.Database;
                 try
                 {
                     if (connection is not null)
@@ -1218,6 +1226,8 @@ internal sealed class SqlServerMultiRunner(
                 }
                 finally
                 {
+                    if ((completed > 0 || batchNumber > 0) && (!isTransaction || commitInDoubt))
+                        service.MarkSqlIndexStale(target.Target.ConnectionId, target.Sql, startedDatabase, endedDatabase);
                     if (slotAcquired) ReleaseEphemeralConnectionSlot();
                 }
             }
@@ -1557,6 +1567,8 @@ internal sealed class SqlServerMultiRunner(
         SqlInfoMessageEventHandler onInfo,
         IReadOnlyList<ResultSetBuffer> sets,
         MultiTargetContext target,
+        string? startedDatabase,
+        string? endedDatabase,
         Action releaseEphemeralSlot) : IMultiTargetPhase2Handle
     {
         private int disposed;
@@ -1691,6 +1703,7 @@ internal sealed class SqlServerMultiRunner(
             }
             finally
             {
+                if (commitSent) service.MarkSqlIndexStale(target.Target.ConnectionId, target.Sql, startedDatabase, endedDatabase);
                 await DisposeAsync().ConfigureAwait(false);
             }
         }

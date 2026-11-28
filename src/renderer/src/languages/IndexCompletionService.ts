@@ -475,11 +475,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   availability(documentId: string): { label: string; detail: string } | undefined {
     const document = this.documents.get(documentId)
     if (!document || !isQueryDocument(document) || documentProvider(document) !== 'bigquery') return
-    const model = this.documents.modelFor(documentId, 'bigquery')
+    const model = this.documents.modelFor ? this.documents.modelFor(documentId, 'bigquery') : this.documents.getModel(documentId)
     if ((model?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString('en-US')} characters.` }
-    const ctx = model ? this.documents.languageContext(model, id => this.connections.isLive(id)) : undefined
-    const connection = ctx?.connectionId ? this.connections.get(ctx.connectionId) : undefined
+    const ctx = model ? this.documents.languageContext?.(model, id => this.connections.isLive(id)) : undefined
+    const connectionId = ctx ? ctx.connectionId : document.connectionId
+    const connection = connectionId ? this.connections.get(connectionId) : undefined
     if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection))
       return { label: 'IntelliSense disconnected', detail: 'Keywords and functions complete. Connect this query to BigQuery for projects, datasets, tables and columns from its Search Objects index.' }
     const snapshot = this.getSnapshot()
@@ -685,7 +686,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   /** Cached RAM `language.lookup` for a BigQuery tab (used by the status bar IntelliSense popover's source health list). */
   async lookupDocument(documentId: string, requests: readonly LanguageLookupPath[]): Promise<readonly LanguageLookupAnswer[] | undefined> {
     if (this.disposed || !requests.length) return []
-    const model = this.documents.getModel(documentId)
+    const model = this.documents.modelFor ? this.documents.modelFor(documentId, 'bigquery') : this.documents.getModel(documentId)
     if (!model) return undefined
     const target = this.target(model)
     if (!target?.connectionId || !target.key) return undefined

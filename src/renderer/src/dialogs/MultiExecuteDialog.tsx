@@ -304,7 +304,7 @@ export function MultiExecuteDialogModal({
           const response = await estimateBigQuery({
             connectionId: target.connectionId,
             sql: request.sql,
-            ...target.dataset ? { dataset: target.dataset } : {}
+            ...target.dataset ? { dataset: target.dataset } : { noDefaultDataset: true }
           })
           if (abort.signal.aborted) return
           if (response.ok) nextState = { status: 'done', result: response.value }

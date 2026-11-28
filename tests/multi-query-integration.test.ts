@@ -25,6 +25,9 @@ import { outputContribution } from '../src/renderer/src/contributions/output'
 import { compareContribution } from '../src/renderer/src/contributions/compare'
 import { messagesContribution } from '../src/renderer/src/contributions/messages'
 import { canReattachTabOnReconnect, statusBarAppearance } from '../src/renderer/src/App'
+import { requestSchemas } from '../src/main/validation'
+import { optionsAllow } from '../src/shared/ipc/methods'
+import { IndexCompletionService } from '../src/renderer/src/languages/IndexCompletionService'
 import type { DisconnectCoordinator } from '../src/renderer/src/services/disconnect'
 import { TestEditor } from './fixtures/documents'
 import { fakeDocument, FakeElement } from './fixtures/elements'
@@ -1276,6 +1279,71 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     expect(commands.isEnabled('output.goToLastResult', { tabId: doc.id })).toBe(true)
 
     outContrib.dispose()
+    wb.dispose()
+  })
+
+  it('Merge integration: noDefaultDataset contract and Cross-Engine IndexCompletionService.lookupDocument', async () => {
+    // Validation & optionsAllow enforce noDefaultDataset on BigQuery targets and reject mixed options.
+    const validBq = requestSchemas['query.executeMulti'].safeParse({
+      queryId: uuid(1301),
+      sessionId: uuid(1302),
+      mode: 'fireAndForget',
+      sql: 'SELECT 1',
+      maxRows: 100,
+      timeoutSeconds: 30,
+      targets: [{ targetKey: 'bq1', connectionId: uuid(1303), label: 'BQ 1', noDefaultDataset: true }]
+    })
+    expect(validBq.success).toBe(true)
+    const mixedDataset = requestSchemas['query.executeMulti'].safeParse({
+      queryId: uuid(1301),
+      sessionId: uuid(1302),
+      mode: 'fireAndForget',
+      sql: 'SELECT 1',
+      maxRows: 100,
+      timeoutSeconds: 30,
+      targets: [{ targetKey: 'bq1', connectionId: uuid(1303), label: 'BQ 1', dataset: 'sales', noDefaultDataset: true }]
+    })
+    expect(mixedDataset.success).toBe(false)
+    expect(optionsAllow('query.executeMulti', 'sqlserver', {
+      targets: [{ targetKey: 's1', connectionId: uuid(1303), label: 'SQL 1', noDefaultDataset: true }]
+    })).toBe(false)
+
+    // Cross-Engine Split lookupDocument resolves the secondary GoogleSQL model (not primary T-SQL).
+    const wb = workbenchFixture()
+    wb.api.push(readyBackend())
+    const sql1 = connectSql(wb, 'prod-sql-01', 'SalesDB')
+    const bq1 = connectBq(wb, 'prod-bq-01', 'analytics')
+    const crossDoc = wb.documents.openMultiQuery({
+      mode: 'cross',
+      name: 'CrossLookup.sql',
+      sql: 'SELECT 1;',
+      bigQuerySql: 'SELECT * FROM analytics.orders;',
+      targets: [
+        { targetId: sql1.targetId, connectionId: sql1.info.id, database: 'SalesDB', enabled: true, provider: 'sqlserver' },
+        { targetId: bq1.targetId, connectionId: bq1.info.id, database: 'analytics', enabled: true, provider: 'bigquery' }
+      ]
+    })
+    const lookupSpy = vi.fn(async () => ({ ok: true as const, value: { index: 'ready' as const, answers: [{ path: ['prod-bq-01', 'analytics', 'orders'], state: 'ready' as const, items: [], truncated: false }] } }))
+    const fakeMonaco = {
+      languages: {
+        registerCompletionItemProvider: () => ({ dispose() {} }),
+        registerHoverProvider: () => ({ dispose() {} }),
+        registerDefinitionProvider: () => ({ dispose() {} }),
+        CompletionItemKind: { Keyword: 1, Function: 2, Field: 3, Class: 4, Module: 5, Folder: 6, Struct: 7 },
+        CompletionItemInsertTextRule: { InsertAsSnippet: 4 }
+      }
+    } as unknown as typeof Monaco
+    const indexCompletion = new IndexCompletionService(
+      fakeMonaco,
+      { ...wb.api, languageLookup: lookupSpy } as never,
+      wb.documents,
+      wb.connections,
+      {}
+    )
+    const answers = await indexCompletion.lookupDocument(crossDoc.id, [{ path: ['prod-bq-01', 'analytics', 'orders'], limit: 1 }])
+    expect(answers).toHaveLength(1)
+    expect(lookupSpy).toHaveBeenCalledTimes(1)
+    indexCompletion.dispose()
     wb.dispose()
   })
 })
