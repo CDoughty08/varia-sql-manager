@@ -2,9 +2,9 @@
 type Target = Pick<EventTarget, 'addEventListener' | 'removeEventListener'>
 
 /**
- * Runs `then` once the pointer is up and Dockview has handled its release (a Shift-drag float follows the pointer until
- * then), or at once when no pointer is held. A release the window never hears (it lost focus mid-press, a native dialog
- * took the press) ends the hold when the window itself blurs, so nothing waits for a later click. An element's blur, which
+ * Runs `then` once the pointer is up and Dockview has handled its release, or at once when no pointer is held. A release
+ * the window never hears (it lost focus mid-press, a native dialog took the press) ends the hold when the window itself
+ * blurs, so nothing waits for a later click. An element's blur, which
  * a capture listener on the window hears too (an editor moved as the float starts), leaves the hold alone.
  */
 export function afterPointer(target: Target = window, later: (run: () => void) => void = run => { setTimeout(run) }): { held(): boolean; then(run: () => void): void; dispose(): void } {
