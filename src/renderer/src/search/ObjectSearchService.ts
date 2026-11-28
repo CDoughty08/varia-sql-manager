@@ -1265,7 +1265,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       const entry = this.getSnapshot().indexes[connectionId]
       if (this.disposed || !result.ok || entry?.requestId || !live(this.o.connections.get(connectionId))) return
       const { status } = result.value
-      this.putIndex({ connectionId, done: status.indexed, total: status.databases, objects: status.objects, status, ...entry?.error ? { error: entry.error } : {} })
+      this.putIndex({ connectionId, done: status.indexed, total: status.databases, objects: status.objects, status, ...entry?.error && status.state !== 'ready' ? { error: entry.error } : {} })
     }, onUnexpectedError)
   }
 

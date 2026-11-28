@@ -129,6 +129,17 @@ internal static class SqlCompletionChecks
         check(concatResult.Items.Count > 0,
             "hostile || concat chain completes safely via bounded token-stream fallback without stack overflow");
 
+        // Hostile chained method calls `x.m().m()...` (balanced parens) must also be bounded and never overflow the stack!
+        var methodChain = "SELECT x" + string.Concat(Enumerable.Repeat(".m()", 3_500)) + " FROM dbo.LeftFixture t";
+        var methodTokens = new Microsoft.SqlServer.TransactSql.ScriptDom.TSql180Parser(true).GetTokenStream(new StringReader(methodChain), out _);
+        check(!SqlToolsLanguageService.BoundedCompletionSyntax(methodTokens),
+            "BoundedCompletionSyntax rejects deeply chained method calls (.m().m()...) before ScriptDom AST parsing");
+        var methodResult = TsqlCompletionService.Complete(
+            new LanguageRequest(Guid.NewGuid().ToString("D"), 1, methodChain, new("sqlserver", null, "Sales"), new(0, 7)),
+            lookup, "Sales");
+        check(methodResult.Items.Count > 0,
+            "hostile chained method calls complete safely via bounded token-stream fallback without stack overflow");
+
         conn.Dispose();
         return Task.CompletedTask;
     }

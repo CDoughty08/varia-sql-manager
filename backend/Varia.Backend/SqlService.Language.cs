@@ -68,9 +68,11 @@ internal sealed partial class SqlService
             }
             return true;
         }
-        catch (RequestException ex) when (ex.Code == "CANCELLED" && !token.IsCancellationRequested)
+        catch (RequestException ex) when (ex.Code == "CANCELLED")
         {
-            // A concurrent index build or freshness check superseded this check; the index is already being refreshed.
+            // Propagate caller/active/timeout cancellations as OperationCanceledException so RefreshAsync classifies STALE/TIMEOUT cleanly.
+            token.ThrowIfCancellationRequested();
+            // Otherwise a concurrent index build or freshness check superseded this check; the index is already being refreshed.
             return true;
         }
     }

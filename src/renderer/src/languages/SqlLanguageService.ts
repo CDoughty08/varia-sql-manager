@@ -955,10 +955,12 @@ function sqlMetaForItem(
   context: { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string }
 ): SqlResolveMeta | undefined {
   if (item.kind !== undefined && !sqlResolvableKinds.has(item.kind)) return undefined
-  // CTEs and built-in T-SQL functions are script/catalog-local; never mis-resolve them against physical tables or UDFs.
-  if (item.detail === 'CTE' || item.detail?.startsWith('Function · ')) return undefined
+  // CTEs are script-local; never mis-resolve them against physical tables of the same name.
+  if (item.detail === 'CTE') return undefined
   const segments = splitSqlSegments(item.label) ?? (item.filterText ? splitSqlSegments(item.filterText) : undefined)
   if (!segments || segments.length > 3) return undefined
+  // Built-in T-SQL functions are unqualified single-segment Function items; keep qualified database UDFs/TVFs resolvable.
+  if (item.kind === 3 && qualifier.length === 0 && segments.length === 1 && item.detail?.startsWith('Function · ')) return undefined
   const leaf = segments[segments.length - 1]
   if (!leaf || leaf.startsWith('@') || leaf.startsWith('#')) return undefined
   let database = context.database

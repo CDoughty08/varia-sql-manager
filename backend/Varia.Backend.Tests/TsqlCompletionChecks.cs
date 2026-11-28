@@ -440,14 +440,25 @@ internal static class TsqlCompletionChecks
                 && Has(tvfReturn, "[Score]"),
                 "DROP TABLE #t1, #t2, DATE_BUCKET dateparts, nested-paren routine params, and RETURNS @out TABLE work");
 
-            // (l) RefreshAsync cancellation via CloseAsync maps to STALE (never TIMEOUT)!
+            // (l) RefreshAsync cancellation via CloseAsync maps to STALE (never TIMEOUT), including when search.IndexAsync wraps OCE as RequestException("CANCELLED")!
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             using var refreshSvc = new SqlToolsLanguageService(
                 _ => null,
                 activeDatabase: _ => "Sales",
-                refreshIndex: async (_, ct) => { await Task.Delay(5000, ct); return true; });
+                refreshIndex: async (_, ct) =>
+                {
+                    started.TrySetResult();
+                    try { await Task.Delay(Timeout.Infinite, ct); }
+                    catch (OperationCanceledException)
+                    {
+                        // Simulate ObjectSearchService.CheckSqlAsync throwing RequestException("CANCELLED") and SqlService.RefreshLanguageIndexAsync rethrowing OCE on ct.
+                        ct.ThrowIfCancellationRequested();
+                    }
+                    return true;
+                });
             var refreshDocId = Guid.NewGuid().ToString("D");
             var refreshTask = refreshSvc.RefreshAsync(new LanguageRefreshRequest(refreshDocId, 1, "SELECT 1", new("sqlserver", Guid.NewGuid().ToString("D"), "Sales")), CancellationToken.None);
-            await Task.Delay(50);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await refreshSvc.CloseAsync(refreshDocId, CancellationToken.None);
             string? refreshErrCode = null;
             try { await refreshTask; }

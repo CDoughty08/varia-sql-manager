@@ -1565,7 +1565,8 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
         items: [
           { label: 'Orders', kind: 7, detail: 'CTE' },
           { label: 'FORMAT', kind: 3, detail: 'Function · nvarchar', documentation: 'Built-in FORMAT docs' },
-          { label: '[dbo].[Orders]', kind: 7, detail: 'Table · SalesDB.dbo' }
+          { label: '[dbo].[Orders]', kind: 7, detail: 'Table · SalesDB.dbo' },
+          { label: '[dbo].[fn_ActiveOrders]', kind: 3, detail: 'Function · SalesDB.dbo' }
         ]
       }
     })
@@ -1574,12 +1575,19 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     const cteItem = shadowList.suggestions.find(s => labelText(s.label) === 'Orders')!
     const builtinItem = shadowList.suggestions.find(s => labelText(s.label) === 'FORMAT')!
     const tableItem = shadowList.suggestions.find(s => labelText(s.label) === '[dbo].[Orders]')!
+    const tvfItem = shadowList.suggestions.find(s => labelText(s.label) === '[dbo].[fn_ActiveOrders]')!
     await f.completion.resolveCompletionItem!(cteItem, token())
     await f.completion.resolveCompletionItem!(builtinItem, token())
     expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore)
     expect(builtinItem.documentation).toBe('Built-in FORMAT docs')
     await f.completion.resolveCompletionItem!(tableItem, token())
     expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore + 1)
+    await f.completion.resolveCompletionItem!(tvfItem, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore + 2)
+    expect(f.api.languageLookup.mock.calls.at(-1)![0]).toEqual({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', 'dbo', 'fn_ActiveOrders'], limit: 2000, details: true }]
+    })
 
     // 3. Ctrl+Shift+R (refreshCache) calls indexState.syncStatus(connectionId) so popover updates from Not built to Ready.
     const refreshed = await f.service.refreshCache(shadowTab.id)

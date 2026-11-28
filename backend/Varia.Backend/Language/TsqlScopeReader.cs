@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using Microsoft.SqlServer.TransactSql.ScriptDom;
 
@@ -116,6 +117,47 @@ internal static class TsqlScopeReader
     private const int MaxLocalTables = 256;
     private const int MaxLocalVariables = 512;
     private const int MaxSelectIntoParses = 16;
+    /// <summary>Reserved virtual stack for the single reusable ScriptDom AST parser thread (committed lazily by the OS),
+    /// eliminating StackOverflowException across all T-SQL grammar rules within BoundedCompletionSyntax's 16,384-token limit
+    /// on both 512 KB macOS and 1 MB Windows ThreadPool stacks without per-keystroke thread creation cost.</summary>
+    private const int ParseThreadStackBytes = 32 * 1024 * 1024;
+
+    private static readonly Lazy<ParseWorker> ScriptDomWorker = new(() => new ParseWorker(), LazyThreadSafetyMode.ExecutionAndPublication);
+
+    private sealed class ParseWorker
+    {
+        private readonly BlockingCollection<Action> queue = [];
+        private readonly int threadId;
+
+        public ParseWorker()
+        {
+            var thread = new Thread(Run, ParseThreadStackBytes) { IsBackground = true, Name = "Varia.ScriptDomParser" };
+            threadId = thread.ManagedThreadId;
+            thread.Start();
+        }
+
+        private void Run()
+        {
+            foreach (var work in queue.GetConsumingEnumerable()) work();
+        }
+
+        public T Invoke<T>(Func<T> action, CancellationToken cancellationToken)
+        {
+            if (Environment.CurrentManagedThreadId == threadId) return action();
+            cancellationToken.ThrowIfCancellationRequested();
+            var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            queue.Add(() =>
+            {
+                if (cancellationToken.IsCancellationRequested) { tcs.TrySetCanceled(cancellationToken); return; }
+                try { tcs.TrySetResult(action()); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+            return tcs.Task.WaitAsync(cancellationToken).GetAwaiter().GetResult();
+        }
+    }
+
+    private static T RunOnParseThread<T>(Func<T> action, CancellationToken cancellationToken) =>
+        ScriptDomWorker.Value.Invoke(action, cancellationToken);
 
     private static readonly HashSet<TSqlTokenType> StatementStarters =
     [
@@ -860,9 +902,11 @@ internal static class TsqlScopeReader
             var stmtTokens = parser.GetTokenStream(new StringReader(snippet), out var errors);
             if (errors.Count == 0 && SqlToolsLanguageService.BoundedCompletionSyntax(stmtTokens))
             {
-                var fragment = parser.Parse(stmtTokens, out errors);
-                if (errors.Count == 0 && fragment is TSqlScript { Batches: [{ Statements: [SelectStatement selectStmt, ..] }, ..] })
+                var parsedTable = RunOnParseThread(() =>
                 {
+                    var fragment = parser.Parse(stmtTokens, out var parseErrors);
+                    if (parseErrors.Count != 0 || fragment is not TSqlScript { Batches: [{ Statements: [SelectStatement selectStmt, ..] }, ..] })
+                        return null;
                     var localCtes = new Dictionary<string, TsqlCteInfo>(StringComparer.OrdinalIgnoreCase);
                     var tv = tableVars ?? new Dictionary<string, LocalTable>(StringComparer.OrdinalIgnoreCase);
                     if (selectStmt.WithCtesAndXmlNamespaces?.CommonTableExpressions is { Count: > 0 } cteNodes)
@@ -888,7 +932,9 @@ internal static class TsqlScopeReader
                         var (cols, hasStar, starSources) = ExtractQueryProjection(spec, snippet, localCtes, tempTables, tv);
                         return new LocalTable(tableName, false, cols, StampDatabase(starSources, activeDatabase), hasStar);
                     }
-                }
+                    return null;
+                }, CancellationToken.None);
+                if (parsedTable is not null) return parsedTable;
             }
         }
 
@@ -1205,9 +1251,11 @@ internal static class TsqlScopeReader
             cancellationToken.ThrowIfCancellationRequested();
             var tokens = parser.GetTokenStream(new StringReader(candidate.Text), out var errors);
             if (errors.Count != 0 || !SqlToolsLanguageService.BoundedCompletionSyntax(tokens)) continue;
-            var fragment = parser.Parse(tokens, out errors);
-            if (errors.Count != 0) continue;
-            var extracted = ExtractFromAst(fragment, candidate.Text, candidate.CaretOffset, tempTables, tableVars);
+            var extracted = RunOnParseThread(() =>
+            {
+                var fragment = parser.Parse(tokens, out var parseErrors);
+                return parseErrors.Count != 0 ? null : ExtractFromAst(fragment, candidate.Text, candidate.CaretOffset, tempTables, tableVars);
+            }, cancellationToken);
             if (extracted is not null) return extracted;
         }
 

@@ -374,18 +374,27 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
 
     internal static bool BoundedCompletionSyntax(IList<TSqlParserToken> tokens)
     {
-        // ScriptDom's grammar is recursive (including left-recursive binary operators such as ||, +, AND/OR, COLLATE, AT, ::).
-        // Tokenize before parsing so hostile nesting or operator chains cannot overflow even a 512 KB ThreadPool stack.
+        // ScriptDom's grammar is recursive (including left-recursive binary operators such as ||, +, AND/OR, COLLATE, AT, ::
+        // and chained method calls such as x.m().m()...). Tokenize before parsing so hostile nesting or chains fail fast.
         if (tokens.Count > 16_384) return false;
         var parentheses = 0;
+        var totalParens = 0;
+        var totalDots = 0;
+        var chainedDots = 0;
         var recursiveKeywords = 0;
         var unary = 0;
         var operators = 0;
+        var prevType = TSqlTokenType.None;
         foreach (var token in tokens)
         {
             if (token.TokenType is TSqlTokenType.WhiteSpace or TSqlTokenType.SingleLineComment or TSqlTokenType.MultilineComment) continue;
-            if (token.TokenType == TSqlTokenType.LeftParenthesis && ++parentheses > 64) return false;
+            if (token.TokenType == TSqlTokenType.LeftParenthesis && (++parentheses > 64 || ++totalParens > 256)) return false;
             if (token.TokenType == TSqlTokenType.RightParenthesis && --parentheses < 0) return false;
+            if (token.TokenType == TSqlTokenType.Dot)
+            {
+                if (++totalDots > 256) return false;
+                if (prevType == TSqlTokenType.RightParenthesis && ++chainedDots > 32) return false;
+            }
             if (token.TokenType is TSqlTokenType.Select or TSqlTokenType.Begin or TSqlTokenType.Case or TSqlTokenType.If or TSqlTokenType.While or TSqlTokenType.Join
                 || string.Equals(token.Text, "APPLY", StringComparison.OrdinalIgnoreCase))
                 if (++recursiveKeywords > 64) return false;
@@ -398,6 +407,7 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
                 || string.Equals(token.Text, "COLLATE", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(token.Text, "AT", StringComparison.OrdinalIgnoreCase))
                 if (++operators > 128) return false;
+            prevType = token.TokenType;
         }
         return true;
     }
