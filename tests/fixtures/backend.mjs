@@ -2662,11 +2662,19 @@ async function workbench(id, method, params, credit) {
       const context = connection ? `${connection.server}/${params.context.database}` : 'offline'
       const items = []
       const lines = params.text.split(/\r\n|\r|\n/)
-      for (let line = 0; line < lines.length; line++) for (const match of lines[line].matchAll(/\b(?:MissingColumn|WarningColumn)\b/g)) {
-        const warning = match[0] === 'WarningColumn'
-        items.push({ range: { start: { line, character: match.index }, end: { line, character: match.index + match[0].length } },
-          message: warning ? `WarningColumn is a test warning (${context}).` : `Invalid column name 'MissingColumn' (${context}).`,
-          severity: warning ? 2 : 1, code: warning ? 'TEST_WARNING' : '207', source: 'SQL Tools test provider' })
+      for (let line = 0; line < lines.length; line++) {
+        for (const match of lines[line].matchAll(/\b(?:MissingColumn|WarningColumn)\b/g)) {
+          const warning = match[0] === 'WarningColumn'
+          items.push({ range: { start: { line, character: match.index }, end: { line, character: match.index + match[0].length } },
+            message: warning ? `WarningColumn is a test warning (${context}).` : `Invalid column name 'MissingColumn' (${context}).`,
+            severity: warning ? 2 : 1, code: warning ? 'TEST_WARNING' : 'SQL207', source: 'sqlserver' })
+        }
+        for (const match of lines[line].matchAll(/SELECT\s+\(\s+FROM\b/gi)) {
+          const at = match.index + match[0].toUpperCase().indexOf('FROM')
+          items.push({ range: { start: { line, character: at }, end: { line, character: at + 4 } },
+            message: "Incorrect syntax near 'FROM'.",
+            severity: 1, code: 'SQL46010', source: 'sqlserver' })
+        }
       }
       return respond(id, { version: params.version, items, isIncomplete: false })
     }

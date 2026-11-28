@@ -183,13 +183,13 @@ npm run test:smoke:wsl -- --all
   script to leave rows unread (`LiveResultChecks.StoppedEarly`), and measure once more when they miss
   (`LiveResultChecks.OnceMore`). A new live check that walks shared server state or times work against a fixed bound
   needs the same care.
-- **SQL IntelliSense.** After `npm run build:smoke`, `npm run test:language:live` runs the bundled SQL Tools Service
-  against `VARIA_TEST_SQL_SERVER` (requires `VARIA_TEST_SQL_SCRATCH=1` for its two marked databases): scoped and
-  qualified completion, hover after edits, diagnostics, metadata refresh, isolation and cleanup. `npm run
-  test:language:ui` drives the real Monaco widgets through the app against the same server. Both use bundled discovery
-  without a service-path override. `node scripts/language-diagnostics-smoke.mjs` checks marker decorations, messages,
-  navigation, stale-result suppression and split contexts on the fake backend; `--live` checks real squiggles against
-  `VARIA_TEST_SQL_SERVER`. See docs/language-services.md.
+- **SQL IntelliSense.** After `npm run build:smoke`, `npm run test:language:live` runs the in-process ScriptDom +
+  `IndexLookup` SQL language service against `VARIA_TEST_SQL_SERVER` (requires `VARIA_TEST_SQL_SCRATCH=1` for its two
+  marked databases): scoped and qualified completion, hover after edits, syntax and catalog-binding diagnostics, metadata
+  refresh, isolation and cleanup. `npm run test:language:ui` drives the real Monaco widgets through the app against the
+  same server. `node scripts/language-diagnostics-smoke.mjs` checks marker decorations, messages, navigation,
+  foreground scheduling, stale-result suppression and split contexts on the fake backend; `--live` checks real squiggles
+  against `VARIA_TEST_SQL_SERVER`. See docs/language-services.md.
 - **Microsoft Entra ID** checks run only on request: `VARIA_TEST_ENTRA_SERVER`, `VARIA_TEST_ENTRA_SP_CLIENT_ID` and
   `VARIA_TEST_ENTRA_SP_SECRET` (a service principal with a user in the Azure SQL database `VARIA_TEST_ENTRA_DATABASE`
   names) run the Service Principal checks; `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never print

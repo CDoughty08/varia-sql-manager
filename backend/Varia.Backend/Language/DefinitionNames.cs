@@ -17,7 +17,7 @@ internal static class DefinitionNames
 
     internal static DefinitionLookup? Find(string text, LanguagePosition position)
     {
-        var offset = SqlToolsLanguageService.CompletionOffset(text, position);
+        var offset = TsqlLanguageService.CompletionOffset(text, position);
         if (offset < 0) return null;
         var parser = new TSql180Parser(initialQuotedIdentifiers: true);
         var tokens = parser.GetTokenStream(new StringReader(text), out _);
@@ -289,9 +289,13 @@ internal static class DefinitionNames
         {
             var parser = new TSql180Parser(initialQuotedIdentifiers: true);
             var batchTokens = parser.GetTokenStream(new StringReader(batch), out var errors);
-            if (errors.Count != 0 || !SqlToolsLanguageService.BoundedCompletionSyntax(batchTokens)) return null;
-            var fragment = parser.Parse(batchTokens, out errors);
-            if (errors.Count != 0) return null;
+            if (errors.Count != 0 || !TsqlLanguageService.BoundedCompletionSyntax(batchTokens)) return null;
+            var (fragment, parseErrors) = TsqlScopeReader.RunOnParseThread(() =>
+            {
+                var parsed = parser.Parse(batchTokens, out var pe);
+                return (parsed, pe);
+            }, CancellationToken.None);
+            if (parseErrors.Count != 0) return null;
             var visitor = new CaretVisitor(offset);
             fragment.Accept(visitor);
             var scope = new Scope { Parsed = true, Column = visitor.Column is not null, Star = visitor.Star, TableFunction = visitor.TableFunction || visitor.TableName is not null };

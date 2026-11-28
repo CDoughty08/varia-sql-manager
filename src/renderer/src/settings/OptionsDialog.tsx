@@ -10,11 +10,11 @@ import Icon from '../Icon'
 import Switch from '../kit/Switch'
 import Segmented from '../kit/Segmented'
 import DialogFooter from '../kit/DialogFooter'
-import { followPointerDrag } from '../kit/pointer-drag'
+import ResizableSplit from '../kit/ResizableSplit'
 import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
 import {
-  ancestorIds, clampOptionsRailWidth, commitOptions, draftFrom, followValues, firstPage, loadOptionsRailWidth,
+  ancestorIds, commitOptions, draftFrom, followValues, firstPage, loadOptionsRailWidth,
   optionsRailLimits, pageForm, patchFrom, pendingSettingsCount, resetPage, resetSetting, rowNotes, saveOptionsRailWidth, setDraftValue,
   settingGridRow, settingRow, themePatchFrom, themePreferenceChanged, treeRows, unsavedSettings, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
@@ -270,9 +270,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const [saving, setSaving] = useState(false)
   const [appliedNotice, setAppliedNotice] = useState(false)
   const [confirmClose, setConfirmClose] = useState(false)
-  const [dialogWidth, setDialogWidth] = useState(960)
   const [railWidth, setRailWidth] = useState(() => loadOptionsRailWidth(960))
-  const [draggingSplit, setDraggingSplit] = useState(false)
   const [returnFocus] = useState(focusToReturn)
   const search = useRef<HTMLInputElement>(null), tree = useRef<HTMLUListElement>(null), focusSetting = useRef<string | undefined>(setting)
   const previewSeq = useRef(0), previewing = useRef(false)
@@ -373,15 +371,6 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     focusSetting.current = undefined
     target.focus()
   })
-  useEffect(() => {
-    if (!formElement) return
-    const updateWidth = () => { if (formElement.clientWidth > 0) setDialogWidth(formElement.clientWidth) }
-    updateWidth()
-    const win = formElement.ownerDocument.defaultView, Observer = win?.ResizeObserver ?? globalThis.ResizeObserver
-    const observer = typeof Observer === 'function' ? new Observer(updateWidth) : undefined
-    observer?.observe(formElement)
-    return () => observer?.disconnect()
-  }, [formElement])
 
   const clearPreview = () => {
     previewSeq.current++
@@ -534,31 +523,6 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     restoreFocus()
   }
 
-  const effectiveRailWidth = clampOptionsRailWidth(railWidth, dialogWidth)
-  const startPointerSplitter = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    const startX = event.clientX, startWidth = effectiveRailWidth
-    let latest = startWidth
-    setDraggingSplit(true)
-    followPointerDrag(event.currentTarget, event.pointerId, moved => {
-      latest = clampOptionsRailWidth(startWidth + (moved.clientX - startX), dialogWidth)
-      setRailWidth(latest)
-    })
-    const finish = () => { setDraggingSplit(false); saveOptionsRailWidth(latest) }
-    event.currentTarget.addEventListener('pointerup', finish, { once: true })
-    event.currentTarget.addEventListener('pointercancel', finish, { once: true })
-  }
-  const splitterKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const step = event.shiftKey ? 24 : 12
-    const next = event.key === 'ArrowLeft' ? clampOptionsRailWidth(effectiveRailWidth - step, dialogWidth)
-      : event.key === 'ArrowRight' ? clampOptionsRailWidth(effectiveRailWidth + step, dialogWidth)
-        : event.key === 'Home' ? clampOptionsRailWidth(optionsRailLimits.defaultWidth, dialogWidth) : undefined
-    if (next === undefined) return
-    event.preventDefault(); event.stopPropagation()
-    setRailWidth(next); saveOptionsRailWidth(next)
-  }
-
   const treeKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
     const index = rows.findIndex(row => row.page.id === focusId), row = rows[index]
     if (!row) return
@@ -624,7 +588,6 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   </section>)
 
   const path = pagePath(form.page.id), ancestors = path.slice(0, -1).map(node => node.title).join(' › ')
-  const formStyle = { '--options-rail-width': `${effectiveRailWidth}px` } as CSSProperties
   const runThemeCommand = commands ? (id: 'preferences.createTheme' | 'preferences.openThemesFolder') => { void commands.execute(id, undefined, 'toolbar') } : undefined
 
   const pendingParts: string[] = []
@@ -633,11 +596,24 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   if (stagedShortcuts) pendingParts.push(`${stagedShortcuts} ${stagedShortcuts === 1 ? 'shortcut' : 'shortcuts'}`)
   const pendingSummary = pendingParts.length ? `${pendingParts.join(', ')} pending` : appliedNotice ? 'Changes applied' : ''
 
-  return <DialogWindow kind="options" onClose={finishClose} raise={request}><form ref={setForm} style={formStyle} className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
+  return <DialogWindow kind="options" onClose={finishClose} raise={request}><form ref={setForm} className="connection-modal options-dialog" data-options-dialog role="dialog" aria-modal="true" aria-labelledby="options-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void commit(false) }} onKeyDown={keyDown}>
     <DialogHeading id="options-title" title="Options" closeLabel="Close options" disabled={saving} onClose={requestClose} />
-    <div className="options-body">
-      <div className="options-nav">
+    <ResizableSplit
+      className="options-body"
+      railClassName="options-nav"
+      mainClassName="options-page"
+      side="left"
+      defaultWidth={optionsRailLimits.defaultWidth}
+      minWidth={optionsRailLimits.minWidth}
+      maxWidth={optionsRailLimits.maxWidth}
+      minOtherWidth={0}
+      maxShare={0.42}
+      label="Resize options navigation"
+      width={railWidth}
+      onWidthChange={next => { setRailWidth(next); saveOptionsRailWidth(next) }}
+      onWidthReset={() => { setRailWidth(optionsRailLimits.defaultWidth); saveOptionsRailWidth(optionsRailLimits.defaultWidth) }}
+      rail={<>
         <div className="options-nav-top">
           <div className="options-search-box">
             <Icon name="search" />
@@ -665,11 +641,8 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
               </li>
             })}
           </ul>}
-      </div>
-      <div className={'options-splitter' + (draggingSplit ? ' is-dragging' : '')} role="separator" aria-orientation="vertical" aria-label="Resize options navigation"
-        aria-valuenow={effectiveRailWidth} aria-valuemin={optionsRailLimits.minWidth} aria-valuemax={optionsRailLimits.maxWidth} tabIndex={0}
-        onPointerDown={startPointerSplitter} onKeyDown={splitterKeyDown} onDoubleClick={() => { setRailWidth(optionsRailLimits.defaultWidth); saveOptionsRailWidth(optionsRailLimits.defaultWidth) }} />
-      <div className="options-page">
+      </>}
+    >
         {showingUnified ? <>
           <h3 className="options-heading">
             <span className="options-title">{searchResult ? 'Search Results' : 'Modified Settings'}</span>
@@ -713,8 +686,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
                 {form.page.id === 'environment.fontsAndColors' && <SqlFontPreview fontSize={Number(draft['environment.fonts.editorFontSize'])} theme={themeState?.active} />}
               </div>}
         </>}
-      </div>
-    </div>
+    </ResizableSplit>
     {showDescription && <div className="options-description">
       <div className="options-description-head"><strong>{described.title}</strong>{described.notes.length > 0 && <span className="options-description-notes">{described.notes.join(' ')}</span>}</div>
       {described.text && <p>{described.text}</p>}

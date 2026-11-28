@@ -46,6 +46,7 @@ export interface IndexStateEntry { readonly requestId?: string; readonly status?
 export interface IndexStateStore {
   getSnapshot(): { readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }
   subscribe(listener: () => void): () => void
+  syncStatus?(connectionId: string): void
 }
 export interface IndexCompletionOptions {
   /** Starts the connection's Search Objects index when it has none (and Options lets builds start on their own). */

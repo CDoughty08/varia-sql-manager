@@ -1,6 +1,5 @@
 import { isAbsolute, join } from 'node:path'
 import type { SpawnSpec } from './connection'
-import { sqlToolsEnvironment } from './sqltools-runtime'
 
 /** The packaged self-contained backend, or the framework-dependent build under `dotnet` in development (Release for
  *  smoke tests, so they exercise the build CI checks). No credentials or ports ever go into the arguments.
@@ -10,7 +9,7 @@ import { sqlToolsEnvironment } from './sqltools-runtime'
 export function backendSpawnSpec(options: { packaged: boolean; root: string; resourcesPath: string; platform: NodeJS.Platform; smokeTest: boolean; env?: NodeJS.ProcessEnv; locale?: string; userData?: string }): SpawnSpec {
   // The result memory limit is the setting's alone (resultMemoryEnvironment, at each launch), never the shell's.
   // Whatever its case: Windows, and .NET on it, read environment names without regard to it.
-  const runtimeEnv = { ...sqlToolsEnvironment(options) }
+  const runtimeEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) }
   for (const name of Object.keys(runtimeEnv)) if (name.toUpperCase() === resultMemoryVariable) delete runtimeEnv[name]
   // VARIA_USER_DATA: BigQuery never reads a federation subject token from Varia's own files (SubjectTokens).
   for (const name of Object.keys(runtimeEnv)) if (name.toUpperCase() === 'VARIA_USER_DATA') delete runtimeEnv[name]

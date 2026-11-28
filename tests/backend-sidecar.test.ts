@@ -108,15 +108,16 @@ function header(kind: number, length: number, id = 1, arg = 0, flags = 0, magic 
 const requestFrame = (id: number, value: unknown) => encodeFrame(FrameKind.REQUEST, id, 0, encodeControl(value))
 
 describe('real .NET sidecar over protocol v2', () => {
-  it('reports optional SQL language support and rejects unavailable providers over the real wire', async () => {
-    const connection = backend({ VARIA_SQLTOOLS_SERVICE_PATH: resolve('artifacts', 'missing-sqltools-service', 'never-launch.exe') })
+  it('reports in-process SQL language support and rejects unavailable providers over the real wire', async () => {
+    const connection = backend()
     const status = languageStatusSchema.parse(await call(connection, 'language.status', {}))
-    expect(status.providers).toEqual([{ id: 'sqlserver', configured: false, completion: true, hover: true, refresh: true, diagnostics: true, reason: expect.stringContaining('VARIA_SQLTOOLS_SERVICE_PATH') }])
-    const documentId = crypto.randomUUID(), request = { documentId, version: 1, text: 'SELECT 1', context: { providerId: 'sqlserver' as const, connectionId: crypto.randomUUID() }, position: { line: 0, character: 8 } }
-    await expect(call(connection, 'language.complete', request)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
-    const { position: _position, ...refresh } = request
-    await expect(call(connection, 'language.refresh', refresh)).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
-    await expect(call(connection, 'language.hover', { ...request, context: { providerId: 'postgresql' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    expect(status.providers).toEqual([{ id: 'sqlserver', configured: true, completion: true, hover: true, refresh: true, diagnostics: true }])
+    const documentId = crypto.randomUUID(), request = { documentId, version: 1, text: 'SELECT @@ROW', context: { providerId: 'sqlserver' as const }, position: { line: 0, character: 12 } }
+    expect(await call(connection, 'language.complete', request)).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ label: '@@ROWCOUNT' })]) })
+    const diag = await call(connection, 'language.diagnostics', { documentId, version: 2, text: 'SELECT ( FROM dbo.T', context: { providerId: 'sqlserver' as const } })
+    expect(diag).toMatchObject({ version: 2, items: expect.arrayContaining([expect.objectContaining({ severity: 1, source: 'sqlserver' })]) })
+    await expect(call(connection, 'language.complete', { ...request, version: 3, context: { providerId: 'sqlserver' as const, connectionId: crypto.randomUUID() } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
+    await expect(call(connection, 'language.hover', { ...request, version: 4, context: { providerId: 'postgresql' } })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
     expect(await call(connection, 'language.close', { documentId })).toEqual({ closed: true })
     expect(await call(connection, 'system.health', {})).toMatchObject({ protocolVersion: 2 })
   })

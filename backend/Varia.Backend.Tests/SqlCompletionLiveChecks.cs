@@ -17,7 +17,7 @@ internal static class SqlCompletionLiveChecks
             var cursor = marked.IndexOf('|');
             var text = marked.Remove(cursor, 1);
             var request = new LanguageRequest(id, ++version, text, new("sqlserver", connection.Id, connection.Database),
-                SqlToolsLanguageService.EndPosition(text[..cursor]));
+                TsqlLanguageService.EndPosition(text[..cursor]));
             return (LanguageCompletionResult)await service.DispatchAsync("language.complete", JsonSerializer.SerializeToElement(request, Json), Json);
         }
         static bool Has(LanguageCompletionResult result, string label) => result.Items.Any(item => item.Label.Equals(label, StringComparison.Ordinal));

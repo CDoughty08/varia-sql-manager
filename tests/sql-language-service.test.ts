@@ -5,6 +5,7 @@ import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/s
 import { languageDefinitionSchema, languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageDefinition, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { definitionScheme, pendingLimits, SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import type { IndexStateEntry } from '../src/renderer/src/languages/IndexCompletionService'
 import { definitionErrors } from '../src/renderer/src/languages/definition'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
@@ -401,7 +402,7 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageComplete).toHaveBeenCalledTimes(4)
   })
 
-  it('filters a typed bracket against a name STS sends without filter text', async () => {
+  it('filters a typed bracket against a name the provider sends without filter text', async () => {
     const f = await fixture(), tab = f.documents.create('bracket-table.sql', 'SELECT * FROM [Cust', 'master')
     const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 19 } }
     f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: 'Customers', kind: 7, textEdit: { range, newText: 'Customers' } }] } })
@@ -459,7 +460,7 @@ describe('SQL language editor integration', () => {
     // A range outside the model is not believed.
     f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: { ...found, range: { start: { line: 3, character: 0 }, end: { line: 3, character: 2 } } } })
     expect(await f.service.definition(f.model(tab.id), at)).toBeNull()
-    // Definition needs no SQL Tools Service (no backend document to close), but it needs a connection.
+    // Definition opens no backend document to close, but it needs a connection.
     expect(f.api.languageClose).not.toHaveBeenCalled()
     const offline = f.documents.create('b.sql', 'SELECT * FROM dbo.Customer', 'master')
     await expect(f.service.definition(f.model(offline.id), at)).rejects.toThrow(definitionErrors.connectFirst)
@@ -487,7 +488,7 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageDefinition).toHaveBeenCalledTimes(2)
   })
 
-  it('serves definition without a configured SQL Tools Service, and drops an answer an edit made stale', async () => {
+  it('serves definition without a configured language provider, and drops an answer an edit made stale', async () => {
     const f = await fixture({ providers: [{ id: 'sqlserver', configured: false, completion: false, hover: false, reason: 'not installed' }] }); f.addConnection('connection-a')
     const tab = f.documents.create('a.sql', 'EXEC dbo.Load', 'Sales', 'connection-a')
     const answer = deferred<ApiResult<LanguageDefinition>>()
@@ -1337,7 +1338,7 @@ describe('SQL language features in Peek', () => {
 })
 
 describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => {
-  it('enriches STS table completion items from local IndexLookup via language.lookup with PK/UK/Identity, indexes, and FKs', async () => {
+  it('enriches SQL Server table completion items from local IndexLookup via language.lookup with PK/UK/Identity, indexes, and FKs', async () => {
     const f = await fixture()
     f.addConnection('sql-1')
     const tab = f.documents.create('q.sql', 'SELECT * FROM dbo.Ord', 'SalesDB', 'sql-1')
@@ -1404,7 +1405,7 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     expect(afterRefresh).toBe(orders)
   })
 
-  it('preserves existing STS documentation, filters non-object/mismatched kinds, splits bracketed/dotted/db.. names, and invalidates on indexState updates', async () => {
+  it('preserves existing provider documentation, filters non-object/mismatched kinds, splits bracketed/dotted/db.. names, and invalidates on indexState updates', async () => {
     const f = await fixture()
     f.addConnection('sql-1')
     type IndexStateSnap = { readonly indexes: Readonly<Record<string, { readonly requestId?: string; readonly status?: { readonly state: 'none' | 'building' | 'ready'; readonly builtAt?: string; readonly databases: number; readonly indexed: number; readonly objects: number; readonly modules: number; readonly cut: number; readonly skipped: readonly { readonly database: string; readonly code: string; readonly message: string }[]; readonly definitions: boolean } }>> }
@@ -1445,7 +1446,7 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     const list = await f.complete(tab.id, { lineNumber: 1, column: 27 } as Monaco.Position)
     const byLabel = (name: string) => list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === name)!
 
-    // db..table qualifier resolves against OtherDB with schema '*', and preserves existing STS documentation.
+    // db..table qualifier resolves against OtherDB with schema '*', and preserves existing provider documentation.
     const resolved = (await f.completion.resolveCompletionItem!(byLabel('[Orders]'), token()))!
     expect(f.api.languageLookup).toHaveBeenCalledWith({
       connectionId: 'sql-1',
@@ -1500,5 +1501,208 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     })
     await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
     expect(f.api.languageLookup).toHaveBeenCalledTimes(callsAfterCache + 1)
+  })
+
+  it('registers @ trigger character and ranks !-prefixed FK JOIN ON suggestions ahead of individual columns', async () => {
+    const f = await fixture()
+    expect(f.completion.triggerCharacters).toEqual(['.', '@'])
+    const tab = f.documents.create('fk.sql', 'SELECT * FROM dbo.Orders o JOIN dbo.Customers c ON ', 'SalesDB')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: 'o.[CustomerId]', kind: 5, filterText: 'CustomerId', sortText: '010000:CustomerId' },
+          { label: 'o.[CustomerId] = c.[Id]', kind: 10, detail: 'FK · fk_orders_customers', sortText: '!00:o.[CustomerId] = c.[Id]', filterText: 'o.[CustomerId] = c.[Id]' }
+        ]
+      }
+    })
+    const list = await f.complete(tab.id, { lineNumber: 1, column: 52 } as Monaco.Position)
+    const sorted = [...list.suggestions].sort((a, b) => (a.sortText! < b.sortText! ? -1 : a.sortText! > b.sortText! ? 1 : 0))
+    expect(labelText(sorted[0].label)).toBe('o.[CustomerId] = c.[Id]')
+    expect(labelText(sorted[1].label)).toBe('o.[CustomerId]')
+  })
+
+  it('re-queries cross-DB FROM jump when 0-1 char response is incomplete, excludes CTEs/built-ins from lookup, and syncs index status on Ctrl+Shift+R', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    const syncStatus = vi.fn()
+    const indexState = new SnapshotStore<{ readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }>({ indexes: {} })
+    f.service.bindIndexState(Object.assign(indexState, { syncStatus }))
+
+    // 1. Multi-keystroke FROM jump: initial 0-char completion returns isIncomplete: true, so typing `Da` re-queries backend!
+    const jumpTab = f.documents.create('jump.sql', 'SELECT * FROM ', 'SalesDB', 'sql-1')
+    f.api.languageComplete
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [{ label: '[dbo].[Orders]', kind: 7, filterText: 'Orders' }] } })
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: '[AnalyticsDB].[dbo].[DailyRevenue]', kind: 7, detail: 'Table', filterText: 'DailyRevenue' }] } })
+    const first = await f.complete(jumpTab.id, { lineNumber: 1, column: 15 } as Monaco.Position)
+    expect(first.incomplete).toBe(true)
+    const model = f.model(jumpTab.id)
+    model.applyEdits([{ range: { startLineNumber: 1, startColumn: 15, endLineNumber: 1, endColumn: 15 }, text: 'Da' }])
+    const second = await f.completion.provideCompletionItems(model, { lineNumber: 1, column: 17 } as Monaco.Position, { triggerKind: 2 }, token()) as Monaco.languages.CompletionList
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+    expect(second.suggestions.some(s => labelText(s.label) === '[AnalyticsDB].[dbo].[DailyRevenue]')).toBe(true)
+
+    // 2. CTE shadowing physical table & built-in T-SQL function shadowing UDF must NOT fire language.lookup!
+    const shadowTab = f.documents.create('shadow.sql', 'WITH Orders AS (SELECT 1 AS a) SELECT ', 'SalesDB', 'sql-1')
+    f.api.languageLookup.mockResolvedValue({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: [{
+          state: 'ready',
+          path: ['SalesDB', 'dbo', 'Orders'],
+          truncated: false,
+          object: { name: 'Orders', kind: 'table', detailed: true },
+          items: [{ name: 'Id', kind: 'column', type: 'int', nullable: false, detail: 'PK' }]
+        }]
+      }
+    })
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: 'Orders', kind: 7, detail: 'CTE' },
+          { label: 'FORMAT', kind: 3, detail: 'Function · nvarchar', documentation: 'Built-in FORMAT docs' },
+          { label: '[dbo].[Orders]', kind: 7, detail: 'Table · SalesDB.dbo' },
+          { label: '[dbo].[fn_ActiveOrders]', kind: 3, detail: 'Function · SalesDB.dbo' }
+        ]
+      }
+    })
+    const shadowList = await f.complete(shadowTab.id, { lineNumber: 1, column: 39 } as Monaco.Position)
+    const lookupBefore = f.api.languageLookup.mock.calls.length
+    const cteItem = shadowList.suggestions.find(s => labelText(s.label) === 'Orders')!
+    const builtinItem = shadowList.suggestions.find(s => labelText(s.label) === 'FORMAT')!
+    const tableItem = shadowList.suggestions.find(s => labelText(s.label) === '[dbo].[Orders]')!
+    const tvfItem = shadowList.suggestions.find(s => labelText(s.label) === '[dbo].[fn_ActiveOrders]')!
+    await f.completion.resolveCompletionItem!(cteItem, token())
+    await f.completion.resolveCompletionItem!(builtinItem, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore)
+    expect(builtinItem.documentation).toBe('Built-in FORMAT docs')
+    await f.completion.resolveCompletionItem!(tableItem, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore + 1)
+    await f.completion.resolveCompletionItem!(tvfItem, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(lookupBefore + 2)
+    expect(f.api.languageLookup.mock.calls.at(-1)![0]).toEqual({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', 'dbo', 'fn_ActiveOrders'], limit: 2000, details: true }]
+    })
+
+    // 3. Ctrl+Shift+R (refreshCache) calls indexState.syncStatus(connectionId) so popover updates from Not built to Ready.
+    const refreshed = await f.service.refreshCache(shadowTab.id)
+    expect(refreshed).toBe(true)
+    expect(syncStatus).toHaveBeenCalledWith(shadowTab.connectionId)
+  })
+
+  it('retries empty completion and null hover at most once during initial index build, skips retry once ready, and honors cancellation', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    type Snap = { readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }
+    const backing = new SnapshotStore<Snap>({ indexes: { 'sql-1': { requestId: 'build-1' } } })
+    const waiters: (() => void)[] = []
+    let subCount = 0
+    const indexState = {
+      getSnapshot: () => backing.getSnapshot(),
+      subscribe: (listener: () => void) => {
+        subCount++
+        const unsub = backing.subscribe(listener)
+        for (const wake of waiters.splice(0)) wake()
+        return () => { subCount--; unsub() }
+      },
+      set: (next: Snap) => { (backing as unknown as { publish(s: Snap): void }).publish(next) },
+      waitForStepSubscriber: () => subCount >= 2 ? Promise.resolve() : new Promise<void>(resolve => { waiters.push(resolve) })
+    }
+    f.service.bindIndexState(indexState)
+
+    const tab = f.documents.create('initial.sql', 'SELECT d.database_ FROM sys.databases AS d;', 'master', 'sql-1')
+
+    // 1. Completion during initial build (requestId set, no status): retries once when index state steps forward.
+    f.api.languageComplete
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [] } })
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: '[database_id]', kind: 5, filterText: 'database_id' }] } })
+    const compPromise = f.complete(tab.id, { lineNumber: 1, column: 19 } as Monaco.Position)
+    await indexState.waitForStepSubscriber()
+    indexState.set({ indexes: { 'sql-1': { requestId: 'build-1', status: undefined } } })
+    const comp = await compPromise
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+    expect(comp.suggestions.some(s => labelText(s.label) === '[database_id]')).toBe(true)
+
+    // 1b. Non-empty `isIncomplete: false` result while initial build is still running is NOT cached in `completionCache`.
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: '[database_id]', kind: 5, filterText: 'database_id' }] } })
+    const retriggered = await f.completion.provideCompletionItems(
+      f.model(tab.id),
+      { lineNumber: 1, column: 19 } as Monaco.Position,
+      { triggerKind: 2 },
+      token()
+    ) as Monaco.languages.CompletionList
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(3)
+    expect(retriggered.suggestions.some(s => labelText(s.label) === '[database_id]')).toBe(true)
+
+    // 2. Hover during initial build: null first answer retries once when index state steps forward.
+    f.api.languageHover
+      .mockResolvedValueOnce({ ok: true, value: null })
+      .mockResolvedValueOnce({ ok: true, value: { contents: '**sys\\.databases** · View' } })
+    const hoverPromise = f.hover.provideHover(f.model(tab.id), { lineNumber: 1, column: 30 } as Monaco.Position, token())
+    await indexState.waitForStepSubscriber()
+    indexState.set({
+      indexes: {
+        'sql-1': {
+          status: { state: 'ready', databases: 1, indexed: 1, objects: 10, modules: 0, cut: 0, skipped: [], definitions: true }
+        }
+      }
+    })
+    const hov = await hoverPromise
+    expect(f.api.languageHover).toHaveBeenCalledTimes(2)
+    expect(hov?.contents[0]).toMatchObject({ value: '**sys\\.databases** · View' })
+
+    // 3. Once index is ready (status present), empty completion and null hover do NOT retry.
+    const compCallsBefore = f.api.languageComplete.mock.calls.length
+    const hoverCallsBefore = f.api.languageHover.mock.calls.length
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [] } })
+    f.api.languageHover.mockResolvedValueOnce({ ok: true, value: null })
+    const emptyReady = await f.complete(tab.id, { lineNumber: 1, column: 19 } as Monaco.Position)
+    const nullReady = await f.hover.provideHover(f.model(tab.id), { lineNumber: 1, column: 30 } as Monaco.Position, token())
+    expect(emptyReady.suggestions).toHaveLength(0)
+    expect(nullReady).toBeNull()
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(compCallsBefore + 1)
+    expect(f.api.languageHover).toHaveBeenCalledTimes(hoverCallsBefore + 1)
+
+    // 4. Cancellation while waiting during initial build aborts cleanly without issuing a retry RPC.
+    indexState.set({ indexes: { 'sql-1': { requestId: 'build-2' } } })
+    const compCancelBefore = f.api.languageComplete.mock.calls.length
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [] } })
+    const cancelSource = cancellationSource()
+    const cancelledComp = f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: 1, column: 19 } as Monaco.Position, { triggerKind: 0 }, cancelSource.token)
+    await indexState.waitForStepSubscriber()
+    cancelSource.cancel()
+    const cancelledResult = await cancelledComp as Monaco.languages.CompletionList
+    expect(cancelledResult.suggestions).toHaveLength(0)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(compCancelBefore + 1)
+
+    // 5. Synchronous `onCancellationRequested` callback inside `waitForIndexStateStep` never throws TDZ and disposes cleanly.
+    const syncCancelBefore = f.api.languageComplete.mock.calls.length
+    let syncDisposed = false
+    let syncCancelled = false
+    const syncToken: Monaco.CancellationToken = {
+      get isCancellationRequested() { return syncCancelled },
+      onCancellationRequested: (listener: () => void) => {
+        if (f.api.languageComplete.mock.calls.length > syncCancelBefore) {
+          syncCancelled = true
+          listener()
+        }
+        return { dispose: () => { syncDisposed = true } }
+      }
+    }
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [] } })
+    const syncResult = await f.completion.provideCompletionItems(
+      f.model(tab.id),
+      { lineNumber: 1, column: 19 } as Monaco.Position,
+      { triggerKind: 0 },
+      syncToken
+    ) as Monaco.languages.CompletionList
+    expect(syncResult.suggestions).toHaveLength(0)
+    expect(syncDisposed).toBe(true)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(syncCancelBefore + 1)
   })
 })

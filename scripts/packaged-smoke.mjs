@@ -1,7 +1,7 @@
 import { chromium, expect } from '@playwright/test'
 import { spawn, spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -12,7 +12,6 @@ import { closeMs, within } from './fixtures/smoke.mjs'
 import { backendReady } from './fixtures/ui.mjs'
 import { xvfbArgs } from './fixtures/xvfb.mjs'
 import { asarProblems, isReadyToRun, readAsar, readyToRunAssemblies } from './packaged-contents.mjs'
-import { hostRid, sqlToolsServiceProblems } from './prepare-sqltools-service.mjs'
 
 const { fuseMismatches, fuseTarget } = createRequire(import.meta.url)('../build/fuses.cjs')
 const executablePath = process.env.VARIA_PACKAGED_EXECUTABLE
@@ -37,11 +36,10 @@ if (!appImage) {
   if (!contents.has('out/main/index.js')) throw new Error(`${asar} does not hold out/main/index.js.`)
   const problems = asarProblems(contents)
   if (problems.length) throw new Error(`Packaged app.asar: ${problems.join('; ')}`)
-  // The backend is published ReadyToRun.
+  // The backend is published ReadyToRun, and SQL language services run 100% in-process with zero bundled STS files.
   const interpreted = readyToRunAssemblies.filter(name => !isReadyToRun(resolve(resources, 'backend', name)))
   if (interpreted.length) throw new Error(`Packaged backend assemblies are not ReadyToRun: ${interpreted.join(', ')}`)
-  const languageProblems = await sqlToolsServiceProblems(resolve(resources, 'sqltools-service'), process.env.VARIA_PACKAGED_RID || hostRid())
-  if (languageProblems.length) throw new Error(`Packaged SQL Tools Service: ${languageProblems.join(' ')}`)
+  if (existsSync(resolve(resources, 'sqltools-service'))) throw new Error('Packaged application must not bundle retired resources/sqltools-service files.')
 }
 
 // With --inspect fused off, Playwright's Electron launcher cannot attach to main; connect to Chromium's debugging port. A
@@ -53,9 +51,6 @@ const port = server.address().port
 await new Promise(resolveClose => server.close(resolveClose))
 const env = { ...process.env, VARIA_PACKAGED_SMOKE: '1' }
 delete env.ELECTRON_RUN_AS_NODE
-// The package must supply its language service independently of a developer's override.
-delete env.VARIA_SQLTOOLS_SERVICE_PATH
-delete env.VARIA_SQLTOOLS_SERVICE_SOURCE
 const temporaryProfile = process.env.VARIA_PACKAGED_PROFILE ? undefined : mkdtempSync(join(tmpdir(), 'varia-packaged-smoke-'))
 const profile = temporaryProfile ?? resolve(process.env.VARIA_PACKAGED_PROFILE)
 const args = [`--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])]

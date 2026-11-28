@@ -1,5 +1,5 @@
-using Microsoft.Data.SqlClient;
 using System.Text.Json;
+using Varia.Backend.Explorer;
 using Varia.Backend.Language;
 
 namespace Varia.Backend;
@@ -30,18 +30,49 @@ internal sealed partial class SqlService
         }
     }
 
-    /// <summary>Resolves only an existing Varia connection. The renderer cannot supply credentials or executable paths.
-    /// Entra's token providers live in this backend and cannot be inherited by SQL Tools Service's separate process.</summary>
-    internal string? LanguageConnectionString(LanguageContext context)
+    /// <summary>Resolves the active database for an in-process ScriptDom + IndexLookup request (completion, hover,
+    /// diagnostics, refresh). Verifies the connection exists and supports SQL Login, Windows, and Microsoft Entra ID.</summary>
+    internal string? LanguageActiveDatabase(LanguageContext context)
     {
-        if (context.ConnectionId is null) return null;
-        if (!connections.TryGetValue(context.ConnectionId, out var text)) throw new RequestException("NOT_CONNECTED", "Connect this query before requesting database IntelliSense.");
-        var builder = new SqlConnectionStringBuilder(text);
-        if (builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword))
-            throw new RequestException("AUTH_UNSUPPORTED", "SQL language services currently support SQL Server and Windows authentication. Microsoft Entra token sharing with SQL Tools Service is not implemented yet.");
-        builder.InitialCatalog = context.Database ?? DatabaseOf(context.ConnectionId, text) ?? builder.InitialCatalog;
-        builder.ApplicationName = "Varia SQL Manager IntelliSense";
-        builder.Pooling = false;
-        return builder.ConnectionString;
+        if (context.ConnectionId is null) return context.Database;
+        if (!connections.TryGetValue(context.ConnectionId, out var text))
+            throw new RequestException("NOT_CONNECTED", "Connect this query before requesting database IntelliSense.");
+        return context.Database ?? DatabaseOf(context.ConnectionId, text);
+    }
+
+    /// <summary>Refreshes Search Objects index metadata for the query's connection and database on Ctrl+Shift+R.
+    /// Works across all authentication modes including Microsoft Entra ID using Varia's own connection pool.</summary>
+    internal async Task<bool> RefreshLanguageIndexAsync(LanguageContext context, CancellationToken token)
+    {
+        if (context.ConnectionId is not { } connectionId) return false;
+        if (!connections.TryGetValue(connectionId, out var text))
+            throw new RequestException("NOT_CONNECTED", "Connect this query before refreshing IntelliSense.");
+        var database = context.Database ?? DatabaseOf(connectionId, text);
+        var status = search.IndexStatus(new ObjectIndexStatusArgs(connectionId)).Status;
+        try
+        {
+            if (status.State == "none" && status.Databases == 0)
+            {
+                await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D")), token);
+                return true;
+            }
+            if (!string.IsNullOrEmpty(database) && ExplorerRefs.Ident(database))
+            {
+                search.MarkSqlStale(connectionId, database);
+                await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D"), Stale: true, Database: database), token);
+            }
+            else
+            {
+                await search.IndexAsync(new ObjectIndexArgs(connectionId, Guid.NewGuid().ToString("D"), Stale: true, CheckAll: true), token);
+            }
+            return true;
+        }
+        catch (RequestException ex) when (ex.Code == "CANCELLED")
+        {
+            // Propagate caller/active/timeout cancellations as OperationCanceledException so RefreshAsync classifies STALE/TIMEOUT cleanly.
+            token.ThrowIfCancellationRequested();
+            // Otherwise a concurrent index build or freshness check superseded this check; the index is already being refreshed.
+            return true;
+        }
     }
 }

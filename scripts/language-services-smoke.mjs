@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { parseCalls } from './fixtures/call-log.mjs'
 
-// Real Monaco suggestion/hover widgets through preload, main validation and the fake backend. SQL Tools Service's
+// Real Monaco suggestion/hover widgets through preload, main validation and the fake backend. In-process ScriptDom + IndexLookup's
 // process/protocol/provider lifecycle is tested separately; this suite needs neither that executable nor a database.
 await mkdir('artifacts', { recursive: true })
 const control = await mkdtemp(resolve('artifacts', 'language-control-'))

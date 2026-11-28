@@ -2,12 +2,6 @@ using System.Text.Json;
 using Varia.Backend;
 using Varia.Backend.Tests;
 
-if (args is [LspTransportChecks.FixtureArgument])
-{
-    await LspTransportChecks.FixtureAsync();
-    return;
-}
-
 // The child processes of ConnectionFailureChecks' native Kerberos checks.
 if (args is [ConnectionFailureChecks.ProbeArgument])
 {
@@ -134,12 +128,6 @@ if (args is ["--bigquery-checks"])
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
     return;
 }
-if (args is ["--lsp-transport-checks"])
-{
-    await LspTransportChecks.RunAsync(Check);
-    Console.WriteLine("Passed " + passed + " LSP transport checks.");
-    return;
-}
 if (args is ["--sql-language-checks"])
 {
     await SqlLanguageChecks.RunAsync(Check);
@@ -243,6 +231,18 @@ if (args is ["--sql-completion-checks"])
 {
     await SqlCompletionChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " SQL completion checks.");
+    return;
+}
+if (args is ["--tsql-completion-checks"])
+{
+    await TsqlCompletionChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " T-SQL ScriptDom completion & hover checks.");
+    return;
+}
+if (args is ["--tsql-diagnostic-checks"])
+{
+    await TsqlDiagnosticChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " T-SQL ScriptDom diagnostic checks.");
     return;
 }
 if (args is ["--connection-principal-checks"])
@@ -516,11 +516,12 @@ if (liveGroup is null)
     // The offline suites, timed (OfflineSuites: weights, lanes and the suites that must run alone).
     static Func<Task> Sync(Action run) => () => { run(); return Task.CompletedTask; };
     (string Name, Func<Task> Run)[] offlineSuites = [
-        ("LspTransport", () => LspTransportChecks.RunAsync(Check)),
         ("SqlLanguage", () => SqlLanguageChecks.RunAsync(Check)),
         ("SqlDefinition", () => SqlDefinitionChecks.RunAsync(Check)),
         ("SqlLanguageDiagnostics", () => SqlLanguageDiagnosticChecks.RunAsync(Check)),
         ("SqlCompletion", () => SqlCompletionChecks.RunAsync(Check)),
+        ("TsqlCompletion", () => TsqlCompletionChecks.RunAsync(Check)),
+        ("TsqlDiagnostic", () => TsqlDiagnosticChecks.RunAsync(Check)),
         ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
         ("Page", Sync(() => PageChecks.Run(Check))),
         ("Host", Sync(() => HostChecks.Run(Check))),

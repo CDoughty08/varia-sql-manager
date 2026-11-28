@@ -17,7 +17,7 @@ the Measurements below with the new baseline.
   run takes as long as its longest job:
   - `npm run check` on Linux, Windows and macOS.
   - The live .NET checks on Linux in two jobs (`slot: [1, 2]`): slot 1 runs `--live-group 1/3`, `tests/*-live.test.ts`,
-    the bundled SQL Tools Service against the container, Kerberos, and BigQuery against its emulator
+    the SQL language service live suite against the container, Kerberos, and BigQuery against its emulator
     (`--bigquery-emulator-live`, the image pinned by digest: about 2 s of checks after the pull on a developer machine).
     Slot 2 starts two SQL Server containers (ports 1433 and 1434, 3 GB memory cap each) and runs groups `2/3` and `3/3`
     concurrently after one Release build (`scripts/ci-live-pair.mjs`), skipping `setup-node` and `npm ci`.
@@ -33,7 +33,7 @@ the Measurements below with the new baseline.
   (`bench-desktop.yml`).
 - **Release builds** (`release.yml`, through `package.yml`, held by `tests/release-workflow.test.ts`) package every main
   push, tags and manual runs, and a pull request only when it changes what packaging reads (its `paths`); Intel macOS packages only for tags, manual runs and a weekly scheduled run on main (cross-built on `macos-15` arm64 with Rosetta 2 packaged smoke, retiring `macos-15-intel`), so an x64-only
-  break shows before the tag it would block. `package.yml` caches NuGet (`packages.lock.json`) and prepares the app, SQL Tools Service, backend and update helper concurrently (`scripts/package-prepare.mjs`). On non-tag main and PR pushes, Windows uses `--config.compression=store` (still building and smoke-testing Setup, Portable, ZIP and the updater) and macOS uses `--mac dir` (still smoke-testing the full `.app` with fuses and asar integrity while skipping unused DMG/ZIP and hdiutil). Tags, manual runs and the weekly run build full compressed release artifacts. Installers upload only for tags and manual runs; a typecheck runs only for
+  break shows before the tag it would block. `package.yml` caches NuGet (`packages.lock.json`) and prepares the app, backend and update helper concurrently (`scripts/package-prepare.mjs`). On non-tag main and PR pushes, Windows uses `--config.compression=store` (still building and smoke-testing Setup, Portable, ZIP and the updater) and macOS uses `--mac dir` (still smoke-testing the full `.app` with fuses and asar integrity while skipping unused DMG/ZIP and hdiutil). Tags, manual runs and the weekly run build full compressed release artifacts. Installers upload only for tags and manual runs; a typecheck runs only for
   tags. GitHub reads only a pull request's first 3,000 changed files for `paths`, so a larger pull request may skip
   Release builds: run them by hand then. The Windows package also publishes the update helper (NativeAOT), builds the
   archive installed copies stage from, and its installer smoke stages and swaps that archive into the installation it
@@ -47,14 +47,12 @@ the Measurements below with the new baseline.
   which it ran merges only when it is green. The install retries Chocolatey up to four times with backoff, since the
   community feed answers 503 now and then, and fails with a plain message when SQL Server never installed. Measured time: about 230 s wall (SQL Server install 158 s, the two live
   suites 37 s, setup 30 s).
-- **SQL Tools Service** is a build-time dependency pinned in `build/sqltools-service.json` for every release RID.
-  Preparation verifies the official archive's SHA-256 before extraction and keeps upstream notices, the MIT license and
-  an inventory of file hashes. Development commands prepare the host's distribution; packaging prepares its exact target
-  and includes the complete runtime beside the backend. Packaged smoke checks those files and starts the bundled language
-  server without a path override. Live group 1 tests schema completion and hover against its container. Linux smoke
-  shard 3 exercises real Monaco completion and hover in split and floating editors against SQL Server 2022 with SQL
-  Login (focus return from a panel's OS popout, targeted cache refresh, docking back), reusing that shard's server,
-  build and display, with a five-minute deadline.
+- **SQL language services** run 100% in-process in the .NET backend (ScriptDom + Search Objects `IndexLookup`) with
+  zero external language-server runtime. Packaged smoke and AppImage inspection verify zero legacy `sqltools-service`
+  files are bundled and exercise completion offline. Live group 1 tests schema completion, hover, and diagnostics
+  against its container. Linux smoke shard 3 exercises real Monaco completion and hover in split and floating editors
+  against SQL Server 2022 with SQL Login (focus return from a panel's OS popout, targeted cache refresh, docking back),
+  reusing that shard's server, build and display, with a five-minute deadline.
 - **Suites that share a launch instead of adding a job.** The language widget suite also checks hover and suggestion
   placement in short panels and at viewport edges. `language-diagnostics-smoke.mjs` runs in the regular shards (rendered
   squiggles, messages, issue navigation, foreground scheduling with preserved markers, stale-result cleanup); the SQL
@@ -69,10 +67,9 @@ the Measurements below with the new baseline.
   loader; curated release-body compilation runs in the existing tag-publication job with a script-free install.
 - **Downloads and hangs in packaging.** Smoke builds and packaging prepare Electron from its npm-pinned checksums,
   retrying transient download failures within three attempts and three minutes and seeding the shared archive cache so
-  packaging verifies offline. Publishing a verified SQL Tools archive or runtime retries brief Windows sharing violations
-  up to seven times; other filesystem errors still fail, and checksum and inventory verification stay required. Packaged
-  smoke reports its phase, bounds application, window and CDP cleanup, and has a ten-minute runner-level timeout outside
-  its five-minute body watchdog (which catches synchronous work before the watchdog starts).
+  packaging verifies offline. Packaged smoke reports its phase, bounds application, window and CDP cleanup, and has a
+  ten-minute runner-level timeout outside its five-minute body watchdog (which catches synchronous work before the
+  watchdog starts).
 
 ## Packaging locally
 
@@ -165,9 +162,8 @@ would fail at launch with "Could not start the SQL backend" (spawn ENOENT).
 - `scripts/fixtures/explorer-tree.mjs` (`findExplorerRow`) checks rendered rows synchronously and scans virtualized overflowed
   trees immediately instead of waiting 2 s before scrolling, saving over 5 runner-minutes per PR in `object-actions-smoke`
   and `explorer-smoke`.
-- `npm run build:smoke` prepares Electron and SQL Tools Service in parallel with the Release backend and electron-vite
-  builds (`scripts/check.mjs --build`). Jobs that do not launch the SQL language server (Linux smoke shards 1 and 2,
-  Windows smoke shards, Linux benchmarks) pass `VARIA_CHECK_SKIP=sqltools`.
+- `npm run build:smoke` prepares Electron in parallel with the Release backend and electron-vite builds
+  (`scripts/check.mjs --build`).
 - Linux jobs that need SQL Server (`live`, `smoke-linux`, `bench-linux`) start the Docker pull and container boot detached
   right after checkout via `scripts/ci-docker.mjs --detach` (retrying transient Docker pulls up to three times) and wait for
   readiness only before the first SQL step, hiding both image pull and container boot behind setup and builds. The BigQuery
@@ -177,9 +173,8 @@ would fail at launch with "Could not start the SQL backend" (spawn ENOENT).
   (`tests/idle-waits.test.ts`). A close not finished in 45 s kills the app and fails the suite with its own error
   (`boundedClose`; on Linux it names the processes left in the app's process group), and `smoke-shards.mjs` kills a
   suite past four times its weight (at least 5 min), so the shard's later suites still run. Playwright's close also waits
-  for the stdio pipes the backend and its language server inherit, so the backend's exit waits for its language-server
-  kill (`ExitGate`), and Linux and macOS kill that child with one signal instead of a tree kill. A process left behind
-  after quit is a product bug.
+  for the stdio pipes the backend inherits, so a close that hangs after main exited names the remaining holder in the
+  process group. A process left behind after quit is a product bug.
 - Live slot 2 skips `setup-node` and `npm ci` (running `scripts/ci-live-pair.mjs` with the runner's bundled Node);
   `npm ci --no-audit --no-fund` everywhere.
 - `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one
