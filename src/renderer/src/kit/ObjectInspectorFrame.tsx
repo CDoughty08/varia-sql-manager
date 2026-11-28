@@ -1,6 +1,6 @@
 import {
   useCallback, useEffect, useLayoutEffect, useRef, useState,
-  type CSSProperties, type FocusEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type Ref, type WheelEvent
+  type CSSProperties, type FocusEvent, type KeyboardEvent, type ReactNode, type Ref, type WheelEvent
 } from 'react'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { reducedMotionClass } from '../../../shared/theme/metrics'
@@ -11,13 +11,13 @@ import Icon from '../Icon'
 import { formatCount } from '../results/status'
 import { DocumentHeader, useHeaderVerbs, type Crumb, type HeaderVerb, type Verb } from './DocumentFrame'
 import {
-  clampVitalsWidth, defaultInspectorVitals, inspectorStripFade, inspectorTabKey, measureStripTabs, offEdgeTabIds,
+  defaultInspectorVitals, inspectorStripFade, inspectorTabKey, measureStripTabs, offEdgeTabIds,
   resolveTabShortcutTarget, revealSelectedTab, stepScrollDelta, stripClipState, tabShortcutDigit, tabShortcutLabel,
-  vitalsLimits, vitalsMaxWidth, vitalsWidthKey, type InspectorSurface
+  vitalsLimits, type InspectorSurface
 } from './object-inspector'
-import { followPointerDrag } from './pointer-drag'
 import { useClearFieldHints } from './PropertyField'
 import RatioBar, { type RatioSegment } from './RatioBar'
+import ResizableSplit from './ResizableSplit'
 import ScriptDrawer, { type ScriptDrawerProps } from './ScriptDrawer'
 
 export interface InspectorKpi {
@@ -345,77 +345,7 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
     })
   }
 
-  // Vitals rail container width tracking + drag resize via followPointerDrag.
-  const splitRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined)
-  useEffect(() => {
-    const split = splitRef.current
-    if (!split) return
-    const measure = () => {
-      const width = split.clientWidth
-      setContainerWidth(width > 0 ? width : undefined)
-    }
-    measure()
-    const observer = observeResize(split, measure)
-    return () => observer.dispose()
-  }, [])
-
-  const baseVitalsWidth = vitalsWidth ?? defaultInspectorVitals[surface].width
-  const [dragWidth, setDragWidth] = useState<number | undefined>(undefined)
-  const dragWidthRef = useRef<number | undefined>(undefined)
-  const maxVitalsWidth = vitalsMaxWidth(containerWidth)
-  const effectiveVitalsWidth = clampVitalsWidth(dragWidth ?? baseVitalsWidth, surface, containerWidth)
-
-  const handleSashPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    const startX = event.clientX
-    const startWidth = effectiveVitalsWidth
-    const splitWidth = splitRef.current?.clientWidth || containerWidth
-    let moved = false
-    dragWidthRef.current = startWidth
-    setDragWidth(startWidth)
-    const started = followPointerDrag(
-      event.currentTarget,
-      event.pointerId,
-      moveEvent => {
-        const next = clampVitalsWidth(startWidth - (moveEvent.clientX - startX), surface, splitWidth)
-        if (next !== startWidth) moved = true
-        dragWidthRef.current = next
-        setDragWidth(next)
-      },
-      () => {
-        const final = dragWidthRef.current
-        dragWidthRef.current = undefined
-        setDragWidth(undefined)
-        // A click with no drag movement must never overwrite a persisted wider width with a temporarily clamped value.
-        if (moved && final !== undefined && final !== startWidth) onVitalsWidthChange?.(final)
-      }
-    )
-    if (!started) {
-      dragWidthRef.current = undefined
-      setDragWidth(undefined)
-    }
-  }
-
-  const resetVitals = () => {
-    if (onVitalsWidthReset) onVitalsWidthReset()
-    else onVitalsWidthChange?.(defaultInspectorVitals[surface].width)
-  }
-
-  const handleSashKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-    const next = vitalsWidthKey(effectiveVitalsWidth, event.key, surface, containerWidth)
-    if (next === undefined) return
-    event.preventDefault()
-    event.stopPropagation()
-    if (event.key === 'Home') {
-      resetVitals()
-      return
-    }
-    // Only persist when the arrow key actually moved the rendered width (never shrink a persisted width when pinned at narrow max).
-    if (next !== effectiveVitalsWidth) onVitalsWidthChange?.(next)
-  }
 
   const showShortcutCues = surface === 'peek' || (modHeld && hasFocus)
   const hiddenCount = offEdge.size
@@ -521,9 +451,41 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
         })}
       </div>}
     </div>}
-    <div ref={splitRef} className="inspector-split"
+    <ResizableSplit
+      className="inspector-split"
+      sashClassName="inspector-vitals-sash"
+      railClassName="inspector-vitals-rail"
+      railAs="aside"
+      railId={`${id}-vitals`}
+      railLabel={vitalsTitle}
+      side="right"
+      defaultWidth={defaultInspectorVitals[surface].width}
+      minWidth={vitalsLimits.minWidth}
+      maxWidth={vitalsLimits.maxWidth}
+      minOtherWidth={0}
+      maxShare={vitalsLimits.maxShare}
+      step={vitalsLimits.step}
+      shiftStep={vitalsLimits.step * 2}
+      railOpen={showVitals}
+      label={`Resize ${vitalsTitle} panel`}
+      width={vitalsWidth ?? defaultInspectorVitals[surface].width}
+      onWidthChange={onVitalsWidthChange}
+      onWidthReset={onVitalsWidthReset}
+      onContainerWidthChange={setContainerWidth}
       onPointerLeave={() => clearHints?.('hovered')}
-      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHints?.('focused') }}>
+      onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHints?.('focused') }}
+      rail={<>
+        <div className="inspector-vitals-head">
+          <span className="inspector-vitals-title">{vitalsTitle}</span>
+          {onVitalsOpenChange && <button type="button" className="icon-button inspector-vitals-close"
+            aria-label={`Hide ${vitalsTitle} panel`} title={`Hide ${vitalsTitle}`}
+            onClick={() => onVitalsOpenChange(false)}>
+            <Icon name="close" />
+          </button>}
+        </div>
+        <div className="inspector-vitals-body">{vitals}</div>
+      </>}
+    >
       {tabs.map(tab => {
         const selected = tab.id === currentId
         if (!selected && !tab.keepMounted) return null
@@ -533,26 +495,7 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
           {tab.content}
         </div>
       })}
-      {showVitals && <>
-        <div className="inspector-vitals-sash" role="separator" aria-orientation="vertical"
-          aria-label={`Resize ${vitalsTitle} panel`} aria-valuemin={vitalsLimits.minWidth}
-          aria-valuemax={maxVitalsWidth} aria-valuenow={effectiveVitalsWidth} tabIndex={0}
-          data-dragging={dragWidth !== undefined || undefined}
-          onPointerDown={handleSashPointerDown} onDoubleClick={resetVitals} onKeyDown={handleSashKeyDown} />
-        <aside id={`${id}-vitals`} className="inspector-vitals-rail" aria-label={vitalsTitle}
-          style={{ width: `${effectiveVitalsWidth}px` }}>
-          <div className="inspector-vitals-head">
-            <span className="inspector-vitals-title">{vitalsTitle}</span>
-            {onVitalsOpenChange && <button type="button" className="icon-button inspector-vitals-close"
-              aria-label={`Hide ${vitalsTitle} panel`} title={`Hide ${vitalsTitle}`}
-              onClick={() => onVitalsOpenChange(false)}>
-              <Icon name="close" />
-            </button>}
-          </div>
-          <div className="inspector-vitals-body">{vitals}</div>
-        </aside>
-      </>}
-    </div>
+    </ResizableSplit>
     {hint && <div className="inspector-hint-overlay" aria-hidden="true">{hint}</div>}
     {script && <ScriptDrawer id={id} open={scriptOpen} size={scriptSize} {...script}
       onToggle={onScriptToggle ?? (() => {})} onResize={onScriptResize ?? (() => {})} />}

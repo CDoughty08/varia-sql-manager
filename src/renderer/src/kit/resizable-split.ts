@@ -1,12 +1,21 @@
-// Pure geometry, clamping, keyboard stepping, and localStorage persistence for ResizableSplit (AP-1).
+// Pure geometry, clamping, keyboard stepping, and localStorage persistence for ResizableSplit and SplitSash.
 export interface SplitBounds {
   readonly defaultWidth: number
   readonly minWidth: number
   readonly maxWidth: number
   readonly minOtherWidth: number
+  /** Optional maximum fraction of container width (0 < maxShare <= 1), e.g. 0.48 for Vitals or 0.42 for Options. */
+  readonly maxShare?: number
 }
 
 export type SplitSide = 'left' | 'right'
+
+export interface SplitKeyOptions {
+  readonly step?: number
+  readonly shiftStep?: number
+  readonly homeAction?: 'default' | 'min'
+  readonly endToMax?: boolean
+}
 
 export const splitLimits = {
   step: 12,
@@ -23,11 +32,18 @@ export function splitStorageKey(storageKey: string): string {
   return storageKey.startsWith(splitLimits.storagePrefix) ? storageKey : `${splitLimits.storagePrefix}${storageKey}`
 }
 
-/** Maximum rail width (px) that keeps at least `minOtherWidth` for the opposite pane when container width is known. */
-export function dynamicSplitMax(bounds: Pick<SplitBounds, 'minWidth' | 'maxWidth' | 'minOtherWidth'>, containerWidth?: number): number {
+/** Maximum rail width (px) that keeps at least `minOtherWidth` and respects optional `maxShare` when container width is known. */
+export function dynamicSplitMax(
+  bounds: Pick<SplitBounds, 'minWidth' | 'maxWidth' | 'minOtherWidth' | 'maxShare'>,
+  containerWidth?: number
+): number {
   const fixedMax = Math.max(bounds.minWidth, bounds.maxWidth)
   if (containerWidth === undefined || !Number.isFinite(containerWidth) || containerWidth <= 0) return fixedMax
-  return Math.max(bounds.minWidth, Math.min(fixedMax, Math.floor(containerWidth - bounds.minOtherWidth)))
+  let cap = Math.min(fixedMax, Math.floor(containerWidth - bounds.minOtherWidth))
+  if (bounds.maxShare !== undefined && Number.isFinite(bounds.maxShare) && bounds.maxShare > 0) {
+    cap = Math.min(cap, Math.floor(containerWidth * bounds.maxShare))
+  }
+  return Math.max(bounds.minWidth, cap)
 }
 
 /** Clamps a rail width (px) to `[minWidth, dynamicSplitMax(bounds, containerWidth)]`, falling back to `defaultWidth` when non-finite. */
@@ -65,11 +81,19 @@ export function splitWidthKey(
   side: SplitSide,
   bounds: SplitBounds,
   containerWidth?: number,
-  shiftKey = false
+  shiftKey = false,
+  options: SplitKeyOptions = {}
 ): number | undefined {
-  if (key === 'Home') return clampSplitWidth(bounds.defaultWidth, bounds, containerWidth)
+  if (key === 'Home') {
+    return options.homeAction === 'min'
+      ? bounds.minWidth
+      : clampSplitWidth(bounds.defaultWidth, bounds, containerWidth)
+  }
+  if (key === 'End' && options.endToMax) {
+    return dynamicSplitMax(bounds, containerWidth)
+  }
   if (key !== 'ArrowLeft' && key !== 'ArrowRight') return undefined
-  const step = shiftKey ? splitLimits.shiftStep : splitLimits.step
+  const step = shiftKey ? (options.shiftStep ?? splitLimits.shiftStep) : (options.step ?? splitLimits.step)
   const direction = key === 'ArrowRight' ? 1 : -1
   const delta = side === 'left' ? direction * step : -direction * step
   return clampSplitWidth(width + delta, bounds, containerWidth)

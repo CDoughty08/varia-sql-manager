@@ -651,7 +651,7 @@ describe('FactGrid, CapabilityChips, RatioBar and FieldHintStrip clearing', () =
     expect(decls('.inspector-pane-fill').find(d => d.property === 'overflow')?.value).toBe('hidden')
     expect(decls('.inspector-pane-flow .property-field').find(d => d.property === 'grid-template-columns')?.value).toBe('minmax(156px, 28%) minmax(0, 1fr)')
     expect(decls('.inspector-pane-flow .property-field').find(d => d.property === 'column-gap')?.value).toBe('0')
-    expect(decls('.inspector-vitals-sash').find(d => d.property === 'touch-action')?.value).toBe('none')
+    expect(decls('.varia-sash').find(d => d.property === 'touch-action')?.value).toBe('none')
     expect(decls('.inspector-vitals-rail, .inspector-vitals-sash, .inspector-vitals-toggle', '@container inspector-frame (max-width: 680px)').find(d => d.property === 'display')?.value).toBe('none')
     expect(decls('.inspector-tab[aria-selected="true"]', '@media (forced-colors: active)').find(d => d.property === 'border-bottom-color')?.value).toBe('Highlight')
     expect(decls('.ratio-bar-seg, .ratio-bar-swatch', '@media (forced-colors: active)').find(d => d.property === 'forced-color-adjust')?.value).toBe('none')
