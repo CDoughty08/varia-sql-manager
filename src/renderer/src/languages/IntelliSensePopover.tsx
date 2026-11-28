@@ -198,7 +198,8 @@ export interface IntelliSensePopoverProps {
 
 /**
  * Unified Calm Pro Status Bar IntelliSense Popover for both BigQuery (3-wave summary, shared 512 MiB memory bar,
- * active query source health) and SQL Server (ScriptDom + IndexLookup completion/hover, STS diagnostics, Entra ID state, shared memory bar).
+ * active query source health) and SQL Server (in-process ScriptDom + IndexLookup completion, hover and diagnostics,
+ * plus shared memory bar).
  */
 export default function IntelliSensePopover({ open, autoFocus = false, popoverId, triggerRef, active, isBigQuery, language, issues, sqlSetting, onClose }: IntelliSensePopoverProps) {
   const { commands, connections, documents, indexCompletion, objectSearch, indexMemory, bigQueryStarred, menus } = useWorkbench()
@@ -295,18 +296,17 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
   if (!open) return null
 
   const waves = isBigQuery && connection ? summarizeBigQueryWaves(connection.server, indexEntry, starredProjects) : undefined
-  const isEntra = !isBigQuery && !!connection && ((connection.options.provider !== 'bigquery' && connection.options.authentication.startsWith('entra')) || !!connection.principalId?.startsWith('entra:'))
   const sqlStatus = indexEntry?.status
   const sqlIndexBuilding = !!indexEntry?.requestId || sqlStatus?.state === 'building'
   const sqlIndexReady = !sqlIndexBuilding && sqlStatus?.state === 'ready'
   const hasChildrenLeftOut = !!sqlStatus?.skipped.some(entry => entry.code === 'CHILDREN_LEFT_OUT')
   const issuesPaused = issues?.label === 'SQL analysis paused'
-  const entraDiagPaused = isEntra && issuesPaused
-  const headerTone: StatusTone = issues && /\berrors?\b/i.test(issues.label) ? 'critical'
-    : (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable' || (issues && /\bwarnings?\b/i.test(issues.label))) ? 'warning'
-      : (language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense indexing' || language?.label === 'IntelliSense starting' || (isBigQuery && waves?.state === 'building') || (!isBigQuery && connected && sqlIndexBuilding)) ? 'running'
-        : (!connected || language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || (issuesPaused && !entraDiagPaused) || (isBigQuery && waves?.state === 'none') || (!isBigQuery && connected && !sqlIndexReady)) ? 'neutral'
-          : 'success'
+  const headerTone: StatusTone = !connected ? 'neutral'
+    : issues && /\berrors?\b/i.test(issues.label) ? 'critical'
+      : (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable' || (issues && /\bwarnings?\b/i.test(issues.label))) ? 'warning'
+        : (language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense indexing' || language?.label === 'IntelliSense starting' || (isBigQuery && waves?.state === 'building') || (!isBigQuery && sqlIndexBuilding)) ? 'running'
+          : (language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none') || (!isBigQuery && !sqlIndexReady)) ? 'neutral'
+            : 'success'
 
   const headerStatusText = !connected
     ? 'Disconnected'
@@ -320,17 +320,13 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
         ? language.label
         : sqlIndexBuilding
           ? 'ScriptDom · Indexing'
-          : isEntra
+          : issuesPaused
             ? sqlIndexReady
+              ? 'ScriptDom + Index · Analysis paused'
+              : 'ScriptDom · Analysis paused'
+            : sqlIndexReady
               ? 'ScriptDom + Index'
               : 'ScriptDom · No index'
-            : issuesPaused
-              ? sqlIndexReady
-                ? 'ScriptDom + Index · Analysis paused'
-                : 'ScriptDom · Analysis paused'
-              : sqlIndexReady
-                ? 'ScriptDom + Index Ready'
-                : 'ScriptDom · No index'
 
   const handleRefresh = () => {
     onClose(true)
@@ -386,15 +382,15 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
         : sqlIndexReady ? 'ScriptDom + Index'
           : 'ScriptDom (no index)'
 
-  const sqlDiagTone: StatusTone = !connected || isEntra || issuesPaused ? 'neutral'
+  const sqlDiagTone: StatusTone = issuesPaused ? 'neutral'
     : issues?.label === 'SQL analysis unavailable' || issues?.label === 'SQL analysis incomplete' ? 'warning'
-      : issues?.label === 'Checking SQL' ? 'running'
-        : 'success'
-  const sqlDiagText = !connected ? 'Disconnected'
-    : isEntra ? 'Unavailable on Entra ID'
-      : issuesPaused ? 'Paused'
-        : issues?.label === 'SQL analysis unavailable' ? 'Unavailable'
-          : 'SQL Tools Service'
+      : issues?.label === 'Checking SQL' || (connected && sqlIndexBuilding) ? 'running'
+        : connected && sqlIndexReady ? 'success' : 'neutral'
+  const sqlDiagText = issuesPaused ? 'Paused'
+    : issues?.label === 'SQL analysis unavailable' ? 'Unavailable'
+      : !connected ? 'ScriptDom (syntax)'
+        : sqlIndexReady ? 'ScriptDom + Index'
+          : 'ScriptDom (syntax)'
 
   const waveBadge = (count: number, full: number, namesOnly: number, kind: 'starred' | 'discovered'): { readonly tone: StatusTone; readonly label: string } => {
     if (!waves || waves.state === 'none') return { tone: 'neutral', label: count === 0 && kind === 'starred' ? 'None' : 'Not built' }
@@ -540,9 +536,6 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
             )}
             {connected && hasChildrenLeftOut && (
               <p className="intellisense-popover-note">Some databases omitted columns to stay within the shared index memory budget. Raise the index memory limit in Options or click Refresh index.</p>
-            )}
-            {isEntra && (
-              <p className="intellisense-popover-note">Microsoft Entra ID uses ScriptDom + Search Objects index for completion, hover and cache refresh. Live error squiggles are not yet available on Entra ID.</p>
             )}
             {language?.detail && (language.label === 'IntelliSense unavailable' || language.label === 'IntelliSense off' || language.label === 'IntelliSense paused') && (
               <p className="intellisense-popover-note">{language.detail}</p>

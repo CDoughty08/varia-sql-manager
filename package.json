@@ -9,13 +9,12 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "npm run sqltools:prepare && npm run backend:build && electron-vite dev",
-    "sqltools:prepare": "node scripts/prepare-sqltools-service.mjs",
+    "dev": "npm run backend:build && electron-vite dev",
     "electron:prepare": "node scripts/prepare-electron.mjs",
     "backend:build": "dotnet build backend/Varia.Backend/Varia.Backend.csproj --configuration Debug",
     "typecheck": "tsc --noEmit",
-    "build": "npm run sqltools:prepare && npm run typecheck && npm run backend:build && electron-vite build",
-    "start": "npm run sqltools:prepare && electron-vite preview",
+    "build": "npm run typecheck && npm run backend:build && electron-vite build",
+    "start": "electron-vite preview",
     "backend:test": "node scripts/machine-lock.mjs shared dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release",
     "backend:test:agent-service": "node scripts/machine-lock.mjs exclusive dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --live-suite AgentService",
     "test": "npm run backend:test && vitest run",

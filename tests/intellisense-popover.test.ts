@@ -29,6 +29,7 @@ afterEach(() => {
 interface PopoverHarnessOptions {
   readonly isBigQuery: boolean
   readonly entra?: boolean
+  readonly disconnected?: boolean
   readonly sqlText?: string
   readonly indexEntry?: IndexEntry
   readonly starred?: readonly string[]
@@ -85,7 +86,7 @@ function mountEditorStatus(options: PopoverHarnessOptions) {
 
   const fixture = workbenchFixture()
   cleanups.push(fixture.dispose)
-  const tab = fixture.documents.create('Query1.sql', options.sqlText ?? '', options.isBigQuery ? 'sales' : 'SalesDB', connId)
+  const tab = fixture.documents.create('Query1.sql', options.sqlText ?? '', options.disconnected ? '' : (options.isBigQuery ? 'sales' : 'SalesDB'), options.disconnected ? undefined : connId)
   const reportErrorSpy = vi.spyOn(fixture.commands, 'reportError').mockImplementation(reportError)
   vi.spyOn(fixture.commands, 'execute').mockResolvedValue(true)
   const wb = {
@@ -206,19 +207,32 @@ describe('IntelliSensePopover accessibility, badges, Star action, and memory bar
     const entra = mountEditorStatus({
       isBigQuery: false,
       entra: true,
-      issues: { label: 'SQL analysis paused', detail: 'SQL error checking is not available for Microsoft Entra ID connections yet. Completion and hover are active via ScriptDom + Index.' },
+      issues: { label: 'SQL: no issues', detail: 'Analysis does not execute the query.' },
       indexEntry: {
         connectionId: 'sql-1', done: 2, total: 2, objects: 180,
         status: { state: 'ready', databases: 2, indexed: 2, objects: 180, modules: 0, cut: 0, skipped: [], definitions: true }
       }
     })
-    expect(entra.trigger.textContent).toContain('IntelliSense')
+    expect(entra.trigger.textContent).toContain('SQL: no issues')
     await act(async () => { entra.trigger.click() })
     const entraBadge = document.body.querySelector('.intellisense-popover-header .intellisense-popover-pill')!
     expect(entraBadge.textContent).toBe('ScriptDom + Index')
     expect(entraBadge.getAttribute('data-tone')).toBe('success')
     const entraPills = [...document.body.querySelectorAll('.intellisense-popover-rows .intellisense-popover-pill')].map(el => el.textContent)
-    expect(entraPills).toEqual(['ScriptDom + Index', 'Unavailable on Entra ID'])
+    expect(entraPills).toEqual(['ScriptDom + Index', 'ScriptDom + Index'])
+    expect(document.body.querySelector('.intellisense-popover')?.textContent).not.toContain('SQL Tools Service')
+    expect(document.body.querySelector('.intellisense-popover')?.textContent).not.toContain('Unavailable on Entra ID')
+    act(() => { entra.trigger.click() })
+
+    const disconnectedErrors = mountEditorStatus({
+      isBigQuery: false,
+      disconnected: true,
+      issues: { label: 'SQL: 1 error', detail: 'Syntax error.' }
+    })
+    await act(async () => { disconnectedErrors.trigger.click() })
+    const disconnectedBadge = document.body.querySelector('.intellisense-popover-header .intellisense-popover-pill')!
+    expect(disconnectedBadge.textContent).toBe('Disconnected')
+    expect(disconnectedBadge.getAttribute('data-tone')).toBe('neutral')
   })
 
   it('shows Not built / Pending / Indexing for BigQuery Wave 3a/3b before the index is ready and guards NaN memory usage', async () => {

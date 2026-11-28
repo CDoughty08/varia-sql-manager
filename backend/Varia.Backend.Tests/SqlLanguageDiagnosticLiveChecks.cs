@@ -19,7 +19,7 @@ internal static class SqlLanguageDiagnosticLiveChecks
         {
             var missing = await Analyze(id, 1, "SELECT f.MissingLanguageColumn FROM dbo.LanguageFixture AS f;", first);
             check(missing.Version == 1 && Mentions(missing, "MissingLanguageColumn") && missing.Items.All(item => item.Severity is >= 1 and <= 4),
-                "bundled SQL Tools binder publishes a missing live column diagnostic without executing the buffer");
+                "in-process ScriptDom + IndexLookup diagnostics publish a missing live column diagnostic without executing the buffer");
             var fixedColumn = await Analyze(id, 2, "SELECT f.FirstOnly FROM dbo.LanguageFixture AS f;", first);
             check(fixedColumn.Version == 2 && fixedColumn.Items.Count == 0 && !fixedColumn.IsIncomplete,
                 "fixing an unsaved column clears old semantic diagnostics in one immutable analysis pass");
@@ -33,11 +33,11 @@ internal static class SqlLanguageDiagnosticLiveChecks
             var afterRefresh = await Analyze(id, 4, refreshedText, first);
             check(refresh.Refreshed && afterRefresh.Items.Count == 0, "cache refresh invalidates retained diagnostic binding metadata and clears a newly valid column error");
             var alias = await Analyze(id, 5, "SELECT missingAlias.FirstOnly FROM dbo.LanguageFixture AS f;", first);
-            check(alias.Items.Count > 0 && Mentions(alias, "missingAlias"), "bundled SQL Tools binder diagnoses an unknown table alias");
+            check(alias.Items.Count > 0 && Mentions(alias, "missingAlias"), "in-process ScriptDom + IndexLookup binder diagnoses an unknown table alias");
             var syntax = await Analyze(id, 6, "SELECT ( FROM dbo.LanguageFixture;", first);
-            check(syntax.Items.Count > 0 && syntax.Items.All(item => SqlToolsLanguageService.PositionInText("SELECT ( FROM dbo.LanguageFixture;", item.Range.Start)
-                && SqlToolsLanguageService.PositionInText("SELECT ( FROM dbo.LanguageFixture;", item.Range.End)),
-                "bundled SQL Tools parser publishes syntax diagnostics with valid document ranges");
+            check(syntax.Items.Count > 0 && syntax.Items.All(item => TsqlLanguageService.PositionInText("SELECT ( FROM dbo.LanguageFixture;", item.Range.Start)
+                && TsqlLanguageService.PositionInText("SELECT ( FROM dbo.LanguageFixture;", item.Range.End)),
+                "in-process ScriptDom parser publishes syntax diagnostics with valid document ranges");
             const string sharedText = "SELECT f.SecondOnly FROM dbo.LanguageFixture AS f;";
             var wrongDatabase = await Analyze(id, 7, sharedText, first);
             var correctDatabase = await Analyze(secondId, 1, sharedText, second);

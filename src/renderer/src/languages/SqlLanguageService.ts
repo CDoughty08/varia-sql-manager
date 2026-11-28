@@ -105,7 +105,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private backendGeneration?: number
   /** The last complete completion answer: one document's at a time, the one being typed in. */
   private completionCache?: CompletionCache
-  /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero STS/SQL round-trips). */
+  /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero SQL round-trips). */
   private readonly lookupCaches = new Map<string, LookupCache>()
   private readonly indexSignatures = new Map<string, string>()
   private indexStateStore?: IndexStateStore
@@ -376,8 +376,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
    * Go to Definition: the object the name at `position` stands for, from `language.definition` on the model's own connection
    * and database (a query document's or a Peek model's). Null when nothing matches; undefined when it was superseded (a newer
    * request for the same document, or `token`), Peek's in-flight cap is full, or an edit or context change made the answer
-   * stale. A query with no live connection, one too large to send, and a failure throw their message. It needs no SQL Tools
-   * Service, so it serves every connection, and opens no backend document.
+   * stale. A query with no live connection, one too large to send, and a failure throw their message. It runs in-process
+   * against the connection, serves every authentication mode, and opens no backend document.
    */
   async definition(model: Monaco.editor.ITextModel, position: Monaco.Position, token: Monaco.CancellationToken = noCancellation): Promise<FoundDefinition | null | undefined> {
     if (!this.api.languageDefinition || token.isCancellationRequested) return
@@ -441,7 +441,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString()} characters.` }
     if (connection && !isLiveConnection(connection)) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
-    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use ScriptDom + Search Objects index for this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available via ScriptDom. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
+    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion, hover and error checking use ScriptDom + Search Objects index for this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion, hover and syntax checking are available via ScriptDom. Connect this query for schema suggestions and object checks. Ctrl+Space opens suggestions.' }
   }
   /** The connection and database a served model's requests use: its query document's, or its Peek model's. */
   private source(documentId: string): { connectionId?: string; database?: string } | undefined {
@@ -769,7 +769,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     return { connectionId, connectionKey: `${connection.id}:${connection.generation}`, backendEpoch: this.backendEpoch, database }
   }
 
-  /** Lazy schema preview drawer (`resolveCompletionItem`) for SQL Server: reads local `IndexLookup.cs` RAM index (~1 ms, 0 STS/SQL round-trips). */
+  /** Lazy schema preview drawer (`resolveCompletionItem`) for SQL Server: reads local `IndexLookup.cs` RAM index (~1 ms, 0 SQL round-trips). */
   private async resolveSuggestion(item: Monaco.languages.CompletionItem, token: Monaco.CancellationToken): Promise<Monaco.languages.CompletionItem> {
     const meta = this.resolveMeta.get(item)
     if (!meta || !this.api.languageLookup || this.disposed || token.isCancellationRequested) return item
@@ -868,7 +868,7 @@ function unquoteSqlName(value: string): string {
   if (value.startsWith('"')) return (value.length > 1 && value.endsWith('"') ? value.slice(1, -1) : value.slice(1)).replaceAll('""', '"')
   return value
 }
-/** Verifies an IndexLookup object kind is compatible with an STS LSP CompletionItemKind before enriching docs. */
+/** Verifies an IndexLookup object kind is compatible with a SQL Server CompletionItemKind before enriching docs. */
 function sqlKindMatches(lspKind: number | undefined, objectKind: string): boolean {
   if (lspKind === undefined) return true
   if (lspKind === 2 || lspKind === 3) return objectKind === 'procedure' || objectKind === 'function'

@@ -25,7 +25,7 @@ internal static class TsqlCompletionChecks
                 var cursor = marked.IndexOf('|');
                 var text = marked.Remove(cursor, 1);
                 var req = new LanguageRequest(Guid.NewGuid().ToString(), 1, text, new("sqlserver", Guid.NewGuid().ToString(), db),
-                    SqlToolsLanguageService.EndPosition(text[..cursor]));
+                    TsqlLanguageService.EndPosition(text[..cursor]));
                 return TsqlCompletionService.Complete(req, customLookup ?? lookup, db);
             }
 
@@ -34,7 +34,7 @@ internal static class TsqlCompletionChecks
                 var cursor = marked.IndexOf('|');
                 var text = marked.Remove(cursor, 1);
                 var req = new LanguageRequest(Guid.NewGuid().ToString(), 1, text, new("sqlserver", Guid.NewGuid().ToString(), db),
-                    SqlToolsLanguageService.EndPosition(text[..cursor]));
+                    TsqlLanguageService.EndPosition(text[..cursor]));
                 return TsqlHoverService.Hover(req, customLookup ?? lookup, db);
             }
 
@@ -442,8 +442,7 @@ internal static class TsqlCompletionChecks
 
             // (l) RefreshAsync cancellation via CloseAsync maps to STALE (never TIMEOUT), including when search.IndexAsync wraps OCE as RequestException("CANCELLED")!
             var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var refreshSvc = new SqlToolsLanguageService(
-                _ => null,
+            using var refreshSvc = new TsqlLanguageService(
                 activeDatabase: _ => "Sales",
                 refreshIndex: async (_, ct) =>
                 {

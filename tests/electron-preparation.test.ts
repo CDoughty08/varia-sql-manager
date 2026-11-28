@@ -96,7 +96,7 @@ describe('verified Electron preparation', () => {
   })
 
   it('prepares host smoke binaries and exact packaging targets before normal builder extraction', async () => {
-    const pkg = JSON.parse(await readFile('package.json', 'utf8')), hook = await readFile('build/sqltools-service-check.cjs', 'utf8')
+    const pkg = JSON.parse(await readFile('package.json', 'utf8')), hook = await readFile('build/before-pack.cjs', 'utf8')
     const { steps } = await import('../scripts/check.mjs')
     expect(pkg.scripts['electron:prepare']).toBe('node scripts/prepare-electron.mjs')
     expect(pkg.scripts['build:smoke']).toBe('node scripts/check.mjs --build')

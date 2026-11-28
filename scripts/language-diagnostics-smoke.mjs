@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 // Rendered Monaco squiggles, their hover and keyboard navigation through the real preload/main boundary. --live
-// substitutes the bundled SQL Tools binder and reads system metadata; neither mode executes the editor's SQL.
+// substitutes the in-process ScriptDom + IndexLookup binder and reads system metadata; neither mode executes the editor's SQL.
 const live = process.argv.includes('--live')
 const server = process.env.VARIA_TEST_SQL_SERVER
 const username = process.env.VARIA_TEST_SQL_USER, password = process.env.VARIA_TEST_SQL_PASSWORD
@@ -268,7 +268,7 @@ async function liveChecks() {
 try {
   const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile }
   delete env.ELECTRON_RUN_AS_NODE
-  if (live) for (const name of ['VARIA_TEST_BACKEND', 'VARIA_SQLTOOLS_SERVICE_PATH', 'VARIA_SQLTOOLS_SERVICE_SOURCE']) delete env[name]
+  if (live) delete env.VARIA_TEST_BACKEND
   else {
     await writeFile(join(control, 'language-enabled'), '')
     await writeFile(join(control, 'language-diagnostics'), '')

@@ -402,7 +402,7 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageComplete).toHaveBeenCalledTimes(4)
   })
 
-  it('filters a typed bracket against a name STS sends without filter text', async () => {
+  it('filters a typed bracket against a name the provider sends without filter text', async () => {
     const f = await fixture(), tab = f.documents.create('bracket-table.sql', 'SELECT * FROM [Cust', 'master')
     const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 19 } }
     f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: 'Customers', kind: 7, textEdit: { range, newText: 'Customers' } }] } })
@@ -460,7 +460,7 @@ describe('SQL language editor integration', () => {
     // A range outside the model is not believed.
     f.api.languageDefinition.mockResolvedValueOnce({ ok: true, value: { ...found, range: { start: { line: 3, character: 0 }, end: { line: 3, character: 2 } } } })
     expect(await f.service.definition(f.model(tab.id), at)).toBeNull()
-    // Definition needs no SQL Tools Service (no backend document to close), but it needs a connection.
+    // Definition opens no backend document to close, but it needs a connection.
     expect(f.api.languageClose).not.toHaveBeenCalled()
     const offline = f.documents.create('b.sql', 'SELECT * FROM dbo.Customer', 'master')
     await expect(f.service.definition(f.model(offline.id), at)).rejects.toThrow(definitionErrors.connectFirst)
@@ -488,7 +488,7 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageDefinition).toHaveBeenCalledTimes(2)
   })
 
-  it('serves definition without a configured SQL Tools Service, and drops an answer an edit made stale', async () => {
+  it('serves definition without a configured language provider, and drops an answer an edit made stale', async () => {
     const f = await fixture({ providers: [{ id: 'sqlserver', configured: false, completion: false, hover: false, reason: 'not installed' }] }); f.addConnection('connection-a')
     const tab = f.documents.create('a.sql', 'EXEC dbo.Load', 'Sales', 'connection-a')
     const answer = deferred<ApiResult<LanguageDefinition>>()
@@ -1338,7 +1338,7 @@ describe('SQL language features in Peek', () => {
 })
 
 describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => {
-  it('enriches STS table completion items from local IndexLookup via language.lookup with PK/UK/Identity, indexes, and FKs', async () => {
+  it('enriches SQL Server table completion items from local IndexLookup via language.lookup with PK/UK/Identity, indexes, and FKs', async () => {
     const f = await fixture()
     f.addConnection('sql-1')
     const tab = f.documents.create('q.sql', 'SELECT * FROM dbo.Ord', 'SalesDB', 'sql-1')
@@ -1405,7 +1405,7 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     expect(afterRefresh).toBe(orders)
   })
 
-  it('preserves existing STS documentation, filters non-object/mismatched kinds, splits bracketed/dotted/db.. names, and invalidates on indexState updates', async () => {
+  it('preserves existing provider documentation, filters non-object/mismatched kinds, splits bracketed/dotted/db.. names, and invalidates on indexState updates', async () => {
     const f = await fixture()
     f.addConnection('sql-1')
     type IndexStateSnap = { readonly indexes: Readonly<Record<string, { readonly requestId?: string; readonly status?: { readonly state: 'none' | 'building' | 'ready'; readonly builtAt?: string; readonly databases: number; readonly indexed: number; readonly objects: number; readonly modules: number; readonly cut: number; readonly skipped: readonly { readonly database: string; readonly code: string; readonly message: string }[]; readonly definitions: boolean } }>> }
@@ -1446,7 +1446,7 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     const list = await f.complete(tab.id, { lineNumber: 1, column: 27 } as Monaco.Position)
     const byLabel = (name: string) => list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === name)!
 
-    // db..table qualifier resolves against OtherDB with schema '*', and preserves existing STS documentation.
+    // db..table qualifier resolves against OtherDB with schema '*', and preserves existing provider documentation.
     const resolved = (await f.completion.resolveCompletionItem!(byLabel('[Orders]'), token()))!
     expect(f.api.languageLookup).toHaveBeenCalledWith({
       connectionId: 'sql-1',
