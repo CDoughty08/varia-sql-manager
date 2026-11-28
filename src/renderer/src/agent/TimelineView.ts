@@ -116,6 +116,8 @@ export class TimelineView implements Disposable {
     if (this.frame !== undefined) this.cancelFrame(this.frame)
     this.listening.abort()
     this.resize?.dispose()
+    this.options.root.style.removeProperty('--agent-timeline-grid-step')
+    this.options.root.style.removeProperty('--agent-timeline-grid-offset')
     for (const pool of this.lanes) for (const bar of pool.bars) bar.remove()
     for (const element of [...this.ticks, ...this.marks]) element.remove()
     this.tooltip.remove()
@@ -143,11 +145,20 @@ export class TimelineView implements Disposable {
       // Ticks on the wall clock's round times: the window starts at now, so the first is the next multiple of the step after it.
       const origin = secondsIntoDay(model)
       const first = Math.ceil((origin + start) / step) * step - origin
+      const stepPx = step / seconds * width
+      const offsetPx = (first - start) / seconds * width
+      this.options.root.style.setProperty('--agent-timeline-grid-step', `${stepPx}px`)
+      this.options.root.style.setProperty('--agent-timeline-grid-offset', `${offsetPx}px`)
       for (let at = first; at <= start + seconds; at += step) {
         const element = this.pooled(this.ticks, tick++, 'agent-timeline-tick', this.options.axis)
+        const x = (at - start) / seconds * width
         element.style.left = `${(at - start) / seconds * 100}%`
+        const label = timelineClock(model, at)
         const text = element.firstChild as Text
-        text.nodeValue = timelineClock(model, at)
+        text.nodeValue = label
+        const clearance = Math.max(44, label.length * 7 + 9)
+        const measured = element.offsetWidth
+        if (measured > 0 ? x + measured > width : x > width - clearance) text.nodeValue = ''
       }
       // Midnights (the start of each day) as faint lines across the axis.
       for (let at = Math.ceil((origin + start) / 86_400) * 86_400 - origin; at <= start + seconds; at += 86_400) {
@@ -155,6 +166,9 @@ export class TimelineView implements Disposable {
         element.style.left = `${(at - start) / seconds * 100}%`
         ;(element.firstChild as Text).nodeValue = ''
       }
+    } else {
+      this.options.root.style.removeProperty('--agent-timeline-grid-step')
+      this.options.root.style.removeProperty('--agent-timeline-grid-offset')
     }
     for (let index = tick; index < this.ticks.length; index++) this.ticks[index].hidden = true
     for (let index = mark; index < this.marks.length; index++) this.marks[index].hidden = true

@@ -90,7 +90,7 @@ export interface JobActivityServiceOptions extends CustomDocumentTargetOptions {
   readonly explorer?: Pick<ExplorerService, 'agentMenuNode'>
   /** The long-run registry: a start, stop or restart of Agent ending on a monitor's connection reads it again at once (AG-10). */
   readonly longRuns?: AgentLongRunSource
-  readonly api: Pick<VariaApi, 'executeObjectAction' | 'describeObject'>
+  readonly api: Pick<VariaApi, 'executeObjectAction' | 'describeObject'> & Partial<Pick<VariaApi, 'agentHistoryMessage' | 'writeClipboardText'>>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot' | 'subscribe'>
   readonly panes: Pick<PaneService, 'getSnapshot' | 'subscribe'>
   readonly groups?: Pick<EditorGroupService, 'getSnapshot' | 'subscribe'>
@@ -621,6 +621,24 @@ export class JobActivityService extends SnapshotStore<JobActivitySnapshot> imple
   }
 
   refresh(id: string): void { if (this.live(id)) this.handles.get(id)?.refresh() }
+
+  /** Reads the full untruncated message for a step row in the Last Run drawer when the grid preview was cut. */
+  async readLastRunMessage(connectionId: string, jobId: string, instanceId: number): Promise<string | undefined> {
+    if (!this.options.api.agentHistoryMessage) return undefined
+    const result = await this.options.api.agentHistoryMessage({ connectionId, requestId: this.newId(), jobId, instanceId })
+    return result.ok ? result.value.message : undefined
+  }
+
+  /** Copies text to the clipboard via Varia's preload bridge. */
+  async copyText(text: string): Promise<boolean> {
+    try {
+      if (this.options.api.writeClipboardText) {
+        const result = await this.options.api.writeClipboardText(text)
+        return result.ok
+      }
+    } catch { /* clipboard unavailable */ }
+    return false
+  }
 
   private live(id: string): boolean {
     const connectionId = this.get(id)?.connectionId

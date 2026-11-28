@@ -96,7 +96,7 @@ internal sealed class IndexFileRefused(IndexFileProblem problem) : Exception
 /// </summary>
 internal static class IndexFileContainer
 {
-    public const ushort Version = 1;
+    public const ushort Version = 2;
     public static ReadOnlySpan<byte> Magic => "VARIAIDX"u8;
     public const byte ClearMode = 0, SealedMode = 1;
     public const int KeyBytes = 32, SaltBytes = 32, TagBytes = 16, ClearHeaderTagBytes = 32;

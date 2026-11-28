@@ -12,7 +12,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, revealExplorerRow } from './fixtures/explorer-tree.mjs'
-import { connectDialogWindow, documentFrame, documentTab, gridPart, gridTones, liveGrid, liveGridSelector, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
+import { chooseJamMoreAction, connectDialogWindow, documentFrame, documentTab, gridPart, gridTones, jamTile, jamToolbar, liveGrid, liveGridSelector, menuItemNames, statusBar, submitConnect, toolbarButton } from './fixtures/ui.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -45,9 +45,8 @@ const rows = () => page.evaluate(({ grid, row, cell, tones }) => {
 }, parts)
 const calls = async method => parseCalls(await readFile(resolve(control, 'calls.jsonl'), 'utf8').catch(() => '')).filter(call => call.method === method).map(call => call.params)
 const views = () => page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'agent.jobs'))
-const tile = name => frame().getByRole('group', { name: 'Job counts', exact: true }).getByRole('button', { name: new RegExp(`^${name}: `) })
-const chip = name => frame().getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: new RegExp(`^${name}(?: [0-9,]+)?$`) })
-const bulkBar = () => frame().getByRole('toolbar', { name: 'Selected jobs', exact: true })
+const tile = name => jamTile(frame(), name)
+const bulkBar = () => jamToolbar(frame())
 const jobCell = name => grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^${name}$`) }) }).locator(gridPart.cell).nth(2)
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
@@ -96,8 +95,9 @@ try {
   await expect(overview.getByRole('listitem', { name: 'Warning: 1 job notifies no one when it fails', exact: true }).getByRole('button', { name: 'Backup', exact: true })).toBeVisible()
   await overview.getByRole('listitem', { name: 'Problem: 1 job failed in the last 24 hours', exact: true }).getByRole('button', { name: 'Show them', exact: true }).click()
   await expect(documentTab(page, tabName)).toHaveAttribute('aria-selected', 'true')
-  await expect(chip('Failed')).toHaveAttribute('aria-pressed', 'true')
-  await chip('All').click()
+  await expect(tile('Last run failed')).toHaveAttribute('aria-pressed', 'true')
+  await tile('Last run failed').click()
+  await expect(tile('Last run failed')).toHaveAttribute('aria-pressed', 'false')
   await page.getByRole('button', { name: 'Close Agent Overview - server-a', exact: true }).click()
   await expect.poll(async () => (await page.evaluate(() => window.__variaLive.snapshot().handles.filter(handle => handle.source === 'agent.overview'))).length).toBe(0)
   console.log("Overview passed: the Agent node's menu opens the Agent overview with its checks, and Show them opens Job Activity Monitor on its failed jobs.")
@@ -127,15 +127,15 @@ try {
   console.log('Tree passed: the Jobs folder shows each job\'s state chip, lists a job created elsewhere without Refresh, and ends its view when collapsed.')
 
   step = 'filters'
-  // A view chip asks the backend for that view; Clear filters shows every job again.
-  await chip('Disabled').click()
-  await expect(chip('Disabled')).toHaveAttribute('aria-pressed', 'true')
+  // A KPI tile asks the backend for that view; Clear filters shows every job again.
+  await tile('Disabled').click()
+  await expect(tile('Disabled')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(async () => (await rows()).map(row => row.name)).toEqual(['Purge'])
   expect((await calls('live.update')).some(update => update.probes?.some(probe => probe.probe === 'agent.jobs.list' && probe.view === 'disabled'))).toBe(true)
   await frame().getByRole('button', { name: 'Clear filters', exact: true }).click()
-  await expect(chip('Disabled')).toHaveAttribute('aria-pressed', 'false')
+  await expect(tile('Disabled')).toHaveAttribute('aria-pressed', 'false')
   await expect.poll(async () => (await rows()).map(row => row.name)).toEqual(['Nightly', 'Backup', 'Purge'])
-  console.log('Filters passed: a view chip narrows the list and Clear filters restores it.')
+  console.log('Filters passed: a KPI tile narrows the list and Clear filters restores it.')
 
   step = 'start'
   // Two jobs selected: Start sends one request per job and lists each one's result.
@@ -165,7 +165,7 @@ try {
   console.log('Start passed: Start sends one request per selected job, lists each result, and the status bar follows the job to its outcome.')
 
   step = 'last run'
-  // One job selected: the chevron shows its last run below the list, read through args.expand.
+  // One job selected: the Last run toggle shows its last run in a split drawer with inline message preview and shortcuts.
   await jobCell('Purge').click()
   await expect(bulkBar()).toContainText('1 job selected')
   await bulkBar().getByRole('button', { name: 'Last run', exact: true }).click()
@@ -173,10 +173,16 @@ try {
   const lastRun = frame().getByRole('region', { name: 'Last run of Purge', exact: true })
   await expect(lastRun).toBeVisible()
   await expect(liveGrid(page, 'Last run of Purge')).toContainText('(Job outcome)')
+  await expect(lastRun.getByRole('separator', { name: 'Resize last run message', exact: true })).toBeVisible()
+  const preview = lastRun.getByRole('region', { name: 'Step message preview', exact: true })
+  await expect(preview).toContainText('Executed as user: sa.')
+  await expect(preview.getByRole('button', { name: 'Copy', exact: true })).toBeEnabled()
+  await expect(lastRun.getByRole('button', { name: 'Open Job', exact: true })).toBeEnabled()
+  await expect(lastRun.getByRole('button', { name: 'Log File Viewer', exact: true })).toBeEnabled()
   expect((await calls('live.update')).filter(update => update.args).at(-1)?.args).toEqual({ expand: 'a1b2c3d4-0000-4000-8000-000000000003' })
   await lastRun.getByRole('button', { name: 'Hide the last run', exact: true }).click()
   await expect(lastRun).toHaveCount(0)
-  console.log('Last run passed: the chevron shows the selected job\'s last run in place and hides it again.')
+  console.log('Last run passed: the split drawer shows the selected job\'s last run and message preview and hides it again.')
 
   step = 'row menu'
   // AG-10: a right-click on a job opens the list's own menu (agent.jobs.context through MenuService), not Query Output's; its Refresh,
@@ -212,13 +218,13 @@ try {
   await jobCell('Nightly').click()
   await page.keyboard.press('Shift+ArrowDown')
   await expect(bulkBar()).toContainText('2 jobs selected')
-  await bulkBar().getByRole('button', { name: 'Change owner…', exact: true }).click()
+  await chooseJamMoreAction(page, frame(), 'Change owner…')
   const ownerForm = frame().getByRole('region', { name: 'Change the owner of 2 jobs', exact: true })
   await expect(ownerForm).toContainText('Nightly, Backup')
   await expect(ownerForm.getByRole('button', { name: 'Change owner', exact: true })).toBeDisabled()
   await ownerForm.getByLabel('New owner', { exact: true }).press('Escape')
   await expect(ownerForm).toHaveCount(0)
-  await bulkBar().getByRole('button', { name: 'Change owner…', exact: true }).click()
+  await chooseJamMoreAction(page, frame(), 'Change owner…')
   await ownerForm.getByLabel('New owner', { exact: true }).fill('ops')
   await ownerForm.getByLabel('New owner', { exact: true }).press('Enter')
   const ownerResults = frame().getByRole('log', { name: 'Change Job Owner results', exact: true })
@@ -237,7 +243,7 @@ try {
   await page.keyboard.press('Shift+ArrowDown')
   await page.keyboard.press('Shift+ArrowDown')
   await expect(bulkBar()).toContainText('3 jobs selected')
-  await bulkBar().getByRole('button', { name: 'Attach schedule…', exact: true }).click()
+  await chooseJamMoreAction(page, frame(), 'Attach schedule…')
   const scheduleForm = frame().getByRole('region', { name: 'Attach a schedule to 3 jobs', exact: true })
   await scheduleForm.getByRole('searchbox', { name: 'Search shared schedules', exact: true }).fill('nightly')
   await scheduleForm.getByRole('list', { name: 'Shared schedules', exact: true }).getByRole('button', { name: /^Nightly 02:30/ }).click()
@@ -267,7 +273,7 @@ try {
   }, { grid: runsSelector, row: gridPart.row, cell: gridPart.cell })
   await jobCell('Nightly').click()
   await expect(bulkBar()).toContainText('1 job selected')
-  await bulkBar().getByRole('button', { name: 'View history', exact: true }).click()
+  await chooseJamMoreAction(page, frame(), 'View history')
   await expect(documentTab(page, 'Log File Viewer - server-a')).toHaveAttribute('aria-selected', 'true')
   await expect.poll(runs).toEqual(['Nightly Failed', 'Nightly Succeeded'])
   expect((await calls('live.subscribe')).find(call => call.source === 'agent.history')).toMatchObject({ args: { jobs: [nightlyId], days: 7 }, probes: [{ probe: 'agent.history.list' }] })
@@ -275,6 +281,21 @@ try {
   await expect(sources.getByRole('checkbox', { name: 'Nightly', exact: true })).toBeChecked()
   await sources.getByRole('checkbox', { name: 'All jobs', exact: true }).check()
   await expect.poll(runs).toEqual(['Nightly Failed', 'Backup Succeeded', 'Nightly Succeeded'])
+  // Sources inline search filters jobs and Sources toggle collapses/restores the rail cleanly.
+  const sourceSearch = sources.getByRole('searchbox', { name: 'Filter jobs and logs', exact: true })
+  await sourceSearch.fill('Night')
+  await expect(sources.getByRole('checkbox', { name: 'Nightly', exact: true })).toBeVisible()
+  await expect(sources.getByRole('checkbox', { name: 'Backup', exact: true })).toHaveCount(0)
+  await sourceSearch.fill('')
+  await expect(sources.getByRole('checkbox', { name: 'Backup', exact: true })).toBeVisible()
+  const sourcesToggle = viewer().getByRole('button', { name: 'Sources', exact: true })
+  await expect(sourcesToggle).toHaveAttribute('aria-pressed', 'true')
+  await sourcesToggle.click()
+  await expect(sourcesToggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(sources).toHaveCount(0)
+  await sourcesToggle.click()
+  await expect(sourcesToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(sources).toBeVisible()
   await viewer().getByRole('toolbar', { name: 'History filters', exact: true }).getByLabel('Outcome', { exact: true }).selectOption('failed')
   await expect.poll(runs).toEqual(['Nightly Failed'])
   await liveGrid(page, 'Runs').locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^Nightly$/ }) }).locator(gridPart.cell).nth(1).click()

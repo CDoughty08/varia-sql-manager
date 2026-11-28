@@ -40,6 +40,8 @@ export interface InspectorTab {
   readonly modified?: boolean
   readonly problem?: boolean
   readonly disabled?: boolean
+  /** Keep mounted while inactive (hidden) so uncontrolled inputs such as PasswordField retain their DOM value across tab switches. */
+  readonly keepMounted?: boolean
 }
 
 export interface ObjectInspectorFrameViewProps {
@@ -522,10 +524,15 @@ export function ObjectInspectorFrameView(props: ObjectInspectorFrameViewProps) {
     <div ref={splitRef} className="inspector-split"
       onPointerLeave={() => clearHints?.('hovered')}
       onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) clearHints?.('focused') }}>
-      {currentTab && <div id={`${id}-panel`} role="tabpanel" aria-labelledby={tabDomId(id, currentTab.id)}
-        className={currentTab.layout === 'fill' ? 'inspector-pane-fill' : 'inspector-pane-flow'}>
-        {currentTab.content}
-      </div>}
+      {tabs.map(tab => {
+        const selected = tab.id === currentId
+        if (!selected && !tab.keepMounted) return null
+        return <div key={tab.id} id={selected ? `${id}-panel` : undefined} role="tabpanel" aria-labelledby={tabDomId(id, tab.id)}
+          hidden={!selected}
+          className={tab.layout === 'fill' ? 'inspector-pane-fill' : 'inspector-pane-flow'}>
+          {tab.content}
+        </div>
+      })}
       {showVitals && <>
         <div className="inspector-vitals-sash" role="separator" aria-orientation="vertical"
           aria-label={`Resize ${vitalsTitle} panel`} aria-valuemin={vitalsLimits.minWidth}

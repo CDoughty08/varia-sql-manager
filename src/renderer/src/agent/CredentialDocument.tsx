@@ -1,16 +1,19 @@
 // The Credential document (AG-8b, docs/agent-ui-rethink.md › rx-credential): the credential (name, identity, password behind "Change
 // identity and password", the provider for New Credential) and Used by (proxies, then their job steps). CredentialDocumentService keeps every
 // state; this only draws it. The password fields are uncontrolled and remount empty whenever the service empties the secret slot.
-import { credentialText, type CredentialDocumentModel, type CredentialDraft, type CredentialField, type CredentialProblem } from '../../../shared/actions/agent-proxy.ts'
+import { credentialText, subsystemLabel, type CredentialDocumentModel, type CredentialDraft, type CredentialField, type CredentialProblem } from '../../../shared/actions/agent-proxy.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
-import { subsystemLabel } from '../../../shared/actions/agent-proxy.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
+import { resizeScript, selectSection, setScriptOpen } from '../kit/document-frame'
+import { type Verb } from '../kit/DocumentFrame'
+import FactGrid from '../kit/FactGrid'
 import InlineError from '../kit/InlineError'
+import ObjectInspectorFrame, { type InspectorTab } from '../kit/ObjectInspectorFrame'
 import PasswordField from '../kit/PasswordField'
 import PropertyField, { FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
 import Skeleton from '../kit/Skeleton'
+import Switch from '../kit/Switch'
 import { credentialFieldLabels, credentialSections, type CredentialDocumentService, type CredentialDocumentState } from './CredentialDocumentService'
 
 const fieldId = (documentId: string, key: string) => `credential-${documentId}-${key}`
@@ -41,39 +44,45 @@ function CredentialSection(props: SectionProps) {
   const provider = { description: credentialText.providerHint, ...fieldText('provider', props) }
   const identityChanged = !!credential && draft.identity !== credential.identity
   const mismatch = state.secrets.secret === 'set' && !state.secrets.matches
-  return <div className="properties-fields credential-general">
-    <PropertyField id={ids.name} label="Name" {...name}>
-      <input id={ids.name} className="property-input" type="text" maxLength={agentLimits.nameChars} spellCheck={false} value={draft.name} disabled={!editable} readOnly={!!credential}
-        data-credential-focus={!credential || undefined} {...fieldAria(ids.name, name)} onChange={event => service.updateDraft(state.id, { name: event.target.value })} />
-    </PropertyField>
-    {credential && <PropertyField id={ids.change} label={credentialText.changeBoth} description={credentialText.neverRead}>
-      <input id={ids.change} type="checkbox" checked={draft.change} disabled={!editable} data-credential-focus onChange={event => service.setChange(state.id, event.target.checked)} />
-    </PropertyField>}
-    <PropertyField id={ids.identity} label="Identity" changed={identityChanged} {...identity}>
-      <input id={ids.identity} className="property-input" type="text" maxLength={agentLimits.credentialIdentityChars + 1} spellCheck={false} value={draft.identity} disabled={!editable || !open}
-        data-changed={identityChanged || undefined} {...fieldAria(ids.identity, { ...identity, changed: identityChanged })} onChange={event => service.updateDraft(state.id, { identity: event.target.value })} />
-    </PropertyField>
-    {open && <>
-      <PropertyField id={ids.secret} label="Password" {...secret}>
-        <PasswordField key={`secret-${state.secretEpoch}`} id={ids.secret} maxLength={agentLimits.credentialSecretChars + 1} disabled={!editable} onValue={value => service.setSecret(state.id, 'secret', value)} />
+  return <div className="agent-object-flow credential-flow">
+    <h2 className="agent-eyebrow">Credential</h2>
+    <div className="properties-fields credential-general">
+      <PropertyField id={ids.name} label="Name" {...name}>
+        <input id={ids.name} className="property-input" type="text" maxLength={agentLimits.nameChars} spellCheck={false} value={draft.name} disabled={!editable} readOnly={!!credential}
+          data-credential-focus={!credential || undefined} {...fieldAria(ids.name, name)} onChange={event => service.updateDraft(state.id, { name: event.target.value })} />
       </PropertyField>
-      <PropertyField id={ids.confirm} label="Confirm password" description="The password again.">
-        <PasswordField key={`confirm-${state.secretEpoch}`} id={ids.confirm} maxLength={agentLimits.credentialSecretChars + 1} disabled={!editable} aria-invalid={mismatch || undefined}
-          onValue={value => service.setSecret(state.id, 'confirm', value)} />
+      {credential && <PropertyField id={ids.change} label={credentialText.changeBoth} changed={draft.change} description={credentialText.neverRead}>
+        <Switch id={ids.change} checked={draft.change} disabled={!editable} changed={draft.change} data-credential-focus onChange={checked => service.setChange(state.id, checked)} />
+      </PropertyField>}
+      <PropertyField id={ids.identity} label="Identity" changed={identityChanged} {...identity}>
+        <input id={ids.identity} className="property-input" type="text" maxLength={agentLimits.credentialIdentityChars + 1} spellCheck={false} value={draft.identity} disabled={!editable || !open}
+          data-changed={identityChanged || undefined} {...fieldAria(ids.identity, { ...identity, changed: identityChanged })} onChange={event => service.updateDraft(state.id, { identity: event.target.value })} />
       </PropertyField>
+      {open && <>
+        <PropertyField id={ids.secret} label="Password" {...secret}>
+          <PasswordField key={`secret-${state.secretEpoch}`} id={ids.secret} maxLength={agentLimits.credentialSecretChars + 1} disabled={!editable} onValue={value => service.setSecret(state.id, 'secret', value)} />
+        </PropertyField>
+        <PropertyField id={ids.confirm} label="Confirm password" description="The password again.">
+          <PasswordField key={`confirm-${state.secretEpoch}`} id={ids.confirm} maxLength={agentLimits.credentialSecretChars + 1} disabled={!editable} aria-invalid={mismatch || undefined}
+            onValue={value => service.setSecret(state.id, 'confirm', value)} />
+        </PropertyField>
+      </>}
+      {!credential && model.providers.length > 0 && <PropertyField id={ids.provider} label="Provider" {...provider}>
+        <select id={ids.provider} className="property-input" value={draft.provider} disabled={!editable} {...fieldAria(ids.provider, provider)} onChange={event => service.updateDraft(state.id, { provider: event.target.value })}>
+          <option value="">None</option>
+          {model.providers.map(item => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </PropertyField>}
+      {credential?.provider && <p className="field-note">{`Provider: ${credential.provider}`}</p>}
+      {credential && !draft.change && editable && <p className="field-note">{credentialText.unchanged}</p>}
+    </div>
+    {credential && <>
+      <h2 className="agent-eyebrow">Lifecycle</h2>
+      <FactGrid facts={[
+        { id: 'created', label: 'Created', value: credential.created.replace('T', ' '), mono: true },
+        { id: 'modified', label: 'Last modified', value: credential.modified.replace('T', ' ').slice(0, 19), mono: true }
+      ]} />
     </>}
-    {!credential && model.providers.length > 0 && <PropertyField id={ids.provider} label="Provider" {...provider}>
-      <select id={ids.provider} className="property-input" value={draft.provider} disabled={!editable} {...fieldAria(ids.provider, provider)} onChange={event => service.updateDraft(state.id, { provider: event.target.value })}>
-        <option value="">None</option>
-        {model.providers.map(item => <option key={item} value={item}>{item}</option>)}
-      </select>
-    </PropertyField>}
-    {credential?.provider && <p className="field-note">{`Provider: ${credential.provider}`}</p>}
-    {credential && !draft.change && editable && <p className="field-note">{credentialText.unchanged}</p>}
-    {credential && <dl className="agent-job-facts">
-      <dt>Created</dt><dd>{credential.created.replace('T', ' ')}</dd>
-      <dt>Last modified</dt><dd>{credential.modified.replace('T', ' ').slice(0, 19)}</dd>
-    </dl>}
   </div>
 }
 
@@ -81,7 +90,8 @@ function UsedBySection({ state, model, draft }: Pick<SectionProps, 'state' | 'mo
   if (!model.credential) return <p className="field-note">{credentialText.usedByNone}</p>
   if (!model.usedBy) return <p className="field-note">{credentialText.usedByUnread}</p>
   const windows = /^[^\\\s]+\\[^\\]+$/.test(draft.identity.trim())
-  return <div className="credential-used-by">
+  return <div className="agent-object-flow credential-flow credential-used-by">
+    <h2 className="agent-eyebrow">Used By</h2>
     {model.usedBy.length === 0 ? <p className="field-note">{credentialText.usedByNone}</p> : <>
       <ul className="credential-uses" aria-label="Proxies and job steps that use this credential">{model.usedBy.map(use => <li key={use.proxy}>
         <span><Icon name="agent-proxy" />{`Proxy ${use.proxy}`}{use.subsystems.length > 0 && <span className="field-note">{` · ${use.subsystems.map(subsystemLabel).join(', ')}`}</span>}</span>
@@ -112,8 +122,15 @@ export default function CredentialDocument({ documentId }: { documentId: string 
     return section === 'credential' ? <CredentialSection {...props} /> : <UsedBySection state={state} model={model} draft={draft} />
   }
   const errorSection = problems.some(problem => problem.severity === 'error') || !!state.error?.field
-  const sections: FrameSection[] = credentialSections.filter(section => section.id !== 'usedBy' || !!model?.credential)
-    .map(section => ({ id: section.id, title: section.title, problem: section.id === 'credential' && errorSection, content: content(section.id) }))
+  const visibleSections = credentialSections.filter(section => section.id !== 'usedBy' || !!model?.credential)
+  const activeTab = visibleSections.some(section => section.id === state.frame.section) ? state.frame.section : 'credential'
+  const tabs: InspectorTab[] = visibleSections.map(section => ({
+    id: section.id,
+    title: section.title,
+    layout: 'flow',
+    ...section.id === 'credential' ? { keepMounted: true, modified: state.changes > 0, problem: errorSection } : { count: model?.usedBy?.length },
+    content: content(section.id)
+  }))
   const name = model?.credential?.name ?? (draft?.name || 'New Credential')
   const recovery = state.phase === 'loadFailed' || state.unread || state.error?.code === 'NOT_FOUND' || state.error?.code === 'STALE' ? [{ label: 'Reload', run: () => credentialDocuments.reload(state.id) }] : []
   const field = state.error?.field as CredentialField | undefined
@@ -126,7 +143,12 @@ export default function CredentialDocument({ documentId }: { documentId: string 
     {draft?.change && <p className="field-note"><Icon name="lock" />{credentialText.scriptSecret}</p>}
   </>
   const header = { title: name, subtitle: model?.credential ? 'Credential Properties' : 'New Credential', crumbs: [{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Security' }, { label: 'Credentials' }] }
-  return <FieldHints><DocumentFrame id={`credential-${state.id}`} {...header} verbs={verbs} banner={banner} sections={sections} frame={state.frame}
-    onFrame={frame => credentialDocuments.setFrame(state.id, frame)} attributes={{ 'data-credential': state.id }}
-    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void credentialDocuments.deliver(state.id, destination) }} hint={<FieldHintStrip />} /></FieldHints>
+  return <FieldHints resetKey={activeTab}><ObjectInspectorFrame id={`credential-${state.id}`} surface="full" {...header} verbs={verbs} banner={banner}
+    tabs={tabs} activeTab={activeTab} onSelectTab={id => credentialDocuments.setFrame(state.id, selectSection(state.frame, visibleSections, id))}
+    attributes={{ 'data-credential': state.id }}
+    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void credentialDocuments.deliver(state.id, destination) }}
+    scriptOpen={state.frame.scriptOpen} scriptSize={state.frame.scriptSize}
+    onScriptToggle={() => credentialDocuments.setFrame(state.id, setScriptOpen(state.frame, !state.frame.scriptOpen))}
+    onScriptResize={size => credentialDocuments.setFrame(state.id, resizeScript(state.frame, size))}
+    hint={<FieldHintStrip />} /></FieldHints>
 }

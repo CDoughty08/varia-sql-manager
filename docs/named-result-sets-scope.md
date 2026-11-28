@@ -16,12 +16,13 @@ naming one result never renumbers another. A name is a label over a result; its 
 that follows a result across runs (Pivot drafts, highlights, the Compare popover's remembered choice) follows its
 position. The query text is the only source of a name; there is no rename in the results pane.
 
-Code: the marker scan in `SqlScript.Parse`, binding in `backend/Varia.Backend/ResultNames.cs`, the optional `name` on
+Code: the marker scan in `SqlScript.Parse` (SQL Server) and `GoogleSqlScanner` (BigQuery), binding in
+`backend/Varia.Backend/ResultNames.cs` and `backend/Varia.Backend/BigQuery/BigQueryResultNames.cs`, the optional `name` on
 the result descriptor (`Contracts.cs`, `src/shared/contracts.ts`, `src/shared/ipc/descriptors.ts`, docs/ipc.md), and the
 naming functions in `src/renderer/src/results/ResultsService.ts`. Shared fixtures in `tests/fixtures/result-names/` hold
 the marker scan, statement classes, binding cases and refused characters; `ResultNameChecks.cs` (offline),
-`ResultNameLiveChecks.cs` (live) and `tests/result-name-descriptor.test.ts` read them. User-facing behaviour is in
-[results-tools.md](results-tools.md#named-results).
+`BigQueryResultNameChecks.cs` (offline), `ResultNameLiveChecks.cs` (live) and `tests/result-name-descriptor.test.ts` read
+them. User-facing behaviour is in [results-tools.md](results-tools.md#named-results).
 
 ## Syntax
 
@@ -127,6 +128,34 @@ which set a statement's first set will be. Main only passes the field through.
 250 ms) or nested deeper than 128 parentheses (`MaxParenDepth`, since ScriptDom's parse time grows faster than linearly
 with nesting and its recursion can overflow the stack) is not parsed, and its names are reported as not applied. The
 parse runs on a thread of its own with a large reserved stack.
+
+## BigQuery (GoogleSQL)
+
+BigQuery queries and multi-statement scripts support `#Name="…"` markers without changing the SQL sent to BigQuery
+(`GoogleSqlScanner.cs`, `BigQueryResultNames.cs`, `SqlService.BigQueryExecution.cs`).
+
+- **Comment forms.** In addition to `-- #Name="…"` and `/* #Name="…" */`, GoogleSQL `#` line comments accept both
+  `# #Name="…"` and bare `#Name="…"` (where `#` is both the GoogleSQL comment introducer and the marker prefix). Bare
+  `#Name` requires `=` after `#Name` (ignoring white space), so prose comments such as `#Name of report` or
+  `#Name: orders`, as well as `#Names`, `#standardSQL` and `# Name="…"`, stay ordinary comments. The same 128-character
+  limit, refused characters, whitespace collapsing, doubled `""` quotes, `MaxParseChars` (262,144) and `MaxNotes` (20)
+  bounds apply, and neither SQL nor names are ever logged.
+- **Single queries.** A marker preceding a top-level `SELECT`, `WITH`, `FROM` (pipe syntax) or parenthesized query names
+  its result whether it stays in memory (REST or Storage Read) or is windowed in BigQuery, and the name stays across
+  Load into memory, Re-run and re-attaching (`query.attach`, read from the job's own SQL when BigQuery returns it). If
+  multiple valid markers precede the same query statement, the last marker wins and each earlier marker receives an
+  informational note in Messages.
+- **Multi-statement scripts (`SCRIPT`).** Each child job from `jobs.list` carries `statistics.scriptStatistics.stackFrames`
+  (`startLine`/`startColumn`, 1-based in the submitted script; SQL text is never decoded). Top-level single-frame
+  statement children match their planned query statement by `(startLine, startColumn)` (or unique line when no other
+  top-level query starts on that line). When child jobs omit `stackFrames` (for example in emulator or minimal-fake
+  modes), deterministic top-level queries match positionally only when no control-flow or dynamic statement precedes
+  them and the child listing is complete.
+- **Safety rule.** A marker before or inside control flow (`IF`, `LOOP`, `WHILE`, `REPEAT`, `FOR`, `BEGIN … END`,
+  `CASE`, `CALL`, `EXECUTE IMMEDIATE`), inside a statement (such as before `UNION ALL`), on a non-result statement
+  (`DECLARE`, `SET`, DML, DDL, `BEGIN TRANSACTION`), on a repeated execution, in an oversized (> 262,144 characters) or
+  unbalanced script, or in a script whose children could not be listed is never misapplied: the result stays unnamed and
+  Messages explains why (capped at `ResultNames.MaxNotes`).
 
 ## Security and limits
 

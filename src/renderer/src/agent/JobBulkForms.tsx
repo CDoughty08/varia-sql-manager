@@ -11,6 +11,7 @@ import { momentOfText } from '../../../shared/actions/agent-schedule'
 import { formatRun, freq, nextRuns, noRunsReason, scheduleMatches, scheduleSentence, scheduleWhen } from '../../../shared/agent/schedule'
 import Icon from '../Icon'
 import InlineError from '../kit/InlineError'
+import PropertyField, { fieldAria } from '../kit/PropertyField'
 import { pickRows } from './JobSchedules'
 import type { JobActivityService, OwnerForm, ScheduleForm } from './JobActivityService'
 
@@ -58,14 +59,14 @@ function FormFrame({ id, service, form, title, submit, children }: FrameProps) {
 function OwnerFields({ id, service, form }: { readonly id: string; readonly service: JobActivityService; readonly form: OwnerForm }) {
   const inputId = useId()
   const denied = form.sysadmin === false
-  return <>
-    <label htmlFor={inputId}>New owner</label>
-    <input id={inputId} className="property-input" type="text" list={`${inputId}-logins`} maxLength={agentLimits.nameChars} spellCheck={false} autoFocus value={form.owner} disabled={denied}
+  const note = denied ? agentBulkText.ownerSysadmin : agentBulkText.ownerHint
+  return <PropertyField id={inputId} label="New owner" note={note}>
+    <input id={inputId} className="property-input agent-bulk-owner-input" type="text" list={`${inputId}-logins`} maxLength={agentLimits.nameChars} spellCheck={false} autoFocus value={form.owner} disabled={denied}
+      {...fieldAria(inputId, { note })}
       onChange={event => service.setFormOwner(id, event.target.value)}
       onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void service.submitForm(id) } }} />
     {form.owners && <datalist id={`${inputId}-logins`}>{form.owners.map(login => <option key={login} value={login} />)}</datalist>}
-    <p className="field-note">{denied ? <><Icon name="lock" />{agentBulkText.ownerSysadmin}</> : agentBulkText.ownerHint}</p>
-  </>
+  </PropertyField>
 }
 
 function ScheduleFields({ id, service, form }: { readonly id: string; readonly service: JobActivityService; readonly form: ScheduleForm }) {
@@ -77,37 +78,40 @@ function ScheduleFields({ id, service, form }: { readonly id: string; readonly s
   const picked = form.picked === undefined ? undefined : model.schedules.find(item => item.id === form.picked)
   const now = momentOfText(model.now)
   const runs = picked && now ? nextRuns(picked, now, 5) : []
-  return <div className="agent-schedules agent-bulk-schedules">
-    <div className="agent-schedule-list">
-      <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} autoFocus
-        value={form.search} onChange={event => service.setFormSearch(id, event.target.value)} />
-      {matches.length ? <ul aria-label="Shared schedules">
-        {matches.slice(0, pickRows).map(item => <li key={item.id}>
-          <button type="button" className="agent-schedule-item" aria-current={form.picked === item.id || undefined} onClick={() => service.pickFormSchedule(id, item.id)}>
-            <Icon name="agent-schedule" />
-            <span className="agent-schedule-item-text">
-              <span className="agent-schedule-item-name">{item.name}{item.freqType === freq.idle && model.idleDefined === false && <span className="agent-schedule-tag"> · never runs</span>}</span>
-              <span className="field-note">{scheduleWhen(item)}{item.enabled ? '' : ' · disabled'} · {item.jobCount} {item.jobCount === 1 ? 'job' : 'jobs'}</span>
-            </span>
-          </button>
-        </li>)}
-      </ul> : <p className="field-note">{form.search.trim() ? 'No shared schedule matches.' : 'This login sees no shared schedule.'}</p>}
-      {matches.length > pickRows && <p className="field-note">{`Showing ${pickRows} of ${matches.length}: search to narrow them.`}</p>}
+  const note = `${agentBulkText.scheduleHint}${model.sysadmin ? '' : ` ${agentBulkText.ownJobsOnly}`}`
+  return <PropertyField id={searchId} label="Shared schedule" note={note}>
+    <div className="agent-schedules agent-bulk-schedules">
+      <div className="agent-schedule-list">
+        <input id={searchId} className="property-input" type="search" placeholder="Search shared schedules" aria-label="Search shared schedules" maxLength={agentLimits.nameChars} autoFocus
+          {...fieldAria(searchId, { note })}
+          value={form.search} onChange={event => service.setFormSearch(id, event.target.value)} />
+        {matches.length ? <ul aria-label="Shared schedules">
+          {matches.slice(0, pickRows).map(item => <li key={item.id}>
+            <button type="button" className="agent-schedule-item" aria-current={form.picked === item.id || undefined} onClick={() => service.pickFormSchedule(id, item.id)}>
+              <Icon name="agent-schedule" />
+              <span className="agent-schedule-item-text">
+                <span className="agent-schedule-item-name">{item.name}{item.freqType === freq.idle && model.idleDefined === false && <span className="agent-schedule-tag"> · never runs</span>}</span>
+                <span className="field-note">{scheduleWhen(item)}{item.enabled ? '' : ' · disabled'} · {item.jobCount} {item.jobCount === 1 ? 'job' : 'jobs'}</span>
+              </span>
+            </button>
+          </li>)}
+        </ul> : <p className="field-note">{form.search.trim() ? 'No shared schedule matches.' : 'This login sees no shared schedule.'}</p>}
+        {matches.length > pickRows && <p className="field-note">{`Showing ${pickRows} of ${matches.length}: search to narrow them.`}</p>}
+      </div>
+      <div className="agent-schedule-detail">
+        {picked ? <div className="agent-schedule-preview" role="region" aria-label={`Shared schedule ${picked.name}`}>
+          <h3>{picked.name}<span className="field-note"> · {picked.enabled ? 'Enabled' : 'Disabled'}</span></h3>
+          <p className="agent-schedule-sentence"><strong>{scheduleSentence(picked)}</strong>{picked.owner ? ` Owner: ${picked.owner}.` : ''}</p>
+          <section aria-label="Next 5 runs">
+            <h4>Next 5 runs <span className="field-note">server time</span></h4>
+            {runs.length ? <ol className="agent-schedule-runs">{runs.map(run => <li key={`${run.date}-${run.time}`}>{formatRun(run)}</li>)}</ol>
+              : <p className="field-note">{now ? noRunsReason(picked, now) : 'The server time was not read.'}</p>}
+          </section>
+          <p className="field-note">{picked.jobCount} {picked.jobCount === 1 ? 'job uses' : 'jobs use'} it now.</p>
+        </div> : <p className="field-note">{agentBulkText.scheduleNone}</p>}
+      </div>
     </div>
-    <div className="agent-schedule-detail">
-      {picked ? <div className="agent-schedule-preview" role="region" aria-label={`Shared schedule ${picked.name}`}>
-        <h3>{picked.name}<span className="field-note"> · {picked.enabled ? 'Enabled' : 'Disabled'}</span></h3>
-        <p className="agent-schedule-sentence"><strong>{scheduleSentence(picked)}</strong>{picked.owner ? ` Owner: ${picked.owner}.` : ''}</p>
-        <section aria-label="Next 5 runs">
-          <h4>Next 5 runs <span className="field-note">server time</span></h4>
-          {runs.length ? <ol className="agent-schedule-runs">{runs.map(run => <li key={`${run.date}-${run.time}`}>{formatRun(run)}</li>)}</ol>
-            : <p className="field-note">{now ? noRunsReason(picked, now) : 'The server time was not read.'}</p>}
-        </section>
-        <p className="field-note">{picked.jobCount} {picked.jobCount === 1 ? 'job uses' : 'jobs use'} it now.</p>
-      </div> : <p className="field-note">{agentBulkText.scheduleNone}</p>}
-      <p className="field-note">{agentBulkText.scheduleHint}{model.sysadmin ? '' : ` ${agentBulkText.ownJobsOnly}`}</p>
-    </div>
-  </div>
+  </PropertyField>
 }
 
 /** The open form of a Job Activity Monitor document, if any. */

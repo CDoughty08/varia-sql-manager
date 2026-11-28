@@ -130,7 +130,7 @@ import { JobDocumentService } from '../agent/JobDocumentService'
 import { stepMenuProviders } from '../agent/step-menus'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec, type AlertDocumentService, type OperatorDocumentService, type OperatorsDocumentService } from '../agent/AlertOperatorDocumentService'
 import { agentContribution } from '../contributions/agent'
-import { AgentOverviewService } from '../agent/AgentOverviewService'
+import { AgentOverviewService, focusAgentOverview } from '../agent/AgentOverviewService'
 import { createAgentOverviewFixes } from '../agent/agent-overview-fixes'
 import { agentObjectsContribution } from '../contributions/agent-objects'
 import { SchedulesService } from '../agent/SchedulesService'
@@ -614,13 +614,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     openSsisExecution: (connectionId, executionId) => { operations.openExecution(connectionId, executionId); documents.focusActive() },
     focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-agent-job="${CSS.escape(id)}"]`)
-      ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+      ;(root?.querySelector<HTMLElement>('[data-agent-job-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"], .inspector-tab[tabindex="0"]'))?.focus()
     })
   })
   // The alert and operator documents and the grid (AG-7): the first field of a new one, otherwise the section list.
   const agentObjectFocus = (attribute: string) => (id: string) => focusLater(() => {
     const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
-    ;(root?.querySelector<HTMLElement>('[data-agent-object-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    ;(root?.querySelector<HTMLElement>('[data-agent-object-focus]') ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"], .inspector-tab[tabindex="0"]'))?.focus()
   })
   const alertDocuments = new AlertOperatorDocumentService(alertSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-alert') })
   const operatorDocuments = new AlertOperatorDocumentService(operatorSpec, { api, documents, files, connections, targetIdOf, focus: agentObjectFocus('data-agent-operator') })
@@ -633,7 +633,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The proxy and Credential documents (AG-8b): New's name field, else the first section's item in the list.
   const focusAgentObject = (attribute: string, field: string) => (id: string) => focusLater(() => {
     const root = document.querySelector<HTMLElement>(`[${attribute}="${CSS.escape(id)}"]`)
-    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    ;(root?.querySelector<HTMLElement>(`[${field}]:not(:disabled)`) ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"], .inspector-tab[tabindex="0"]'))?.focus()
   })
   const proxyDocuments = new ProxyDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-agent-proxy', 'data-agent-proxy-focus') })
   const credentialDocuments = new CredentialDocumentService({ api, documents, files, connections, targetIdOf, focus: focusAgentObject('data-credential', 'data-credential-focus') })
@@ -644,14 +644,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const logViewer = new LogViewerService({
     api, documents, panes, groups: editorGroups, live, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-history="${CSS.escape(id)}"] [role="grid"]`)?.focus()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-lfv="${CSS.escape(id)}"] [role="grid"]`)?.focus()),
     // A Recycle renames every Agent error log: Object Explorer's Error Logs folder of that server, if listed, reloads.
     recycled: connectionId => { const folder = explorer.folderNode(connectionId, { kind: 'agent' }, 'agentErrorLogs'); if (folder !== undefined) explorer.reconcile(folder) }
   })
   // SQL Server Agent's overview (AG-15): each check's fix runs through the surface that owns it; the overview itself writes nothing.
   const agentOverview = new AgentOverviewService({
     documents, panes, groups: editorGroups, live, connections, targetIdOf,
-    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-agent-overview="${CSS.escape(id)}"] .agent-check button, [data-agent-overview="${CSS.escape(id)}"] .agent-overview-head button`)?.focus()),
+    focus: id => focusLater(() => { focusAgentOverview(id) }),
     fixes: createAgentOverviewFixes({ jobActivity, jobDocuments, dialogs, operatorsDocuments, schedules, explorer, commands: () => commands })
   })
   const objectSearch = new ObjectSearchService({
@@ -668,7 +668,23 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     for (const connection of connections.liveBigQuery()) objectSearch.syncBigQueryStarred(connection.id)
   }
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
-  const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, { ensureIndex: id => objectSearch.ensureIndex(id) })
+  const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, {
+    ensureIndex: id => objectSearch.ensureIndex(id),
+    refreshScopes: (id, scopes) => objectSearch.refreshBigQueryScopes(id, scopes),
+    refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes),
+    indexState: objectSearch,
+    jitHydrateEnabled: () => settings.get('textEditor.googleSql.jitHydrate'),
+    reportError: message => commands.reportError(message),
+    starProject: async (connectionId, project) => {
+      const connection = connections.get(connectionId)
+      const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
+      if (!connection || !principal) return false
+      const result = await bigQueryStarred.setStarred(connectionId, principal, project, true)
+      if (!result.ok) { commands.reportError(result.error); return false }
+      objectSearch.refreshBigQuery(connectionId, { scope: { project } })
+      return true
+    }
+  })
   const bigQueryProperties = new BigQueryPropertiesService({
     api, documents, connections, results, scriptingOptions,
     billedGate: (connectionId, estimate, signal) => bigQueryCost.beforeScript(connectionId, estimate, signal),

@@ -6,8 +6,8 @@ SQL Server Agent ships in 0.10.0 ([docs/agent-plan.md](agent-plan.md), UI in
 Start Job at Step…, Stop Job, Enable, Disable, Rename, Delete and Properties, and the Agent node's Start, Stop, Restart and
 Properties; Search Objects finds jobs, alerts and operators, Script As scripts jobs, alerts, operators and proxies, Job
 Activity Monitor follows the jobs live, the Log File Viewer reads and deletes job history and reads Agent's error logs, the
-job document edits a job's General, Steps, Schedules, Notifications, Targets and Alerts or creates a job and shows its
-History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
+job document edits a job's General (including Targets), Steps, Schedules, Notifications & Alerts, and History tabs or
+creates a job and shows its History live, the Schedules document manages the shared schedules, the alert and operator documents and the Operators and
 notifications grid edit and create alerts, operators and who is notified, and the proxy and credential documents edit and
 create proxies and credentials. Help › Getting Started has a guide, Schedule work with SQL Server Agent, with a fictional
 schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
@@ -84,10 +84,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Job Activity Monitor node, and the palette's SQL Server Agent: Job Activity Monitor open one document per connection
   ("Job Activity Monitor - server"), focused if open. Its view of `agent.jobs.list` (every 5 s) and `agent.jobs.service`
   (every 10 s) lists every job the login may see from `sp_help_job`, with SSMS's columns, how long a running job has run
-  and a tone per row (last run failed, running, disabled). Tiles count Running, Last run failed, Between retries and
-  Disabled, and pressing one shows only those jobs; the View chips (All, Running, Failed, Disabled), the filter box (the
-  job's own columns, never the last run) and the column value filters narrow the list in backend memory, and Clear filters takes them all off. The Last run chevron
-  shows the selected job's last run below the list (`args.expand`: the job outcome and step rows from the newest
+  and a tone per row (last run failed, running, disabled). Slim KPI tiles count Running, Last run failed, Between retries and
+  Disabled, and pressing one filters to those jobs; a single grouped toolbar holds the filter box (matching the
+  job's own columns, never the last run), Clear filters, selection count, Start, Stop, Enable / Disable ▾, More actions ▾
+  (Change owner…, Attach schedule…, View history, Create Job Like This…) and the right-pinned Last run drawer toggle. The Last run drawer
+  shows the selected job's last run in a resizable split pane (`agent.jam.lastRunMessage`, persisted in localStorage) with the steps grid beside an inline step message preview (fetching full truncated messages via `agent.historyMessage`, with Copy, Open Job, and Log File Viewer shortcuts; `args.expand` reads the job outcome and step rows from the newest
   `lastRunRows` rows of `sp_help_jobhistory`; when that read stops inside the run, the panel says only its newest steps
   show, or that no finished run is among those rows; a job that left the list says so).
   Start, Stop, Enable and Disable act on the selected jobs (at most `startJobs`), one AG-2 request per job in turn with
@@ -116,9 +117,10 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Agent overview** (AG-15; `agent.overview`, docs/live.md; the rules in `src/shared/agent/overview.ts`, `AgentOverviewService`
   and `AgentOverview.tsx` in the renderer). Agent Overview on the Agent node's menu, or the palette's SQL Server Agent: Agent
   Overview (Ctrl+Q finds it as a command), opens one document per connection ("Agent Overview - server"). Its header shows
-  Agent's state, startup type, service account and the server's version, with Check again and Properties; tiles count jobs,
-  jobs failed in the last 24 hours (by the server's clock), running jobs and alerts (those fired this week); then the health
-  checks, each with a severity, the jobs or schedules it names (each name a link in its sentence that opens it) and a fix that opens the usual editor
+  Agent's state and startup type pill with Properties and Check again, above a compact fact line with Service Account,
+  the server's version and last-checked timestamp; clickable KPI tiles count Total jobs, Failed (24 h), Running now and
+  Alerts (7 d) (opening Job Activity Monitor or Operators and Notifications); then grouped health checks (**Needs attention**,
+  **Notes**, **Passing**, **Not checked**), each with a severity, clickable object chips for named jobs or schedules and a fixed-width right-aligned fix button that opens the usual editor
   or confirmation. Nothing is written by the overview itself:
   - **Agent not running** (only then): Start for sysadmin on Windows, AG-2's service control on the Agent node.
   - **Failed jobs**: a job whose last run failed and started within 24 hours ("(retrying)" while it retries); Show
@@ -159,14 +161,18 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Job document** (`agentJob`, object actions, docs/object-actions.md). One tab per job ("Job Properties - Nightly"), opened
   from a job's node (Enter, double-click or Properties), from Job Activity Monitor, from Ctrl+Q's object search and from the
   palette's SQL Server Agent: Open Job… (the job selected in Job Activity Monitor or Object Explorer, else a pick of the
-  server's jobs). The header shows the job's live state from `agent.jobs.watched` (running and its step, or idle with the last
-  outcome), Start with a step menu (Start once at step, which leaves the job's start step alone), Stop while it runs, Reload
-  and Save. Sections: **General** (name, owner, category, description, enabled; only sysadmin changes the owner),
-  **Notifications** (e-mail, page, net send, Windows event log and delete, each a level and an operator; whether Database Mail
-  can send, read through `sysmail_help_profile_sp` where the login may, and an operator's missing address or pager duty hours
-  as warnings), **Targets** (this server only; multi-server targets come later) and **Alerts** (the alerts that run the job;
-  Remove for sysadmin only, since msdb grants `sp_update_alert` to no Agent role; New alert for this job… opens New Alert with the job as its response).
-  **Steps** is a master/detail page: the list shows each step's number, type and where it goes on success and on failure, marks
+  server's jobs). The `ObjectInspectorFrame` header shows breadcrumbs, live status from `agent.jobs.watched` (running and
+  its step, or idle with the last outcome), Start with a step menu (Start once at step, which leaves the job's start step
+  alone), Stop while it runs, a toggleable Vitals right rail (`Live Status`, `Identity`, `Problems`), Reload and Save, above
+  a Hero KPI strip (`Last Run`, `Duration`, `Next Run`, `Owner`). Tabs (`Ctrl+1`..`5`, via `ObjectInspectorFrame`'s `Ctrl+1..9` / `⌘1..9`): **General** (name, owner, category,
+  description, enabled, and **Targets**—this server only; multi-server targets come later; only sysadmin changes the owner),
+  **Steps**, **Schedules**, **Notifications & Alerts** (e-mail, page, net send, Windows event log and delete, each a level
+  and an operator; whether Database Mail can send, read through `sysmail_help_profile_sp` where the login may, and an
+  operator's missing address or pager duty hours as warnings, plus the alerts that run the job with Remove for sysadmin only,
+  since msdb grants `sp_update_alert` to no Agent role, and `New alert for this job…` opening New Alert with the job as
+  its response; `Changes from source` replaces `History` when copying a job), and **History**.
+  **Steps** is a persisted resizable master/detail page (`ResizableSplit`): the list shows each step's number, compact type
+  badge (`TSQL`, `SSIS`, `PS`, `Cmd`, `SSAS`, `Repl`) and equal-width columns for where it goes on success and on failure, marks
   the Start step, and reorders by drag, Move up and Move down, or Alt+Up and Alt+Down (Move Step Up and Move Step Down, in the
   Steps section but not in a field or the step's command editor, where the keys open a list or move lines); moving the step shown
   keeps it shown. Go-to targets follow the step they name, since the draft keys
@@ -257,7 +263,7 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   **Create Job Like This…** (AG-6e; a job's menu after New Job…, Job Activity Monitor's bar for the one job selected, the palette, which
   copies the active job document or asks for a job, and New Job's Copy an existing job) opens New Job filled from the job's describe
   ("Copy of …"): General, Notifications and every step with its flow, retries, output and logging, each step new to msdb (its
-  `sp_add_jobstep`). It is saved disabled unless Enable when saved is ticked, owned by the login (sysadmin keeps the source's owner and
+  `sp_add_jobstep`). It is saved disabled unless Enable when saved is turned on, owned by the login (sysadmin keeps the source's owner and
   may change it), and each schedule is shared (`sp_attach_schedule` under its version guard) by default, or copied as a new schedule
   (`sp_add_jobschedule`, named "… (copy)"), or left out; a schedule whose version could not be read can only be copied. History and the
   alerts that run the source are not copied: an alert runs one job. A **Changes from source** section leads the document: Replace
@@ -280,8 +286,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   refusing a step that takes another's old name. New Job's steps are its `sp_add_jobstep` calls between `sp_add_job` and
   `sp_add_jobserver`. A refused step call lands on Steps ("Saving step 2 was refused"). The Schedules section's calls follow the steps (below).
   Pager duty is not yet checked against the job's schedules.
-  **Create several…** (AG-6f; mocks `rx-create-several`, `rx-create-several-review`) on Changes from source turns the copy into a table in
-  the same tab ("Create several jobs"), one row per new job; the copy as it stands is the template. An empty cell uses the template's value
+  **Create several…** (AG-6f; mocks `rx-create-several`, `rx-create-several-review`) on Changes from source turns the copy into a full-height table in
+  the same tab ("Create several jobs", `fill` layout without nested vertical scrollbars), one row per new job; the copy as it stands is the template. An empty cell uses the template's value
   (grey); a typed one overrides that field for that row only (accent edge); clearing it goes back to the template's. Columns opens with Name,
   each step's key fields but its command, each schedule's Share, Copy or Leave out, and Enabled, and offers every other field: Owner
   (sysadmin only), Category, Description, the e-mail and pager operators and levels, the event log and delete levels, and each step's
@@ -299,7 +305,7 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   **Enable the created jobs** reads the job list once for their ids, then enables each (AG-2's `enable`) with its own result. No new
   RPC or backend write.
 - **Schedules** (`src/shared/agent/schedule.ts` for the encoding, sentences, presets, runs and free-slot check;
-  `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules, each
+  `src/shared/actions/agent-schedule.ts` for the saves). The job document's **Schedules** section lists the job's schedules beside a persisted resizable splitter (`agent.job.schedules`), each
   with its short "when" and whether other jobs share it, and edits the selected one in place with SSMS's own fields (Occurs,
   Daily frequency, Duration; an ending time of 00:00 is 23:59:59, as msdb stores it; past SSMS's own limits, such as every 365 days, which msdb accepts, the editor warns instead of refusing, and a job's schedule as read is checked only once it is changed), preset chips that only fill those fields ("Every day at…", "Weekdays at…", "Weekly on…", "Every N
   minutes", "Monthly on day…", and under More… agent start, CPU idle and one time; Managed Instance offers no CPU idle and refuses a schedule set to it, and an idle schedule warns where Agent has no idle CPU condition), SSMS's sentence, the next five runs in server
@@ -321,7 +327,7 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   index, so a schedule changed since it was read is `STALE` on the Schedules field and nothing commits. A new job has nothing to
   compare: its attached schedules are read again and take the new versions, keeping your edits, and the next Save names them.
 - **History** (AG-6d; `src/shared/agent/job-history.ts` for the rules, `JobHistoryService` and `JobHistory.tsx` in the renderer). The job
-  document's last section shows the job's own runs in place, as SSMS's View History shows them in the Log File Viewer: a bar per run for the
+  document's last section shows the job's own runs beside a persisted resizable splitter (`agent.job.history`), as SSMS's View History shows them in the Log File Viewer: a bar per run for the
   newest 14 finished runs with the job's **usual** time as a line ("usual 18 min": the median of its newest 10 succeeded runs, whatever
   the filter), the runs newest first with All and Failed, and beside them the selected run (the newest until another is picked): its
   start in server time, its duration against the usual one, who invoked it and its outcome (both from msdb's job outcome message),
@@ -345,12 +351,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   usual time, since status colours are never a series; a sparkline has no crosshair, so each run's start, outcome and duration
   are read in the runs list beside it.
 - **Schedules document** (Manage Schedules on the Jobs folder's menu and the palette; New › Schedule… on the Agent node). One
-  document per connection replaces SSMS's Manage Schedules dialog: a grid of the shared schedules (name, when, Enabled, how many
-  jobs, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
-  beside it the selected schedule's editor (the same one as the job document's), the jobs that use it with Detach and Attach a
+  document per connection replaces SSMS's Manage Schedules dialog inside a `DocumentFrame` header with connection breadcrumbs, a shared-count pill, a `Grid | Timeline` switch, `Refresh`, and primary `New schedule`: a Calm Pro grid of the shared schedules (name, when, inline `Switch` Enabled toggle, tabular Jobs count, monospace **Next Run**, owner) with All, Unused and Disabled views and a filter that matches schedule names, job names (sysadmin, whose read has the links) and when schedules run, and
+  beside a persisted resizable splitter the selected schedule's editor (with a leading tinted summary bar, aligned form rows, and side-by-side **Next 5 runs** and **Jobs using it** cards), Detach and Attach a
   job (only jobs the login owns, or any for sysadmin, as msdb allows, on any schedule the login can see; another login's schedule takes only these job changes), and Save. Edits are kept per schedule until saved, each guarded by the schedule as its edit began, so neither Refresh nor
   the read after another save lets it pass over someone else's change; a STALE save reads again and shows their change with the
-  user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** box saves at once. Below sysadmin it is
+  user's on top, for the user to save again. Closing the tab with unsaved ones asks Save / Don't Save; Save (and File › Save) saves each changed schedule in turn and stops at the first refused. Only a save under way stops the close. The grid's **Enabled** switch saves at once. Below sysadmin it is
   offered on a schedule another login owns only to a member of msdb's SQLAgentOperatorRole (read once through `agent.profile`),
   whose `enable` and `disable` send `sp_update_schedule` only the schedule and `@enabled`, as msdb allows that role; the
   schedule's other settings stay read-only to it. New schedule and Duplicate edit a draft that
@@ -381,9 +386,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Schedules Timeline** (the Schedules document's Timeline view, `src/shared/agent/timeline.ts`, `TimelineView.ts`). A Gantt
   chart from now over the next 24 hours or 7 days: for sysadmin one row per job, from the links and each job's usual duration
   (a job without one drawn for a minute), below sysadmin one row per schedule some job uses; rows in the order they next run, disabled jobs
-  and schedules dashed. Runs of two jobs that meet are flagged and listed under the chart as "Overlap 02:30–02:48: Backup
+  and schedules dashed. Runs of two jobs that meet are flagged and listed under the chart in a collapsible **Overlaps** drawer (shown inline for a single overlap and expandable when multiple overlaps occur) as "Overlap 02:30–02:48: Backup
   starts once during Nightly." with Open on the schedule (at most 20, the rest counted), and a job whose usual run outlasts the
-  gap to its next start is called out, as Agent skips a start while the job runs. Zoom in and out (Ctrl+wheel, + and -), scroll
+  gap to its next start is called out, as Agent skips a start while the job runs. Pixel-aligned vertical gridlines track the time axis ticks; zoom in and out (Ctrl+wheel, + and -), scroll
   (the slider, Shift+wheel), Show all; hovering a run shows its times, schedule and usual run; clicking it or Enter opens the
   job, Shift+click or Shift+Enter its schedule. The chart is a grid: Up and Down move between rows, Left, Right, Home and End
   between runs, each announced. It draws at most 200 rows and 40,000 runs, shared evenly over the rows (at most 2,000 a row),
@@ -391,20 +396,20 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
 - **Alerts and operators** (`actions` dialogs `agentAlert`, `agentOperator`, `agentOperators`; `src/renderer/src/agent/`). An alert or
   operator opens in its own tab from its node (Enter, double-click or Properties) or the palette's Open Alert… and Open Operator…;
   the Agent node's New › Alert… and Operator…, the Alerts and Operators folders' New, and the palette open New Alert and New Operator,
-  which create nothing until Create. The **alert document** is one screen: **When** (a SQL Server event: an error number or a
+  which create nothing until Create. The **alert document** is one inspector tab: **When** (a SQL Server event: an error number or a
   severity, a database and a "Message contains" text; or a performance condition: object, counter, instance, comparison and value,
   with the counter's current values read through `agent.counterValues`; msdb wants a value that starts with a digit, and an instance for a counter that has them), **Then** (a job to run, and the operators to notify as chips
   with E-mail, Pager and Net send toggles, an "Add an operator" pick and an inline New operator created in the same save) and
-  **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message). The header shows
-  the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** has General (name, enabled,
-  e-mail, pager and net send addresses, Send test e-mail), Pager duty (the days and each day kind's hours) and Notifications (the
+  **Options** (the delay between responses, the error text in e-mail, pager or net send, an additional message) and **Activity** timestamps. The header shows
+  the history: when it last fired and how often. A WMI alert's When is read-only; its Then and Options can change. The **operator document** uses three inspector tabs: **General** (name, enabled,
+  e-mail, pager and net send addresses, Send test e-mail, and **Activity** timestamps), **Pager duty** (the days and each day kind's hours) and **Notifications** (the
   alerts that notify it, each a method toggle, and the jobs that notify it, read-only). Save sends only what changed as one batch
   in one transaction (`AgentSql.ObjectBatch`): an existing object's opens with its identity guard (name and id; 50010 `NOT_FOUND`
   when the object was replaced), every call checks its return code, and a refusal names the call that failed with the document's
   edits kept. The Script drawer shows the same calls with literal values. **Operators and Notifications…** (the Alerts and Operators folders'
-  menus or the palette) opens the grid (read-only past the notifications it reads at once): one row per alert, one column per operator, each cell cycling none, E-mail, E-mail and Pager,
-  Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its side pane opens
-  the selected operator, sends a test e-mail or deletes it (not while the grid is read-only, when it cannot count what notifies the operator), and a table below the grid lists the jobs that notify operators. **Add recommended alerts…**
+  menus or the palette) opens a two-tab inspector (**Alerts Matrix** and **Jobs Notifying Operators**, read-only past the notifications it reads at once): one row per alert, one column per operator, each pill cell cycling none, E-mail, E-mail and Pager,
+  Pager; Save sends one `agentAlert` save per changed alert, in turn, and says how many saved if one is refused. Its resizable side pane opens
+  the selected operator, sends a test e-mail or deletes and reassigns it (not while the grid is read-only, when it cannot count what notifies the operator), and the **Jobs Notifying Operators** tab lists the jobs that notify operators. **Add recommended alerts…**
   creates any of severity 17 and 19 to 25 and errors 823 to 825 the server has no alert for (any name), each with an operator if
   one is picked. **Send test e-mail** runs `sp_notify_operator` through Agent's own Database Mail profile, refused before anything
   is sent when Agent has none, the operator is disabled or Database Mail XPs is off; the Agent mail check (Database Mail XPs, a profile, Agent using it) shows on the operator document
@@ -416,8 +421,8 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Account Properties - FileShareWriter") opens from a proxy's node (Enter, double-click or Properties); **New Proxy…** from the
   Proxies folder, a subsystem's folder (the proxy starts active to it), Unassigned Proxies or a proxy, and **Proxy…** from the
   SQL Server Agent node's New submenu (SQL Server only: Managed Instance has no proxies). Only sysadmin reads or changes
-  proxies; below it the describe answers `PERMISSION_DENIED`. One screen: **Proxy** (name, the credential, description,
-  enabled), **Subsystems** (every subsystem but T-SQL), **Principals** (logins, msdb roles and server roles that may use it
+  proxies; below it the describe answers `PERMISSION_DENIED`. Three inspector tabs: **Proxy & Subsystems** (name, credential, description,
+  enabled switch, and every subsystem but T-SQL), **Principals** (logins, msdb roles and server roles that may use it
   besides sysadmin, picked or typed) and **References** (the job steps that run as it). The credential is picked, or created
   in place (name, identity, password and its confirmation) for a login with ALTER ANY CREDENTIAL. **Save** sends only what
   changed under the `proxy_id` the describe read (a proxy renamed or replaced since is `NOT_FOUND`) in two batches: first, in
@@ -427,9 +432,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   keeps the draft; a refused second batch leaves the rest saved, so the document reads the proxy again and shows which
   principal was refused. msdb ignores a grant to a sysadmin member, who may use every proxy anyway. A **credential's
   document** ("Credential Properties - …", Security › Credentials, on SQL Server and Managed Instance; New Credential… on the
-  folder or a credential) shows its name, identity, creation and modification dates, and **Used by** (the proxies that run as
-  it with their subsystems, then their job steps; sysadmin only). SQL Server never returns a secret, so the password starts
-  empty behind **Change identity and password**, and Save sends the identity and the password together (ALTER CREDENTIAL sets
+  folder or a credential) has **Credential** (name, identity, creation and modification dates) and **Used by** (the proxies that run as
+  it with their subsystems, then their job steps; sysadmin only) tabs. SQL Server never returns a secret, so the password starts
+  empty behind the **Change identity and password** switch, and Save sends the identity and the password together (ALTER CREDENTIAL sets
   both) behind a STALE guard on the credential's id, name and `modify_date`. Without ALTER ANY CREDENTIAL it opens read-only.
   New Credential lists the server's enabled cryptographic providers when it has any. **Secrets**: the password fields are
   uncontrolled; what is typed lives only in the renderer's per-document secret slot (a snapshot learns only whether it is
@@ -442,11 +447,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   (`AgentSql.LintProxySave`, `CredentialSql.Lint`).
 - **Log File Viewer** (`agent.history`, docs/live.md). Job › View History, the Agent node's and the Jobs folder's View
   History, Job Activity Monitor's View history (the selected jobs) and the palette's SQL Server Agent: View History open one
-  document per connection ("Log File Viewer - server"), focused if open with its sources replaced. **Select logs** lists every
+  document per connection ("Log File Viewer - server"), focused if open with its sources replaced. Its header offers a collapsible **Sources** toggle (with focus rescue on collapse), `Refresh`, `Delete History…`, `Recycle…` (sysadmin), and the `Live` pill. A persisted resizable **Select logs** rail includes inline source search (`Filter jobs & logs…`), grouped **Jobs** and **Agent Error Logs** counts, and a compact retention footer, listing every
   job the login may see, with All jobs; at most `historyJobs` may be checked unless all are. The runs grid (newest first) reads
   `sp_help_jobhistory` with `@mode = N'FULL'`, which every Agent role may call, for each checked job by its id (a multi-server job, which msdb answers by id with its target servers, from the every-job read) or for all, with
   `@start_run_date` for the window (24 h, Last 7 days, 30 days, All; the server's clock, read in the same sample), at most
-  `historyRows` rows (once the rows read reach it, checked jobs not yet read are left out, and the note says how many; a checked job deleted since is skipped); a read that stops there says it was truncated, and a note gives the server's history caps. The backend
+  `historyRows` rows (once the rows read reach it, checked jobs not yet read are left out, and the note says how many; a checked job deleted since is skipped); a read that stops there says it was truncated. The backend
   groups rows into runs by each job's outcome rows: the steps after one outcome row and up to the next belong to the next
   run. Steps with no outcome row read In progress when the job is running and started at or before them, Unknown (Agent stopped
   or restarted during the run) otherwise, or In progress or unknown when the Agent XPs option is 0 and the service is not read
@@ -454,9 +459,9 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   their start, so a run Agent never finished stays Unknown in any window; a run that started before the read (one longer than
   about a day) has its outcome row outside it, so its later steps read Unknown too, with a message that says so and that a wider
   window reads it; steps of a run that spans a daylight-saving fall-back
-  can read as an Unknown run, as msdb stores local times. The Outcome, Message contains and Step filters regroup the last read in backend memory, without SQL; only the
-  sources and the window read msdb again. Selecting a run shows its steps (outcome row first) and the selected row's message in
-  **Message details** with Copy; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message
+  can read as an Unknown run, as msdb stores local times. A single-row filter bar (`Window` segmented control, `Outcome` select, `Message contains`, `Step #`, `Clear`) regroups the last read in backend memory, without SQL; only the
+  sources and the window read msdb again. Selecting a run shows its steps in a persisted resizable split beside the selected row's message in
+  **Message details** with monospace timestamps and `Copy`; the grids cut messages at `gridMessageChars`, so the details pane reads the whole message
   with `agent.historyMessage` (`sysjobhistory` by instance in msdb, or, when msdb refuses that table, the job's
   `sp_help_jobhistory` rows). **Delete History…** deletes the checked jobs' history, all of it or only rows older than a number
   of days, weeks or months counted back from the server's clock, after a confirmation naming the jobs. It is the `deleteJobHistory` object action: one
@@ -490,11 +495,11 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   Job Activity Monitor (with several such servers, a pick of them; a monitor whose connection is gone does not count); after a followed job ends that way, the service probe alone keeps reading Agent's state until it
   runs again. The connection item is unchanged.
 - **SQL Server Agent Properties** (the Agent node's Properties, a modal dialog; object actions, docs/object-actions.md). General
-  shows the service account and whether it starts automatically, SSMS's "Auto restart SQL Server if it stops unexpectedly"
+  shows the service account and whether it starts automatically, switches for SSMS's "Auto restart SQL Server if it stops unexpectedly"
   and "Auto restart SQL Server Agent if it stops unexpectedly", and the error log, read-only for now; Advanced, Alert System,
-  Job System and Connection come later. History has SSMS's "Limit size of job history log", "Maximum job history log size"
+  Job System and Connection come later. History shows a **Current log usage** meter above SSMS's "Limit size of job history log" switch, "Maximum job history log size"
   (2 to `historyMaxRows`, or no limit) and "Maximum job history rows per job" (1 to the log's size). Below them, **What this
-  keeps** lists the jobs with the most history, each with the rows it wrote over the last `retentionDays` days and how long
+  keeps** lists the jobs with the most history, each with right-aligned rates written over the last `retentionDays` days and how long
   its history lasts under the limits now, and under the ones being typed when they differ: rows per job over the job's rate,
   or the log's size over every job's rate where that is less, which a note points out, since Agent then removes the oldest
   rows of any job. Reading every job's history needs sysadmin; below it the table says why it is missing.
@@ -530,6 +535,26 @@ schedule sample. Parity with SSMS 2022 is recorded below (Parity with SSMS).
   As for every kind Script As can write, Search Objects' details pane shows a selected job's, alert's or operator's CREATE
   script.
 
+## UI layout and contracts
+
+- **Document shells and scroll discipline.** Job, Alert, Operator, Operators and Notifications, Proxy, and Credential documents use `ObjectInspectorFrame` (`surface="full"`, `Ctrl+1..9` / `⌘1..9` tab switching, Hero KPI strip and toggleable `Vitals` right rail on `JobDocument` reusing `workbench.inspector.vitals`), with explicit `layout: 'flow'` (document scroll) vs `layout: 'fill'` (full-height split/grid tabs: Job `Steps`, `Schedules`, `History`, and `Operators and notifications` `Alerts Matrix` / `Jobs Notifying Operators`) so no surface nests vertical scrollbars. Job Activity Monitor, Agent Overview, Log File Viewer, Schedules, and `JobDocument`'s `Create several` (full-bleed `body` slot) / New Job start panel use `DocumentFrame`; SQL Server Agent Properties remains a modal dialog (`AgentPropertiesPages.tsx`, `AgentPages.tsx`).
+- **Alignment, typography, and tables.** Agent forms align labels on a `160 px` `PropertyField` column; Overview health checks align fix buttons in a `156 px` right column; Step cards (`.agent-step-flow`) use a `44px minmax(0, 1fr) minmax(0, 1fr)` grid with a compact mono subsystem badge (`TSQL`, `SSIS`, `PS`, `Cmd`, `SSAS`, `Repl`; full name in tooltip) and equal single-line ellipsized `✓` / `✗` target columns. Shared primitives: `.agent-eyebrow`, `.agent-mono` (`tabular-nums`), `.agent-table` (`.borderless` for full-bleed panes; `.properties-table` stays in `styles.css` for `tests/property-sheet.test.ts`), and vertically centered icon+label / split button alignment (`tests/button-icon-alignment.test.ts`). Log File Viewer (`.lfv-*`) and Job History (`.agent-job-history-*`) keep separate CSS namespaces, and `ScheduleEditor`'s summary/fact card rules stay scoped under `.agent-schedules-detail` separate from `.agent-job-schedules-main`.
+- **Persisted resizable rails (`ResizableSplit`).** `src/renderer/src/kit/ResizableSplit.tsx` (`resizable-split.ts`, built on `followPointerDrag` + `observeResize`) supports self-persisted (`storageKey` → `localStorage` `varia.split.<id>`, falling back safely on missing/corrupt values) and controlled (`width`, `onWidthChange`, `onWidthReset`) modes. Separators expose `role="separator"`, `aria-orientation="vertical"`, `aria-valuemin`/`max`/`valuenow`, `tabIndex={0}`, `ArrowLeft`/`ArrowRight` (±12 px, `Shift` ±24 px), `Home` / double-click reset, dynamic opposite-pane clamping, `.varia-sash` (`forced-colors: active` safe), and focus rescue when collapsible rails close while focused. Existing non-Agent splitters (`OptionsDialog`, `ObjectInspectorFrame` Vitals `vitals.full`, `PlanPaneSizer`) stay on their existing persistence.
+
+| Split ID | Surface | Side | Default | Min | Max | Min opposite pane |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| *(existing `vitals.full`)* | Job Document Vitals rail | Right | 272 px | 200 px | 440 px | 48% share cap |
+| `agent.job.steps` | Job › Steps list rail | Left | 304 px | 252 px | 480 px | 360 px |
+| `agent.job.schedules` | Job › Schedules list rail | Left | 284 px | 236 px | 460 px | 360 px |
+| `agent.job.history` | Job › History runs list | Left | 276 px | 232 px | 440 px | 380 px |
+| `agent.jam.lastRunMessage` | JAM › Last Run message preview | Right | 440 px | 260 px | 720 px | 320 px |
+| `agent.lfv.sources` | Log File Viewer › Select logs rail | Left | 236 px | 188 px | 380 px | 460 px |
+| `agent.lfv.message` | Log File Viewer › Message details | Right | 430 px | 260 px | 720 px | 300 px |
+| `agent.schedules.detail` | Schedules › Detail inspector | Right | 472 px | 360 px | 660 px | 340 px |
+| `agent.operators.side` | Operators Matrix › Selected operator | Right | 264 px | 220 px | 400 px | 380 px |
+
+- **Theme, focus, and selector invariants.** Zero literal `px`/`pt`/`em`/`rem` font sizes (`tests/theme-metrics.test.ts` + `src/shared/theme/metrics.ts`); token color/background pairs registered in `src/shared/theme/contrast-pairs.ts` (`tests/theme-contrast.test.ts`); `transition: none` on button/row state rules; Agent tab focus fallback includes `.inspector-tab[tabindex="0"]` (`src/renderer/src/core/workbench.ts`); and smoke selectors live only in `scripts/fixtures/ui.mjs` (`tests/smoke-selectors.test.ts`).
+
 ## Parity with SSMS
 
 Re-checked for 0.10.0 (AG-9) against SSMS 2022's SQL Server Agent surfaces: its Object Explorer nodes and context menus,
@@ -550,12 +575,12 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
 | Alerts, Operators, Proxies menus | New Alert… / New Operator… / New Proxy…; Script … as; Enable/Disable (alerts); Rename; Delete; Properties | Same; Proxies list one folder per subsystem, then Unassigned Proxies, as SSMS |
 | Error Logs menu | View Agent Log, Recycle | Same (Recycle asks first; not on Managed Instance) |
 | Log File Viewer | Select logs, runs with their steps, message details, Delete history | Same layout (master/detail), with Agent's error logs in the same viewer |
-| Job dialog pages | General, Steps, Schedules, Alerts, Notifications, Targets | Same sections, plus History (rethink); Targets shows the local server only |
+| Job dialog pages | General, Steps, Schedules, Alerts, Notifications, Targets | General (with Targets), Steps, Schedules, Notifications & Alerts, and History (rethink); Targets shows the local server only |
 | Job Step dialog | General (name, type, Run as, database, command, Parse, Open), Advanced (on success, on failure, retries, output file, log to table) | Same fields on the Steps page beside the list, with Open as Load from file… on PowerShell and CmdExec steps; Advanced is the folded More options |
 | Job Schedule dialog | Schedule type, frequency, daily frequency, duration, summary sentence | Same fields and SSMS's sentence, plus presets and the next runs (rethink) |
-| Alert dialog | General (event, performance condition, WMI), Response (job, operators), Options | One screen with When / Then / Options; WMI alerts read-only (editing is Later) |
+| Alert dialog | General (event, performance condition, WMI), Response (job, operators), Options | Inspector tab with When / Then / Options and Activity timestamps; WMI alerts read-only (editing is Later) |
 | Operator dialog | General (e-mail, pager, on-duty schedule), Notifications, History | General, Pager duty and Notifications, plus Send test e-mail and the Operators and Notifications grid; the History page (last notification attempts) is Later |
-| Proxy Account dialog | General (credential, subsystems), Principals, References | One screen with the inline credential; References as Used by on the credential |
+| Proxy Account dialog | General (credential, subsystems), Principals, References | Three inspector tabs (Proxy & Subsystems with inline credential, Principals, References); References as Used by on the credential |
 | SQL Server Agent Properties | General, Advanced, Alert System, Job System, Connection, History | General and History (a dialog, as SSMS); the rest are Later |
 | Keys | No default Agent keys; Enter opens, Delete deletes, F2 renames in Object Explorer; F5 refreshes | Same in Object Explorer; F5 refreshes Job Activity Monitor, and Alt+Up and Alt+Down move a job's steps |
 
@@ -566,7 +591,7 @@ docs/agent-plan.md (AG-10 to AG-16) or to its Later row.
   another session's change (STALE, with a field-by-field compare).
 - Creation happens in place (a new schedule, operator or credential inside the job, alert or proxy that needs it) instead of
   stacked child dialogs.
-- Job Activity Monitor is a live document with tiles, view chips and a last-run panel; SSMS's Filter dialog is the filter
+- Job Activity Monitor is a live document with clickable KPI tiles, grouped action menus and a split last-run panel; SSMS's Filter dialog is the filter
   box and column filters, and its bulk verbs give one result line per job.
 - New Job adds Create Job Like This and Create several; the job document adds History in place and the live run view.
 - Manage Schedules is the Schedules document (a grid with the selected schedule's editor) instead of a dialog.
@@ -662,7 +687,7 @@ its step that runs as a proxy comes without the proxy and with the warning).
 `AgentJobsChecks` checks the `agent.jobs` reader offline over a fake runner (rows, tones, views, filters, the last run,
 the watched slots, the service probe and each refusal) and, in the Agent live suite, subscribes to all three probes on
 the scratch job. The `agent-jobs` smoke suite drives Job Activity Monitor against the fake backend's jobs: opening it,
-a view chip, Start on two jobs with the status bar following them, the Last run chevron, Change owner on two jobs (and
+a KPI tile, Start on two jobs with the status bar following them, the Last run drawer, Change owner on two jobs (and
 Escape closing its form), Attach schedule on three jobs with one already on the schedule, and reopening it from its node.
 `tests/agent-job-bulk.test.ts` covers the two forms' requests, the skipped and unsent jobs, a refusal failing one line, a
 login below sysadmin and a read that fails or answers after its form closed; `AgentActionChecks.ChangeOwner` covers the
@@ -688,7 +713,7 @@ Run with the new run; `VARIA_SMOKE_RECORD=1` records it.
 a write out of order), each save's batch for the job document and the Schedules document, the timing rules that mirror
 `timingProblem`, the validation, the error mapping onto the Schedules field, the script and the describe's records, jobs and
 median durations. The `agent-job` smoke suite adds a schedule from a preset and attaches a shared one found by search on the job
-document, then, in the Schedules document, saves an Enabled box at once and a rename under the guard, and creates a schedule
+document, then, in the Schedules document, saves an Enabled switch at once and a rename under the guard, and creates a schedule
 from the Agent node's New › Schedule….
 
 `AgentHistoryChecks` checks the `agent.history` reader offline over a fake runner (the statements each source and window
@@ -726,6 +751,8 @@ starts and restarts Agent and leaves it running. No grouped or full live run rea
 `npm run backend:test:agent-service`, under the exclusive machine lock so no other session's Agent checks run while Agent
 is stopped, and in `.github/workflows/agent-service.yml` (docs/ci.md) against a named instance on Windows. A remote
 server's service control is checked by hand.
+
+Additional renderer and cross-panel tests cover the shared polish contracts: `tests/resizable-split.test.ts` (splitter drag, keyboard arrows, reset, clamping, and `localStorage` persistence), `tests/button-icon-alignment.test.ts`, `tests/agent-job-steps-layout.test.ts`, `tests/agent-lfv-render.test.ts`, `tests/agent-ap5-render.test.ts`, and `tests/agent-ap6-cross-panel.test.ts` (all 8 `varia.split.<id>` rails across remounts, zero CSS namespace/cascade collisions, and cross-panel button-icon & ARIA container alignment).
 
 <!-- Generated below from src/shared/agent/catalog.ts. Regenerate with: npx vitest run tests/agent-catalog.test.ts -u -->
 

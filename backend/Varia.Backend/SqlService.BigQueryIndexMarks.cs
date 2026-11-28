@@ -102,6 +102,8 @@ internal sealed partial class SqlService
         string? dataset, string? sql)
     {
         var text = finished.Configuration?.Query?.Query ?? sql;
+        if (finished.Statistics?.Query?.ReferencedTables is { Count: > 0 } referenced)
+            search.RecordQueriedProjects(connectionId, referenced.Select(table => table.ProjectId).Where(id => !string.IsNullOrEmpty(id))!);
         var deferred = new List<BigQueryChild>();
         var marks = DdlMarks(finished, statement, children, listedAll, project, dataset, text is null || GoogleSqlScanner.MayChangeObjects(text), deferred);
         Record(connectionId, connection, project, marks);
