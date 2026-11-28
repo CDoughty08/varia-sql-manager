@@ -5,6 +5,7 @@ import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/s
 import { languageDefinitionSchema, languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageDefinition, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
 import { limits as ipcLimits } from '../src/shared/ipc/wire/protocol'
 import { definitionScheme, pendingLimits, SqlLanguageService } from '../src/renderer/src/languages/SqlLanguageService'
+import type { IndexStateEntry } from '../src/renderer/src/languages/IndexCompletionService'
 import { definitionErrors } from '../src/renderer/src/languages/definition'
 import { SqlDiagnosticsService, sqlDiagnosticDebounceMs } from '../src/renderer/src/languages/SqlDiagnosticsService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
