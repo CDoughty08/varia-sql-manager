@@ -446,7 +446,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
           </div>)}</div>
         </div>
       </aside>
-      {outline && <PlanPaneSizer name="outline" value={outlineWidth} minimum={120} resize={setOutlineWidth} commit={value => void settings.choose('queryResults.plan.outlineWidth', value)} />}
+      {outline && <PlanPaneSizer name="outline" value={outlineWidth} minimum={120} defaultWidth={220} resize={setOutlineWidth} commit={value => void settings.choose('queryResults.plan.outlineWidth', value)} />}
       <div className="plan-canvas-shell">
         <div className="plan-canvas" ref={root} hidden={showSql} tabIndex={0} role="region" aria-label="Query plan canvas" aria-description="Drag or scroll to pan. Pinch or Control-scroll to zoom. Hover over an operator for statistics, or use the outline or arrow keys to select it." aria-describedby={hoveredNode ? labelId + 'stats' : undefined} onKeyDown={navigate} />
         {showSql && <section className="plan-sql-view" aria-label="Statement SQL from plan"><button type="button" onClick={() => { returnToGraph.current = true; setShowSql(false) }}>Back to graph</button><p>SQL text supplied by SQL Server for this statement.</p><pre tabIndex={0}>{current?.text || 'SQL text unavailable'}</pre></section>}
@@ -464,7 +464,7 @@ export default function PlanViewer({ sources, identity, scope = identity, visibl
         {!showSql && (!content.layout || gpuFailed) && <div className="plan-canvas-state"><EmptyState icon="execution-plan" detail={gpuFailed ? 'GPU rendering is unavailable. Use the operator outline and properties, or open the XML source.' : content.error ?? (content.empty ? 'This plan contains no statements to display. Its XML source is available.' : sources.length ? 'Preparing execution plans…' : 'Plans appear here when the query returns them.')}
           actions={content.error || gpuFailed ? [{ label: 'Retry plan viewer', run: () => setRetry(value => value + 1) }] : undefined} /></div>}
       </div>
-      {inspector && <PlanPaneSizer name="properties" value={propertiesWidth} minimum={140} reverse resize={setPropertiesWidth} commit={value => void settings.choose('queryResults.plan.propertiesWidth', value)} />}
+      {inspector && <PlanPaneSizer name="properties" value={propertiesWidth} minimum={140} defaultWidth={260} reverse resize={setPropertiesWidth} commit={value => void settings.choose('queryResults.plan.propertiesWidth', value)} />}
       <aside className="plan-inspector" aria-label="Plan properties" hidden={!inspector} style={{ flexBasis: propertiesWidth }}>
         <PlanPropertiesPane statement={current} node={selectedNode} liveRunning={live?.running && mode === 'live'} />
       </aside>
