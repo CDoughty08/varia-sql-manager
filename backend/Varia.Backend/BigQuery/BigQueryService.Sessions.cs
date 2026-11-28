@@ -773,7 +773,7 @@ internal sealed partial class BigQueryService
     }
 
     /// <summary>Deterministic test seam invoked in <see cref="CommitCoreDetailedAsync"/> immediately before backoff delay after a 429 response.</summary>
-    internal Action? CommitBackingOff { get; set; }
+    internal Action<CancellationTokenSource>? CommitBackingOff { get; set; }
 
     async Task<CommitCoreDetail> CommitCoreDetailedAsync(BigQueryTabSession session, CancellationToken token)
     {
@@ -808,7 +808,7 @@ internal sealed partial class BigQueryService
                     if (token.IsCancellationRequested) throw;
                     if (attempt >= InsertAttempts || limit.IsCancellationRequested)
                         return new(new(MultiCommitOutcome.Refused, MapCommitRefusal(session, error, project)), jobId, RawError: error, Retryable: true);
-                    CommitBackingOff?.Invoke();
+                    CommitBackingOff?.Invoke(limit);
                     await Task.Delay(Backoff(attempt), limit.Token);
                 }
                 catch (GoogleApiException error) when ((int)error.HttpStatusCode is >= 400 and < 500 && error.HttpStatusCode is not HttpStatusCode.Conflict and not HttpStatusCode.RequestTimeout and not HttpStatusCode.TooManyRequests)

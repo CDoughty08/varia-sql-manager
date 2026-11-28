@@ -518,8 +518,9 @@ internal static class MultiQueryBigQueryChecks
         {
             var prevLimit = service.BigQuery.CommitLimit;
             var prevRetry = service.BigQuery.RetryDelay;
-            service.BigQuery.RetryDelay = TimeSpan.FromMilliseconds(120);
-            service.BigQuery.CommitLimit = TimeSpan.FromMilliseconds(60);
+            service.BigQuery.RetryDelay = TimeSpan.FromSeconds(5);
+            service.BigQuery.CommitLimit = prevLimit;
+            service.BigQuery.CommitBackingOff = limit => limit.Cancel();
             bq.CommitReply = job =>
             {
                 // A 429 rate-limit response rejects the insert before BigQuery creates the job.
@@ -528,13 +529,14 @@ internal static class MultiQueryBigQueryChecks
             };
             var session429 = new BigQueryTabSession("ephem-429", conn) { Id = "sess-429", Location = "US", Transaction = BigQueryTransaction.Open };
             var res429 = await service.BigQuery.CommitCoreAsync(session429, CancellationToken.None);
+            service.BigQuery.CommitBackingOff = null;
             check(res429.Outcome == MultiCommitOutcome.Refused && res429.Error?.Code == "QUOTA",
                 $"CommitCoreAsync 429 hitting CommitLimit returns Refused/QUOTA (not CONNECTION_LOST): {res429}");
 
             using var cancel429 = new CancellationTokenSource();
             service.BigQuery.RetryDelay = TimeSpan.FromSeconds(5);
             service.BigQuery.CommitLimit = prevLimit;
-            service.BigQuery.CommitBackingOff = () => cancel429.Cancel();
+            service.BigQuery.CommitBackingOff = _ => cancel429.Cancel();
             bq.CommitReply = job =>
             {
                 bq.Jobs.TryRemove(job.Id, out _);
