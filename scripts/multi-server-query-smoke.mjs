@@ -68,6 +68,7 @@ try {
     const byConnId = new Map()
     const GiB = 1024 ** 3
     globalThis.__multiSmokeCalls = []
+    globalThis.__multiSmokeUnhandled = []
 
     ipcMain.removeHandler('varia:connections-accept')
     ipcMain.handle('varia:connections-accept', () => ok({ accepted: true, retained: true }))
@@ -142,8 +143,9 @@ try {
         case 'language.diagnostics':
           return ok({ diagnostics: [] })
         case 'language.close':
-        case 'language.refresh':
           return ok({ closed: true })
+        case 'language.refresh':
+          return ok({ refreshed: true })
         case 'explorer.children': {
           const { node } = params
           if (node.type === 'object') {
@@ -220,6 +222,7 @@ try {
           })
         }
         default:
+          globalThis.__multiSmokeUnhandled.push(method)
           return { ok: false, error: 'Unsupported stub operation: ' + method }
       }
     })
@@ -310,7 +313,9 @@ try {
   await popover.getByRole('button', { name: 'Done', exact: true }).click()
   await queryBarButton(page, 'Execute').click()
   await expect(multiExecuteDialog(page)).toHaveCount(0)
-  await expect.poll(() => application.evaluate(() => globalThis.__multiSmokeCalls.length)).toBe(callsBeforeSingle + 1)
+  await expect(multiRunSummary(page)).toContainText('Completed')
+  await expect(multiRunSummary(page)).toContainText('1 of 1 server')
+  expect(await application.evaluate(() => globalThis.__multiSmokeCalls.length)).toBe(callsBeforeSingle + 1)
   const lastSingle = await application.evaluate(() => globalThis.__multiSmokeCalls.at(-1))
   expect(lastSingle.mode).toBe('fireAndForget')
   expect(lastSingle.targets).toHaveLength(1)
@@ -373,6 +378,7 @@ try {
   expect(await application.evaluate(() => globalThis.__multiSmokeCalls.length)).toBe(callsBeforeBlocked)
 
   // Restore read-only SELECT and execute Cross-Engine run (confirms aggregated BigQuery cost prompt first).
+  const callsBeforeCross = await application.evaluate(() => globalThis.__multiSmokeCalls.length)
   await setEditorValue('SELECT TOP 5 1 AS Id;', sqlPane)
   await expect(guardStrip).toHaveCount(0)
   await queryBarButton(page, 'Execute').click()
@@ -382,16 +388,24 @@ try {
   await expect(costDialog).toContainText('14.60 GiB')
   await costDialog.getByRole('button', { name: 'Run', exact: true }).click()
   await expect(costDialog).toHaveCount(0)
-  await expect(multiRunSummary(page)).toBeVisible()
+  const crossSummary = multiRunSummary(page)
+  await expect(crossSummary).toBeVisible()
+  await expect(crossSummary).toContainText('Completed')
+  await expect(crossSummary).toContainText('prod-sql-east-01')
+  await expect(crossSummary).toContainText('bq-analytics-01')
+  expect(await application.evaluate(() => globalThis.__multiSmokeCalls.length)).toBe(callsBeforeCross + 1)
   const lastCross = await application.evaluate(() => globalThis.__multiSmokeCalls.at(-1))
   expect(lastCross.mode).toBe('crossEngineReadOnly')
   expect(lastCross.targets.map(t => t.label)).toEqual(expect.arrayContaining(['prod-sql-east-01', 'bq-analytics-01']))
   expect(lastCross.scripts?.sqlserver).toContain('SELECT TOP 5 1 AS Id;')
   expect(lastCross.scripts?.bigquery).toContain('SELECT 1 AS Id LIMIT 5;')
 
+  expect(await application.evaluate(() => globalThis.__multiSmokeUnhandled)).toEqual([])
   expect(failures).toEqual([])
   console.log('Multi-server & Cross-Engine smoke checks passed.')
 } catch (error) {
+  const unhandled = await application?.evaluate(() => globalThis.__multiSmokeUnhandled ?? []).catch(() => [])
+  if (unhandled?.length) console.error('Unhandled stub RPCs:', unhandled)
   await page?.screenshot({ path: resolve('artifacts', 'multi-server-query-failure.png') }).catch(() => {})
   throw error
 } finally {

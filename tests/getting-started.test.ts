@@ -85,7 +85,7 @@ describe('Multi-server query sample', () => {
     expect(multiServerSampleOutcome({ provider: 'bigquery', crossEngine: false, sql: 'CALL my_dataset.my_proc();' }).outcome).toContain('disabled for this BigQuery statement')
     expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'SELECT 1;' })).toEqual({ tags: [], outcome: 'Read-only check passed: both dialect panes run together.' })
     expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'DELETE FROM dbo.T;' }).outcome).toContain('1 violation on Line 1')
-    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'DELETE FROM dbo.T;\nUPDATE dbo.T SET a = 1;' }).outcome).toContain('2 violations on Line 1')
+    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'DELETE FROM dbo.T;\nUPDATE dbo.T SET a = 1;' }).outcome).toContain('2 violations, first on Line 1')
   })
   it('renders real statement classification without executing queries or connecting', () => {
     const fixture = workbenchFixture()

@@ -129,11 +129,13 @@ export function multiServerSampleOutcome(scenario: MultiServerSampleInput): {
 } {
   if (scenario.crossEngine) {
     const violations = checkCrossEngineReadOnly(scenario.sql, scenario.provider)
-    const noun = violations.length === 1 ? 'violation' : 'violations'
+    const location = violations.length === 1
+      ? `1 violation on Line ${violations[0]!.line}`
+      : `${violations.length} violations, first on Line ${violations[0]?.line ?? 1}`
     return {
       tags: [],
       outcome: violations.length > 0
-        ? `Blocked before sending (${violations.length} ${noun} on Line ${violations[0]!.line}): ${violations[0]!.message}`
+        ? `Blocked before sending (${location}): ${violations[0]!.message}`
         : 'Read-only check passed: both dialect panes run together.'
     }
   }

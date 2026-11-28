@@ -23,7 +23,7 @@ Varia can run one query across up to 32 SQL Server instances or up to 32 BigQuer
 
 ## Run mode prompt and execution modes
 
-Pressing **Execute** (`F5`) on a same-engine tab with two or more enabled targets opens the **Run Mode** dialog before anything runs. If you uncheck targets down to **1** enabled target, Execute skips the Run Mode dialog and runs directly as an ephemeral single-target execution (still applying BigQuery cost prompts when applicable).
+Pressing **Execute** (`F5`) on a same-engine tab with two or more enabled targets opens the run mode dialog (**Execute across N SQL Servers** / **Execute across N BigQuery Projects**) before anything runs. If you uncheck targets down to **1** enabled target, Execute skips the run mode dialog and runs directly as an ephemeral single-target execution (still applying BigQuery cost prompts when applicable).
 
 ### SQL Server modes
 
