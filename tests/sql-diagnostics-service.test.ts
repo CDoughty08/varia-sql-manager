@@ -362,4 +362,17 @@ describe('versioned SQL diagnostics markers', () => {
     f.model(tab.id).edit('SELECT MissingX'); await f.tick()
     expect(f.markers(tab.id)).toHaveLength(2)
   })
+  it('pauses STS diagnostics cleanly on Microsoft Entra ID connections without firing failing analysis calls', async () => {
+    const f = fixture()
+    f.connections.add(
+      { id: 'entra-1', providerId: 'sqlserver', generation: 1, server: 'contoso.database.windows.net', database: 'SalesDB', serverVersion: '16.0', principalId: 'entra:t:u' } satisfies ConnectionInfo,
+      { server: 'contoso.database.windows.net', database: 'SalesDB', authentication: 'entraMfa', trustServerCertificate: false })
+    const tab = f.documents.create('entra.sql', 'SELECT * FROM dbo.Orders', 'SalesDB', 'entra-1')
+    await f.tick()
+    expect(f.language.diagnostics).not.toHaveBeenCalled()
+    expect(f.service.status(tab.id)).toEqual({
+      label: 'SQL analysis paused',
+      detail: 'SQL error checking is not available for Microsoft Entra ID connections yet. Completion and hover are active via ScriptDom + Index.'
+    })
+  })
 })

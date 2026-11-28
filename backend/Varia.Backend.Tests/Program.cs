@@ -245,6 +245,12 @@ if (args is ["--sql-completion-checks"])
     Console.WriteLine("Passed " + passed + " SQL completion checks.");
     return;
 }
+if (args is ["--tsql-completion-checks"])
+{
+    await TsqlCompletionChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " T-SQL ScriptDom completion & hover checks.");
+    return;
+}
 if (args is ["--connection-principal-checks"])
 {
     await ConnectionPrincipalChecks.RunAsync(Check);
@@ -521,6 +527,7 @@ if (liveGroup is null)
         ("SqlDefinition", () => SqlDefinitionChecks.RunAsync(Check)),
         ("SqlLanguageDiagnostics", () => SqlLanguageDiagnosticChecks.RunAsync(Check)),
         ("SqlCompletion", () => SqlCompletionChecks.RunAsync(Check)),
+        ("TsqlCompletion", () => TsqlCompletionChecks.RunAsync(Check)),
         ("Protocol", Sync(() => ProtocolChecks.Run(Check))),
         ("Page", Sync(() => PageChecks.Run(Check))),
         ("Host", Sync(() => HostChecks.Run(Check))),

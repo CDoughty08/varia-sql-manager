@@ -77,6 +77,9 @@ internal sealed partial class ObjectSearchService : IDisposable
         public CancellationTokenSource? Build;
         public bool Building;
         public bool Built;
+        public bool ListedDone;
+        public bool ResourceDone;
+        public TaskCompletionSource BuildPulse = NewPulse();
         /// <summary>The last full build was stopped (Stop or a disconnect, not a newer build) before it finished.</summary>
         public bool Stopped;
         public bool Definitions = true;
@@ -314,6 +317,8 @@ internal sealed partial class ObjectSearchService : IDisposable
             state.Build = source;
             state.Building = true;
             state.Checking = false;
+            state.ListedDone = false;
+            state.ResourceDone = false;
             // The marks this build spends: those made before it began (DDL that lands while it reads stays marked).
             seen = state.StaleMarks;
             state.Definitions = definitions;
@@ -329,12 +334,13 @@ internal sealed partial class ObjectSearchService : IDisposable
             {
                 state.Databases = names.Count;
                 state.Ledger.List(names);
-                if (ReferenceEquals(state.Build, source)) { state.Listed = listed; PruneLocked(state); }
+                if (ReferenceEquals(state.Build, source)) { state.Listed = listed; state.ListedDone = true; PruneLocked(state); }
                 foreach (var gone in state.SqlStale.Keys.Concat(state.Due.Keys).Where(key => key.Length > 0 && !listed.Contains(key)).ToList())
                 {
                     state.SqlStale.Remove(gone);
                     state.Due.Remove(gone);
                 }
+                PulseLocked(state);
             }
             state.Index.Keep(listed);
             // Spends a unit's marks made before the build began, once it has read the unit.
@@ -355,8 +361,13 @@ internal sealed partial class ObjectSearchService : IDisposable
             Spend(ServerScope, serverRead is null);
             if (explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Agent, agentSkip);
-            if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
-                lock (state.Gate) state.Skipped.Add(SkipList.Resource, resourceSkip);
+            var resourceSkip = await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token);
+            lock (state.Gate)
+            {
+                if (resourceSkip is not null) state.Skipped.Add(SkipList.Resource, resourceSkip);
+                if (ReferenceEquals(state.Build, source)) state.ResourceDone = true;
+                PulseLocked(state);
+            }
             await ReadDatabasesAsync(names, Limits.Total, (name, loop) => ReadAsync(args.ConnectionId, state, name, render, definitions, perDatabase, loop), (at, skip) =>
             {
                 lock (state.Gate)
@@ -364,12 +375,13 @@ internal sealed partial class ObjectSearchService : IDisposable
                     if (skip is null or { Code: ChildrenLeftOut }) state.Indexed++;
                     if (skip is not null) state.Skipped.Add(at, skip);
                     state.Ledger.Done(names[at], skip);
+                    PulseLocked(state);
                 }
                 Spend(names[at], skip is null or { Code: ChildrenLeftOut });
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
             {
-                if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.Stopped = false; state.BuiltAt = DateTime.UtcNow; }
+                if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.Stopped = false; state.BuiltAt = DateTime.UtcNow; PulseLocked(state); }
             }
             Finish(build: true, watch.ElapsedMilliseconds);
             finishedBuild = true;
@@ -394,7 +406,7 @@ internal sealed partial class ObjectSearchService : IDisposable
         finally
         {
             lock (state.Gate)
-                if (ReferenceEquals(state.Build, source)) { state.Build = null; state.Building = false; }
+                if (ReferenceEquals(state.Build, source)) { state.Build = null; state.Building = false; PulseLocked(state); }
             if (!finishedBuild) Ended();
             running.Unregister(args.RequestId, entry);
         }
@@ -442,12 +454,126 @@ internal sealed partial class ObjectSearchService : IDisposable
 
     /// <summary>The editor's lookup into a connection's index (<see cref="IndexLookup"/>), or null when it has none: a snapshot of
     /// its build's state and the reads held now.</summary>
+    private static TaskCompletionSource NewPulse() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static void PulseLocked(State state)
+    {
+        var previous = state.BuildPulse;
+        state.BuildPulse = NewPulse();
+        previous.TrySetResult();
+    }
+
+    /// <summary>Maximum time <see cref="WaitForLookupAsync"/> waits for an active initial index build to finish reading
+    /// the resource catalog and active database before returning whatever the index currently holds.</summary>
+    internal TimeSpan LookupWaitBudget { get; set; } = TimeSpan.FromSeconds(15);
+
     internal IndexLookup? Lookup(string connectionId)
     {
         if (!states.TryGetValue(connectionId, out var state)) return null;
         lock (state.Gate)
             // The editor's lookup reads SQL Server's catalog shape; a BigQuery index answers through LookupBigQuery.
             return state.BigQuery ? null : new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
+    }
+
+    /// <summary>Returns an <see cref="IndexLookup"/> for <paramref name="connectionId"/>, waiting up to
+    /// <see cref="LookupWaitBudget"/> when an initial index build is actively reading the shared resource catalog or
+    /// <paramref name="database"/> so immediate completion/hover right after connecting sees real catalog objects instead
+    /// of an empty lookup. Returns immediately (0 ms wait) once held, during rebuilds/freshness checks with held data,
+    /// when skipped, when unlisted (e.g. tempdb), or when no build is running.</summary>
+    internal async Task<IndexLookup?> WaitForLookupAsync(string connectionId, string? database, CancellationToken token)
+    {
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        waitCts.CancelAfter(LookupWaitBudget);
+        while (true)
+        {
+            if (!states.TryGetValue(connectionId, out var state)) return null;
+            Task wait;
+            lock (state.Gate)
+            {
+                if (state.BigQuery || state.Closed) return null;
+                var lookup = new IndexLookup(state.Index, budget, state.Building, state.Ledger.Snapshot(), Changed);
+                if (!state.Building) return lookup;
+                var resourceReady = state.Checking || state.Index.Resource is not null || state.ResourceDone;
+                var dbReady = string.IsNullOrEmpty(database);
+                if (!dbReady)
+                {
+                    var dbInfo = lookup.Database(database!);
+                    dbReady = dbInfo.Held is not null || dbInfo.State == LookupState.Skipped || (state.ListedDone && dbInfo.State == LookupState.Absent);
+                }
+                if (resourceReady && dbReady) return lookup;
+                wait = state.BuildPulse.Task;
+            }
+            try
+            {
+                await wait.WaitAsync(waitCts.Token);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                return Lookup(connectionId);
+            }
+        }
+    }
+
+    /// <summary>Offline check helpers that advance a connection's build state under Gate + BuildPulse without a live server.</summary>
+    internal void BeginSimulatedBuild(string connectionId, bool checking = false)
+    {
+        var state = states.GetOrAdd(connectionId, _ => new State(pool, resources));
+        lock (state.Gate)
+        {
+            state.Building = true;
+            state.Checking = checking;
+            state.ListedDone = false;
+            state.ResourceDone = false;
+            state.Ledger.Start();
+            PulseLocked(state);
+        }
+    }
+
+    internal void CompleteSimulatedListing(string connectionId, IReadOnlyList<string> names)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+        {
+            state.Databases = names.Count;
+            state.Listed = names.ToHashSet(StringComparer.Ordinal);
+            state.Ledger.List(names);
+            state.ListedDone = true;
+            PulseLocked(state);
+        }
+    }
+
+    internal void CompleteSimulatedResource(string connectionId, ResourceSet? set)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+        {
+            if (set is not null) state.Index.PutResource(set);
+            state.ResourceDone = true;
+            PulseLocked(state);
+        }
+    }
+
+    internal void CompleteSimulatedDatabase(string connectionId, string database, DatabaseIndex? read, ObjectIndexSkip? skip = null)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+        {
+            if (read is not null) state.Index.Put(read);
+            state.Ledger.Done(database, skip);
+            PulseLocked(state);
+        }
+    }
+
+    internal void EndSimulatedBuild(string connectionId)
+    {
+        if (!states.TryGetValue(connectionId, out var state)) return;
+        lock (state.Gate)
+        {
+            state.Building = false;
+            state.Checking = false;
+            state.Built = true;
+            PulseLocked(state);
+        }
     }
 
     /// <summary>The index a connection holds, or null (the checks read it).</summary>
@@ -458,7 +584,7 @@ internal sealed partial class ObjectSearchService : IDisposable
     {
         running.Forget(connectionId);
         if (!states.TryRemove(connectionId, out var state)) return;
-        lock (state.Gate) state.Closed = true;
+        lock (state.Gate) { state.Closed = true; PulseLocked(state); }
         StopSweep(state);
         state.Index.Dispose();
         // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
@@ -471,6 +597,7 @@ internal sealed partial class ObjectSearchService : IDisposable
         running.ForgetAll();
         foreach (var state in states.Values)
         {
+            lock (state.Gate) { state.Closed = true; PulseLocked(state); }
             StopSweep(state);
             state.Index.Dispose();
         }

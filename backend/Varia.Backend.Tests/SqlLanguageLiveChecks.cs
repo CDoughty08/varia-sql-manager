@@ -80,6 +80,9 @@ internal static class SqlLanguageLiveChecks
             check(status.Providers.Single(provider => provider.Id == "sqlserver") is { Configured: true, Refresh: true }, "actual SQL Tools Service executable and cache refresh are configured for live tests");
             var firstConnection = await Call<ConnectionInfo>("connections.connect", Options(firstDatabase));
             var secondConnection = await Call<ConnectionInfo>("connections.connect", Options(secondDatabase));
+            // Build Search Objects index for both scratch connections (as the Electron workbench does on connect).
+            await Call<ObjectIndexResult>("explorer.index", new ObjectIndexArgs(firstConnection.Id, Guid.NewGuid().ToString("D")));
+            await Call<ObjectIndexResult>("explorer.index", new ObjectIndexArgs(secondConnection.Id, Guid.NewGuid().ToString("D")));
             await SqlLanguageDiagnosticLiveChecks.RunAsync(check, service, firstConnection, secondConnection, Sql);
             await SqlCompletionLiveChecks.RunAsync(check, service, firstConnection);
             var firstId = Guid.NewGuid().ToString();
@@ -89,12 +92,11 @@ internal static class SqlLanguageLiveChecks
             Task<LanguageCompletionResult> Complete(LanguageRequest request) => Call<LanguageCompletionResult>("language.complete", request);
             static string Name(LanguageCompletionItem item) => item.Label.Trim('[', ']');
             static bool Has(LanguageCompletionResult value, string name) => value.Items.Any(item => Name(item).Equals(name, StringComparison.OrdinalIgnoreCase));
-            // A single call must absorb STS's transient null/busy binding responses. Retrying from this test would
-            // hide the empty-widget failure users see when Monaco requests suggestions once for a new document.
             var masterConnection = await Call<ConnectionInfo>("connections.connect", Options("master"));
+            await Call<ObjectIndexResult>("explorer.index", new ObjectIndexArgs(masterConnection.Id, Guid.NewGuid().ToString("D")));
             var systemDocument = Guid.NewGuid().ToString();
             var systemColumns = await Complete(Request(systemDocument, 1, "SELECT d.database_ FROM sys.databases AS d;", masterConnection, 18));
-            check(Has(systemColumns, "database_id"), "first public completion request waits for system-catalog binding and returns database_id");
+            check(Has(systemColumns, "database_id"), "in-process completion resolves system-catalog views from the resource index and returns database_id");
             await Call<LanguageCloseResult>("language.close", new LanguageCloseArgs(systemDocument));
             await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(masterConnection.Id), Json), Json);
             var wideDocument = Guid.NewGuid().ToString();
@@ -154,7 +156,7 @@ internal static class SqlLanguageLiveChecks
                 && await Definition("SELECT * FROM [NoSuchDatabase_" + Guid.NewGuid().ToString("N") + "].dbo.LanguageFixture", "LanguageFixture") is null,
                 "an unknown object or database answers null, not an error");
             launchedProcesses = LanguageProcesses().Except(initialProcesses).ToHashSet();
-            check(launchedProcesses.Count > 0, "live language requests launch the actual bundled SQL Tools Service child process");
+            check(launchedProcesses.Count == 0, "in-process ScriptDom completion and hover launch zero SQL Tools Service processes");
 
             // Keep real query-tab state open while a separate connection changes this run's fixture schema. A
             // language refresh must never achieve freshness by restarting the backend or closing its SQL sessions.
@@ -170,7 +172,7 @@ internal static class SqlLanguageLiveChecks
             var siblingDuringRefresh = await Complete(secondRequest);
             check((await refresh).Refreshed && Has(siblingDuringRefresh, "SecondOnly") && !Has(siblingDuringRefresh, "RefreshedOnly"),
                 "targeted cache refresh completes while an unrelated database continues serving its own metadata");
-            check(LanguageProcesses().Except(initialProcesses).ToHashSet().SetEquals(launchedProcesses), "cache refresh retains the actual SQL Tools Service process");
+            check(LanguageProcesses().Except(initialProcesses).ToHashSet().Count == 0, "in-process cache refresh launches zero SQL Tools Service processes");
             var refreshedColumns = await Complete(Request(firstId, 5, select, firstConnection, "SELECT f.".Length));
             check(Has(refreshedColumns, "RefreshedOnly") && Has(refreshedColumns, "FirstOnly"), "one completion after refresh exposes the newly added live column");
             const string refreshedHoverText = "SELECT f.RefreshedOnly FROM dbo.LanguageFixture AS f";

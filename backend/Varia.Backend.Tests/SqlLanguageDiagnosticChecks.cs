@@ -56,9 +56,9 @@ internal static class SqlLanguageDiagnosticChecks
             catch (RequestException error) { check(error.Code == "STALE", "provider rejects diagnostic versions older than its latest accepted snapshot"); }
             source.AutoPublish = true;
             await sql.CompleteAsync(new(request.DocumentId, 2, "SELECT missing;", request.Context, new(0, 0)), default);
-            check(clients.Count == 2 && clients[1].OpenUris.Count == 1, "completion remains lazy and synchronizes text after diagnostic acceptance");
+            check(clients.Count == 1, "in-process ScriptDom completion never launches a second STS completion child");
             await sql.CloseAsync(request.DocumentId, default);
-            check(source.Disposed && clients.All(client => client.Disposed), "closing the owning document releases both analysis and completion processes");
+            check(source.Disposed && clients.All(client => client.Disposed), "closing the owning document releases the analysis process");
         }
 
         clients.Clear();
@@ -114,16 +114,16 @@ internal static class SqlLanguageDiagnosticChecks
         {
             var request = Request();
             await sql.CompleteAsync(new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), default);
-            var ordinary = clients.Single();
+            check(clients.Count == 0, "in-process completion starts zero STS processes before diagnostics run");
             await sql.DiagnosticsAsync(request, default);
-            var source = clients[1];
+            var source = clients.Single();
             source.AutoPublish = false;
             source.Opened = new(TaskCreationOptions.RunContinuationsAsynchronously);
             var pending = sql.DiagnosticsAsync(request with { Version = 2 }, stop.Token);
             await source.Opened.Task.WaitAsync(Wait);
             stop.Cancel();
             try { await pending; check(false, "cancelled diagnostics observe cancellation"); }
-            catch (OperationCanceledException) { check(source.Disposed && !ordinary.Disposed, "cancelling analysis releases its ambiguous child and preserves completion metadata"); }
+            catch (OperationCanceledException) { check(source.Disposed, "cancelling analysis releases its ambiguous diagnostic child"); }
             await sql.DiagnosticsAsync(request with { Version = 3 }, default);
             var restarted = clients[^1];
             restarted.AutoPublish = false;
@@ -218,12 +218,12 @@ internal static class SqlLanguageDiagnosticChecks
                 check(observed && !analysis.IsCompleted && !source.Disposed, "an already cancelled foreground request cannot preempt valid background analysis");
             }
             var completion = await broker.CompleteAsync(new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 7)), default).WaitAsync(Wait);
-            check(completion.Items.Count == 0 && source.Disposed && clients.Count == 2 && clients[1].Methods.Contains("textDocument/completion")
+            check(completion.Items.Count > 0 && source.Disposed && clients.Count == 1
                 && await analysis.WaitAsync(Wait) == "STALE",
-                "foreground completion preempts a held native diagnostic publication without waiting for its timeout or a publication");
+                "in-process foreground completion preempts a held native diagnostic publication without launching an STS completion child");
             var retried = await broker.DiagnosticsAsync(request, default).WaitAsync(Wait);
-            check(retried.Items.Count == 1 && clients.Count == 3 && !clients[1].Disposed,
-                "diagnostics resume after foreground completion and preserve the separate completion child");
+            check(retried.Items.Count == 1 && clients.Count == 2,
+                "diagnostics resume after in-process foreground completion");
         }
 
         using (var provider = new AdmissionProvider())

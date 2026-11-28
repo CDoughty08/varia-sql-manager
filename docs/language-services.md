@@ -1,13 +1,15 @@
 # SQL language services
 
-Varia supplies completion, hover and query diagnostics through Microsoft SQL Tools Service. SQL Server is the only
-provider; the editor-facing contract and transport are provider-neutral so another engine can use a different language
-server without changing the Monaco integration. BigQuery queries are GoogleSQL, which SQL Tools never sees; its editor is
-described in [googlesql.md](googlesql.md), and it completes from the Search Objects index instead
-([Completion from the index](#completion-from-the-index)).
+Varia supplies SQL Server **completion and hover** in-process using Microsoft's `ScriptDom` (`TSql180Parser`) and the
+Search Objects in-memory index (`IndexLookup`, [object-search.md](object-search.md#editor-lookup)), across all SQL Server
+authentication modes (SQL Login, Windows Authentication, and **Microsoft Entra ID**). Query **error checking**
+(diagnostics) continues to run in an isolated Microsoft SQL Tools Service child process until Phase 2 replaces
+diagnostics as well. BigQuery queries are GoogleSQL, which completes from the Search Objects index
+([Completion from the index](#completion-from-the-index)) and is described in [googlesql.md](googlesql.md).
 
-Installed applications include the matching self-contained runtime for Windows x64, Linux x64, macOS arm64 or macOS x64.
-IntelliSense needs no separate installation, path setting or first-launch download.
+Installed applications include the matching self-contained SQL Tools Service diagnostic runtime for Windows x64, Linux
+x64, macOS arm64 or macOS x64. Completion and hover need no external language-server process, separate installation, path
+setting or first-launch download.
 
 ## Using IntelliSense
 
@@ -28,14 +30,32 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
 - Because each list is requested again as you type, a list opened with **Ctrl+Space** shows *No suggestions* once
   nothing matches, instead of keeping the last matches.
 - A table created after the query's metadata was loaded is not suggested until **Refresh Local Cache** (below).
-- **Columns** rank ahead of general suggestions of equal match quality. In supported SELECT scopes, unqualified column
-  suggestions carry their source qualifier (a self-join offers `t.[high]` and `b.[high]`; `hi` matches both). `t.` returns
-  only that source's columns. Scope resolution uses a bounded parser and SQL Tools' binder per visible source (temporary
-  probe edits are restored before any other request), limited to 16 source qualifiers and a five-second probe budget. An
-  incomplete expansion does not bring back ambiguous bare columns.
-- **Hover** an identifier for the language server's information.
-- **Lazy schema preview drawer.** Arrowing through completion suggestions lazily resolves a full schema preview in Monaco's details pane from the local Search Objects RAM index (~1 ms, zero extra SQL Server, STS, or BigQuery calls): BigQuery items show their path, PR #738 discovery tier (`Billing`, `★ Starred`, `Discovered`), rows, size, partitioning/clustering, description, nested `STRUCT` field summaries, and top columns; SQL Server items enrich STS suggestions with columns, types, `PK`/`UK`/`FK`/`IDENTITY` markers, indexes, and incoming/outgoing foreign keys.
-- **Unified status bar IntelliSense popover.** Clicking the status bar's SQL IntelliSense chip opens a Calm Pro popover (dismissible with **Esc** or an outside click) summarizing index and provider health, the shared Search Objects memory budget bar, one-click **Refresh Cache** / **Refresh Local Cache** (`Ctrl+Shift+R`), and **Settings**. On BigQuery tabs it breaks down the 3-wave index (billing, ★ starred, and discovered / memory-capped projects) and checks the health of each `FROM`/`JOIN` table in the active query; on SQL Server tabs it reports SQL Tools Service and `IndexLookup` status alongside indexed database counts.
+- **Columns, scope & script-local objects.** Columns rank ahead of general suggestions of equal match quality. In-process
+  `ScriptDom` (`TsqlScopeReader`) resolves `FROM` / `JOIN` / `CROSS APPLY` / `OUTER APPLY` / `PIVOT` / `UNPIVOT` /
+  `OPENJSON` / `UPDATE` / `DELETE` / `MERGE` / `INSERT` sources and aliases, CTEs (`WITH`), derived tables, `OUTPUT`
+  `inserted` / `deleted`, script-local `#temp` and `##global_temp` tables (`CREATE TABLE #t`, `SELECT … INTO #t`,
+  persisting across `GO` batches), batch-local `@table` and `@scalar` variables (plus procedure/function parameters), and
+  mid-script `USE other_db` database switches directly against `IndexLookup` (~1 ms, zero IPC hop, full database
+  collation case rules including case-sensitive and Turkish/Azeri dotted-I collations, plus `sys` and
+  `INFORMATION_SCHEMA` resource objects). Aliased and multi-source unqualified columns carry their source qualifier
+  (`t.[high]`, `b.[high]`; `hi` matches both), and `t.` returns only that source's columns.
+- **FK-aware `JOIN … ON` & cross-DB fuzzy `FROM` jump.** Inside `JOIN … ON |`, `IndexLookup` foreign keys (outgoing,
+  incoming, and multi-column composite FKs) suggest the join predicate (`o.[CustomerId] = c.[Id]`) ranked **#1** ahead of
+  individual columns. Typing 2+ characters at an unqualified `FROM` / `JOIN` site performs a bounded cross-schema and
+  cross-database fuzzy jump (current DB `dbo` → current DB other schemas → other indexed databases), inserting
+  `[schema].[Table]` or `[OtherDB].[dbo].[Table]`.
+- **T-SQL context sites.** `CAST(x AS |)` / `CONVERT(|, x)` / `DECLARE @x |` suggest T-SQL data types only;
+  `DATEADD(|, …)` / `DATEDIFF` / `DATEDIFF_BIG` / `DATENAME` / `DATEPART` / `DATETRUNC` suggest T-SQL date parts only;
+  `@@|` (with `@` as a trigger character) suggests curated system globals (`@@ROWCOUNT`, `@@TRANCOUNT`, `@@ERROR`,
+  `@@IDENTITY`, `@@SPID`, `@@VERSION`, etc.) while `@|` suggests batch-local variables; built-in T-SQL functions include
+  hover signatures.
+- **3-level hover.** Hovering a SQL Server **database** segment (or `USE` target) shows index state, collation case rule,
+  and schema/object counts; hovering a **schema** shows object counts and sample objects; hovering a **table, view,
+  procedure, function, synonym, or table type** shows columns with `PK`/`UK`/`FK`/`IDENTITY` markers, parameters/return
+  type, and incoming/outgoing foreign keys; hovering an alias, column, `#temp` table, `@var`, CTE, `@@` global, or
+  built-in function shows its resolved schema, type, FK target, or signature.
+- **Lazy schema preview drawer.** Arrowing through completion suggestions lazily resolves a full schema preview in Monaco's details pane from the local Search Objects RAM index (~1 ms, zero extra SQL Server, STS, or BigQuery calls): BigQuery items show their path, PR #738 discovery tier (`Billing`, `★ Starred`, `Discovered`), rows, size, partitioning/clustering, description, nested `STRUCT` field summaries, and top columns; SQL Server items enrich suggestions with columns, types, `PK`/`UK`/`FK`/`IDENTITY` markers, indexes, and incoming/outgoing foreign keys.
+- **Unified status bar IntelliSense popover.** Clicking the status bar's SQL IntelliSense chip opens a Calm Pro popover (dismissible with **Esc** or an outside click) summarizing index and provider health, the shared Search Objects memory budget bar, one-click **Refresh Cache** / **Refresh Local Cache** (`Ctrl+Shift+R`), **Build index** / **Refresh index** when unindexed or memory-capped (`CHILDREN_LEFT_OUT`), and **Settings**. On BigQuery tabs it breaks down the 3-wave index (billing, ★ starred, and discovered / memory-capped projects) and checks the health of each `FROM`/`JOIN` table in the active query; on SQL Server tabs it reports `ScriptDom + Index` for completion/hover alongside SQL Tools Service error checking (or `Unavailable on Entra ID` on Microsoft Entra ID tabs) and indexed database counts.
 - Hover and completion widgets can extend beyond a short query panel within the window; each editor owns its widgets
   across split and floating groups, and menus and dialogs stay above them.
 
@@ -129,23 +149,28 @@ checking**.
 
 **Ctrl+Shift+R** (**Command+Shift+R** on macOS), **Edit › IntelliSense › Refresh Local Cache** or the palette rebuilds
 the query's metadata cache after schema changes, for its provider, connection and database (or BigQuery datasets). It
-preserves unsaved SQL, execution sessions, transactions and temporary tables. On SQL Server it calls `language.refresh`
-and waits for the provider's readiness notification; on BigQuery it clears the connection's `LookupCache` immediately
-and runs a scoped `explorer.index` refresh for the datasets referenced by the tab (or its default dataset and billing
-project). The status bar shows `SQL: Refreshing` (`IntelliSense refreshing`) and failures; changing the
-query's target, disconnecting or closing it discards an obsolete result.
+preserves unsaved SQL, execution sessions, transactions and temporary tables. On SQL Server it calls `language.refresh`,
+which refreshes the database in the Search Objects index (via fingerprint + selective reload, or a full index build if
+unindexed), clears the renderer's `LookupCache`, and resets the STS diagnostic child so error checking picks up schema
+changes too; on BigQuery it clears the connection's `LookupCache` immediately and runs a scoped `explorer.index` refresh
+for the datasets referenced by the tab (or its default dataset and billing project). The status bar shows
+`SQL: Refreshing` (`IntelliSense refreshing`) and failures; changing the query's target, disconnecting or closing it
+discards an obsolete result.
 
 ### Authentication
 
-Connected IntelliSense supports SQL Login and Windows authentication with the connection's encryption and certificate
-settings. Microsoft Entra authentication is not supported for IntelliSense (SQL Tools Service does not share Varia's
-token broker); query execution is unaffected.
+SQL Server **completion, hover, Go To Definition, and Refresh Local Cache** support **SQL Login, Windows Authentication,
+and Microsoft Entra ID** (using Varia's own connection pools and Search Objects index). Live SQL error checking
+(diagnostics) still uses SQL Tools Service's separate process and therefore supports SQL Login and Windows authentication
+until Phase 2 replaces STS diagnostics; Microsoft Entra ID tabs cleanly pause error checking while keeping completion,
+hover, and cache refresh active.
 
 ## Completion from the index
 
 A BigQuery tab has no language server: completion and hover are Varia's own, read from the connection's Search Objects
 index ([object-search.md](object-search.md#bigquery)) in the backend's memory through `language.lookup`
-([ipc.md](ipc.md)). Nothing is sent to Google and nothing is billed. SQL Server tabs keep SQL Tools.
+([ipc.md](ipc.md)). Nothing is sent to Google and nothing is billed. SQL Server tabs use the in-process `ScriptDom` +
+`IndexLookup` provider above for completion and hover, and keep SQL Tools Service only for live error checking until Phase 2.
 
 - **Pipeline.** `src/shared/completion/` knows no engine: a grammar reads the caret's statement into a site (an object
   name, a member after a dot, an expression, or a clause site such as `afterFromTable`, `statementStart`, `castType`,
@@ -267,46 +292,44 @@ before promoting any SQL Server-specific assumption into the common contract.
   resolve the requesting model, not the active query. Responses are discarded after an edit, context change, close,
   cancellation or backend-generation change. Query editors stay in the main OS window; other panels support
   [OS popouts](popout-windows.md).
-- Credentials stay in the backend. SQL Tools keeps its own database connection, not a query tab's session, so temporary
-  tables, session variables, uncommitted changes and session SET options are invisible to it, and background analysis
-  cannot interfere with a running query or transaction.
-- The SQL Server adapter opens the buffer before connecting, waits for metadata readiness and retries transient busy
-  completion responses within a deadline. It sends explicit UTF-16 replacement ranges and refreshes its parse tree before
-  hovering changed text. Service file tracing is off; stderr is drained without logging.
+- Credentials stay in the backend. For live SQL error checking, SQL Tools keeps its own database connection, not a query
+  tab's session, so uncommitted changes and session SET options are invisible to it, and background analysis cannot
+  interfere with a running query or transaction.
+- The SQL Server diagnostics child opens its buffer before connecting and waits for metadata readiness before publishing
+  issues. Completion and hover never spawn or touch SQL Tools Service; they run in-process via ScriptDom + `IndexLookup`
+  with explicit UTF-16 replacement ranges. Service file tracing is off; stderr is drained without logging.
 - The executable and arguments come only from the trusted application.
 
 ## Scope and limits
 
-- Implemented: completion, lazy completion-item schema previews (via local Search Objects `language.lookup` on both
-  BigQuery and SQL Server), hover, syntax/catalog diagnostics, metadata-cache refresh, Go To Definition, and unified status
-  bar IntelliSense popover. Not yet: formatting, signature help, Entra IntelliSense.
+- Implemented: in-process `ScriptDom` + `IndexLookup` SQL Server completion and 3-level hover (all auth modes including
+  **Microsoft Entra ID**), lazy completion-item schema previews (via local Search Objects `language.lookup` on both
+  BigQuery and SQL Server), syntax/catalog diagnostics (SQL Login & Windows via isolated STS child), metadata-cache
+  refresh, Go To Definition, and unified status bar IntelliSense popover. Not yet: formatting, signature help, Entra ID
+  error squiggles (Phase 2).
 - Documents above 250,000 UTF-16 code units edit and execute normally without language requests.
-- Completion keeps at most 128 documents and 8,000,000 UTF-16 code units in total, and returns at most 500 items per
-  response, prioritizing matching identifiers before truncation so later catalog names stay reachable.
-- A missing service executable leaves language support unavailable; editing and execution still work.
+- Completion keeps at most 128 documents and returns at most 500 items per response (and 1,000,000 aggregate characters),
+  prioritizing FK join suggestions, exact matches, and columns before truncation so later catalog names stay reachable.
+- When `objectExplorer.search.indexOnConnect` is off or a database is `CHILDREN_LEFT_OUT`, `Skipped`, or `Absent`,
+  completion continues serving keywords, built-in functions, `@@` globals, `#temp` tables, `@vars`, and CTEs, while the
+  status bar popover surfaces a one-click **Build index** / **Refresh index** action.
+- A missing SQL Tools Service executable leaves error checking unavailable; ScriptDom completion, hover, editing, and
+  execution still work.
 
 ### Documents and processes
 
 - **Document cap.** The broker tracks at most 128 documents. A new one waits for a close under way; otherwise the least
-  recently used document with no request in progress is released (it reopens from full text on its next request). Only
-  when all 128 have requests in progress is the new one refused as busy.
-- **Notification queue.** Bounded by 8,388,608 characters (each notification counted at its parameters' length plus 512);
-  passing the bound stops the child, which is reinitialized.
-- **Lifetime.** The child starts on the first request that needs it; the first-launch welcome query is not analysed until
-  edited. Requests have deadlines; a failed process is reinitialized on a later request, resynchronizing each document
-  from full text. A failed availability check is retried on the next completion or hover after a short cooldown;
-  Refresh Local Cache retries at once. Closing a query or disconnecting releases its document and analysis connection.
-- **Retirement.** When a context's last document closes, or after 128 closures, the adapter waits for admitted requests and
-  retires the child (the pinned service keeps caches after close); remaining documents resync lazily. Renderer cleanup is
-  bounded, waits for requests queued behind metadata work, and retries only explicit pre-dispatch capacity refusals;
-  persistent overload reports a warning.
+  recently used document with no request in progress is released. Only when all 128 have requests in progress is the new
+  one refused as busy.
+- **No completion child process.** SQL Server completion, hover, and cache refresh run strictly in-process in the .NET
+  backend (~1 ms) using `ScriptDom` + `IndexLookup`; zero interactive SQL Tools Service completion child processes are
+  spawned.
 - **Analysis child.** Diagnostics run in one separate, serialized SQL Tools child with an immutable URI per snapshot,
   because SQL Tools publishes unversioned diagnostics with a shared debounce. Completion and hover preempt pending
   analysis for their document; error checking resumes after them. At most one diagnostic context is kept (briefly two
   snapshot connections during rollover). The child retires on close, disconnect, relevant refresh, context change, 128
   snapshots, 8,000,000 cumulative snapshot UTF-16 code units, reset, or 60 seconds idle. The broker keeps fingerprints,
-  not buffer copies. Analysis and completion together can hold two processes; diagnostics alone does not start the
-  completion child.
+  not buffer copies.
 - **Management actions** pause language requests and release metadata connections so IntelliSense cannot keep a database
   in use during rename, detach, restore and similar; the next request rebuilds the context. The pause covers all
   providers.

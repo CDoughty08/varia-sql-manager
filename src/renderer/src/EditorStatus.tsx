@@ -41,6 +41,8 @@ export function sqlStatusChip(language: SqlStatusItem | undefined, issues: SqlSt
   else if (language?.label === 'IntelliSense starting') { label = 'SQL: Starting'; icon = 'sync'; tone = 'normal' }
   else if (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable') {
     label = 'SQL: Unavailable'; icon = 'warning'; tone = 'warning'
+  } else if (issues?.label === 'SQL analysis paused' && language?.label === 'IntelliSense' && issues.detail.includes('Microsoft Entra ID')) {
+    label = 'IntelliSense'; icon = 'code'; tone = 'normal'
   } else if (issues?.label === 'SQL analysis paused' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected') {
     label = 'SQL: Paused'; icon = 'code'; tone = 'muted'
   } else if (language?.label === 'IntelliSense off') {
@@ -89,7 +91,7 @@ export default function EditorStatus() {
   if (!active || !caret) return <span className="editor-status" />
   const file = active.file
   const encoding = documentEncodingLabel(file, values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined)
-  // A BigQuery tab's IntelliSense is Varia's own, from the index; SQL Server's is SQL Tools Service's.
+  // A BigQuery tab's IntelliSense is Varia's IndexCompletionService; SQL Server's uses ScriptDom + IndexLookup.
   const bigQueryLanguage = isQueryDocument(active) ? indexCompletion.availability(active.id) : undefined
   const language = isQueryDocument(active) ? bigQueryLanguage ?? sqlLanguage.availability(active.id) : undefined
   // A BigQuery tab's issues come from its dry runs; SQL Server's from SQL analysis.

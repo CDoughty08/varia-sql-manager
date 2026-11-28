@@ -18,16 +18,14 @@ internal sealed partial class SqlToolsLanguageService
     private int diagnosticCharacters;
     private bool diagnosticRunning;
     private string? diagnosticDocumentId;
+    private string? diagnosticConnectionId;
     private string? diagnosticContextKey;
 
-    private sealed record DiagnosticOwner(string Uri, string DocumentId, string ContextKey, ILspClient Client);
+    private sealed record DiagnosticOwner(string Uri, string DocumentId, string? ConnectionId, string ContextKey, ILspClient Client);
     private sealed record DiagnosticPending(ILspClient Client, LanguageRequest Request, TaskCompletionSource<LanguageDiagnosticResult> Answer);
 
-    public async Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token)
-    {
-        var result = await RequestAsync("varia/diagnostics", new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), token);
-        return result.Deserialize<LanguageDiagnosticResult>() ?? throw new IOException("Invalid language diagnostics response.");
-    }
+    public Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token) =>
+        DiagnosticsRequestAsync(new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), token);
 
     private async Task<LanguageDiagnosticResult> DiagnosticsRemoteAsync(LanguageRequest request, string? settings, CancellationToken token)
     {
@@ -41,6 +39,7 @@ internal sealed partial class SqlToolsLanguageService
             {
                 diagnosticRunning = true;
                 diagnosticDocumentId = request.DocumentId;
+                diagnosticConnectionId = request.Context.ConnectionId;
                 diagnosticContextKey = contextKey;
                 diagnosticIdle?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
                 // STS retains parse/binding owners after didClose. Bound that retention and keep only the current
@@ -64,7 +63,7 @@ internal sealed partial class SqlToolsLanguageService
                 token.ThrowIfCancellationRequested();
                 if (!ReferenceEquals(current, diagnosticClient)) throw new OperationCanceledException(token);
                 diagnosticPending.Add(uri, new(current, request, answer));
-                diagnosticOwner = new(uri, request.DocumentId, contextKey, current);
+                diagnosticOwner = new(uri, request.DocumentId, request.Context.ConnectionId, contextKey, current);
                 diagnosticOwners++;
                 diagnosticCharacters += request.Text.Length;
             }
@@ -93,6 +92,7 @@ internal sealed partial class SqlToolsLanguageService
                 diagnosticPending.Remove(uri);
                 diagnosticRunning = false;
                 diagnosticDocumentId = null;
+                diagnosticConnectionId = null;
                 diagnosticContextKey = null;
                 if (!disposed && diagnosticClient is not null)
                 {
