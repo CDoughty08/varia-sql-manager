@@ -415,7 +415,7 @@ export class BackendSupervisor {
       if (provider === undefined) { allKnown = false; continue }
       if (provider === 'sqlserver') {
         hasSqlServer = true
-        if (target.dataset !== undefined || target.maximumBytesBilled !== undefined) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
+        if (target.dataset !== undefined || target.noDefaultDataset !== undefined || target.maximumBytesBilled !== undefined) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)
       } else {
         hasBigQuery = true
         if (target.database !== undefined) throw new BackendError('UNSUPPORTED_PROVIDER', sentences.unsupportedOptions)

@@ -17,6 +17,7 @@ export type BigQueryDryRunEstimator = (request: {
   readonly connectionId: string
   readonly sql: string
   readonly dataset?: string
+  readonly noDefaultDataset?: true
 }) => Promise<ApiResult<BigQueryDryRunResult>>
 
 /** Per-target display and cost metadata rendered inside MultiExecuteDialog. */
@@ -303,7 +304,7 @@ async function dryRunTarget(
     const response = await api.bigQueryDryRun({
       connectionId: target.connection.id,
       sql,
-      ...target.item.dataset ? { dataset: target.item.dataset } : { noDefaultDataset: true }
+      ...target.item.dataset ? { dataset: target.item.dataset } : { noDefaultDataset: true as const }
     })
     return response.ok ? response.value : undefined
   } catch {
