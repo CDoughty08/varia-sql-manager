@@ -76,7 +76,7 @@ describe('Release builds', () => {
       expect(/\n {8}if: (.*)/.exec(step!)?.[1] ?? '', marker).not.toMatch(/github\.ref|github\.event_name/)
     }
     expect(pack).toContain('cache: true\n          cache-dependency-path: backend/Varia.Backend/packages.lock.json')
-    expect(pack).toContain('VARIA_PACKAGED_RID: ${{ inputs.rid }}')
+    expect(pack).not.toContain('VARIA_PACKAGED_RID')
     expect(pack).toContain('--config.compression=store')
     expect(pack).toContain('--mac dir --arm64')
     expect(pack).toMatch(/- name: Type check\n {8}if: startsWith\(github\.ref, 'refs\/tags\/'\)\n/)

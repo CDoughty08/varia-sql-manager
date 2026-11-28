@@ -18,6 +18,8 @@ internal static class TsqlDiagnosticService
     private const int MaxConsecutiveUnary = 32;
     private const int MaxExpressionOperators = 256;
     private const int MaxBlockDepth = 64;
+    private const int MaxControlFlowDepth = 64;
+    private const int MaxStatementJoins = 128;
     private const int MaxStatementSelects = 64;
     private const int MaxLocalTables = 256;
     private const int MaxScriptObjects = 1024;
@@ -59,7 +61,7 @@ internal static class TsqlDiagnosticService
             return new(request.Version, [], true);
 
         var batches = SplitBatches(allTokens, text.Length);
-        var state = new ScriptState(defaultDatabase);
+        var state = new ScriptState(defaultDatabase, lookup);
 
         foreach (var batch in batches)
         {
@@ -86,10 +88,15 @@ internal static class TsqlDiagnosticService
                 continue;
             }
 
-            var (fragment, parseErrors) = TsqlScopeReader.RunOnParseThread(() =>
+            var parseErrors = TsqlScopeReader.RunOnParseThread(() =>
             {
                 var parsed = parser.Parse(batchTokens, out var errors);
-                return (parsed, errors);
+                if (errors.Count == 0 && parsed is TSqlScript script)
+                {
+                    var binder = new BindingVisitor(lookup, state, batch.Start, collector, cancellationToken);
+                    script.Accept(binder);
+                }
+                return errors;
             }, cancellationToken);
 
             if (parseErrors.Count > 0)
@@ -99,13 +106,6 @@ internal static class TsqlDiagnosticService
                     var range = MapErrorRange(lines, text, batch.Start, err, batchTokens);
                     collector.Add(range, err.Message, severity: 1, code: $"SQL{err.Number}");
                 }
-                continue;
-            }
-
-            if (fragment is TSqlScript script)
-            {
-                var binder = new BindingVisitor(lookup, state, batch.Start, collector, cancellationToken);
-                script.Accept(binder);
             }
         }
 
@@ -118,9 +118,13 @@ internal static class TsqlDiagnosticService
         var parenDepth = 0;
         var stmtParens = 0;
         var chainedDots = 0;
+        var chainDepth = 0;
         var unary = 0;
         var exprOps = 0;
         var blockDepth = 0;
+        var controlFlowDepth = 0;
+        var inControlHeader = false;
+        var stmtJoins = 0;
         var stmtSelects = 0;
         var prevType = TSqlTokenType.None;
 
@@ -138,8 +142,11 @@ internal static class TsqlDiagnosticService
                 stmtParens = 0;
                 chainedDots = 0;
                 exprOps = 0;
+                stmtJoins = 0;
                 stmtSelects = 0;
                 unary = 0;
+                controlFlowDepth = 0;
+                inControlHeader = false;
                 prevType = type;
                 continue;
             }
@@ -147,8 +154,8 @@ internal static class TsqlDiagnosticService
             if (type == TSqlTokenType.Comma && parenDepth == 0)
             {
                 exprOps = 0;
-                chainedDots = 0;
                 unary = 0;
+                if (chainedDots > 0 && parenDepth <= chainDepth) chainedDots = 0;
                 prevType = type;
                 continue;
             }
@@ -156,7 +163,28 @@ internal static class TsqlDiagnosticService
             if (parenDepth == 0 && StatementBoundaryKeywords.Contains(text))
             {
                 exprOps = 0;
-                chainedDots = 0;
+                if (chainedDots > 0 && parenDepth <= chainDepth) chainedDots = 0;
+
+                if (type is TSqlTokenType.If or TSqlTokenType.While)
+                {
+                    if (inControlHeader)
+                    {
+                        if (++controlFlowDepth > MaxControlFlowDepth) return false;
+                    }
+                    else
+                    {
+                        controlFlowDepth = 1;
+                    }
+                    inControlHeader = true;
+                }
+                else if (type == TSqlTokenType.Else)
+                {
+                    inControlHeader = true;
+                }
+                else
+                {
+                    inControlHeader = false;
+                }
             }
 
             if (type == TSqlTokenType.LeftParenthesis)
@@ -166,15 +194,20 @@ internal static class TsqlDiagnosticService
             else if (type == TSqlTokenType.RightParenthesis)
             {
                 if (parenDepth > 0) parenDepth--;
+                if (chainedDots > 0 && parenDepth < chainDepth) chainedDots = 0;
             }
 
             if (type == TSqlTokenType.Dot)
             {
-                if (prevType == TSqlTokenType.RightParenthesis && ++chainedDots > MaxChainedMethodDots)
-                    return false;
+                if (prevType == TSqlTokenType.RightParenthesis)
+                {
+                    if (chainedDots == 0) chainDepth = parenDepth;
+                    if (++chainedDots > MaxChainedMethodDots) return false;
+                }
             }
-            else if (type is not (TSqlTokenType.Identifier or TSqlTokenType.QuotedIdentifier or TSqlTokenType.AsciiStringOrQuotedIdentifier
-                or TSqlTokenType.LeftParenthesis or TSqlTokenType.RightParenthesis))
+            else if (chainedDots > 0 && parenDepth <= chainDepth
+                && type is not (TSqlTokenType.Identifier or TSqlTokenType.QuotedIdentifier or TSqlTokenType.AsciiStringOrQuotedIdentifier
+                    or TSqlTokenType.LeftParenthesis or TSqlTokenType.RightParenthesis))
             {
                 chainedDots = 0;
             }
@@ -188,7 +221,12 @@ internal static class TsqlDiagnosticService
                 if (blockDepth > 0) blockDepth--;
             }
 
-            if (type == TSqlTokenType.Select)
+            if (type == TSqlTokenType.Join || string.Equals(text, "APPLY", StringComparison.OrdinalIgnoreCase))
+            {
+                if (++stmtJoins > MaxStatementJoins) return false;
+            }
+
+            if (type is TSqlTokenType.Union or TSqlTokenType.Intersect or TSqlTokenType.Except)
             {
                 if (++stmtSelects > MaxStatementSelects) return false;
             }
@@ -287,28 +325,48 @@ internal static class TsqlDiagnosticService
         var globalStart = Math.Clamp(batchBaseOffset + relOffset, 0, text.Length);
         var globalEnd = globalStart;
 
-        // Highlight the offending token if one starts at or contains relOffset (capped to a single line).
-        for (var i = 0; i < batchTokens.Count; i++)
+        // Binary search for the rightmost token whose Offset <= relOffset (capped to a single line).
+        var lo = 0;
+        var hi = batchTokens.Count - 1;
+        var match = -1;
+        while (lo <= hi)
         {
-            var tok = batchTokens[i];
-            if (tok.TokenType == TSqlTokenType.EndOfFile) break;
-            var tokLen = tok.Text?.Length ?? 0;
-            if (tok.Offset > relOffset) break;
-            if (relOffset >= tok.Offset && relOffset < tok.Offset + tokLen)
+            var mid = lo + ((hi - lo) >> 1);
+            if (batchTokens[mid].Offset <= relOffset)
             {
-                if (tok.TokenType != TSqlTokenType.WhiteSpace)
-                {
-                    var end = Math.Min(text.Length, batchBaseOffset + tok.Offset + tokLen);
-                    // Cap range to the end of the start line so unclosed multi-line tokens don't paint the whole file.
-                    var nl = text.IndexOfAny(['\r', '\n'], globalStart, end - globalStart);
-                    globalEnd = nl >= 0 ? nl : end;
-                }
-                break;
+                match = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+        while (match >= 0 && batchTokens[match].TokenType == TSqlTokenType.EndOfFile)
+            match--;
+        if (match >= 0)
+        {
+            var tok = batchTokens[match];
+            var tokLen = tok.Text?.Length ?? 0;
+            if (relOffset >= tok.Offset && relOffset < tok.Offset + tokLen && tok.TokenType != TSqlTokenType.WhiteSpace)
+            {
+                var end = Math.Min(text.Length, batchBaseOffset + tok.Offset + tokLen);
+                // Cap range to the end of the start line so unclosed multi-line tokens don't paint the whole file.
+                var nl = text.IndexOfAny(['\r', '\n'], globalStart, end - globalStart);
+                globalEnd = nl >= 0 ? nl : end;
             }
         }
 
         if (globalEnd <= globalStart && globalStart < text.Length && text[globalStart] is not ('\r' or '\n'))
+        {
             globalEnd = globalStart + 1;
+        }
+
+        // Never split a UTF-16 surrogate pair at either boundary (whether from a token or the 1-char fallback).
+        if (globalStart > 0 && globalStart < text.Length && char.IsLowSurrogate(text[globalStart]) && char.IsHighSurrogate(text[globalStart - 1]))
+            globalStart--;
+        if (globalEnd > globalStart && globalEnd < text.Length && char.IsLowSurrogate(text[globalEnd]) && char.IsHighSurrogate(text[globalEnd - 1]))
+            globalEnd++;
 
         return lines.RangeOf(globalStart, globalEnd - globalStart);
     }
@@ -413,20 +471,50 @@ internal static class TsqlDiagnosticService
         HashSet<string> Columns,
         bool HasCompleteColumns);
 
-    private sealed class ScriptState(string? activeDatabase)
+    private static string? NormalizePart(Identifier? id) =>
+        id?.Value is { Length: > 0 } value ? value : null;
+
+    private sealed class ObjectPairComparer(IEqualityComparer<string> inner) : IEqualityComparer<(string Schema, string Name)>
     {
+        public bool Equals((string Schema, string Name) x, (string Schema, string Name) y) =>
+            inner.Equals(x.Schema, y.Schema) && inner.Equals(x.Name, y.Name);
+
+        public int GetHashCode((string Schema, string Name) obj) =>
+            HashCode.Combine(inner.GetHashCode(obj.Schema), inner.GetHashCode(obj.Name));
+    }
+
+    private sealed class DbScriptObjects(IEqualityComparer<string> comparer)
+    {
+        public HashSet<(string Schema, string Name)> CreatedObjects { get; } = new(new ObjectPairComparer(comparer));
+        public Dictionary<(string Schema, string Name), ScriptLocalTable> CreatedTables { get; } = new(new ObjectPairComparer(comparer));
+        public HashSet<(string Schema, string Name)> AlteredTables { get; } = new(new ObjectPairComparer(comparer));
+        public HashSet<string> CreatedSchemas { get; } = new(comparer);
+    }
+
+    private sealed class ScriptState(string? activeDatabase, IndexLookup? lookup)
+    {
+        private readonly Dictionary<string, DbScriptObjects> byDatabase = new(StringComparer.OrdinalIgnoreCase);
+
         public string? ActiveDatabase { get; set; } = activeDatabase;
         public Dictionary<string, ScriptLocalTable> TempTables { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public HashSet<string> CreatedObjects { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, ScriptLocalTable> CreatedTables { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public HashSet<string> AlteredTables { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public HashSet<string> CreatedSchemas { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, HashSet<string>> SchemaCache { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public int TotalCreatedObjects { get; set; }
+        public int TotalCreatedSchemas { get; set; }
 
-        public static string ObjectKey(string? db, string? schema, string name) =>
-            $"{db ?? ""}\u0000{schema ?? "dbo"}\u0000{name}";
+        public DbScriptObjects ForDatabase(string? dbName)
+        {
+            var key = dbName ?? "";
+            if (byDatabase.TryGetValue(key, out var existing)) return existing;
+            var comparer = !string.IsNullOrEmpty(dbName) && lookup is not null
+                ? TsqlCompletionService.CollationComparer(lookup.Database(dbName))
+                : StringComparer.OrdinalIgnoreCase;
+            var created = new DbScriptObjects(comparer);
+            byDatabase[key] = created;
+            return created;
+        }
 
-        public static string SchemaKey(string? db, string schema) =>
-            $"{db ?? ""}\u0000{schema}";
+        public static (string Schema, string Name) ObjectPair(string? schema, string name) =>
+            (string.IsNullOrEmpty(schema) ? "dbo" : schema, name);
     }
 
     private sealed record BoundSource(
@@ -439,7 +527,14 @@ internal static class TsqlDiagnosticService
         bool HasCompleteColumns,
         IReadOnlySet<string> Columns,
         IEqualityComparer<string> Comparer,
-        TSqlFragment? AliasFragment);
+        TSqlFragment? AliasFragment,
+        bool IsVirtualExposure = false)
+    {
+        public bool MatchesExposure(string qualifier) =>
+            IsVirtualExposure
+                ? string.Equals(ExposureName, qualifier, StringComparison.OrdinalIgnoreCase)
+                : Comparer.Equals(ExposureName, qualifier);
+    }
 
     private sealed record BoundCte(
         string Name,
@@ -459,20 +554,36 @@ internal static class TsqlDiagnosticService
         public bool InOrderBy { get; set; }
     }
 
-    private sealed class BindingVisitor(
-        IndexLookup? lookup,
-        ScriptState state,
-        int batchBaseOffset,
-        DiagnosticCollector collector,
-        CancellationToken cancellationToken) : TSqlFragmentVisitor
+    private sealed class BindingVisitor : TSqlFragmentVisitor
     {
-        private readonly Dictionary<string, ScriptLocalTable> tableVars = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, BoundCte> visibleCtes = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<QueryDerivedTable, IReadOnlyList<BoundSource>> applyLateralSources = [];
+        private readonly IndexLookup? lookup;
+        private readonly ScriptState state;
+        private readonly int batchBaseOffset;
+        private readonly DiagnosticCollector collector;
+        private readonly CancellationToken cancellationToken;
+        private Dictionary<string, ScriptLocalTable> tableVars;
+        private Dictionary<string, BoundCte> visibleCtes;
         private readonly Stack<QueryScope?> scopeStack = new();
         private int conditionalDepth;
         private int suppressColumnDepth;
         private BoundSource? triggerTableSource;
+
+        public BindingVisitor(
+            IndexLookup? lookup,
+            ScriptState state,
+            int batchBaseOffset,
+            DiagnosticCollector collector,
+            CancellationToken cancellationToken)
+        {
+            this.lookup = lookup;
+            this.state = state;
+            this.batchBaseOffset = batchBaseOffset;
+            this.collector = collector;
+            this.cancellationToken = cancellationToken;
+            var comp = ActiveComparer();
+            tableVars = new Dictionary<string, ScriptLocalTable>(comp);
+            visibleCtes = new Dictionary<string, BoundCte>(comp);
+        }
 
         private QueryScope? CurrentScope => scopeStack.Count > 0 ? scopeStack.Peek() : null;
 
@@ -506,22 +617,35 @@ internal static class TsqlDiagnosticService
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (node.DatabaseName?.Value is { Length: > 0 } dbName)
+            {
                 state.ActiveDatabase = dbName;
+                var comp = ActiveComparer();
+                var reboundVars = new Dictionary<string, ScriptLocalTable>(comp);
+                foreach (var (k, v) in tableVars) reboundVars[k] = v;
+                tableVars = reboundVars;
+                var reboundCtes = new Dictionary<string, BoundCte>(comp);
+                foreach (var (k, v) in visibleCtes) reboundCtes[k] = v;
+                visibleCtes = reboundCtes;
+            }
         }
 
         public override void ExplicitVisit(CreateSchemaStatement node)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (node.Name?.Value is { Length: > 0 } schemaName && state.CreatedSchemas.Count < MaxScriptObjects)
-                state.CreatedSchemas.Add(ScriptState.SchemaKey(state.ActiveDatabase, schemaName));
+            if (node.Name?.Value is { Length: > 0 } schemaName && state.TotalCreatedSchemas < MaxScriptObjects)
+            {
+                if (state.ForDatabase(state.ActiveDatabase).CreatedSchemas.Add(schemaName))
+                    state.TotalCreatedSchemas++;
+            }
         }
 
         public override void ExplicitVisit(CreateTableStatement node)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var name = node.SchemaObjectName?.BaseIdentifier?.Value;
-            if (string.IsNullOrEmpty(name)) return;
-            var cols = new HashSet<string>(ActiveComparer(node.SchemaObjectName?.DatabaseIdentifier?.Value));
+            var name = NormalizePart(node.SchemaObjectName?.BaseIdentifier);
+            if (name is null) return;
+            var db = NormalizePart(node.SchemaObjectName?.DatabaseIdentifier);
+            var cols = new HashSet<string>(ActiveComparer(db));
             if (node.Definition?.ColumnDefinitions is { Count: > 0 } defs)
             {
                 foreach (var col in defs)
@@ -544,13 +668,14 @@ internal static class TsqlDiagnosticService
                     }
                 }
             }
-            else if (state.CreatedObjects.Count < MaxScriptObjects)
+            else if (state.TotalCreatedObjects < MaxScriptObjects)
             {
-                var db = node.SchemaObjectName?.DatabaseIdentifier?.Value ?? state.ActiveDatabase;
-                var schema = node.SchemaObjectName?.SchemaIdentifier?.Value;
-                var key = ScriptState.ObjectKey(db, schema, name);
-                state.CreatedObjects.Add(key);
-                state.CreatedTables[key] = new ScriptLocalTable(name, cols, complete);
+                var targetDb = db ?? state.ActiveDatabase;
+                var schema = NormalizePart(node.SchemaObjectName?.SchemaIdentifier);
+                var dbState = state.ForDatabase(targetDb);
+                var pair = ScriptState.ObjectPair(schema, name);
+                if (dbState.CreatedObjects.Add(pair)) state.TotalCreatedObjects++;
+                dbState.CreatedTables[pair] = new ScriptLocalTable(name, cols, complete);
             }
         }
 
@@ -574,8 +699,8 @@ internal static class TsqlDiagnosticService
 
         private void RecordAlteredTable(SchemaObjectName? objName, IList<ColumnDefinition>? addedColumns)
         {
-            var baseName = objName?.BaseIdentifier?.Value;
-            if (string.IsNullOrEmpty(baseName)) return;
+            var baseName = NormalizePart(objName?.BaseIdentifier);
+            if (baseName is null) return;
             if (baseName.StartsWith('#'))
             {
                 if (state.TempTables.TryGetValue(baseName, out var existing))
@@ -588,10 +713,9 @@ internal static class TsqlDiagnosticService
                 }
                 return;
             }
-            var db = objName?.DatabaseIdentifier?.Value ?? state.ActiveDatabase;
-            var schema = objName?.SchemaIdentifier?.Value;
-            var key = ScriptState.ObjectKey(db, schema, baseName);
-            state.AlteredTables.Add(key);
+            var db = NormalizePart(objName?.DatabaseIdentifier) ?? state.ActiveDatabase;
+            var schema = NormalizePart(objName?.SchemaIdentifier);
+            state.ForDatabase(db).AlteredTables.Add(ScriptState.ObjectPair(schema, baseName));
         }
 
         public override void ExplicitVisit(DropTableStatement node)
@@ -641,10 +765,21 @@ internal static class TsqlDiagnosticService
         {
             cancellationToken.ThrowIfCancellationRequested();
             RecordCreatedObject(name);
-            RegisterParameters(parameters);
-            if (returnTable?.DeclareTableVariableBody is { } tvBody)
-                RegisterTableVariableBody(tvBody);
-            body?.Accept(this);
+            var savedTemps = new Dictionary<string, ScriptLocalTable>(state.TempTables, StringComparer.OrdinalIgnoreCase);
+            var savedVars = new Dictionary<string, ScriptLocalTable>(tableVars, tableVars.Comparer);
+            try
+            {
+                RegisterParameters(parameters);
+                if (returnTable?.DeclareTableVariableBody is { } tvBody)
+                    RegisterTableVariableBody(tvBody);
+                body?.Accept(this);
+            }
+            finally
+            {
+                state.TempTables.Clear();
+                foreach (var (k, v) in savedTemps) state.TempTables[k] = v;
+                tableVars = savedVars;
+            }
         }
 
         public override void ExplicitVisit(CreateTriggerStatement node) => VisitTriggerBody(node.Name, node.TriggerObject, node.StatementList);
@@ -656,10 +791,18 @@ internal static class TsqlDiagnosticService
             cancellationToken.ThrowIfCancellationRequested();
             RecordCreatedObject(name);
             var previous = triggerTableSource;
+            var savedTemps = new Dictionary<string, ScriptLocalTable>(state.TempTables, StringComparer.OrdinalIgnoreCase);
+            var savedVars = new Dictionary<string, ScriptLocalTable>(tableVars, tableVars.Comparer);
             if (target?.Name is { } targetObj)
                 triggerTableSource = ResolveNamedTableReference(targetObj, alias: null, emitDiagnostics: false, fromSources: null);
             try { body?.Accept(this); }
-            finally { triggerTableSource = previous; }
+            finally
+            {
+                triggerTableSource = previous;
+                state.TempTables.Clear();
+                foreach (var (k, v) in savedTemps) state.TempTables[k] = v;
+                tableVars = savedVars;
+            }
         }
 
         public override void ExplicitVisit(CreateSynonymStatement node) => RecordCreatedObject(node.Name);
@@ -669,10 +812,12 @@ internal static class TsqlDiagnosticService
 
         private void RecordCreatedObject(SchemaObjectName? objName)
         {
-            if (objName?.BaseIdentifier?.Value is not { Length: > 0 } name || state.CreatedObjects.Count >= MaxScriptObjects) return;
-            var db = objName.DatabaseIdentifier?.Value ?? state.ActiveDatabase;
-            var schema = objName.SchemaIdentifier?.Value;
-            state.CreatedObjects.Add(ScriptState.ObjectKey(db, schema, name));
+            var name = NormalizePart(objName?.BaseIdentifier);
+            if (name is null || state.TotalCreatedObjects >= MaxScriptObjects) return;
+            var db = NormalizePart(objName?.DatabaseIdentifier) ?? state.ActiveDatabase;
+            var schema = NormalizePart(objName?.SchemaIdentifier);
+            if (state.ForDatabase(db).CreatedObjects.Add(ScriptState.ObjectPair(schema, name)))
+                state.TotalCreatedObjects++;
         }
 
         private void RegisterParameters(IList<ProcedureParameter>? parameters)
@@ -714,12 +859,12 @@ internal static class TsqlDiagnosticService
         private void RegisterTypedVariable(string? varName, DataTypeReference? dataType)
         {
             if (string.IsNullOrEmpty(varName) || tableVars.Count >= MaxLocalTables) return;
-            if (dataType is UserDataTypeReference udt && udt.Name?.BaseIdentifier?.Value is { Length: > 0 } typeName && lookup is not null)
+            if (dataType is UserDataTypeReference udt && NormalizePart(udt.Name?.BaseIdentifier) is { } typeName && lookup is not null)
             {
-                var dbName = udt.Name.DatabaseIdentifier?.Value ?? state.ActiveDatabase;
+                var dbName = NormalizePart(udt.Name?.DatabaseIdentifier) ?? state.ActiveDatabase;
                 if (!string.IsNullOrEmpty(dbName))
                 {
-                    var found = TsqlCompletionService.ResolveCatalogObject(lookup, dbName, udt.Name.SchemaIdentifier?.Value, typeName, TsqlCompletionService.TableTypeKinds, out _);
+                    var found = TsqlCompletionService.ResolveCatalogObject(lookup, dbName, NormalizePart(udt.Name?.SchemaIdentifier), typeName, TsqlCompletionService.TableTypeKinds, out _);
                     if (found is { } tt)
                     {
                         var db = lookup.Database(tt.Database);
@@ -782,20 +927,22 @@ internal static class TsqlDiagnosticService
 
         private void RegisterSelectInto(SchemaObjectName into, QueryExpression? query)
         {
-            var baseName = into.BaseIdentifier.Value;
+            var baseName = NormalizePart(into.BaseIdentifier);
+            if (baseName is null) return;
             var (cols, complete) = ProjectQueryColumns(query, explicitCols: null);
             if (baseName.StartsWith('#'))
             {
                 if (state.TempTables.Count < MaxLocalTables)
                     state.TempTables[baseName] = new ScriptLocalTable(baseName, cols, complete && conditionalDepth == 0);
             }
-            else if (state.CreatedObjects.Count < MaxScriptObjects)
+            else if (state.TotalCreatedObjects < MaxScriptObjects)
             {
-                var db = into.DatabaseIdentifier?.Value ?? state.ActiveDatabase;
-                var schema = into.SchemaIdentifier?.Value;
-                var key = ScriptState.ObjectKey(db, schema, baseName);
-                state.CreatedObjects.Add(key);
-                state.CreatedTables[key] = new ScriptLocalTable(baseName, cols, complete && conditionalDepth == 0);
+                var db = NormalizePart(into.DatabaseIdentifier) ?? state.ActiveDatabase;
+                var schema = NormalizePart(into.SchemaIdentifier);
+                var dbState = state.ForDatabase(db);
+                var pair = ScriptState.ObjectPair(schema, baseName);
+                if (dbState.CreatedObjects.Add(pair)) state.TotalCreatedObjects++;
+                dbState.CreatedTables[pair] = new ScriptLocalTable(baseName, cols, complete && conditionalDepth == 0);
             }
         }
 
@@ -850,7 +997,7 @@ internal static class TsqlDiagnosticService
                 CheckDuplicateAliases(sources);
 
                 var target = ResolveDmlTarget(spec.Target, sources, emitDiagnostics: true);
-                if (target is not null && !sources.Any(s => s.Comparer.Equals(s.ExposureName, target.ExposureName)))
+                if (target is not null && !sources.Any(s => s.MatchesExposure(target.ExposureName)))
                     sources.Insert(0, target);
 
                 var scope = new QueryScope(CurrentScope, sources, ActiveComparer());
@@ -913,7 +1060,7 @@ internal static class TsqlDiagnosticService
                 CheckDuplicateAliases(sources);
 
                 var target = ResolveDmlTarget(spec.Target, sources, emitDiagnostics: true);
-                if (target is not null && !sources.Any(s => s.Comparer.Equals(s.ExposureName, target.ExposureName)))
+                if (target is not null && !sources.Any(s => s.MatchesExposure(target.ExposureName)))
                     sources.Insert(0, target);
 
                 var scope = new QueryScope(CurrentScope, sources, ActiveComparer());
@@ -951,15 +1098,19 @@ internal static class TsqlDiagnosticService
                     target = ResolveTableReference(spec.Target, emitDiagnostics: true, fromSources: null);
                     if (target is not null) sources.Add(target);
                 }
+                var usingSources = new List<BoundSource>();
                 if (spec.TableReference is not null)
-                    CollectFromSources(spec.TableReference, sources, emitDiagnostics: true);
+                {
+                    CollectFromSources(spec.TableReference, usingSources, emitDiagnostics: true);
+                    sources.AddRange(usingSources);
+                }
                 CheckDuplicateAliases(sources);
 
                 var scope = new QueryScope(CurrentScope, sources, ActiveComparer());
                 scopeStack.Push(scope);
                 try
                 {
-                    if (spec.TableReference is not null) VisitTableReferenceChildren(spec.TableReference);
+                    if (spec.TableReference is not null) VisitTableReferenceChildren(spec.TableReference, [], activeApplyLateral: null);
                     spec.SearchCondition?.Accept(this);
                     foreach (var actionClause in spec.ActionClauses)
                     {
@@ -987,7 +1138,14 @@ internal static class TsqlDiagnosticService
                                         collector.AddFragment(col, batchBaseOffset, $"Invalid column name '{ids[^1].Value}'.", "SQL207");
                                 }
                             }
-                            ins.Source?.Accept(this);
+                            if (ins.Source is not null)
+                            {
+                                // WHEN NOT MATCHED [BY TARGET] THEN INSERT VALUES binds exclusively against the USING source.
+                                var insertScope = new QueryScope(scope.Outer, usingSources, scope.Comparer);
+                                scopeStack.Push(insertScope);
+                                try { ins.Source.Accept(this); }
+                                finally { scopeStack.Pop(); }
+                            }
                         }
                     }
                     VisitOutputClause(spec.OutputClause, target, includeInserted: true, includeDeleted: true, outerSources: sources);
@@ -1027,9 +1185,9 @@ internal static class TsqlDiagnosticService
             var sources = new List<BoundSource>(outerSources.Count + 2);
             var fallbackTarget = target ?? new BoundSource("target", false, null, null, null, null, false, new HashSet<string>(StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase, null);
             if (includeInserted)
-                sources.Add(fallbackTarget with { ExposureName = "inserted", HasExplicitAlias = true, AliasFragment = null });
+                sources.Add(fallbackTarget with { ExposureName = "inserted", HasExplicitAlias = true, AliasFragment = null, IsVirtualExposure = true });
             if (includeDeleted)
-                sources.Add(fallbackTarget with { ExposureName = "deleted", HasExplicitAlias = true, AliasFragment = null });
+                sources.Add(fallbackTarget with { ExposureName = "deleted", HasExplicitAlias = true, AliasFragment = null, IsVirtualExposure = true });
             sources.AddRange(outerSources);
             return sources;
         }
@@ -1096,46 +1254,48 @@ internal static class TsqlDiagnosticService
 
         private void VisitFromClauseChildren(FromClause fromClause)
         {
+            var accumulated = new List<BoundSource>();
             foreach (var tr in fromClause.TableReferences)
-                VisitTableReferenceChildren(tr);
+            {
+                VisitTableReferenceChildren(tr, accumulated, activeApplyLateral: null);
+                CollectFromSources(tr, accumulated, emitDiagnostics: false);
+            }
         }
 
-        private void VisitTableReferenceChildren(TableReference tr)
+        private void VisitTableReferenceChildren(TableReference tr, IReadOnlyList<BoundSource> priorLateral, IReadOnlyList<BoundSource>? activeApplyLateral)
         {
             switch (tr)
             {
                 case QualifiedJoin qj:
-                    VisitTableReferenceChildren(qj.FirstTableReference);
-                    VisitTableReferenceChildren(qj.SecondTableReference);
+                    VisitTableReferenceChildren(qj.FirstTableReference, priorLateral, activeApplyLateral);
+                    VisitTableReferenceChildren(qj.SecondTableReference, priorLateral, activeApplyLateral);
                     qj.SearchCondition?.Accept(this);
                     break;
                 case UnqualifiedJoin uj:
-                    VisitTableReferenceChildren(uj.FirstTableReference);
-                    if (uj.UnqualifiedJoinType is UnqualifiedJoinType.CrossApply or UnqualifiedJoinType.OuterApply
-                        && uj.SecondTableReference is QueryDerivedTable lateral)
+                    VisitTableReferenceChildren(uj.FirstTableReference, priorLateral, activeApplyLateral);
+                    if (uj.UnqualifiedJoinType is UnqualifiedJoinType.CrossApply or UnqualifiedJoinType.OuterApply)
                     {
-                        var leftSources = new List<BoundSource>();
-                        CollectFromSources(uj.FirstTableReference, leftSources, emitDiagnostics: false);
-                        applyLateralSources[lateral] = leftSources;
-                        try { VisitTableReferenceChildren(uj.SecondTableReference); }
-                        finally { applyLateralSources.Remove(lateral); }
+                        var combined = new List<BoundSource>(priorLateral.Count + 2);
+                        combined.AddRange(priorLateral);
+                        CollectFromSources(uj.FirstTableReference, combined, emitDiagnostics: false);
+                        VisitTableReferenceChildren(uj.SecondTableReference, combined, activeApplyLateral: combined);
                     }
                     else
                     {
-                        VisitTableReferenceChildren(uj.SecondTableReference);
+                        VisitTableReferenceChildren(uj.SecondTableReference, priorLateral, activeApplyLateral);
                     }
                     break;
                 case JoinParenthesisTableReference paren:
-                    VisitTableReferenceChildren(paren.Join);
+                    VisitTableReferenceChildren(paren.Join, priorLateral, activeApplyLateral);
                     break;
                 case QueryDerivedTable derived:
-                    VisitDerivedTable(derived);
+                    VisitDerivedTable(derived, activeApplyLateral);
                     break;
                 case PivotedTableReference pivoted:
-                    VisitTableReferenceChildren(pivoted.TableReference);
+                    VisitTableReferenceChildren(pivoted.TableReference, priorLateral, activeApplyLateral);
                     break;
                 case UnpivotedTableReference unpivoted:
-                    VisitTableReferenceChildren(unpivoted.TableReference);
+                    VisitTableReferenceChildren(unpivoted.TableReference, priorLateral, activeApplyLateral);
                     break;
                 case SchemaObjectFunctionTableReference tvf:
                     foreach (var p in tvf.Parameters) p.Accept(this);
@@ -1150,14 +1310,14 @@ internal static class TsqlDiagnosticService
             }
         }
 
-        private void VisitDerivedTable(QueryDerivedTable derived)
+        private void VisitDerivedTable(QueryDerivedTable derived, IReadOnlyList<BoundSource>? lateralSources)
         {
             // A non-APPLY derived table cannot see sibling tables from its enclosing FROM clause (skip immediate enclosing QueryScope),
-            // whereas CROSS/OUTER APPLY can see its left-hand lateral sources plus outer enclosing queries!
+            // whereas CROSS/OUTER APPLY can see its left-hand lateral sources (including prior comma-joined tables) plus outer enclosing queries!
             var enclosing = CurrentScope;
             var outerForDerived = enclosing?.Outer;
-            if (applyLateralSources.TryGetValue(derived, out var lateral))
-                outerForDerived = new QueryScope(outerForDerived, lateral, ActiveComparer());
+            if (lateralSources is { Count: > 0 })
+                outerForDerived = new QueryScope(outerForDerived, lateralSources, ActiveComparer());
 
             scopeStack.Push(outerForDerived);
             try { derived.QueryExpression?.Accept(this); }
@@ -1167,12 +1327,22 @@ internal static class TsqlDiagnosticService
         public override void ExplicitVisit(FunctionCall node)
         {
             var fnName = node.FunctionName?.Value;
-            if (!string.IsNullOrEmpty(fnName) && TsqlCatalog.DatePartFunctions.Contains(fnName))
+            if (!string.IsNullOrEmpty(fnName))
             {
-                for (var i = 1; i < node.Parameters.Count; i++)
-                    node.Parameters[i].Accept(this);
-                node.OverClause?.Accept(this);
-                return;
+                if (TsqlCatalog.DatePartFunctions.Contains(fnName))
+                {
+                    for (var i = 1; i < node.Parameters.Count; i++)
+                        node.Parameters[i].Accept(this);
+                    node.OverClause?.Accept(this);
+                    return;
+                }
+                if (string.Equals(fnName, "ISJSON", StringComparison.OrdinalIgnoreCase) && node.Parameters.Count >= 2)
+                {
+                    // SQL Server 2022+ ISJSON(expr, OBJECT | ARRAY | VALUE | SCALAR): 2nd parameter is a keyword parsed as a column reference.
+                    node.Parameters[0].Accept(this);
+                    node.OverClause?.Accept(this);
+                    return;
+                }
             }
             base.ExplicitVisit(node);
         }
@@ -1282,7 +1452,7 @@ internal static class TsqlDiagnosticService
             // 1. Search current scope, then enclosing correlated scopes for matching exposure name.
             for (var cur = scope; cur is not null; cur = cur.Outer)
             {
-                var matched = cur.Sources.Where(s => s.Comparer.Equals(s.ExposureName, qual)).ToList();
+                var matched = cur.Sources.Where(s => s.MatchesExposure(qual)).ToList();
                 if (matched.Count > 1) return; // Duplicate alias already flagged; don't cascade.
                 if (matched.Count == 1)
                 {
@@ -1294,16 +1464,14 @@ internal static class TsqlDiagnosticService
                 }
             }
 
-            // 2. Allow UDT / geometry / geography / hierarchyid property access on an unqualified column (`Location.Lat`).
+            // 2. Allow UDT / geometry / geography / hierarchyid property access on an unqualified column (`Location.Lat`),
+            // including over incomplete sources (synonyms, caller #temp, ChildrenLeftOut) where column names are unknown.
             for (var cur = scope; cur is not null; cur = cur.Outer)
             {
                 foreach (var src in cur.Sources)
                 {
                     if (!src.HasCompleteColumns || src.Columns.Contains(qual))
-                    {
-                        // If `qual` is a real column of an in-scope source, suppress (UDT property access).
-                        if (src.Columns.Contains(qual)) return;
-                    }
+                        return;
                 }
             }
 
@@ -1334,13 +1502,23 @@ internal static class TsqlDiagnosticService
             // Case B: `alias.udtCol.Prop` (property access on a qualified column).
             for (var cur = scope; cur is not null; cur = cur.Outer)
             {
-                var matched = cur.Sources.Where(s => s.Comparer.Equals(s.ExposureName, p0.Value)).ToList();
+                var matched = cur.Sources.Where(s => s.MatchesExposure(p0.Value)).ToList();
                 if (matched.Count == 1)
                 {
                     var src = matched[0];
                     if (!src.HasCompleteColumns || src.Columns.Contains(p1.Value)) return;
                     collector.AddFragment(p1, batchBaseOffset, $"Invalid column name '{p1.Value}'.", "SQL207");
                     return;
+                }
+            }
+
+            // Case C: `udtCol.Sub.Prop` (chained UDT property access on an unqualified column or incomplete source).
+            for (var cur = scope; cur is not null; cur = cur.Outer)
+            {
+                foreach (var src in cur.Sources)
+                {
+                    if (!src.HasCompleteColumns || src.Columns.Contains(p0.Value))
+                        return;
                 }
             }
 
@@ -1390,7 +1568,10 @@ internal static class TsqlDiagnosticService
         private Dictionary<string, BoundCte>? PushCtes(WithCtesAndXmlNamespaces? withClause)
         {
             if (withClause is null || withClause.CommonTableExpressions.Count == 0) return null;
-            var saved = new Dictionary<string, BoundCte>(visibleCtes, StringComparer.OrdinalIgnoreCase);
+            var saved = visibleCtes;
+            var comp = ActiveComparer();
+            visibleCtes = new Dictionary<string, BoundCte>(comp);
+            foreach (var (k, v) in saved) visibleCtes[k] = v;
             foreach (var cte in withClause.CommonTableExpressions)
             {
                 var cteName = cte.ExpressionName?.Value;
@@ -1399,8 +1580,8 @@ internal static class TsqlDiagnosticService
                 // Register stub before visiting body so recursive CTEs referencing themselves never trigger unknown-object errors!
                 var explicitCols = cte.Columns?.Select(c => c.Value).Where(v => !string.IsNullOrEmpty(v)).ToList();
                 var stubCols = explicitCols is { Count: > 0 }
-                    ? new HashSet<string>(explicitCols, ActiveComparer())
-                    : new HashSet<string>(ActiveComparer());
+                    ? new HashSet<string>(explicitCols, comp)
+                    : new HashSet<string>(comp);
                 visibleCtes[cteName] = new BoundCte(cteName, stubCols, HasCompleteColumns: explicitCols is { Count: > 0 });
 
                 // CTE bodies cannot see outer query sources; push a null scope barrier.
@@ -1417,8 +1598,7 @@ internal static class TsqlDiagnosticService
         private void RestoreCtes(Dictionary<string, BoundCte>? saved)
         {
             if (saved is null) return;
-            visibleCtes.Clear();
-            foreach (var (k, v) in saved) visibleCtes[k] = v;
+            visibleCtes = saved;
         }
 
         private (HashSet<string> Columns, bool HasCompleteColumns) ProjectQueryColumns(QueryExpression? query, IReadOnlyList<string>? explicitCols)
@@ -1447,7 +1627,7 @@ internal static class TsqlDiagnosticService
                         if (star.Qualifier?.Identifiers is { Count: > 0 } q)
                         {
                             var qName = q[^1].Value;
-                            var matched = fromSources.FirstOrDefault(s => s.Comparer.Equals(s.ExposureName, qName));
+                            var matched = fromSources.FirstOrDefault(s => s.MatchesExposure(qName));
                             if (matched is { HasCompleteColumns: true }) cols.UnionWith(matched.Columns);
                             else complete = false;
                         }
@@ -1586,6 +1766,12 @@ internal static class TsqlDiagnosticService
                     return new BoundSource(exposure, tvf.Alias is not null, null, null, null, null, cols.Count > 0, cols, comp, tvf.Alias);
                 }
 
+                case GlobalFunctionTableReference gft:
+                {
+                    var exposure = gft.Alias?.Value ?? gft.Name?.Value ?? "";
+                    return new BoundSource(exposure, gft.Alias is not null, null, null, null, null, false, new HashSet<string>(comp), comp, gft.Alias);
+                }
+
                 case TableReferenceWithAliasAndColumns withCols:
                 {
                     var cols = withCols.Columns is { Count: > 0 }
@@ -1604,15 +1790,15 @@ internal static class TsqlDiagnosticService
 
         private BoundSource ResolveNamedTableReference(SchemaObjectName objName, Identifier? alias, bool emitDiagnostics, IReadOnlyList<BoundSource>? fromSources)
         {
-            var baseName = objName.BaseIdentifier?.Value ?? "";
-            var schema = objName.SchemaIdentifier?.Value;
-            var dbName = objName.DatabaseIdentifier?.Value;
+            var baseName = NormalizePart(objName.BaseIdentifier) ?? "";
+            var schema = NormalizePart(objName.SchemaIdentifier);
+            var dbName = NormalizePart(objName.DatabaseIdentifier);
             var exposure = alias?.Value ?? baseName;
             var aliasFrag = (TSqlFragment?)alias ?? objName;
             var comp = ActiveComparer(dbName);
 
             // 1. 4-part linked-server name: never flag!
-            if (objName.ServerIdentifier is not null)
+            if (NormalizePart(objName.ServerIdentifier) is not null)
                 return new BoundSource(exposure, alias is not null, objName, dbName, schema, baseName, false, new HashSet<string>(comp), comp, aliasFrag);
 
             // 2. Single-part local/virtual names: #temp, inserted/deleted, CTE, or UPDATE/DELETE alias target.
@@ -1628,9 +1814,10 @@ internal static class TsqlDiagnosticService
                 if (string.Equals(baseName, "inserted", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(baseName, "deleted", StringComparison.OrdinalIgnoreCase))
                 {
+                    var isVirtual = alias is null;
                     if (triggerTableSource is { } trig)
-                        return trig with { ExposureName = exposure, HasExplicitAlias = alias is not null, AliasFragment = aliasFrag };
-                    return new BoundSource(exposure, alias is not null, objName, null, null, baseName, false, new HashSet<string>(comp), comp, aliasFrag);
+                        return trig with { ExposureName = exposure, HasExplicitAlias = alias is not null, AliasFragment = aliasFrag, IsVirtualExposure = isVirtual };
+                    return new BoundSource(exposure, alias is not null, objName, null, null, baseName, false, new HashSet<string>(comp), comp, aliasFrag, IsVirtualExposure: isVirtual);
                 }
 
                 if (visibleCtes.TryGetValue(baseName, out var cte))
@@ -1639,22 +1826,23 @@ internal static class TsqlDiagnosticService
                 // UPDATE o SET ... FROM dbo.Orders AS o / DELETE o FROM dbo.Orders AS o
                 if (fromSources is not null)
                 {
-                    var fromMatch = fromSources.FirstOrDefault(s => s.Comparer.Equals(s.ExposureName, baseName));
+                    var fromMatch = fromSources.FirstOrDefault(s => s.MatchesExposure(baseName));
                     if (fromMatch is not null) return fromMatch;
                 }
             }
 
             var targetDb = dbName ?? state.ActiveDatabase;
 
-            // 3. Script-created tables / objects earlier in the same script.
-            var createdKey = ScriptState.ObjectKey(targetDb, schema, baseName);
-            if (state.CreatedTables.TryGetValue(createdKey, out var createdTable))
+            // 3. Script-created tables / objects earlier in the same script (using target DB's collation).
+            var dbState = state.ForDatabase(targetDb);
+            var createdPair = ScriptState.ObjectPair(schema, baseName);
+            if (dbState.CreatedTables.TryGetValue(createdPair, out var createdTable))
             {
-                var altered = state.AlteredTables.Contains(createdKey);
+                var altered = dbState.AlteredTables.Contains(createdPair);
                 return new BoundSource(exposure, alias is not null, objName, targetDb, schema ?? "dbo", baseName,
                     createdTable.HasCompleteColumns && !altered, createdTable.Columns, comp, aliasFrag);
             }
-            if (state.CreatedObjects.Contains(createdKey))
+            if (dbState.CreatedObjects.Contains(createdPair))
                 return new BoundSource(exposure, alias is not null, objName, targetDb, schema ?? "dbo", baseName, false, new HashSet<string>(comp), comp, aliasFrag);
 
             // 4. Catalog lookup via IndexLookup.
@@ -1670,8 +1858,14 @@ internal static class TsqlDiagnosticService
             if (answer.Value.Count > 0)
             {
                 var chosen = PickBestObject(answer.Value, schema);
-                var altered = state.AlteredTables.Contains(ScriptState.ObjectKey(db.Database, chosen.Schema, chosen.Name));
+                var resolvedDbState = state.ForDatabase(db.Database);
+                var altered = resolvedDbState.AlteredTables.Contains(ScriptState.ObjectPair(chosen.Schema, chosen.Name));
+                // If an unqualified table matches multiple non-dbo schemas, the login's default schema is unknown; suppress column errors.
+                var ambiguousNonDbo = schema is null
+                    && !string.Equals(chosen.Schema, "dbo", StringComparison.OrdinalIgnoreCase)
+                    && answer.Value.Count(m => m.Kind is "table" or "view") > 1;
                 var checkCols = !altered
+                    && !ambiguousNonDbo
                     && CanCheckColumns(db, chosen.Schema)
                     && chosen.Kind is "table" or "view";
                 var cols = new HashSet<string>(dbComp);
@@ -1689,10 +1883,11 @@ internal static class TsqlDiagnosticService
             {
                 if (!string.IsNullOrEmpty(schema) && db.State == LookupState.Ready)
                 {
-                    var schemas = lookup.Schemas(db.Database);
+                    var schemas = GetDatabaseSchemas(db, dbComp);
+                    var resolvedDbState = state.ForDatabase(db.Database);
                     if (schemas.Count > 0
-                        && !schemas.Any(s => dbComp.Equals(s, schema))
-                        && !state.CreatedSchemas.Contains(ScriptState.SchemaKey(db.Database, schema))
+                        && !schemas.Contains(schema)
+                        && !resolvedDbState.CreatedSchemas.Contains(schema)
                         && !(IsSystemSchema(schema) && db.Gaps.HasFlag(LookupGaps.SystemObjectsLeftOut)))
                     {
                         collector.AddFragment(
@@ -1709,6 +1904,14 @@ internal static class TsqlDiagnosticService
             }
 
             return new BoundSource(exposure, alias is not null, objName, db.Database, schema, baseName, false, new HashSet<string>(dbComp), dbComp, aliasFrag);
+        }
+
+        private HashSet<string> GetDatabaseSchemas(LookupDatabase db, IEqualityComparer<string> dbComp)
+        {
+            if (state.SchemaCache.TryGetValue(db.Database, out var cached)) return cached;
+            var set = new HashSet<string>(lookup!.Schemas(db.Database), dbComp);
+            state.SchemaCache[db.Database] = set;
+            return set;
         }
 
         private static LookupObject PickBestObject(IReadOnlyList<LookupObject> matches, string? requestedSchema)

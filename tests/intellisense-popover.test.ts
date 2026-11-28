@@ -29,6 +29,7 @@ afterEach(() => {
 interface PopoverHarnessOptions {
   readonly isBigQuery: boolean
   readonly entra?: boolean
+  readonly disconnected?: boolean
   readonly sqlText?: string
   readonly indexEntry?: IndexEntry
   readonly starred?: readonly string[]
@@ -85,7 +86,7 @@ function mountEditorStatus(options: PopoverHarnessOptions) {
 
   const fixture = workbenchFixture()
   cleanups.push(fixture.dispose)
-  const tab = fixture.documents.create('Query1.sql', options.sqlText ?? '', options.isBigQuery ? 'sales' : 'SalesDB', connId)
+  const tab = fixture.documents.create('Query1.sql', options.sqlText ?? '', options.disconnected ? '' : (options.isBigQuery ? 'sales' : 'SalesDB'), options.disconnected ? undefined : connId)
   const reportErrorSpy = vi.spyOn(fixture.commands, 'reportError').mockImplementation(reportError)
   vi.spyOn(fixture.commands, 'execute').mockResolvedValue(true)
   const wb = {
@@ -221,6 +222,17 @@ describe('IntelliSensePopover accessibility, badges, Star action, and memory bar
     expect(entraPills).toEqual(['ScriptDom + Index', 'ScriptDom + Index'])
     expect(document.body.querySelector('.intellisense-popover')?.textContent).not.toContain('SQL Tools Service')
     expect(document.body.querySelector('.intellisense-popover')?.textContent).not.toContain('Unavailable on Entra ID')
+    act(() => { entra.trigger.click() })
+
+    const disconnectedErrors = mountEditorStatus({
+      isBigQuery: false,
+      disconnected: true,
+      issues: { label: 'SQL: 1 error', detail: 'Syntax error.' }
+    })
+    await act(async () => { disconnectedErrors.trigger.click() })
+    const disconnectedBadge = document.body.querySelector('.intellisense-popover-header .intellisense-popover-pill')!
+    expect(disconnectedBadge.textContent).toBe('Disconnected')
+    expect(disconnectedBadge.getAttribute('data-tone')).toBe('neutral')
   })
 
   it('shows Not built / Pending / Indexing for BigQuery Wave 3a/3b before the index is ready and guards NaN memory usage', async () => {

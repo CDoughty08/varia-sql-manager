@@ -301,11 +301,12 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
   const sqlIndexReady = !sqlIndexBuilding && sqlStatus?.state === 'ready'
   const hasChildrenLeftOut = !!sqlStatus?.skipped.some(entry => entry.code === 'CHILDREN_LEFT_OUT')
   const issuesPaused = issues?.label === 'SQL analysis paused'
-  const headerTone: StatusTone = issues && /\berrors?\b/i.test(issues.label) ? 'critical'
-    : (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable' || (issues && /\bwarnings?\b/i.test(issues.label))) ? 'warning'
-      : (language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense indexing' || language?.label === 'IntelliSense starting' || (isBigQuery && waves?.state === 'building') || (!isBigQuery && connected && sqlIndexBuilding)) ? 'running'
-        : (!connected || language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none') || (!isBigQuery && connected && !sqlIndexReady)) ? 'neutral'
-          : 'success'
+  const headerTone: StatusTone = !connected ? 'neutral'
+    : issues && /\berrors?\b/i.test(issues.label) ? 'critical'
+      : (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable' || (issues && /\bwarnings?\b/i.test(issues.label))) ? 'warning'
+        : (language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense indexing' || language?.label === 'IntelliSense starting' || (isBigQuery && waves?.state === 'building') || (!isBigQuery && sqlIndexBuilding)) ? 'running'
+          : (language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none') || (!isBigQuery && !sqlIndexReady)) ? 'neutral'
+            : 'success'
 
   const headerStatusText = !connected
     ? 'Disconnected'

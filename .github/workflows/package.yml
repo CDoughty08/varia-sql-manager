@@ -118,7 +118,6 @@ jobs:
         shell: bash
         env:
           VARIA_PACKAGED_EXECUTABLE: ${{ inputs.executable }}
-          VARIA_PACKAGED_RID: ${{ inputs.rid }}
         run: |
           if [ "$RUNNER_OS" = Linux ]; then
             xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/packaged-smoke.mjs

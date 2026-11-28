@@ -173,9 +173,8 @@ would fail at launch with "Could not start the SQL backend" (spawn ENOENT).
   (`tests/idle-waits.test.ts`). A close not finished in 45 s kills the app and fails the suite with its own error
   (`boundedClose`; on Linux it names the processes left in the app's process group), and `smoke-shards.mjs` kills a
   suite past four times its weight (at least 5 min), so the shard's later suites still run. Playwright's close also waits
-  for the stdio pipes the backend and its language server inherit, so the backend's exit waits for its language-server
-  kill (`ExitGate`), and Linux and macOS kill that child with one signal instead of a tree kill. A process left behind
-  after quit is a product bug.
+  for the stdio pipes the backend inherits, so a close that hangs after main exited names the remaining holder in the
+  process group. A process left behind after quit is a product bug.
 - Live slot 2 skips `setup-node` and `npm ci` (running `scripts/ci-live-pair.mjs` with the runner's bundled Node);
   `npm ci --no-audit --no-fund` everywhere.
 - `VARIA_TEST_SLOW_MS=<ms>` prints each offline or live .NET check reached later than that after the previous one

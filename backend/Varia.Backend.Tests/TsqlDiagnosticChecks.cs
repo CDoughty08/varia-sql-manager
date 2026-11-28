@@ -221,9 +221,120 @@ internal static class TsqlDiagnosticChecks
             var methodRes = Analyze(methodChain, lookup);
             check(methodRes.IsIncomplete, "hostile .m().m()... method chain completes safely via bounded-syntax guard with IsIncomplete=true");
 
+            var methodArgsChain = "SELECT o.XmlCol" + string.Concat(Enumerable.Repeat(".m(1)", 500)) + " FROM dbo.Orders AS o;";
+            var methodArgsRes = Analyze(methodArgsChain, lookup);
+            check(methodArgsRes.IsIncomplete, "hostile .m(1).m(1)... method chain with arguments completes safely with IsIncomplete=true");
+
+            var joinChain = "SELECT 1 FROM dbo.Orders" + string.Concat(Enumerable.Repeat(" CROSS JOIN dbo.Orders", 2_000)) + ";";
+            var joinRes = Analyze(joinChain, lookup);
+            check(joinRes.IsIncomplete, "hostile CROSS JOIN chain completes safely via join bound and 32 MB worker stack");
+
+            var nestedIfChain = string.Concat(Enumerable.Repeat("IF 1=1 ", 10_000)) + "SELECT 1;";
+            var nestedIfRes = Analyze(nestedIfChain, lookup);
+            check(nestedIfRes.IsIncomplete, "hostile nested IF chain without BEGIN/END completes safely with IsIncomplete=true");
+
+            var siblingIfs = string.Concat(Enumerable.Repeat("IF 1=1 SELECT 1\n", 80));
+            var siblingIfsRes = Analyze(siblingIfs, lookup);
+            check(siblingIfsRes.Items.Count == 0 && !siblingIfsRes.IsIncomplete, "sequential sibling IF statements without semicolons analyze completely");
+
             var deepParens = "SELECT " + new string('(', 1_000) + "1" + new string(')', 1_000) + ";";
             var parenRes = Analyze(deepParens, lookup);
             check(parenRes.IsIncomplete, "deeply nested parentheses complete safely without stack overflow");
+
+            // 6b. Adversarial review regression suite (db..table, ISJSON, OUTPUT/trigger collations, MERGE INSERT, collation-aware script objects/CTEs/@vars, UDT chains, comma+APPLY, proc #temp isolation, GlobalFunctionTableReference, multi-schema non-dbo, surrogate pair highlight)
+            var dbDotDot = Analyze("SELECT Sales..Orders.OrderId FROM Sales..Orders;\nCREATE TABLE dbo.BrandNew (Id INT);\nSELECT Id FROM Sales..BrandNew;", lookup);
+            check(dbDotDot.Items.Count == 0, $"3-part names with omitted default schema (Sales..Orders, Sales..BrandNew) emit zero diagnostics (got {dbDotDot.Items.Count})");
+
+            var isJsonValid = Analyze("SELECT ISJSON(XmlCol, OBJECT), ISJSON(XmlCol, ARRAY), ISJSON(XmlCol, VALUE), ISJSON(XmlCol, SCALAR) FROM dbo.Orders;", lookup);
+            var isJsonBadFirstArg = Analyze("SELECT ISJSON(NoSuchCol, OBJECT) FROM dbo.Orders;", lookup);
+            check(isJsonValid.Items.Count == 0 && HasCode(isJsonBadFirstArg, "SQL207"),
+                "ISJSON 2nd type-constraint argument produces zero false positives while still validating the 1st argument");
+
+            var outputCased = Analyze("""
+                INSERT INTO dbo.Item (id, Id) OUTPUT INSERTED.id, INSERTED.Id VALUES (1, 2);
+                DELETE FROM dbo.Item OUTPUT DELETED.id WHERE id = 1;
+                GO
+                CREATE TRIGGER dbo.Tr ON dbo.Item AFTER INSERT AS BEGIN SELECT inserted.id FROM INSERTED; END;
+                """, lookup, db: "CasedDb");
+            var outputTurkish = Analyze("INSERT INTO dbo.İtem (İ_col) OUTPUT INSERTED.i_col VALUES (1);", lookup, db: "TurkishDb");
+            check(outputCased.Items.Count == 0 && outputTurkish.Items.Count == 0,
+                $"OUTPUT INSERTED/DELETED and trigger virtual tables work in CaseSensitive and Turkish collations (got {outputCased.Items.Count}, {outputTurkish.Items.Count})");
+
+            var mergeInsertValues = Analyze("""
+                MERGE INTO dbo.Orders AS tgt
+                USING dbo.Customers AS src ON tgt.CustomerId = src.CustomerId
+                WHEN NOT MATCHED THEN INSERT (CustomerId, Total) VALUES (CustomerId, 0);
+                """, lookup);
+            check(mergeInsertValues.Items.Count == 0,
+                $"MERGE WHEN NOT MATCHED THEN INSERT VALUES binds unqualified columns against USING source without false SQL209 (got {mergeInsertValues.Items.Count})");
+
+            var turkishScriptObjects = Analyze("""
+                WITH İtemCte AS (SELECT İ_col FROM dbo.İtem) SELECT i_col FROM itemcte;
+                CREATE TABLE dbo.İnvoice (İd INT);
+                SELECT id FROM dbo.invoice;
+                GO
+                CREATE SCHEMA İnternal;
+                GO
+                CREATE TABLE İnternal.T (İd INT);
+                SELECT id FROM internal.T;
+                ALTER TABLE dbo.item ADD ExtraCol INT;
+                SELECT ExtraCol FROM dbo.İtem;
+                """, lookup, db: "TurkishDb");
+            var casedScriptObjects = Analyze("""
+                WITH item AS (SELECT 1 AS a) SELECT id FROM Item;
+                CREATE TABLE dbo.item (a INT);
+                SELECT id FROM dbo.Item;
+                DECLARE @t TABLE (id INT);
+                DECLARE @T TABLE (other INT);
+                SELECT id FROM @t;
+                """, lookup, db: "CasedDb");
+            check(turkishScriptObjects.Items.Count == 0 && casedScriptObjects.Items.Count == 0,
+                $"CTEs, @table vars, and script-created/altered objects obey Turkish and CaseSensitive collations (got {turkishScriptObjects.Items.Count}, {casedScriptObjects.Items.Count})");
+
+            var udtIncomplete = Analyze("""
+                SELECT GeoCol.Lat FROM dbo.OrdersSynonym;
+                SELECT GeoCol.Lat FROM #ExternalTemp;
+                SELECT GeoCol.Sub.Lat FROM dbo.Orders;
+                """, lookup);
+            var udtChildrenLeftOut = Analyze("SELECT GeoCol.Lat FROM dbo.NoColsTable;", lookup, db: "ChildrenLeftOutDb");
+            check(udtIncomplete.Items.Count == 0 && udtChildrenLeftOut.Items.Count == 0,
+                "UDT/spatial property access over incomplete sources and 3-part unqualified chains emit zero false SQL4104");
+
+            var commaApply = Analyze("""
+                SELECT o.OrderId, ca.X
+                FROM dbo.Orders AS o, dbo.Customers AS c
+                CROSS APPLY (SELECT o.OrderId AS X WHERE c.CustomerId = o.CustomerId) AS ca;
+                """, lookup);
+            check(commaApply.Items.Count == 0,
+                $"comma-join followed by CROSS APPLY sees prior comma-joined sources (got {commaApply.Items.Count})");
+
+            var procTempIsolation = Analyze("""
+                CREATE PROCEDURE dbo.P1 AS
+                BEGIN
+                    CREATE TABLE #t (A INT);
+                    SELECT A FROM #t;
+                END;
+                GO
+                SELECT B FROM #t;
+                """, lookup);
+            check(procTempIsolation.Items.Count == 0,
+                "#temp created inside CREATE PROCEDURE does not leak into subsequent GO batches");
+
+            var unaliasedGlobalTvf = Analyze("SELECT STRING_SPLIT.value FROM STRING_SPLIT('a,b', ',');", lookup);
+            check(unaliasedGlobalTvf.Items.Count == 0,
+                "unaliased GlobalFunctionTableReference (STRING_SPLIT.value) emits zero false SQL4104");
+
+            var multiNonDboSchema = Analyze("SELECT HrCol FROM Widgets;", lookup);
+            check(multiNonDboSchema.Items.Count == 0,
+                "unqualified table matching multiple non-dbo schemas suppresses column errors");
+
+            const string surrogateSql = "SELECT 1 \U0001F600 \U0001F600;";
+            var surrogateErr = Analyze(surrogateSql);
+            check(surrogateErr.Items.Count >= 1
+                && surrogateErr.Items.All(item =>
+                    !(item.Range.Start.Character < surrogateSql.Length && char.IsLowSurrogate(surrogateSql[item.Range.Start.Character]))
+                    && !(item.Range.End.Character < surrogateSql.Length && char.IsLowSurrogate(surrogateSql[item.Range.End.Character]))),
+                $"syntax error range never splits a UTF-16 surrogate pair (got {surrogateErr.Items.Count} errors)");
 
             var oversized = Analyze(new string(' ', TsqlLanguageService.MaxTextCharacters + 1), lookup);
             check(oversized.Items.Count == 0 && !oversized.IsIncomplete, "whitespace-only oversized text returns cleanly");
@@ -290,7 +401,11 @@ internal static class TsqlDiagnosticChecks
             new IndexedObject("column", "columns", null, "CustomerId", "table", "dbo", "Customers"),
             new IndexedObject("column", "columns", null, "SharedId", "table", "dbo", "Customers"),
             new IndexedObject("column", "columns", null, "CustomerName", "table", "dbo", "Customers"),
-            new IndexedObject("synonym", "synonyms", "dbo", "OrdersSynonym")
+            new IndexedObject("synonym", "synonyms", "dbo", "OrdersSynonym"),
+            new IndexedObject("table", "tables", "sales", "Widgets"),
+            new IndexedObject("column", "columns", null, "SalesCol", "table", "sales", "Widgets"),
+            new IndexedObject("table", "tables", "hr", "Widgets"),
+            new IndexedObject("column", "columns", null, "HrCol", "table", "hr", "Widgets")
         ]), 0, 0, 0) { CaseSensitive = false });
 
         conn.Put(new DatabaseIndex("AnalyticsDB", ObjectTable.Of([

@@ -769,7 +769,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     return { connectionId, connectionKey: `${connection.id}:${connection.generation}`, backendEpoch: this.backendEpoch, database }
   }
 
-  /** Lazy schema preview drawer (`resolveCompletionItem`) for SQL Server: reads local `IndexLookup.cs` RAM index (~1 ms, 0 STS/SQL round-trips). */
+  /** Lazy schema preview drawer (`resolveCompletionItem`) for SQL Server: reads local `IndexLookup.cs` RAM index (~1 ms, 0 SQL round-trips). */
   private async resolveSuggestion(item: Monaco.languages.CompletionItem, token: Monaco.CancellationToken): Promise<Monaco.languages.CompletionItem> {
     const meta = this.resolveMeta.get(item)
     if (!meta || !this.api.languageLookup || this.disposed || token.isCancellationRequested) return item
@@ -868,7 +868,7 @@ function unquoteSqlName(value: string): string {
   if (value.startsWith('"')) return (value.length > 1 && value.endsWith('"') ? value.slice(1, -1) : value.slice(1)).replaceAll('""', '"')
   return value
 }
-/** Verifies an IndexLookup object kind is compatible with an STS LSP CompletionItemKind before enriching docs. */
+/** Verifies an IndexLookup object kind is compatible with a SQL Server CompletionItemKind before enriching docs. */
 function sqlKindMatches(lspKind: number | undefined, objectKind: string): boolean {
   if (lspKind === undefined) return true
   if (lspKind === 2 || lspKind === 3) return objectKind === 'procedure' || objectKind === 'function'

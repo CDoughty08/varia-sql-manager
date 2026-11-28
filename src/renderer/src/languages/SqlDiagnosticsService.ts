@@ -75,10 +75,9 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
   }
   private indexSignature(connectionId: string | undefined): string | undefined {
     if (!connectionId || !this.indexStateStore) return undefined
-    const entry = this.indexStateStore.getSnapshot().indexes[connectionId]
-    const status = entry?.status
-    if (!status) return entry?.requestId ? 'building' : 'none'
-    return `${entry?.requestId ? 'building' : status.state}:${status.builtAt ?? ''}:${status.indexed}:${status.objects}:${status.skipped.length}`
+    const status = this.indexStateStore.getSnapshot().indexes[connectionId]?.status
+    if (!status || status.state !== 'ready') return 'none'
+    return `ready:${status.builtAt ?? ''}:${status.indexed}:${status.objects}:${status.skipped.length}`
   }
   private reconcile(): void {
     if (this.disposed) return

@@ -390,17 +390,39 @@ describe('versioned SQL diagnostics markers', () => {
 
     // Index finishes building -> SqlDiagnosticsService automatically re-runs diagnostics to upgrade to catalog binding.
     f.language.diagnostics.mockResolvedValueOnce({ version: 1, items: [error], isIncomplete: false })
+    const readyStatus = { state: 'ready' as const, databases: 1, indexed: 1, objects: 42, modules: 0, cut: 0, skipped: [], definitions: true, builtAt: '2026-11-28T05:00:00Z' }
     indexStore.set({
-      indexes: {
-        'conn-1': {
-          connectionId: 'conn-1',
-          status: { state: 'ready', databases: 1, indexed: 1, objects: 42, modules: 0, cut: 0, skipped: [], definitions: true, builtAt: '2026-11-28T05:00:00Z' }
-        }
-      }
+      indexes: { 'conn-1': { connectionId: 'conn-1', status: readyStatus } }
     })
     await f.tick()
     expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
     expect(f.markers(tab.id)).toHaveLength(1)
     expect(f.service.status(tab.id)?.label).toBe('SQL: 1 error')
+
+    // Progress ticks and starting/cancelling/failing a refresh on a ready index preserve active markers with zero re-runs.
+    indexStore.set({
+      indexes: { 'conn-1': { connectionId: 'conn-1', requestId: 'refresh-1', status: readyStatus } }
+    })
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
+    expect(f.markers(tab.id)).toHaveLength(1)
+
+    // Refresh cancelled or failed (requestId cleared, status unchanged) -> still zero re-runs and markers preserved.
+    indexStore.set({
+      indexes: { 'conn-1': { connectionId: 'conn-1', status: readyStatus } }
+    })
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(2)
+    expect(f.markers(tab.id)).toHaveLength(1)
+
+    // Refresh completes with updated builtAt/objects -> re-runs exactly once.
+    f.language.diagnostics.mockResolvedValueOnce({ version: 1, items: [], isIncomplete: false })
+    indexStore.set({
+      indexes: { 'conn-1': { connectionId: 'conn-1', status: { ...readyStatus, objects: 43, builtAt: '2026-11-28T05:05:00Z' } } }
+    })
+    await f.tick()
+    expect(f.language.diagnostics).toHaveBeenCalledTimes(3)
+    expect(f.markers(tab.id)).toEqual([])
+    expect(f.service.status(tab.id)?.label).toBe('SQL: no issues')
   })
 })
