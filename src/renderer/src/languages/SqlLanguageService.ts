@@ -142,12 +142,20 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (refreshing && !await this.waitFor(refreshing.settled, token)) return { suggestions: [] }
           if (!this.current(capture, token)) return { suggestions: [] }
           this.used.add(capture.request.documentId)
-          const result = await this.track(capture.request.documentId, api.languageComplete(capture.request))
+          let result = await this.track(capture.request.documentId, api.languageComplete(capture.request))
           if (!this.current(capture, token)) return { suggestions: [] }
+          const connId = capture.request.context.connectionId
+          if (result.ok && result.value.items.length === 0 && connId && this.isInitialIndexBuilding(connId)) {
+            if (!await this.waitForIndexStateStep(connId, token) || !this.current(capture, token)) return { suggestions: [] }
+            result = await this.track(capture.request.documentId, api.languageComplete(capture.request))
+            if (!this.current(capture, token)) return { suggestions: [] }
+          }
           if (!result.ok) { this.failure(capture.request.documentId, result.error); return { suggestions: [] } }
           this.failure(capture.request.documentId)
-          if (!result.value.isIncomplete) this.completionCache = { model, documentId: capture.request.documentId, key: capture.key, epoch: capture.epoch,
-            text: capture.request.text, position: capture.request.position, items: result.value.items }
+          if (!result.value.isIncomplete && !(connId && this.isInitialIndexBuilding(connId))) {
+            this.completionCache = { model, documentId: capture.request.documentId, key: capture.key, epoch: capture.epoch,
+              text: capture.request.text, position: capture.request.position, items: result.value.items }
+          }
           return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, result.value.items, resolveContext, this.resolveMeta) }
         } catch (error) {
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
@@ -173,8 +181,14 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           if (refreshing && !await this.waitFor(refreshing.settled, token)) return null
           if (!this.current(capture, token)) return null
           this.used.add(capture.request.documentId)
-          const result = await this.track(capture.request.documentId, api.languageHover(capture.request))
+          let result = await this.track(capture.request.documentId, api.languageHover(capture.request))
           if (!this.current(capture, token)) return null
+          const connId = capture.request.context.connectionId
+          if (result.ok && !result.value && connId && this.isInitialIndexBuilding(connId)) {
+            if (!await this.waitForIndexStateStep(connId, token) || !this.current(capture, token)) return null
+            result = await this.track(capture.request.documentId, api.languageHover(capture.request))
+            if (!this.current(capture, token)) return null
+          }
           if (!result.ok) { this.failure(capture.request.documentId, result.error); return null }
           this.failure(capture.request.documentId)
           const hover = result.value
@@ -678,6 +692,45 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     }
     this.indexStateBinding = binding
     return binding
+  }
+
+  private isInitialIndexBuilding(connectionId: string): boolean {
+    const entry = this.indexStateStore?.getSnapshot().indexes[connectionId]
+    return Boolean(entry?.requestId && !entry.status)
+  }
+
+  /** Waits briefly for the initial Search Objects index build to step forward (guarding the tiny IPC ordering window
+   *  where `language.complete`/`language.hover` arrives at the backend before `explorer.index` registers `Building`). */
+  private waitForIndexStateStep(connectionId: string, token: Monaco.CancellationToken, maxMs = 150): Promise<boolean> {
+    if (this.disposed || token.isCancellationRequested || !this.indexStateStore) return Promise.resolve(false)
+    const store = this.indexStateStore
+    const before = store.getSnapshot().indexes[connectionId]
+    return new Promise<boolean>(resolve => {
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let unsubscribe: (() => void) | undefined
+      let cancel: Monaco.IDisposable | undefined
+      const wakeDispose = () => finish(false)
+      const finish = (ok: boolean) => {
+        if (settled) return
+        settled = true
+        if (timer !== undefined) clearTimeout(timer)
+        unsubscribe?.()
+        cancel?.dispose()
+        this.waiters.delete(wakeDispose)
+        resolve(ok)
+      }
+      this.waiters.add(wakeDispose)
+      cancel = token.onCancellationRequested(() => finish(false))
+      if (settled) { cancel.dispose(); return }
+      unsubscribe = store.subscribe(() => {
+        if (store.getSnapshot().indexes[connectionId] !== before) finish(!this.disposed && !token.isCancellationRequested)
+      })
+      if (settled) { unsubscribe(); return }
+      if (this.disposed || token.isCancellationRequested) { finish(false); return }
+      if (store.getSnapshot().indexes[connectionId] !== before) { finish(true); return }
+      timer = setTimeout(() => finish(!this.disposed && !token.isCancellationRequested), maxMs)
+    })
   }
 
   private syncIndexes(store: IndexStateStore): void {

@@ -260,7 +260,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             LanguageConnectionString,
             indexLookup: search.Lookup,
             activeDatabase: LanguageActiveDatabase,
-            refreshIndex: RefreshLanguageIndexAsync)]);
+            refreshIndex: RefreshLanguageIndexAsync,
+            waitForLookup: search.WaitForLookupAsync)]);
         Open = async (connection, token) =>
         {
             CommandTracker.ThrowIfRejected(connection);

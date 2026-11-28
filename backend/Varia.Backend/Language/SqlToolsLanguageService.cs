@@ -24,6 +24,7 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
     private readonly ConcurrentDictionary<string, (ILspClient Client, TaskCompletionSource<JsonElement> Complete, TaskCompletionSource Ready)> connecting = new(StringComparer.Ordinal);
     private readonly Func<LanguageContext, string?> connectionString;
     private readonly Func<string, IndexLookup?> indexLookup;
+    private readonly Func<string, string?, CancellationToken, Task<IndexLookup?>> waitForLookup;
     private readonly Func<LanguageContext, string?> activeDatabase;
     private readonly Func<LanguageContext, CancellationToken, Task<bool>>? refreshIndex;
     private readonly Func<Func<string, JsonElement, Task>, ILspClient> createClient;
@@ -50,10 +51,12 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
         TimeSpan? diagnosticIdleTimeout = null,
         Func<string, IndexLookup?>? indexLookup = null,
         Func<LanguageContext, string?>? activeDatabase = null,
-        Func<LanguageContext, CancellationToken, Task<bool>>? refreshIndex = null)
+        Func<LanguageContext, CancellationToken, Task<bool>>? refreshIndex = null,
+        Func<string, string?, CancellationToken, Task<IndexLookup?>>? waitForLookup = null)
     {
         this.connectionString = connectionString;
         this.indexLookup = indexLookup ?? (_ => null);
+        this.waitForLookup = waitForLookup ?? ((id, _, _) => Task.FromResult(this.indexLookup(id)));
         this.activeDatabase = activeDatabase ?? (context => context.Database);
         this.refreshIndex = refreshIndex;
         this.diagnosticIdleTimeout = diagnosticIdleTimeout ?? DiagnosticIdleTimeout;
@@ -131,7 +134,9 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
         {
             AcceptVersionLocked(document, request, checkContextMatch: false, operation);
             var db = activeDatabase(request.Context);
-            var lookup = request.Context.ConnectionId is { } connectionId ? indexLookup(connectionId) : null;
+            var lookup = request.Context.ConnectionId is { } connectionId
+                ? await waitForLookup(connectionId, db, operation.Token)
+                : null;
             return TsqlCompletionService.Complete(request, lookup, db, operation.Token);
         }
         finally { lock (gate) if (ReferenceEquals(document.Active, operation)) document.Active = null; document.Serial.Release(); }
@@ -148,7 +153,9 @@ internal sealed partial class SqlToolsLanguageService : ILanguageServiceProvider
         {
             AcceptVersionLocked(document, request, checkContextMatch: false, operation);
             var db = activeDatabase(request.Context);
-            var lookup = request.Context.ConnectionId is { } connectionId ? indexLookup(connectionId) : null;
+            var lookup = request.Context.ConnectionId is { } connectionId
+                ? await waitForLookup(connectionId, db, operation.Token)
+                : null;
             return TsqlHoverService.Hover(request, lookup, db, operation.Token);
         }
         finally { lock (gate) if (ReferenceEquals(document.Active, operation)) document.Active = null; document.Serial.Release(); }

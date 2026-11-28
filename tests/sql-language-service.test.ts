@@ -1594,4 +1594,115 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     expect(refreshed).toBe(true)
     expect(syncStatus).toHaveBeenCalledWith(shadowTab.connectionId)
   })
+
+  it('retries empty completion and null hover at most once during initial index build, skips retry once ready, and honors cancellation', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    type Snap = { readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }
+    const backing = new SnapshotStore<Snap>({ indexes: { 'sql-1': { requestId: 'build-1' } } })
+    const waiters: (() => void)[] = []
+    let subCount = 0
+    const indexState = {
+      getSnapshot: () => backing.getSnapshot(),
+      subscribe: (listener: () => void) => {
+        subCount++
+        const unsub = backing.subscribe(listener)
+        for (const wake of waiters.splice(0)) wake()
+        return () => { subCount--; unsub() }
+      },
+      set: (next: Snap) => { (backing as unknown as { publish(s: Snap): void }).publish(next) },
+      waitForStepSubscriber: () => subCount >= 2 ? Promise.resolve() : new Promise<void>(resolve => { waiters.push(resolve) })
+    }
+    f.service.bindIndexState(indexState)
+
+    const tab = f.documents.create('initial.sql', 'SELECT d.database_ FROM sys.databases AS d;', 'master', 'sql-1')
+
+    // 1. Completion during initial build (requestId set, no status): retries once when index state steps forward.
+    f.api.languageComplete
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [] } })
+      .mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: '[database_id]', kind: 5, filterText: 'database_id' }] } })
+    const compPromise = f.complete(tab.id, { lineNumber: 1, column: 19 } as Monaco.Position)
+    await indexState.waitForStepSubscriber()
+    indexState.set({ indexes: { 'sql-1': { requestId: 'build-1', status: undefined } } })
+    const comp = await compPromise
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
+    expect(comp.suggestions.some(s => labelText(s.label) === '[database_id]')).toBe(true)
+
+    // 1b. Non-empty `isIncomplete: false` result while initial build is still running is NOT cached in `completionCache`.
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: '[database_id]', kind: 5, filterText: 'database_id' }] } })
+    const retriggered = await f.completion.provideCompletionItems(
+      f.model(tab.id),
+      { lineNumber: 1, column: 19 } as Monaco.Position,
+      { triggerKind: 2 },
+      token()
+    ) as Monaco.languages.CompletionList
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(3)
+    expect(retriggered.suggestions.some(s => labelText(s.label) === '[database_id]')).toBe(true)
+
+    // 2. Hover during initial build: null first answer retries once when index state steps forward.
+    f.api.languageHover
+      .mockResolvedValueOnce({ ok: true, value: null })
+      .mockResolvedValueOnce({ ok: true, value: { contents: '**sys\\.databases** · View' } })
+    const hoverPromise = f.hover.provideHover(f.model(tab.id), { lineNumber: 1, column: 30 } as Monaco.Position, token())
+    await indexState.waitForStepSubscriber()
+    indexState.set({
+      indexes: {
+        'sql-1': {
+          status: { state: 'ready', databases: 1, indexed: 1, objects: 10, modules: 0, cut: 0, skipped: [], definitions: true }
+        }
+      }
+    })
+    const hov = await hoverPromise
+    expect(f.api.languageHover).toHaveBeenCalledTimes(2)
+    expect(hov?.contents[0]).toMatchObject({ value: '**sys\\.databases** · View' })
+
+    // 3. Once index is ready (status present), empty completion and null hover do NOT retry.
+    const compCallsBefore = f.api.languageComplete.mock.calls.length
+    const hoverCallsBefore = f.api.languageHover.mock.calls.length
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [] } })
+    f.api.languageHover.mockResolvedValueOnce({ ok: true, value: null })
+    const emptyReady = await f.complete(tab.id, { lineNumber: 1, column: 19 } as Monaco.Position)
+    const nullReady = await f.hover.provideHover(f.model(tab.id), { lineNumber: 1, column: 30 } as Monaco.Position, token())
+    expect(emptyReady.suggestions).toHaveLength(0)
+    expect(nullReady).toBeNull()
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(compCallsBefore + 1)
+    expect(f.api.languageHover).toHaveBeenCalledTimes(hoverCallsBefore + 1)
+
+    // 4. Cancellation while waiting during initial build aborts cleanly without issuing a retry RPC.
+    indexState.set({ indexes: { 'sql-1': { requestId: 'build-2' } } })
+    const compCancelBefore = f.api.languageComplete.mock.calls.length
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [] } })
+    const cancelSource = cancellationSource()
+    const cancelledComp = f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: 1, column: 19 } as Monaco.Position, { triggerKind: 0 }, cancelSource.token)
+    await indexState.waitForStepSubscriber()
+    cancelSource.cancel()
+    const cancelledResult = await cancelledComp as Monaco.languages.CompletionList
+    expect(cancelledResult.suggestions).toHaveLength(0)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(compCancelBefore + 1)
+
+    // 5. Synchronous `onCancellationRequested` callback inside `waitForIndexStateStep` never throws TDZ and disposes cleanly.
+    const syncCancelBefore = f.api.languageComplete.mock.calls.length
+    let syncDisposed = false
+    let syncCancelled = false
+    const syncToken: Monaco.CancellationToken = {
+      get isCancellationRequested() { return syncCancelled },
+      onCancellationRequested: (listener: () => void) => {
+        if (f.api.languageComplete.mock.calls.length > syncCancelBefore) {
+          syncCancelled = true
+          listener()
+        }
+        return { dispose: () => { syncDisposed = true } }
+      }
+    }
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: true, items: [] } })
+    const syncResult = await f.completion.provideCompletionItems(
+      f.model(tab.id),
+      { lineNumber: 1, column: 19 } as Monaco.Position,
+      { triggerKind: 0 },
+      syncToken
+    ) as Monaco.languages.CompletionList
+    expect(syncResult.suggestions).toHaveLength(0)
+    expect(syncDisposed).toBe(true)
+    expect(f.api.languageComplete).toHaveBeenCalledTimes(syncCancelBefore + 1)
+  })
 })

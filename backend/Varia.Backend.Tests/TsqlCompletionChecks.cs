@@ -464,11 +464,101 @@ internal static class TsqlCompletionChecks
             try { await refreshTask; }
             catch (RequestException ex) { refreshErrCode = ex.Code; }
             check(refreshErrCode == "STALE", $"RefreshAsync cancelled by CloseAsync maps to STALE (got {refreshErrCode ?? "none"})");
+
+            // (m) WaitForLookupAsync waits during initial build until Resource + activeDb land (without waiting for remaining DBs),
+            // returns immediately when already held / not building / unlisted, wakes on cancel & Forget, and respects LookupWaitBudget!
+            await VerifyWaitForLookupAsync(check);
         }
         finally
         {
             conn.Dispose();
         }
+    }
+
+    private sealed class MinimalSearchHost : IObjectSearchHost
+    {
+        public Varia.Backend.Explorer.ServerProfile Profile(string connectionId) => new(17, null, 3, null, false, true, true, 16);
+        public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId, string? database) => throw new NotSupportedException();
+        public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => throw new NotSupportedException();
+    }
+
+    private static async Task VerifyWaitForLookupAsync(Action<bool, string> check)
+    {
+        using var search = new ObjectSearchService(new MinimalSearchHost());
+        var connId = Guid.NewGuid().ToString("D");
+
+        // 1. Initial build in progress: WaitForLookupAsync waits until Resource + activeDb ("Sales") land, WITHOUT waiting for "SlowDb"!
+        search.BeginSimulatedBuild(connId);
+        var waitSales = search.WaitForLookupAsync(connId, "Sales", CancellationToken.None);
+        check(!waitSales.IsCompleted, "WaitForLookupAsync waits while initial build has not yet read resource or active DB");
+
+        search.CompleteSimulatedListing(connId, ["Sales", "SlowDb"]);
+        check(!waitSales.IsCompleted, "WaitForLookupAsync continues waiting after listing until resource and Sales finish");
+
+        var sysSet = new ResourceSet(
+            new ResourceKey("17.0.1000.7", 3, 1, null, 1, false),
+            ObjectTable.Of([
+                new IndexedObject("view", "systemViews", "sys", "databases", System: true, Subtype: "system"),
+                new IndexedObject("column", "columns", null, "database_id", "view", "sys", "databases", System: true)
+            ]), 0, 0);
+        search.CompleteSimulatedResource(connId, sysSet);
+        check(!waitSales.IsCompleted, "WaitForLookupAsync still waits for active DB Sales after resource finishes");
+
+        var salesDb = new DatabaseIndex("Sales", ObjectTable.Of([
+            new IndexedObject("table", "tables", "dbo", "Orders"),
+            new IndexedObject("column", "columns", null, "OrderId", "table", "dbo", "Orders")
+        ]), 0, 0, 0);
+        search.CompleteSimulatedDatabase(connId, "Sales", salesDb);
+
+        var salesLookup = await waitSales.WaitAsync(TimeSpan.FromSeconds(5));
+        check(salesLookup is not null
+            && salesLookup.Database("Sales").Held is not null
+            && salesLookup.Objects("Sales", "sys", "databases").Value.Count == 1,
+            "WaitForLookupAsync wakes immediately when Resource + activeDb land without waiting for SlowDb");
+
+        // 2. Unlisted database (e.g. tempdb) does not hang once ListedDone && ResourceDone!
+        var tempdbLookup = await search.WaitForLookupAsync(connId, "tempdb", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        check(tempdbLookup is not null && tempdbLookup.Database("tempdb").State == LookupState.Absent,
+            "WaitForLookupAsync returns immediately for an unlisted database once listing and resource finish");
+
+        // 3. Rebuild / freshness check with Sales already held returns synchronously (0 ms wait) even while SlowDb is still building!
+        var rebuildLookup = search.WaitForLookupAsync(connId, "Sales", CancellationToken.None);
+        check(rebuildLookup.IsCompleted && (await rebuildLookup)!.Database("Sales").Held is not null,
+            "WaitForLookupAsync returns immediately (0 wait) when activeDb is already held during a build");
+
+        search.EndSimulatedBuild(connId);
+        var idleLookup = search.WaitForLookupAsync(connId, "Sales", CancellationToken.None);
+        check(idleLookup.IsCompleted && (await idleLookup) is not null,
+            "WaitForLookupAsync returns immediately when no build is running");
+
+        // 4. Caller cancellation wakes WaitForLookupAsync immediately with OperationCanceledException.
+        var connCancel = Guid.NewGuid().ToString("D");
+        search.BeginSimulatedBuild(connCancel);
+        using var cancelCts = new CancellationTokenSource();
+        var cancelledWait = search.WaitForLookupAsync(connCancel, "Sales", cancelCts.Token);
+        cancelCts.Cancel();
+        var gotOce = false;
+        try { _ = await cancelledWait.WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (OperationCanceledException) { gotOce = true; }
+        check(gotOce, "WaitForLookupAsync wakes immediately with OperationCanceledException on caller cancellation");
+        search.EndSimulatedBuild(connCancel);
+
+        // 5. Forget(connectionId) wakes WaitForLookupAsync immediately and returns null.
+        var connForget = Guid.NewGuid().ToString("D");
+        search.BeginSimulatedBuild(connForget);
+        var forgetWait = search.WaitForLookupAsync(connForget, "Sales", CancellationToken.None);
+        search.Forget(connForget);
+        var forgetResult = await forgetWait.WaitAsync(TimeSpan.FromSeconds(5));
+        check(forgetResult is null, "WaitForLookupAsync wakes immediately and returns null when connection is forgotten");
+
+        // 6. LookupWaitBudget timeout falls back gracefully to Lookup(connectionId) without throwing.
+        var connBudget = Guid.NewGuid().ToString("D");
+        search.LookupWaitBudget = TimeSpan.FromMilliseconds(30);
+        search.BeginSimulatedBuild(connBudget);
+        var budgetResult = await search.WaitForLookupAsync(connBudget, "Sales", CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5));
+        check(budgetResult is not null && budgetResult.Database("Sales").State == LookupState.Absent,
+            "WaitForLookupAsync falls back gracefully to current Lookup when LookupWaitBudget expires");
+        search.EndSimulatedBuild(connBudget);
     }
 
     private static async Task<(ConnectionIndex Conn, IndexBudget Budget, IndexLookup Lookup, LookupLedger Ledger)> BuildRichFixtureAsync()
