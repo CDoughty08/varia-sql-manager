@@ -667,6 +667,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   onBigQueryStarredLoaded = () => {
     for (const connection of connections.liveBigQuery()) objectSearch.syncBigQueryStarred(connection.id)
   }
+  sqlLanguage.bindIndexState(objectSearch)
   // BigQuery tabs' completion and hover, from the Search Objects index; the first lookup that finds none starts it as a search would.
   const indexCompletion = new IndexCompletionService(monaco, api, documents, connections, {
     ensureIndex: id => objectSearch.ensureIndex(id),

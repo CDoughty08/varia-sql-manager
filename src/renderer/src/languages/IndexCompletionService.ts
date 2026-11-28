@@ -3,9 +3,10 @@ import type { VariaApi } from '../../../shared/contracts'
 import { bigQueryPath, isBigQueryName } from '../../../shared/bigquery/names'
 import { completeFromIndex } from '../../../shared/completion/complete'
 import { definitionFromIndex, IndexUnavailableError } from '../../../shared/completion/definition'
-import { escapeMarkdown, hoverFromIndex } from '../../../shared/completion/hover'
+import { datasetMarkdown, escapeMarkdown, hoverColumns, hoverFromIndex, objectMarkdown, projectMarkdown } from '../../../shared/completion/hover'
 import { LookupCache, lookupCacheLimits } from '../../../shared/completion/lookup-cache'
-import type { CompletionDialect, CompletionItem, CompletionKind, CompletionWord, IndexLookup } from '../../../shared/completion/model'
+import type { CompletionDialect, CompletionItem, CompletionKind, CompletionWord, IndexLookup, QueryScope } from '../../../shared/completion/model'
+import { boundedLookup, childrenOf, sameName, ScopeResolver } from '../../../shared/completion/resolve'
 import type { BigQueryIndexScope, ObjectIndexStatus } from '../../../shared/explorer/search'
 import type { BigQueryScopeRefreshResult } from '../search/ObjectSearchService'
 import { googleSqlDialect, quoteGoogleSqlName } from '../../../shared/googlesql/dialect'
@@ -36,6 +37,11 @@ interface Snapshot {
 /** What Go To Definition found in a BigQuery tab: an object of the index, on the tab's connection. */
 export interface FoundIndexObject { readonly connectionId: string; readonly kind: string; readonly subtype?: string; readonly project: string; readonly dataset: string; readonly name: string }
 interface Target { readonly documentId: string; readonly connectionId?: string; readonly key?: string; readonly project?: string; readonly dataset?: string; readonly dialect: CompletionDialect }
+type BigQueryResolveMeta =
+  | { readonly kind: 'object'; readonly target: Target; readonly path: readonly [string, string, string] }
+  | { readonly kind: 'dataset'; readonly target: Target; readonly project: string; readonly dataset: string }
+  | { readonly kind: 'project'; readonly target: Target; readonly project: string }
+  | { readonly kind: 'cte'; readonly target: Target; readonly name: string; readonly scope: QueryScope }
 export interface IndexStateEntry { readonly requestId?: string; readonly status?: ObjectIndexStatus; readonly error?: string }
 export interface IndexStateStore {
   getSnapshot(): { readonly indexes: Readonly<Record<string, IndexStateEntry | undefined>> }
@@ -118,6 +124,7 @@ function jumpMatches(name: string, query: string): boolean {
 export class IndexCompletionService extends SnapshotStore<Snapshot> implements Disposable {
   private readonly bindings: Disposable[] = []
   private readonly caches = new Map<string, LookupCache>()
+  private readonly resolveMeta = new WeakMap<Monaco.languages.CompletionItem, BigQueryResolveMeta>()
   private readonly cacheEpoch = new Map<string, number>()
   private readonly jumpCaches = new Map<string, JumpCacheEntry[]>()
   private readonly hydrateAttempted = new Map<string, Set<string>>()
@@ -262,7 +269,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
             endColumn: position.column + 1
           }) === '`'
 
-        const suggestions = list.items.map(item => suggestion(monaco, model, item, { insert, replace }, read.word, canExitBacktick, projectRanks))
+        const suggestions = list.items.map(item => {
+          const monacoItem = suggestion(monaco, model, item, { insert, replace }, read.word, canExitBacktick, projectRanks)
+          const meta = resolveMetaFor(item, read, target, projectRanks)
+          if (meta) this.resolveMeta.set(monacoItem, meta)
+          return monacoItem
+        })
 
         // Append deduplicated cross-project fuzzy table jump hits ranked Billing → ★ Starred → Recent → Discovered.
         if (jumpAnswer?.items.length && target.project) {
@@ -271,7 +283,11 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
             if (!hit.project || !hit.dataset) return
             const isDefault = hit.project === target.project && !!target.dataset && hit.dataset.toLowerCase() === target.dataset.toLowerCase()
             if (isDefault && existingDefaultNames.has(hit.name)) return
-            suggestions.push(jumpSuggestion(monaco, hit, index, target.project!, { insert, replace }, read.word, canExitBacktick))
+            const monacoItem = jumpSuggestion(monaco, hit, index, target.project!, { insert, replace }, read.word, canExitBacktick)
+            if (target.connectionId && target.key && validLookupSegments([hit.project, hit.dataset, hit.name])) {
+              this.resolveMeta.set(monacoItem, { kind: 'object', target, path: [hit.project, hit.dataset, hit.name] })
+            }
+            suggestions.push(monacoItem)
           })
         }
 
@@ -301,7 +317,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
           incomplete: suggestions.length > 0 || list.incomplete || !!jumpAnswer?.truncated || building,
           suggestions
         }
-      }
+      },
+      resolveCompletionItem: async (item, token) => this.resolveSuggestion(item, token)
     }), monaco.languages.registerHoverProvider(googleSqlLanguageId, {
       provideHover: async (model, position, token) => {
         const target = this.target(model)
@@ -588,6 +605,87 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     return { documentId: document.id, connectionId: connection.id, key: cacheKey(connection), project: connection.server, dataset, dialect: googleSqlDialect({ project: connection.server, dataset }) }
   }
 
+  /** Lazy schema preview drawer (`resolveCompletionItem`): reads local `LookupCache` / `language.lookup` with 0 BigQuery API calls. */
+  private async resolveSuggestion(item: Monaco.languages.CompletionItem, token: Monaco.CancellationToken): Promise<Monaco.languages.CompletionItem> {
+    const meta = this.resolveMeta.get(item)
+    if (!meta || this.disposed || token.isCancellationRequested) return item
+    const { target } = meta
+    if (!target.connectionId || !target.key || !this.isCurrentTarget(target.documentId, target.key)) return item
+    try {
+      const lookup = boundedLookup(this.lookup(target, true))
+      let markdown: string | undefined
+      if (meta.kind === 'object') {
+        const [project, dataset, name] = meta.path
+        const answers = await lookup([
+          { path: [project, dataset, name], limit: languageLookupLimits.items, details: true },
+          { path: [], prefix: project, exact: true, limit: 1 }
+        ])
+        if (this.disposed || token.isCancellationRequested) return item
+        const answer = answers?.[0], proj = answers?.[1]?.items[0]
+        if (answer?.object) {
+          markdown = objectMarkdown(
+            target.dialect,
+            answer.path,
+            answer.object,
+            answer.items.map(entry => ({ path: entry.name, type: entry.type, nullable: entry.nullable, description: entry.description })),
+            answer.truncated,
+            { tier: proj?.tier, namesOnly: proj?.namesOnly === true || proj?.detail === 'names' }
+          )
+        }
+      } else if (meta.kind === 'dataset') {
+        const answers = await lookup([
+          { path: [meta.project], prefix: meta.dataset, exact: true, limit: 1 },
+          { path: [meta.project, meta.dataset], limit: languageLookupLimits.defaultItems },
+          { path: [], prefix: meta.project, exact: true, limit: 1 }
+        ])
+        if (this.disposed || token.isCancellationRequested) return item
+        const dsInfo = answers?.[0]?.items[0], objects = answers?.[1], proj = answers?.[2]?.items[0]
+        if (dsInfo || (objects && objects.state !== 'absent')) {
+          const resolvedProject = objects?.path[0] ?? proj?.name ?? meta.project
+          const resolvedDataset = objects?.path[1] ?? dsInfo?.name ?? meta.dataset
+          markdown = datasetMarkdown(target.dialect, resolvedProject, resolvedDataset, dsInfo, objects?.items ?? [], objects?.state ?? 'ready', objects?.truncated ?? false, proj?.tier)
+        }
+      } else if (meta.kind === 'project') {
+        const answers = await lookup([
+          { path: [], prefix: meta.project, exact: true, limit: 1 },
+          { path: [meta.project], limit: languageLookupLimits.defaultItems }
+        ])
+        if (this.disposed || token.isCancellationRequested) return item
+        const proj = answers?.[0]?.items[0], datasets = answers?.[1]
+        if (proj || (datasets && datasets.state !== 'absent')) {
+          const resolvedProject = datasets?.path[0] ?? proj?.name ?? meta.project
+          markdown = projectMarkdown(target.dialect, resolvedProject, proj, datasets?.items ?? [], datasets?.state ?? 'ready', datasets?.truncated ?? false)
+        }
+      } else if (meta.kind === 'cte') {
+        const resolver = new ScopeResolver(meta.scope, target.dialect, lookup)
+        await resolver.load()
+        if (this.disposed || token.isCancellationRequested) return item
+        const columns = (await resolver.columns({ kind: 'cte', name: meta.name, cte: meta.name })).columns
+        if (this.disposed || token.isCancellationRequested) return item
+        const allTop = childrenOf(columns, [])
+        const top = allTop.slice(0, hoverColumns)
+        const more = allTop.length - top.length
+        const lines = [`**${escapeMarkdown(meta.name)}** · WITH query`, '', ...(top.length ? top.map(col => `- ${escapeMarkdown(col.path)}${col.type ? ` ${escapeMarkdown(col.type)}` : ''}`) : ['Columns resolved from query.'])]
+        if (more > 0) lines.push('', `and ${more.toLocaleString('en-US')} more columns`)
+        markdown = lines.join('\n')
+      }
+      if (!markdown || this.disposed || token.isCancellationRequested) return item
+      return { ...item, documentation: { value: markdown, isTrusted: false, supportHtml: false } }
+    } catch {
+      return item
+    }
+  }
+
+  /** Cached RAM `language.lookup` for a BigQuery tab (used by the status bar IntelliSense popover's source health list). */
+  async lookupDocument(documentId: string, requests: readonly LanguageLookupPath[]): Promise<readonly LanguageLookupAnswer[] | undefined> {
+    if (this.disposed || !requests.length) return []
+    const model = this.documents.getModel(documentId)
+    if (!model) return undefined
+    const target = this.target(model)
+    if (!target?.connectionId || !target.key) return undefined
+    return boundedLookup(this.lookup(target, true))(requests)
+  }
+
   private isJitHydrateEnabled(): boolean {
     return this.options.jitHydrateEnabled ? this.options.jitHydrateEnabled() : true
   }
@@ -713,7 +811,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   }
 
   /** language.lookup for a target, through its connection's cache; a tab without a live connection has no index to ask. */
-  private lookup(target: Target): IndexLookup {
+  private lookup(target: Target, passive = false): IndexLookup {
     const { connectionId, key, documentId } = target
     if (!connectionId || !key) return async () => undefined
     let cache = this.caches.get(key)
@@ -722,8 +820,9 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       this.caches.set(key, cache)
     }
     const kept = cache
+    const caller = passive ? undefined : documentId
     return async requests => {
-      const answers = await kept.lookup(requests, documentId)
+      const answers = await kept.lookup(requests, caller)
       // A connection reconcile() dropped while this lookup ran is not brought back.
       if (kept.index && this.caches.get(key) === kept && this.getSnapshot().indexes.get(key) !== kept.index) {
         const indexes = new Map(this.getSnapshot().indexes).set(key, kept.index)
@@ -737,7 +836,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   /** One language.lookup; its failure (or success) is shown on the tab that asked. Batches any pending cross-project jump into the same IPC call. */
   private async ask(connectionId: string, key: string, documentId: string | undefined, requests: LanguageLookupPath[], isSoloJump = false) {
     if (this.disposed || this.inFlight >= indexCompletionLimits.inFlight) return undefined
-    const pending = !isSoloJump ? this.batchedJump.get(key) : undefined
+    const pending = !isSoloJump && documentId !== undefined ? this.batchedJump.get(key) : undefined
     const attachJump = !!pending && !pending.consumed && requests.length < languageLookupLimits.requests
     const sent = attachJump ? [...requests, pending.request] : requests
     if (attachJump && pending) {
@@ -963,6 +1062,45 @@ function unquoteGoogleSqlName(value: string, quoted = false): string {
     ? (value.length > 1 && value.endsWith('`') ? value.slice(1, -1) : value.slice(1))
     : value
   return body.replace(/\\(.)/g, '$1')
+}
+
+const validLookupSegments = (segments: readonly string[]) =>
+  segments.every(segment => segment.length >= 1 && segment.length <= languageLookupLimits.segmentChars)
+
+function resolveMetaFor(
+  item: CompletionItem,
+  read: ReturnType<typeof readGoogleSqlCompletion>,
+  target: Target,
+  projectRanks?: ReadonlyMap<string, ProjectRankInfo>
+): BigQueryResolveMeta | undefined {
+  if (!target.connectionId || !target.key) return undefined
+  if (item.kind === 'cte') return { kind: 'cte', target, name: item.label, scope: read.scope }
+  if (item.kind === 'alias') {
+    const source = read.scope.sources.find(entry => entry.name !== undefined && sameName(entry.name, item.label))
+    if (!source) return undefined
+    if (source.kind === 'cte') return { kind: 'cte', target, name: source.cte, scope: read.scope }
+    if (source.kind === 'object') {
+      const path = target.dialect.objectPath(source.parts)
+      if (path && path.length === 3 && validLookupSegments(path)) return { kind: 'object', target, path: [path[0], path[1], path[2]] }
+    }
+    return undefined
+  }
+  if (read.site.kind !== 'object') return undefined
+  const { qualifier } = read.site
+  if (item.kind === 'table' || item.kind === 'view' || item.kind === 'routine' || item.kind === 'model') {
+    const path = target.dialect.objectPath([...qualifier, item.label])
+    if (path && path.length === 3 && validLookupSegments(path)) return { kind: 'object', target, path: [path[0], path[1], path[2]] }
+    return undefined
+  }
+  if (item.kind === 'container') {
+    if (qualifier.length === 0) {
+      if (projectRanks?.has(item.label) || item.detail?.startsWith('Project')) return validLookupSegments([item.label]) ? { kind: 'project', target, project: item.label } : undefined
+      if (target.project && validLookupSegments([target.project, item.label])) return { kind: 'dataset', target, project: target.project, dataset: item.label }
+    } else if (qualifier.length === 1 && validLookupSegments([qualifier[0], item.label])) {
+      return { kind: 'dataset', target, project: qualifier[0], dataset: item.label }
+    }
+  }
+  return undefined
 }
 
 /** Wraps a GoogleSQL dialect so top-level `bqProject` items render PR #738 tier & wave/memory-cap descriptions. */

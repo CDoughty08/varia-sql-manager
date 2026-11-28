@@ -2,12 +2,13 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { completeFromIndex } from '../src/shared/completion/complete'
 import { definitionFromIndex, IndexUnavailableError } from '../src/shared/completion/definition'
-import { escapeMarkdown, hoverFromIndex } from '../src/shared/completion/hover'
+import { escapeMarkdown, hoverFromIndex, sqlObjectMarkdown } from '../src/shared/completion/hover'
 import { LookupCache, lookupCacheLimits } from '../src/shared/completion/lookup-cache'
 import type { CompletionItem, CompletionSite, IndexLookup, ScopeSource } from '../src/shared/completion/model'
 import { googleSqlDialect, quoteGoogleSqlName } from '../src/shared/googlesql/dialect'
 import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../src/shared/googlesql/scope'
 import { languageLookupLimits, languageLookupRequestSchema, languageLookupResultSchema, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath, type LanguageLookupResult } from '../src/shared/language-lookup'
+import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
 /** `|` marks the caret. */
 function at(source: string): { text: string; offset: number } {
@@ -277,10 +278,11 @@ describe('GoogleSQL scope reader', () => {
   })
 
   it('reads text with many FROMs and long WITH chains without slowing down or overflowing', async () => {
-    const started = performance.now()
     const froms = 'SELECT 1 ' + 'FROM a '.repeat(30000)
-    readGoogleSqlCompletion(froms, froms.length)
-    expect(performance.now() - started).toBeLessThan(2000)
+    // Bound by deterministic metered work rather than wall clock, which stretches past 3 s on contended 3-vCPU CI runners.
+    const { work: fromsWork } = meterWork(() => readGoogleSqlCompletion(froms, froms.length))
+    expect(fromsWork.elements, JSON.stringify(fromsWork)).toBeLessThan(1_000_000)
+    expect(fromsWork.costly, JSON.stringify(fromsWork)).toBeLessThan(2_000_000)
     const chain = Array.from({ length: 3000 }, (_, index) => `a${index} AS (SELECT * FROM ${index ? `a${index - 1}` : 'sales.orders'})`)
     const text = `WITH ${chain.join(', ')} SELECT  FROM a2999`
     const offset = text.indexOf('SELECT  FROM') + 'SELECT '.length
@@ -290,25 +292,29 @@ describe('GoogleSQL scope reader', () => {
     const short = `WITH ${near.join(', ')} SELECT  FROM a2`
     const columns = await completeFromIndex(readGoogleSqlCompletion(short, short.indexOf('  FROM') + 1), dialect, fakeLookup())
     expect(columns.items.filter(item => item.kind === 'column').map(item => item.label)).toContain('customer')
-    // The chain's completion itself stays quick, and so do many sources of one wide table.
-    const timed = performance.now()
-    await completeFromIndex(readGoogleSqlCompletion(text, offset), dialect, fakeLookup())
+    // The chain's completion itself stays linear, and so do many sources of one wide table.
     const many = 'SELECT  FROM ' + Array.from({ length: 1000 }, () => '`varia-wide.lab.wide`').join(', ')
-    await completeFromIndex(readGoogleSqlCompletion(many, 'SELECT '.length), dialect, fakeLookup())
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    const { work: chainWork } = await meterWork(async () => {
+      await completeFromIndex(readGoogleSqlCompletion(text, offset), dialect, fakeLookup())
+      await completeFromIndex(readGoogleSqlCompletion(many, 'SELECT '.length), dialect, fakeLookup())
+    })
+    expect(chainWork.elements, JSON.stringify(chainWork)).toBeLessThan(2_000_000)
+    expect(chainWork.costly, JSON.stringify(chainWork)).toBeLessThan(2_000_000)
+  }, heavyTimeout)
 
   it('reads subqueries and WITH queries over a wide table without work growing with its width squared', async () => {
     const wide = '`varia-wide.lab.wide`'
     const subqueries = 'SELECT c24 FROM ' + Array.from({ length: 200 }, (_, index) => `(SELECT * FROM ${wide}) s${index}`).join(', ')
     const chain = 'WITH ' + Array.from({ length: 60 }, (_, index) => `w${index} AS (SELECT * FROM ${index ? `w${index - 1}` : wide})`).join(', ') + ' SELECT c24 FROM w59, w59 AS again'
-    const timed = performance.now()
-    const first = await completeFromIndex(readGoogleSqlCompletion(subqueries, 'SELECT c24'.length), dialect, fakeLookup())
-    const second = await completeFromIndex(readGoogleSqlCompletion(chain, chain.indexOf('SELECT c24') + 'SELECT c24'.length), dialect, fakeLookup())
-    expect(performance.now() - timed).toBeLessThan(3000)
+    const { result: [first, second], work } = await meterWork(async () => [
+      await completeFromIndex(readGoogleSqlCompletion(subqueries, 'SELECT c24'.length), dialect, fakeLookup()),
+      await completeFromIndex(readGoogleSqlCompletion(chain, chain.indexOf('SELECT c24') + 'SELECT c24'.length), dialect, fakeLookup())
+    ])
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(2_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(200_000)
     expect(first.items.some(item => item.filterText === 'c2499' && item.label === 's0.c2499')).toBe(true)
     expect(second.items.filter(item => item.filterText === 'c2499').map(item => item.label)).toEqual(['w59.c2499', 'again.c2499'])
-  })
+  }, heavyTimeout)
 
   it('reads a dot after a project id that ends in digits', () => {
     expect(read('SELECT * FROM my-project-123456.|').site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
@@ -574,11 +580,13 @@ describe('GoogleSQL scope reader', () => {
   it('reads deeply nested subqueries in bounded time and without overflowing', () => {
     const depth = 3000
     const text = 'SELECT '.padEnd(7) + '* FROM ('.repeat(depth) + 'SELECT id FROM t' + ') q'.repeat(depth)
-    const started = performance.now()
-    expect(() => readGoogleSqlCompletion(text, 7)).not.toThrow()
-    expect(() => readGoogleSqlCompletion(text, text.indexOf('id'))).not.toThrow()
-    expect(performance.now() - started).toBeLessThan(2000)
-  })
+    const { work } = meterWork(() => {
+      expect(() => readGoogleSqlCompletion(text, 7)).not.toThrow()
+      expect(() => readGoogleSqlCompletion(text, text.indexOf('id'))).not.toThrow()
+    })
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(500_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(1_000_000)
+  }, heavyTimeout)
 
   it('reads the targets of UPDATE, DELETE, MERGE and INSERT', () => {
     expect(names(read('UPDATE sales.orders SET |').scope.sources)).toEqual(['orders=sales.orders'])
@@ -597,6 +605,25 @@ describe('GoogleSQL scope reader', () => {
     expect(readGoogleSqlHover(call.text, call.offset)).toMatchObject({ parts: ['COUNT'], object: false, scope: { sources: [] } })
     const text = at("SELECT 'or|ders'")
     expect(readGoogleSqlHover(text.text, text.offset)).toBeUndefined()
+  })
+
+  it('escapes standalone carriage returns in Markdown, appends CTE >40 col footer, and includes project tier/namesOnly on table alias hover', async () => {
+    expect(escapeMarkdown('line1\rline2\r\nline3\nline4')).toBe('line1 line2 line3 line4')
+
+    const cols = Array.from({ length: 45 }, (_, i) => `${i + 1} AS c${i + 1}`).join(', ')
+    const cteHoverPos = at(`WITH wide AS (SELECT ${cols}) SELECT * FROM wi|de`)
+    const cteHover = await hoverFromIndex(readGoogleSqlHover(cteHoverPos.text, cteHoverPos.offset)!, dialect, fakeLookup())
+    expect(cteHover?.markdown).toContain('and 5 more columns')
+
+    const aliasHoverPos = at('SELECT |o.id FROM sales.orders o')
+    const tierLookup = fakeLookup()
+    const aliasHover = await hoverFromIndex(readGoogleSqlHover(aliasHoverPos.text, aliasHoverPos.offset)!, dialect, async requests => {
+      const answers = await tierLookup(requests)
+      return answers?.map(ans => ans.path.length === 0
+        ? { ...ans, items: ans.items.map(item => ({ ...item, tier: 'billing' as const })) }
+        : ans)
+    })
+    expect(aliasHover?.markdown).toContain('**orders** · Table · Billing')
   })
 })
 
@@ -680,24 +707,28 @@ describe('completion from the index', () => {
     const hop65WithShallow = await complete(`${chain65} SELECT | FROM w64, w0`)
     expect(hop65WithShallow.incomplete).toBe(true)
     expect(hop65WithShallow.labels('column')).toContain('customer')
-    const timed = performance.now()
     const bare = 'SELECT c24| FROM `varia-wide.lab.wide` w' + ', UNNEST(zrec) u'.repeat(11000)
-    await complete(bare)
-    // A dbt-style diamond (each WITH query joins the two before it) past the star budget, and a deep one named thousands of times.
     const diamond = 'WITH c0 AS (SELECT * FROM sales.orders), c1 AS (SELECT * FROM sales.orders), ' + Array.from({ length: 98 }, (_, index) => `c${index + 2} AS (SELECT * FROM c${index + 1} JOIN c${index} USING (id))`).join(', ') + ' SELECT | FROM c99'
-    expect((await complete(diamond)).labels('column')).toContain('customer')
     const deep = 'WITH ' + Array.from({ length: 70 }, (_, index) => `c${index} AS (SELECT * FROM ${index ? `c${index - 1}` : 'sales.orders'})`).join(', ') + ' SELECT cu| FROM ' + Array.from({ length: 10000 }, (_, index) => `c69 x${index}`).join(', ')
-    await complete(deep)
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    const { result: diamondResult, work } = await meterWork(async () => {
+      await complete(bare)
+      // A dbt-style diamond (each WITH query joins the two before it) past the star budget, and a deep one named thousands of times.
+      const found = await complete(diamond)
+      await complete(deep)
+      return found
+    })
+    expect(diamondResult.labels('column')).toContain('customer')
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(6_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(3_000_000)
+  }, heavyTimeout)
 
   it('bounds the work of a web of WITH queries over a wide table, nearest listed first, and says the list is cut short', async () => {
     // A table that comes back whole: only the cap can make the list incomplete.
     const wide = '`varia-wide.lab.whole`'
     const web = 'WITH ' + Array.from({ length: 522 }, (_, index) => `c${index} AS (SELECT * FROM ${wide} w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ') + ' SELECT c00| FROM c521'
-    const timed = performance.now()
-    const list = await complete(web)
-    expect(performance.now() - timed).toBeLessThan(3000)
+    const { result: list, work: webWork } = await meterWork(() => complete(web))
+    expect(webWork.elements, JSON.stringify(webWork)).toBeLessThan(4_000_000)
+    expect(webWork.costly, JSON.stringify(webWork)).toBeLessThan(1_000_000)
     expect(list.labels('column')).toContain('c0000')
     expect(list.incomplete).toBe(true)
     // UNNESTs past the cap over a table that was not cut short leave the list final.
@@ -706,9 +737,10 @@ describe('completion from the index', () => {
     // Thousands of UNNESTs through a WITH query of many named columns count against the cap too.
     const named = Array.from({ length: 20000 }, (_, index) => `x${index}`).join(', ')
     const unnests = `WITH c AS (SELECT ${named} FROM sales.orders) SELECT q| FROM \`varia-wide.lab.wide\` w, c` + Array.from({ length: 6000 }, (_, index) => `, UNNEST(c.ab) u${index}`).join('')
-    const started = performance.now()
-    expect((await complete(unnests)).incomplete).toBe(true)
-    expect(performance.now() - started).toBeLessThan(2000)
+    const { result: unnestResult, work: unnestWork } = await meterWork(() => complete(unnests))
+    expect(unnestResult.incomplete).toBe(true)
+    expect(unnestWork.elements, JSON.stringify(unnestWork)).toBeLessThan(4_000_000)
+    expect(unnestWork.costly, JSON.stringify(unnestWork)).toBeLessThan(3_000_000)
     // A member list whose source the cap cut is not final, though every answer came back whole.
     const copies = Array.from({ length: 600 }, (_, index) => `c0 a${index}`).join(', ')
     const member = await complete(`WITH c0 AS (SELECT * FROM \`varia-wide.lab.whole\`), c1 AS (SELECT * FROM ${copies}) SELECT items.| FROM c1, sales.orders o`)
@@ -716,7 +748,7 @@ describe('completion from the index', () => {
     // A second ask (one typed letter beside a table cut short) lists what the first did: it has a cap of its own.
     const web80 = 'WITH ' + Array.from({ length: 80 }, (_, index) => `c${index} AS (SELECT * FROM \`varia-wide.lab.whole\` w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ')
     expect((await complete(`${web80} SELECT x.c| FROM c79 x, \`varia-wide.lab.wide\` z`)).labels('column').length).toBeGreaterThanOrEqual(1900)
-  })
+  }, heavyTimeout)
 
   it('follows a long chain of UNNESTs, each reading the last, without overflowing', async () => {
     const chain = (count: number) => Array.from({ length: count }, (_, index) => `, UNNEST(${index ? `u${index - 1}.zz` : 'o.items'}) u${index}`).join('')
@@ -730,25 +762,34 @@ describe('completion from the index', () => {
   it('reads a star repeated over many sources, and many dotted FROM items, in bounded time', async () => {
     const stars = `WITH c AS (SELECT ${Array(10000).fill('*').join(',')} FROM ${Array(20000).fill('sales.orders').join(',')}) SELECT | FROM c`
     const dotted = 'SELECT | FROM sales.orders o0' + ', x.y z'.repeat(35000)
-    const timed = performance.now()
-    const read = readGoogleSqlCompletion(stars, stars.indexOf('| FROM c'))
+    const { result: [read, starsResult], work } = await meterWork(async () => {
+      const read = readGoogleSqlCompletion(stars, stars.indexOf('| FROM c'))
+      const starsResult = await complete(stars)
+      await complete(dotted)
+      return [read, starsResult] as const
+    })
     expect(read.scope.ctes[0].shape.stars.length).toBeLessThanOrEqual(20000)
-    expect((await complete(stars)).labels('column')).toContain('customer')
-    await complete(dotted)
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    expect(starsResult.labels('column')).toContain('customer')
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(8_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(10_000_000)
+  }, heavyTimeout)
 
   it('reads huge FROM lists, quoted paths and qualified stars without throwing, in bounded time', async () => {
-    const timed = performance.now()
     const many = 'SELECT  FROM ' + 'a,'.repeat(124000) + 'a'
-    expect(readGoogleSqlCompletion(many, 7).scope.sources.length).toBe(124001)
-    expect(readGoogleSqlHover(many, many.length - 1)).toBeDefined()
     const path = '`' + 'a.'.repeat(124000) + 'a`'
-    for (const text of [`SELECT * FROM (SELECT ${path}) q WHERE `, `SELECT * FROM UNNEST(${path}) WHERE `, `SELECT * FROM x.${path} WHERE `]) expect(() => readGoogleSqlCompletion(text, text.length)).not.toThrow()
     const qualified = `WITH c AS (SELECT ${Array(30000).fill('zz.*').join(', ')} FROM ${Array.from({ length: 10000 }, (_, index) => `t a${index}`).join(', ')}) SELECT  FROM c`
-    readGoogleSqlCompletion(qualified, qualified.length - ' FROM c'.length)
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    const { result: [sourcesCount, hover], work } = meterWork(() => {
+      const sourcesCount = readGoogleSqlCompletion(many, 7).scope.sources.length
+      const hover = readGoogleSqlHover(many, many.length - 1)
+      for (const text of [`SELECT * FROM (SELECT ${path}) q WHERE `, `SELECT * FROM UNNEST(${path}) WHERE `, `SELECT * FROM x.${path} WHERE `]) readGoogleSqlCompletion(text, text.length)
+      readGoogleSqlCompletion(qualified, qualified.length - ' FROM c'.length)
+      return [sourcesCount, hover] as const
+    })
+    expect(sourcesCount).toBe(124001)
+    expect(hover).toBeDefined()
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(12_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(12_000_000)
+  }, heavyTimeout)
 
   it('bounds UNNESTs and stars nested together, and says a bare name past a cut source is not final', async () => {
     const levels = Array.from({ length: 256 }, (_, index) => {
@@ -1224,6 +1265,122 @@ describe('hover from the index', () => {
 
   it('escapes every Markdown character in names', () => {
     expect(escapeMarkdown('a|b*c_[d](e)`f`')).toBe('a\\|b\\*c\\_\\[d\\]\\(e\\)\\`f\\`')
+  })
+
+  it('supports 3-level BigQuery hover: Project (tier & counts), Dataset (location & counts), and Table (description & nested STRUCT field counts)', async () => {
+    const richLookup: IndexLookup = async requests => requests.map(request => {
+      const key = request.path.join('.')
+      if (key === '') {
+        const all: LanguageLookupItem[] = [
+          { name: 'varia-alpha', kind: 'bqProject', tier: 'billing' },
+          { name: 'dw-shared', kind: 'bqProject', tier: 'starred' },
+          { name: 'org-raw', kind: 'bqProject', tier: 'discovered', namesOnly: true, detail: 'names' }
+        ]
+        const filtered = request.prefix ? all.filter(i => request.exact ? i.name === request.prefix : i.name.startsWith(request.prefix!)) : all
+        return { state: 'ready', path: [], items: filtered, truncated: false }
+      }
+      if (key === 'dw-shared') {
+        const all: LanguageLookupItem[] = [
+          { name: 'gold', kind: 'bqDataset', detail: 'US' },
+          { name: 'silver', kind: 'bqDataset', detail: 'EU' }
+        ]
+        const filtered = request.prefix ? all.filter(i => request.exact ? i.name === request.prefix : i.name.startsWith(request.prefix!)) : all
+        return { state: 'ready', path: ['dw-shared'], items: filtered, truncated: false }
+      }
+      if (key === 'org-raw') return { state: 'partial', path: ['org-raw'], items: [{ name: 'landing', kind: 'bqDataset' }], truncated: false }
+      if (key === 'dw-shared.gold') {
+        return {
+          state: 'ready', path: ['dw-shared', 'gold'], truncated: false,
+          items: [
+            { name: 'orders', kind: 'bqTable' },
+            { name: 'customers', kind: 'bqTable' },
+            { name: 'daily_view', kind: 'bqView' },
+            { name: 'to_cents', kind: 'bqRoutine' }
+          ]
+        }
+      }
+      if (key === 'dw-shared.gold.orders') {
+        return {
+          state: 'ready', path: ['dw-shared', 'gold', 'orders'], truncated: false,
+          object: {
+            name: 'orders', kind: 'bqTable', detailed: true, rows: 1_234_567, bytes: 5 * 1024 ** 3,
+            partitioning: 'DAY on placed', clustering: 'customer_id',
+            description: 'Core ecommerce order ledger | updated hourly.'
+          },
+          items: [
+            { name: 'id', kind: 'bqColumn', type: 'INT64', nullable: false },
+            { name: 'address', kind: 'bqColumn', type: 'STRUCT', subtype: 'struct', nullable: true },
+            { name: 'address.city', kind: 'bqColumn', type: 'STRING', nullable: true },
+            { name: 'address.state', kind: 'bqColumn', type: 'STRING', nullable: true },
+            { name: 'address.geo', kind: 'bqColumn', type: 'GEOGRAPHY', nullable: true }
+          ]
+        }
+      }
+      return { state: 'absent', path: [...request.path], items: [], truncated: false }
+    })
+
+    const hoverRich = async (source: string) => {
+      const { text, offset } = at(source)
+      const found = readGoogleSqlHover(text, offset)
+      return found && hoverFromIndex(found, dialect, richLookup)
+    }
+
+    // Level 1: Project hover (★ Starred + discovered names-only)
+    const projHover = await hoverRich('SELECT * FROM `dw-sh|ared.gold.orders`')
+    expect(projHover?.markdown).toContain('**dw\\-shared** · ★ Starred project')
+    expect(projHover?.markdown).toContain('2 datasets')
+    expect(projHover?.markdown).toContain('gold, silver')
+    expect(projHover?.markdown).toContain('Ctrl\\+Shift\\+R')
+
+    const cappedProjHover = await hoverRich('SELECT * FROM `org-r|aw.landing.events`')
+    expect(cappedProjHover?.markdown).toContain('**org\\-raw** · Discovered project')
+    expect(cappedProjHover?.markdown).toContain('Names only (memory cap)')
+    expect(cappedProjHover?.markdown).toContain('Star in Object Explorer')
+
+    // Unknown project returns undefined
+    expect(await hoverRich('SELECT * FROM `no-such-pr|oj.ds.tbl`')).toBeUndefined()
+
+    // Level 2: Dataset hover (location + counts by kind)
+    const dsHover = await hoverRich('SELECT * FROM `dw-shared.go|ld.orders`')
+    expect(dsHover?.markdown).toContain('**gold** · Dataset · US · ★ Starred')
+    expect(dsHover?.markdown).toContain('2 tables · 1 view · 1 routine')
+    expect(dsHover?.markdown).toContain('orders, customers, daily\\_view, to\\_cents')
+
+    // Level 3: Table hover (PR #738 tier + escaped description + nested STRUCT field count summary)
+    const tblHover = await hoverRich('SELECT * FROM `dw-shared.gold.ord|ers`')
+    expect(tblHover?.markdown).toContain('**orders** · Table · ★ Starred')
+    expect(tblHover?.markdown).toContain('Core ecommerce order ledger \\| updated hourly\\.')
+    expect(tblHover?.markdown).toContain('| address | STRUCT · 3 fields: city, state, geo |')
+    expect(tblHover?.markdown).not.toContain('address\\.city')
+  })
+
+  it('formats SQL Server IndexLookup summaries with PK/UK/Identity markers, indexes, and foreign keys', () => {
+    const md = sqlObjectMarkdown(
+      ['SalesDB', 'dbo', 'Orders'],
+      { name: 'Orders', kind: 'table', detailed: true },
+      [
+        { name: 'OrderId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+        { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+        { name: 'Code|1', kind: 'column', type: 'nvarchar(40)', nullable: false, detail: 'UK' },
+        { name: 'PK_Orders', kind: 'key', subtype: 'primary', detail: '(OrderId)' },
+        { name: 'UQ_Orders_Code', kind: 'key', subtype: 'unique', detail: '(Code|1)' },
+        { name: 'IX_Orders_Customer', kind: 'index', subtype: 'nonclustered', detail: '(CustomerId)' },
+        { name: 'FK_Orders_Customers', kind: 'foreignKey', subtype: 'outgoing', detail: '(CustomerId) → dbo.Customers(Id)' },
+        { name: 'FK_Lines_Orders', kind: 'foreignKey', subtype: 'incoming', detail: 'dbo.OrderLines(OrderId) → (OrderId)' }
+      ],
+      false
+    )
+    expect(md).toContain('**dbo\\.Orders** · Table')
+    expect(md).toContain('\\[SalesDB\\]\\.\\[dbo\\]\\.\\[Orders\\]')
+    expect(md).toContain('PK \\(OrderId\\)')
+    expect(md).toContain('1 unique key')
+    expect(md).toContain('1 index')
+    expect(md).toContain('| OrderId | int · NOT NULL · PK · IDENTITY |')
+    expect(md).toContain('| Code\\|1 | nvarchar\\(40\\) · NOT NULL · UK |')
+    expect(md).toContain('**Keys & Indexes**')
+    expect(md).toContain('**Foreign Keys**')
+    expect(md).toContain('→ \\(CustomerId\\) → dbo\\.Customers\\(Id\\)')
+    expect(md).toContain('← dbo\\.OrderLines\\(OrderId\\) → \\(OrderId\\)')
   })
 })
 

@@ -1338,4 +1338,122 @@ describe('IndexCompletionService', () => {
     const quotedWildcard = (await f.completeAt(tab.id, 'SELECT * FROM `varia-alpha.sales.ev|`')).suggestions.find(s => labelText(s.label) === 'events_*')!
     expect(quotedWildcard.insertText).toBe('events_*`')
   })
+
+  it('lazy-resolves BigQuery schema preview drawer on resolveCompletionItem from local LookupCache (0 BQ API calls)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((request): LanguageLookupAnswer => {
+            const key = request.path.join('.')
+            if (key === '') {
+              return { state: 'ready', path: [], truncated: false, items: [{ name: 'varia-alpha', kind: 'bqProject', tier: 'billing' }] }
+            }
+            if (key === 'varia-alpha') {
+              return { state: 'ready', path: ['varia-alpha'], truncated: false, items: [{ name: 'sales', kind: 'bqDataset', detail: 'US' }] }
+            }
+            if (key === 'varia-alpha.sales') {
+              return {
+                state: 'ready', path: ['varia-alpha', 'sales'], truncated: false,
+                items: [{ name: 'orders', kind: 'bqTable' }, { name: 'daily', kind: 'bqView' }]
+              }
+            }
+            if (key === 'varia-alpha.sales.orders') {
+              return {
+                state: 'ready', path: ['varia-alpha', 'sales', 'orders'], truncated: false,
+                object: {
+                  name: 'orders', kind: 'bqTable', detailed: true, rows: 4200, bytes: 2048,
+                  partitioning: 'DAY on placed', clustering: 'customer', description: 'Orders ledger.'
+                },
+                items: [
+                  { name: 'id', kind: 'bqColumn', type: 'INT64', nullable: false },
+                  { name: 'address', kind: 'bqColumn', type: 'STRUCT', subtype: 'struct', nullable: true },
+                  { name: 'address.city', kind: 'bqColumn', type: 'STRING', nullable: true },
+                  { name: 'address.state', kind: 'bqColumn', type: 'STRING', nullable: true }
+                ]
+              }
+            }
+            return { state: 'absent', path: [...request.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('q1.sql', '', 'sales', bqConnId)
+    const list = await f.completeAt(tab.id, 'SELECT * FROM |')
+    const orders = list.suggestions.find(s => labelText(s.label) === 'orders')!
+    const salesDs = list.suggestions.find(s => labelText(s.label) === 'sales')!
+    const project = list.suggestions.find(s => labelText(s.label) === 'varia-alpha')!
+    const provider = f.completionProvider()
+
+    const resolvedTable = (await provider.resolveCompletionItem!(orders, token()))!
+    expect(resolvedTable.documentation).toMatchObject({ isTrusted: false, supportHtml: false })
+    const tableMd = (resolvedTable.documentation as Monaco.IMarkdownString).value
+    expect(tableMd).toContain('**orders** · Table · Billing')
+    expect(tableMd).toContain('4,200 rows · 2.0 KiB · Partitioned by DAY on placed · Clustered by customer')
+    expect(tableMd).toContain('Orders ledger\\.')
+    expect(tableMd).toContain('| address | STRUCT · 2 fields: city, state |')
+
+    const resolvedDs = (await provider.resolveCompletionItem!(salesDs, token()))!
+    const dsMd = (resolvedDs.documentation as Monaco.IMarkdownString).value
+    expect(dsMd).toContain('**sales** · Dataset · US · Billing')
+    expect(dsMd).toContain('1 table · 1 view')
+
+    const resolvedProj = (await provider.resolveCompletionItem!(project, token()))!
+    const projMd = (resolvedProj.documentation as Monaco.IMarkdownString).value
+    expect(projMd).toContain('**varia\\-alpha** · Billing project')
+    expect(projMd).toContain('1 dataset')
+
+    // Cancelled token returns the original item untouched.
+    const cancel = cancellationSource()
+    cancel.cancel()
+    expect(await provider.resolveCompletionItem!(orders, cancel.token)).toBe(orders)
+
+    // lookupDocument exposes cached RAM lookups for the IntelliSense popover's source health list.
+    const answers = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])
+    expect(answers?.[0]?.object?.name).toBe('orders')
+  })
+
+  it('bounds over-length segments, keeps passive lookup failures from poisoning tab status, and appends CTE truncation footer', async () => {
+    let failNext = false
+    const f = createFixture({
+      lookup: async requests => {
+        if (failNext) return { ok: false, code: 'BACKEND_ERROR', error: 'Transient lookup failure.' }
+        return {
+          ok: true,
+          value: {
+            index: 'ready',
+            answers: requests.map(request => ({ state: 'absent', path: [...request.path], items: [], truncated: false }))
+          }
+        }
+      }
+    })
+    const tab = f.documents.create('q-bounds.sql', '', 'sales', bqConnId)
+
+    // Over-length backticked table alias (>1024 chars) never sends invalid path segments to language.lookup.
+    const longTable = 't'.repeat(1030)
+    const aliasList = await f.completeAt(tab.id, `SELECT | FROM \`varia-alpha.sales.${longTable}\` a`)
+    const aliasItem = aliasList.suggestions.find(s => labelText(s.label) === 'a')!
+    const callsBeforeAlias = f.languageLookup.mock.calls.length
+    expect(await f.completionProvider().resolveCompletionItem!(aliasItem, token())).toBe(aliasItem)
+    expect(f.languageLookup).toHaveBeenCalledTimes(callsBeforeAlias)
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    // lookupDocument filters out >1024-char segments via boundedLookup and passive errors never poison tab errors.
+    const bounded = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', longTable], limit: 1 }])
+    expect(bounded?.[0]?.state).toBe('absent')
+    expect(f.languageLookup).toHaveBeenCalledTimes(callsBeforeAlias)
+
+    failNext = true
+    expect(await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])).toBeUndefined()
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+    failNext = false
+
+    // CTE drawer with >40 columns appends the "and N more columns" footer.
+    const cols = Array.from({ length: 45 }, (_, i) => `${i + 1} AS c${i + 1}`).join(', ')
+    const cteList = await f.completeAt(tab.id, `WITH wide AS (SELECT ${cols}) SELECT * FROM |`)
+    const wideItem = cteList.suggestions.find(s => labelText(s.label) === 'wide')!
+    const resolvedCte = (await f.completionProvider().resolveCompletionItem!(wideItem, token()))!
+    expect((resolvedCte.documentation as Monaco.IMarkdownString).value).toContain('and 5 more columns')
+  })
 })

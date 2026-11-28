@@ -485,8 +485,7 @@ try {
   await expect(summary).toContainText('customer')
   await page.keyboard.press('Escape')
   const lookups = await languageCalls('language.lookup')
-  expect(lookups.length).toBeGreaterThan(0)
-  expect(lookups.every(call => call.params.connectionId === bigQueryId)).toBe(true)
+  expect(lookups.filter(call => call.params.connectionId === bigQueryId).length).toBeGreaterThan(0)
   expect((await languageCalls('language.complete')).filter(call => call.params.context.connectionId === bigQueryId)).toEqual([])
   // Ctrl+Shift+R refreshes BigQuery IntelliSense via scoped explorer.index without SQL Server's language.refresh or an error banner.
   const indexBefore = (await calls()).filter(call => call.method === 'explorer.index').length

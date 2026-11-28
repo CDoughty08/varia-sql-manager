@@ -343,11 +343,13 @@ const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(
 const bigQueryIndex = {
   'varia-fake': {
     sales: {
-      orders: { kind: 'bqTable', rows: 1200, bytes: 5 * 1024 * 1024, partitioning: 'DAY on placed', columns: [
+      orders: { kind: 'bqTable', rows: 1200, bytes: 5 * 1024 * 1024, partitioning: 'DAY on placed', clustering: 'customer',
+        description: 'Core ecommerce order ledger, updated hourly.', columns: [
         { name: 'id', type: 'INT64', nullable: false }, { name: 'customer', type: 'STRING', nullable: true }, { name: 'placed', type: 'TIMESTAMP', nullable: true },
-        { name: 'address', type: 'STRUCT', subtype: 'struct', nullable: true }, { name: 'address.city', type: 'STRING', nullable: true }] },
-      customers: { kind: 'bqTable', rows: 40, bytes: 4096, columns: [{ name: 'id', type: 'INT64', nullable: false }, { name: 'name', type: 'STRING', nullable: true }] },
-      daily: { kind: 'bqView', columns: [{ name: 'day', type: 'DATE', nullable: true }, { name: 'total', type: 'NUMERIC', nullable: true }] }
+        { name: 'address', type: 'STRUCT', subtype: 'struct', nullable: true }, { name: 'address.city', type: 'STRING', nullable: true },
+        { name: 'address.state', type: 'STRING', nullable: true }, { name: 'address.geo', type: 'GEOGRAPHY', nullable: true }] },
+      customers: { kind: 'bqTable', rows: 40, bytes: 4096, description: 'Customer master directory.', columns: [{ name: 'id', type: 'INT64', nullable: false }, { name: 'name', type: 'STRING', nullable: true }] },
+      daily: { kind: 'bqView', description: 'Daily order totals view.', columns: [{ name: 'day', type: 'DATE', nullable: true }, { name: 'total', type: 'NUMERIC', nullable: true }] }
     },
     staging: {}
   }
@@ -393,10 +395,10 @@ function bigQueryLookup(request, tierMode = false) {
     const kept = entries.filter(entry => keep(entry.name)), limit = request.limit ?? 500
     return { state: 'ready', path, items: kept.slice(0, limit), truncated: kept.length > limit, ...object ? { object } : {} }
   }
-  if (projectName === undefined) return answer([], tierMode ? bigQueryTierProjects : Object.keys(bigQueryIndex).map(name => ({ name, kind: 'bqProject' })))
+  if (projectName === undefined) return answer([], tierMode ? bigQueryTierProjects : Object.keys(bigQueryIndex).map((name, i) => ({ name, kind: 'bqProject', tier: i === 0 ? 'billing' : 'starred' })))
   const project = bigQueryNamed(Object.keys(bigQueryIndex), projectName)
   if (!project) return { state: 'absent', path: request.path, items: [], truncated: false }
-  if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset' })))
+  if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset', detail: 'US' })))
   const dataset = bigQueryNamed(Object.keys(bigQueryIndex[project]), datasetName)
   if (!dataset) return { state: 'absent', path: request.path, items: [], truncated: false }
   const objects = bigQueryIndex[project][dataset]
@@ -405,6 +407,54 @@ function bigQueryLookup(request, tierMode = false) {
   if (!name) return { state: 'ready', path: [project, dataset], items: [], truncated: false }
   const { columns, kind, ...facts } = objects[name]
   return answer([project, dataset, name], columns.map(column => ({ ...column, kind: 'bqColumn' })), { name, kind, detailed: true, ...facts })
+}
+const sqlServerLookupTables = {
+  Orders: {
+    object: { name: 'Orders', kind: 'table', detailed: true },
+    items: [
+      { name: 'OrderId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+      { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+      { name: 'PlacedAt', kind: 'column', type: 'datetime2(7)', nullable: false },
+      { name: 'TotalAmount', kind: 'column', type: 'decimal(18,2)', nullable: true },
+      { name: 'PK_Orders', kind: 'key', subtype: 'primary', detail: '(OrderId)' },
+      { name: 'IX_Orders_CustomerId', kind: 'index', subtype: 'nonclustered', detail: '(CustomerId) INCLUDE (PlacedAt, TotalAmount)' },
+      { name: 'FK_Orders_Customers', kind: 'foreignKey', subtype: 'outgoing', detail: '(CustomerId) → dbo.Customers(Id)' },
+      { name: 'FK_OrderLines_Orders', kind: 'foreignKey', subtype: 'incoming', detail: 'dbo.OrderLines(OrderId) → (OrderId)' }
+    ]
+  },
+  CustomerAppData: {
+    object: { name: 'CustomerAppData', kind: 'table', detailed: true },
+    items: [
+      { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+      { name: 'AccountCode', kind: 'column', type: 'nvarchar(40)', nullable: false, detail: 'UK' },
+      { name: 'RegionId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+      { name: 'CreatedAt', kind: 'column', type: 'datetime2(3)', nullable: false },
+      { name: 'PK_CustomerAppData', kind: 'key', subtype: 'primary', detail: '(CustomerId)' },
+      { name: 'UQ_CustomerAppData_AccountCode', kind: 'key', subtype: 'unique', detail: '(AccountCode)' },
+      { name: 'IX_CustomerAppData_RegionId', kind: 'index', subtype: 'nonclustered', detail: '(RegionId) INCLUDE (AccountCode)' },
+      { name: 'FK_CustomerAppData_Regions', kind: 'foreignKey', subtype: 'outgoing', detail: '(RegionId) → dbo.Regions(Id)' },
+      { name: 'FK_Orders_CustomerAppData', kind: 'foreignKey', subtype: 'incoming', detail: 'dbo.Orders(CustomerId) → (CustomerId)' }
+    ]
+  },
+  CustomerMaster: {
+    object: { name: 'CustomerMaster', kind: 'table', detailed: true },
+    items: [
+      { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+      { name: 'DisplayName', kind: 'column', type: 'nvarchar(120)', nullable: false },
+      { name: 'PK_CustomerMaster', kind: 'key', subtype: 'primary', detail: '(CustomerId)' }
+    ]
+  }
+}
+function sqlServerLookup(request) {
+  const [database, schema, objectName] = request.path
+  if (!database) return { state: 'ready', path: [], items: [{ name: 'AppData', kind: 'database' }, { name: 'master', kind: 'database' }], truncated: false }
+  if (!schema) return { state: 'ready', path: [database], items: [{ name: 'dbo', kind: 'schema' }], truncated: false }
+  if (!objectName) return { state: 'ready', path: [database, schema], items: Object.keys(sqlServerLookupTables).map(name => ({ name, kind: 'table' })), truncated: false }
+  const resolvedSchema = schema === '*' ? 'dbo' : schema
+  const key = Object.keys(sqlServerLookupTables).find(name => name.toLowerCase() === objectName.toLowerCase())
+  if (!key || resolvedSchema.toLowerCase() !== 'dbo') return { state: 'ready', path: [database, resolvedSchema], items: [], truncated: false }
+  const entry = sqlServerLookupTables[key]
+  return { state: 'ready', path: [database, 'dbo', entry.object.name], items: entry.items, truncated: false, object: entry.object }
 }
 const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
@@ -1918,11 +1968,12 @@ const agentOutcomes = { 0: 'Failed', 1: 'Succeeded', 3: 'Canceled' }
 const agentStamp = text => Number(text.replace(/\D/g, ''))
 const agentRunning = job => agentRuns.has(job.id)
 /** Each list or watched sample moves a started run on; after two it ends (Succeeded, or Canceled when stopped). */
-function agentAdvance() {
+function agentAdvance(probeName) {
   for (const [id, run] of agentRuns) {
     // The Agent session's run (activity-agent-job) lasts until Stop Job ends it: its session row says the job runs, so Stop must find it.
     if (run.held && !run.stopped) continue
-    if (run.flow) { flowAdvance(id, run); continue }
+    // agent-flow-runs advances one step per watched sample, never on a background Job Activity Monitor's list probe.
+    if (run.flow) { if (probeName === 'agent.jobs.watched') flowAdvance(id, run); continue }
     if (run.samples++ < 2) continue
     Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
     agentRuns.delete(id)
@@ -1933,7 +1984,7 @@ function agentJobsSample(live, probe) {
     const [agentXps, serviceState, startupType, clustered = 0] = explorerStatus()?.agent ?? [1, 4, 2]
     return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }, { id: 'clustered', value: clustered }] }
   }
-  agentAdvance()
+  agentAdvance(probe.probe)
   if (probe.probe === 'agent.jobs.watched') {
     const metrics = liveProbes['agent.jobs.watched'].series.map(() => null)
     ;(live.args.watch ?? []).forEach((id, slot) => {
@@ -2552,9 +2603,13 @@ async function workbench(id, method, params, credit) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'bigquery.account': return respond(id, { kind: 'emulator', account: 'Anonymous (emulator)' })
     case 'language.lookup': {
-      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.lookup needs a BigQuery connection.')
-      const tierMode = await controlled('bq-tiers')
-      return respond(id, { index: 'ready', answers: params.requests.map(request => bigQueryLookup(request, tierMode)) })
+      const conn = workbenchConnections.get(params.connectionId)
+      if (!conn) return fail(id, 'NOT_CONNECTED', 'The connection is no longer active.')
+      if (conn.bigQuery) {
+        const tierMode = await controlled('bq-tiers')
+        return respond(id, { index: 'ready', answers: params.requests.map(request => bigQueryLookup(request, tierMode)) })
+      }
+      return respond(id, { index: 'ready', answers: params.requests.map(sqlServerLookup) })
     }
     case 'language.hydrate': {
       if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.hydrate needs a BigQuery connection.')
@@ -2567,6 +2622,32 @@ async function workbench(id, method, params, credit) {
         return { project: target.project, dataset: target.dataset, name: target.name, status: 'notFound', code: 'NOT_FOUND' }
       })
       return respond(id, { outcomes })
+    }
+    case 'bigquery.properties': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'bigquery.properties needs a BigQuery connection.')
+      const obj = bigQueryIndex[params.project]?.[params.dataset]?.[params.name]
+      if (!obj) return fail(id, 'NOT_FOUND', `Not found: ${params.project}.${params.dataset}.${params.name}`)
+      const columns = obj.columns.map(col => ({ name: col.name, type: col.type }))
+      const topFields = obj.columns.filter(col => !col.name.includes('.')).map(col => {
+        const nested = obj.columns.filter(c => c.name.startsWith(col.name + '.')).map(c => ({ name: c.name.slice(col.name.length + 1), type: c.type, mode: c.nullable === false ? 'REQUIRED' : 'NULLABLE' }))
+        return { name: col.name, type: col.type, mode: col.nullable === false ? 'REQUIRED' : 'NULLABLE', ...nested.length ? { fields: nested } : {} }
+      })
+      return respond(id, {
+        name: params.name,
+        type: obj.kind === 'bqView' ? 'View' : 'Table',
+        fullName: `${params.project}.${params.dataset}.${params.name}`,
+        location: 'US',
+        description: obj.description,
+        elapsedMs: 12,
+        groups: [
+          { title: 'Table', facts: [{ label: 'Location', value: 'US' }, ...obj.partitioning ? [{ label: 'Partitioned by', value: obj.partitioning }] : [], ...obj.clustering ? [{ label: 'Clustered by', value: obj.clustering }] : []] },
+          { title: 'Storage', facts: [...obj.rows !== undefined ? [{ label: 'Rows', value: obj.rows.toLocaleString('en-US') }] : [], ...obj.bytes !== undefined ? [{ label: 'Logical size', value: '5.0 MiB' }] : []] }
+        ],
+        storage: { ...obj.rows !== undefined ? { rows: obj.rows } : {}, ...obj.bytes !== undefined ? { logicalBytes: obj.bytes } : {} },
+        layout: { ...obj.partitioning ? { partitioning: obj.partitioning } : {}, ...obj.clustering ? { clustering: obj.clustering.split(',').map(s => s.trim()) } : {} },
+        columns,
+        schema: topFields
+      })
     }
     case 'language.status': {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
