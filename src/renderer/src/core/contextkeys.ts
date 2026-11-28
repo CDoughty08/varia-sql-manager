@@ -2,7 +2,7 @@ import type { BackendStatus, RecentFile } from '../../../shared/contracts'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
 import type { Platform } from '../../../shared/commands/keybindings'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
-import { documentProvider, isQueryDocument, isTextDocument } from '../documents'
+import { documentProvider, isMultiServerDocument, isQueryDocument, isTextDocument, type QueryDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
 import type { EditorGroupSnapshot } from '../services/editor-groups'
 import type { BookmarkSnapshot } from '../editor/bookmarks'
@@ -32,7 +32,7 @@ export interface FocusFacts {
   readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean; readonly objectInspectorFocus: boolean
   readonly agentStepsFocus: boolean
   readonly agentFlowFocus: boolean
-  readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly optionsDialogFocus: boolean
+  readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly explorerServerFocus: boolean; readonly optionsDialogFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
 export interface DesignerKeys { readonly editable: boolean; readonly rowSelected: boolean; readonly keyRemovable: boolean }
@@ -66,21 +66,25 @@ export interface FocusElement { matches(selector: string): boolean; closest(sele
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
 const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false, agentStepsFocus: false, agentFlowFocus: false,
-  messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, optionsDialogFocus: false }
+  messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, explorerServerFocus: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
-/** Focus keys for editor text and owned widgets, including widgets hosted outside the editor container. */
-export function focusFacts<E extends FocusElement>(element: E | null, editor: FocusEditor<E> | undefined): FocusFacts {
+/** Focus keys for editor text and owned widgets, including widgets hosted outside the editor container and secondary split panes. */
+export function focusFacts<E extends FocusElement>(element: E | null, editor: FocusEditor<E> | readonly FocusEditor<E>[] | undefined): FocusFacts {
   if (!element) return noFocus
-  const editorTextFocus = !!editor?.hasTextFocus()
+  const editors = !editor ? [] : Array.isArray(editor) ? editor : [editor]
+  const editorTextFocus = editors.some(instance => instance.hasTextFocus())
   // Monaco defers widget blur; ownership of the browser's focused element is current when its next key arrives.
-  const editorId = editor?.getId?.()
-  const editorFocus = editorTextFocus || !!editor?.getContainerDomNode().contains(element) ||
-    !!editorId && element.closest('[data-query-editor-id]')?.getAttribute('data-query-editor-id') === editorId
+  const editorFocus = editorTextFocus || editors.some(instance => {
+    const editorId = instance.getId?.()
+    return instance.getContainerDomNode().contains(element) ||
+      (!!editorId && element.closest('[data-query-editor-id]')?.getAttribute('data-query-editor-id') === editorId)
+  })
   const inputFocus = !editorTextFocus && (element.matches('input, textarea, select') || !!element.closest('[contenteditable]:not([contenteditable="false"])'))
   // DockWorkspace marks each pane host, and the mark moves with floating groups.
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   const tree = element.closest('[data-explorer-tree]')
+  const serverFocused = tree?.getAttribute('data-server-focused')
   return {
     editorFocus, editorTextFocus, inputFocus, activePanel: isOutputPane(pane) ? 'output' : panels.has(pane) ? pane as FocusFacts['activePanel'] : editorFocus ? 'editor' : '', outputGridFocus: !!element.closest('[data-result-grid]') || !!element.closest('[data-output-view="live"]'),
     // Any live view's grid (LiveGridPane marks its frame), with Query Output's menu or its owner's own (Job History); not a
@@ -93,7 +97,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     // picker, which is drawn over the page outside any pane.
     resultsFocus: (pane === 'results' && !element.closest('[data-messages-strip]') && !element.closest('[data-output-view="messages"]')) || !!element.closest('[data-results-picker]'),
     // The tree marks itself while type-ahead collects a name (ExplorerTree), so Space types rather than peeks.
-    explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, optionsDialogFocus: !!element.closest('[data-options-dialog]'),
+    explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, explorerServerFocus: serverFocused != null && serverFocused !== 'false', optionsDialogFocus: !!element.closest('[data-options-dialog]'),
     // A job document's Steps section (its list and the selected step's editor), where Alt+Up and Alt+Down move the selected step.
     // Not in a step's command editor: Monaco's focused element (native-edit-context) is no input, and Alt+Up/Down are its own there.
     agentStepsFocus: !!element.closest('[data-agent-steps]') && !element.closest('.monaco-editor'),
@@ -178,6 +182,19 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   const active = documents.documents.find(document => document.id === documents.activeId)
   const connected = isLiveConnection
   const offline = (connection: ContextInputs['connections'][number]) => !!connection.lost && (!connection.lifecycle || connection.lifecycle.state === 'disconnected' || connection.lifecycle.state === 'lost')
+  const isConnectionLive = (connectionId: string | undefined) => !!connectionId && connections.some(connection => connection.id === connectionId && connected(connection))
+  const isDocumentConnected = (document: QueryDocument | undefined): boolean => {
+    if (!document) return false
+    if (document.multiMode) {
+      const enabled = (document.multiTargets ?? []).filter(target => target.enabled)
+      if (document.multiMode === 'cross') {
+        return enabled.some(target => target.provider === 'sqlserver' && isConnectionLive(target.connectionId))
+          && enabled.some(target => target.provider === 'bigquery' && isConnectionLive(target.connectionId))
+      }
+      return enabled.some(target => isConnectionLive(target.connectionId))
+    }
+    return isConnectionLive(document.connectionId)
+  }
   const activeConnection = active?.connectionId ? connections.find(connection => connection.id === active.connectionId) : undefined
   const rememberedConnection = activeConnection ?? (active?.targetId ? connections.find(connection => connection.targetId === active.targetId) : undefined)
   const designer = active ? inputs.designer?.byDocument[active.id] : undefined, monitor = active ? inputs.activity?.byDocument[active.id] : undefined
@@ -199,8 +216,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     comparisonRowHasPartner: !!active && !!inputs.comparisonToggles?.[active.id]?.partner,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: !!documents.unsavedFill || documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
-    // A query's engine follows its connection; every other document is SQL Server's.
-    hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
+    // A query's engine follows its connection (and activePane in Cross-Engine Split); every other document is SQL Server's.
+    hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsMultiServer: isMultiServerDocument(active), activeDocumentCrossFile: isQueryDocument(active) && active?.multiMode === 'cross' && active.crossView === 'file', activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,
     propertiesRefreshable: !!properties?.refreshable, activeDocumentIsTableProperties: active?.kind === 'tableProperties',
     activeDocumentIsNewDatabase: active?.kind === 'newDatabase', newDatabaseCreatable: !!newDatabase?.creatable, newDatabaseCreating: !!newDatabase?.creating,
@@ -218,8 +235,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, multipleEditorGroups: groups.length > 1,
     activeDocumentFloating: !!activeGroup?.floating, documentBusy: documents.busy,
     hasConnection: connections.some(connected), hasLostConnection: connections.some(connection => connection.inExplorer !== false && offline(connection)),
-    activeDocumentConnected: !!activeConnection && connected(activeConnection), activeConnectionLost: !!rememberedConnection && offline(rememberedConnection),
-    anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && connected(connection))),
+    activeDocumentConnected: isDocumentConnected(active), activeConnectionLost: !!rememberedConnection && offline(rememberedConnection),
+    anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && isDocumentConnected(document)),
     queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], hasResultSets: !!active && !!inputs.resultSets?.[active.id], multipleResults: !!active && !!inputs.resultsSteppable?.[active.id], outputPaneVisible: !!inputs.panes && outputPaneIds.some(id => inputs.panes![id]), panelTabsVisible: !!inputs.panelTabs, ...inputs.explorer,
     includeActualPlan: isQueryDocument(active) && !!active?.includeActualPlan,
     includeLivePlan: isQueryDocument(active) && !!active?.includeLivePlan,
@@ -286,7 +303,8 @@ export interface ContextKeyOptions {
   readonly jobHistory?: ExternalStore<JobHistoryContextState>
   /** The editor groups (`multipleEditorGroups`, `activeDocumentFloating`). */
   readonly editorGroups?: ExternalStore<EditorGroupSnapshot>
-  readonly editor?: () => FocusEditor<Element> | undefined
+  readonly editor?: () => FocusEditor<Element> | readonly FocusEditor<Element>[] | undefined
+  readonly editors?: () => readonly FocusEditor<Element>[]
   readonly activeElement?: () => Element | null
 }
 
@@ -325,7 +343,7 @@ export class ContextKeyService implements Disposable {
   get(): ContextKeys {
     // The focused element of the window the user is in (a popout's, when one has focus).
     const element = this.options.activeElement ? this.options.activeElement() : typeof document === 'undefined' ? null : windows.activeElement()
-    return computeContextKeys(this.inputs(focusFacts(element, this.options.editor?.())))
+    return computeContextKeys(this.inputs(focusFacts(element, this.options.editors ? this.options.editors() : this.options.editor?.())))
   }
   private changed(): void {
     for (const listener of [...this.listeners]) {

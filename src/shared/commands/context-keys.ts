@@ -56,6 +56,7 @@ export const contextKeys = {
   planOutlineFocus: { type: 'boolean', scope: 'focus', description: "Focus is in an execution plan's operator outline, whose Copy copies the selected operator." },
   explorerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'." },
   explorerTypeAhead: { type: 'boolean', scope: 'focus', description: "Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking." },
+  explorerServerFocus: { type: 'boolean', scope: 'focus', description: "Focus is on a connected top-level server row in Object Explorer's tree." },
   optionsDialogFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in the Options dialog.' },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
   queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
@@ -128,6 +129,8 @@ export const contextKeys = {
   activityPaused: { type: 'boolean', scope: 'state', description: 'The active Activity Monitor is paused: it runs no SQL until Resume.' },
   activitySplit: { type: 'boolean', scope: 'state', description: 'The active Activity Monitor shows two panes (Split View).' },
   activeDocumentIsQuery: { type: 'boolean', scope: 'state', description: 'The active document is a query, not an XML, JSON, or execution plan value opened from the results.' },
+  activeDocumentIsMultiServer: { type: 'boolean', scope: 'state', description: 'The active document targets two or more servers (Same-Engine Multi-Server or Cross-Engine SELECT).' },
+  activeDocumentCrossFile: { type: 'boolean', scope: 'state', description: 'The active document is a Cross-Engine SELECT tab in single-file view, where Transact-SQL and GoogleSQL share one editor.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   multipleEditorGroups: { type: 'boolean', scope: 'state', description: 'The query editor shows two or more editor groups (split or floating).' },
   activeDocumentFloating: { type: 'boolean', scope: 'state', description: "The active document's editor group floats over the editor area." },
@@ -215,6 +218,8 @@ export const contextKeys = {
     description: "The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers."
   },
   explorerServerLost: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a disconnected server, including a connection lost when the SQL backend restarted.' },
+  explorerMultiSelected: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a connected server belonging to a multi-server selection of two or more servers.' },
+  explorerSameEngineMultiple: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: "Two or more connected servers of the target server's engine exist in Object Explorer." },
   explorerFolderFilterable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that Filter Settings can filter.' },
   explorerFolderFiltered: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for an Object Explorer folder that has a filter.' },
   explorerFolder: {

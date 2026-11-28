@@ -14,7 +14,7 @@ import type { ResultGridProps } from '../src/renderer/src/grid/ResultGrid'
 import { gridLimits as g } from '../src/renderer/src/grid/constants'
 import { scrollbarSize } from '../src/renderer/src/grid/ResultsStack'
 import ResultsTabs, { groupView, revealLeft, selectedEntry, tabsFold, tabsNeed, tabWindow, topItems } from '../src/renderer/src/grid/ResultsTabs'
-import { comparisonSideChars, comparisonTabLabel, filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, shortenMiddle, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
+import { comparisonSideChars, comparisonTabLabel, filterRows, jumpResult, pickerRequests, pickerRows, pickerScroll, pickerSummary, pickerWindow, shortenDistinct, shortenMiddle, stackReveals, stepResult, stepView } from '../src/renderer/src/grid/result-picker'
 import { pickerRowHeight, pickerRowsShown } from '../src/renderer/src/grid/ResultsPicker'
 import { minGridHeight } from '../src/renderer/src/grid/stack'
 import { comparedNames, comparisonName, distinctName, ResultsService } from '../src/renderer/src/results/ResultsService'
@@ -1180,5 +1180,23 @@ describe('a comparison\'s tab label', () => {
     const slot = { entry: { label: 'Differences: Totals → Result 3', number: 5 }, sources: [{ name: 'Totals' }, { name: 'Result 3' }] } as unknown as Parameters<typeof comparisonTabLabel>[0]
     expect(comparisonTabLabel(slot)).toBe('Totals → Result 3')
     expect(comparisonTabLabel(slot)).not.toContain('Result 5')
+  })
+
+  it('R8 D4 #7: shortenDistinct slices code points instead of UTF-16 code units so surrogate pairs are never split', () => {
+    const sharedPrefix = 'shared-analytics-prefix-'
+    const sharedSuffix = '-tail-segment'
+    const [left, right] = shortenDistinct(
+      `${sharedPrefix}🚀🚀🚀🚀🚀🚀🚀A${sharedSuffix}`,
+      `${sharedPrefix}🔥🔥🔥🔥🔥🔥🔥B${sharedSuffix}`,
+      comparisonSideChars
+    )
+    const hasLoneSurrogate = (value: string) => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
+    expect(left).not.toBe(right)
+    expect(hasLoneSurrogate(left)).toBe(false)
+    expect(hasLoneSurrogate(right)).toBe(false)
+    expect(Array.from(left).length).toBeLessThanOrEqual(comparisonSideChars)
+    expect(Array.from(right).length).toBeLessThanOrEqual(comparisonSideChars)
+    expect(left).toContain('🚀')
+    expect(right).toContain('🔥')
   })
 })

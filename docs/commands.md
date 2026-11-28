@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (467)
+## Commands (475)
 
 ### File
 
@@ -64,15 +64,15 @@ keys it uses are listed below.
 | Clear Bookmarks | `edit.clearBookmarks` | Ctrl+K Ctrl+L * | Ctrl+K Ctrl+L * | ⌘K ⌘L * | `hasBookmarks` | Edit › Bookmarks › Clear Bookmarks |
 | Previous Bookmark In Document | `edit.previousBookmarkInDocument` | — | — | — | `activeDocumentHasBookmarks` | Edit › Bookmarks › Previous Bookmark In Document |
 | Next Bookmark In Document | `edit.nextBookmarkInDocument` | — | — | — | `activeDocumentHasBookmarks` | Edit › Bookmarks › Next Bookmark In Document |
-| Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
-| Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
+| Insert Snippet… | `edit.insertSnippet` | Ctrl+K Ctrl+X * | Ctrl+K Ctrl+X * | ⌘K ⌘X * | `activeDocumentIsQuery && !documentBusy && !activeDocumentCrossFile` | Edit › IntelliSense › Insert Snippet…; Editor context menu › Insert Snippet… |
+| Surround With… | `edit.surroundWith` | Ctrl+K Ctrl+S * | Ctrl+K Ctrl+S * | ⌘K ⌘S * | `activeDocumentIsQuery && !documentBusy && !activeDocumentCrossFile` | Edit › IntelliSense › Surround With…; Editor context menu › Surround With… |
 | Refresh Local Cache | `edit.refreshIntelliSense` | Ctrl+Shift+R (`editorFocus && !inputFocus`) | Ctrl+Shift+R (`editorFocus && !inputFocus`) | ⇧⌘R (`editorFocus && !inputFocus`) | `backendReady && !documentBusy` | Edit › IntelliSense › Refresh Local Cache |
 | Go To Definition | `edit.goToDefinition` | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Go To Definition |
 | Peek Definition | `edit.peekDefinition` | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | Alt+F12 (`editorTextFocus \|\| peekEditorFocus`) | ⌥F12 (`editorTextFocus \|\| peekEditorFocus`) | `backendReady` | Editor context menu › Peek Definition |
 | Open Definition in Peek Tab | `edit.openPeekTab` | — | — | — | `backendReady` | Editor context menu › Open Definition in Peek Tab |
-| Toggle Brackets | `edit.toggleBrackets` | Ctrl+[ (`editorTextFocus`) | Ctrl+[ (`editorTextFocus`) | ⌘[ (`editorTextFocus`) | `activeDocumentIsQuery` | Edit › Advanced › Toggle Brackets; Editor context menu › Toggle Brackets |
-| Move Commas to Front | `edit.commasToFront` | — | — | — | `activeDocumentIsQuery` | Edit › Advanced › Move Commas to Front; Editor context menu › Move Commas to Front |
-| Move Commas to End | `edit.commasToEnd` | — | — | — | `activeDocumentIsQuery` | Edit › Advanced › Move Commas to End; Editor context menu › Move Commas to End |
+| Toggle Brackets | `edit.toggleBrackets` | Ctrl+[ (`editorTextFocus`) | Ctrl+[ (`editorTextFocus`) | ⌘[ (`editorTextFocus`) | `activeDocumentIsQuery && !activeDocumentCrossFile` | Edit › Advanced › Toggle Brackets; Editor context menu › Toggle Brackets |
+| Move Commas to Front | `edit.commasToFront` | — | — | — | `activeDocumentIsQuery && !activeDocumentCrossFile` | Edit › Advanced › Move Commas to Front; Editor context menu › Move Commas to Front |
+| Move Commas to End | `edit.commasToEnd` | — | — | — | `activeDocumentIsQuery && !activeDocumentCrossFile` | Edit › Advanced › Move Commas to End; Editor context menu › Move Commas to End |
 | Next SQL Issue | `edit.nextSqlIssue` | Alt+F8 * | Alt+F8 * | ⌥F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Next SQL Issue |
 | Previous SQL Issue | `edit.previousSqlIssue` | Shift+Alt+F8 * | Shift+Alt+F8 * | ⌥⇧F8 * | `activeDocumentIsQuery` | Edit › IntelliSense › Previous SQL Issue |
 
@@ -157,16 +157,16 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| backendReady)` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
-| Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
-| Include Live Execution Plan | `query.includeLivePlan` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeLivePlan` | Query › Include Live Execution Plan |
-| Display Estimated Execution Plan | `query.estimatePlan` | Ctrl+L (`editorFocus \|\| queryBarFocus`) | Ctrl+L (`editorFocus \|\| queryBarFocus`) | ⌘L (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Display Estimated Execution Plan; Editor context menu › Display Estimated Execution Plan |
-| Display Estimated Plan in Query Session | `query.estimateSessionPlan` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Display Estimated Plan in Query Session; Editor context menu › Display Estimated Plan in Query Session |
-| Include Client Statistics | `query.includeClientStatistics` | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy`; checked when `includeClientStatistics` | Query › Include Client Statistics |
-| Reset Client Statistics | `query.resetClientStatistics` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Reset Client Statistics |
-| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
-| Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
+| Include Actual Execution Plan | `query.includeActualPlan` | Ctrl+M (`editorFocus \|\| queryBarFocus`) | Ctrl+M (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer`; checked when `includeActualPlan` | Query › Include Actual Execution Plan |
+| Include Live Execution Plan | `query.includeLivePlan` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer`; checked when `includeLivePlan` | Query › Include Live Execution Plan |
+| Display Estimated Execution Plan | `query.estimatePlan` | Ctrl+L (`editorFocus \|\| queryBarFocus`) | Ctrl+L (`editorFocus \|\| queryBarFocus`) | ⌘L (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer` | Query › Display Estimated Execution Plan; Editor context menu › Display Estimated Execution Plan |
+| Display Estimated Plan in Query Session | `query.estimateSessionPlan` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer` | Query › Display Estimated Plan in Query Session; Editor context menu › Display Estimated Plan in Query Session |
+| Include Client Statistics | `query.includeClientStatistics` | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | Shift+Alt+S (`editorFocus \|\| queryBarFocus`) | — | `activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer`; checked when `includeClientStatistics` | Query › Include Client Statistics |
+| Reset Client Statistics | `query.resetClientStatistics` | — | — | — | `activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer` | Query › Reset Client Statistics |
+| Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy && !activeDocumentIsMultiServer` | Query › Connection › Change Connection… |
+| Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer` | Query › Connection › Disconnect |
 | Disconnect All Queries | `query.disconnectAll` | — | — | — | `anyDocumentConnected && !documentBusy` | Query › Connection › Disconnect All Queries |
-| Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Change Database… |
+| Change Database… | `query.changeDatabase` | Ctrl+U | Ctrl+U | ⌘U | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy && !activeDocumentIsMultiServer` | Query › Change Database… |
 | Copy (not in the palette) | `output.copy` | Ctrl+C (`outputGridFocus`) | Ctrl+C (`outputGridFocus`) | ⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy |
 | Copy with Headers (not in the palette) | `output.copyWithHeaders` | Ctrl+Shift+C (`outputGridFocus`) | Ctrl+Shift+C (`outputGridFocus`) | ⇧⌘C (`outputGridFocus`) | Always | Query Output context menu › Copy with Headers |
 | Copy Column Name (not in the palette) | `output.copyColumnName` | — | — | — | Always | Query Output context menu › Copy Column Name |
@@ -231,7 +231,7 @@ keys it uses are listed below.
 | Show Results as Tabs | `output.toggleResultsTabs` | — | — | — | Always; checked when `resultsTabs` | Window › Results as Tabs; Results toolbar › More results tools › Results as Tabs |
 | Next Result | `output.nextResult` | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | Ctrl+Alt+PageDown, Ctrl+PageDown (`resultsFocus && multipleResults`) | ⌃⌥⇟ | `hasResultSets` | — |
 | Previous Result | `output.previousResult` | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | Ctrl+Alt+PageUp, Ctrl+PageUp (`resultsFocus && multipleResults`) | ⌃⌥⇞ | `hasResultSets` | — |
-| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`resultsFocus && multipleResults`) | Ctrl+1 (`resultsFocus && multipleResults`) | ⌘1 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Result 1 | `output.goToResult1` | Ctrl+1 (`resultsFocus && multipleResults`) | Ctrl+1 (`resultsFocus && multipleResults`) | ⌘1 (`resultsFocus && multipleResults`) | `hasResults` | — |
 | Go to Result 2 | `output.goToResult2` | Ctrl+2 (`resultsFocus && multipleResults`) | Ctrl+2 (`resultsFocus && multipleResults`) | ⌘2 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 3 | `output.goToResult3` | Ctrl+3 (`resultsFocus && multipleResults`) | Ctrl+3 (`resultsFocus && multipleResults`) | ⌘3 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 4 | `output.goToResult4` | Ctrl+4 (`resultsFocus && multipleResults`) | Ctrl+4 (`resultsFocus && multipleResults`) | ⌘4 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
@@ -239,10 +239,10 @@ keys it uses are listed below.
 | Go to Result 6 | `output.goToResult6` | Ctrl+6 (`resultsFocus && multipleResults`) | Ctrl+6 (`resultsFocus && multipleResults`) | ⌘6 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 7 | `output.goToResult7` | Ctrl+7 (`resultsFocus && multipleResults`) | Ctrl+7 (`resultsFocus && multipleResults`) | ⌘7 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
 | Go to Result 8 | `output.goToResult8` | Ctrl+8 (`resultsFocus && multipleResults`) | Ctrl+8 (`resultsFocus && multipleResults`) | ⌘8 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
-| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`resultsFocus && multipleResults`) | Ctrl+9 (`resultsFocus && multipleResults`) | ⌘9 (`resultsFocus && multipleResults`) | `hasResultSets` | — |
+| Go to Last Result | `output.goToLastResult` | Ctrl+9 (`resultsFocus && multipleResults`) | Ctrl+9 (`resultsFocus && multipleResults`) | ⌘9 (`resultsFocus && multipleResults`) | `hasResults` | — |
 | Next Result View | `output.nextResultView` | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | Ctrl+Shift+Alt+PageDown (`!textInputFocus`) | ⌃⌥⇧⇟ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
 | Previous Result View | `output.previousResultView` | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | Ctrl+Shift+Alt+PageUp (`!textInputFocus`) | ⌃⌥⇧⇞ (`!textInputFocus`) | `resultsTabs && hasResultSets` | — |
-| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResultSets` | Window › Go to Result…; Results toolbar › More results tools › Go to Result… |
+| Go to Result… | `output.goToResult` | Ctrl+Shift+O | Ctrl+Shift+O | ⇧⌘O | `resultsTabs && hasResults` | Window › Go to Result…; Results toolbar › More results tools › Go to Result… |
 | Show Row Size in Results | `output.toggleRowSize` | — | — | — | Always; checked when `resultsRowSize` | Query Output context menu › Show Row Size; Results toolbar › More results tools › Row Size |
 | Open Value in New Tab (not in the palette) | `output.openValue` | — | — | — | Always | — |
 | Copy Operator (not in the palette) | `plan.copyOperator` | Ctrl+C * (`planOutlineFocus`) | Ctrl+C * (`planOutlineFocus`) | ⌘C * (`planOutlineFocus`) | Always | Execution plan outline context menu › Copy |
@@ -279,6 +279,13 @@ keys it uses are listed below.
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | Object Explorer header › More actions › Collapse All |
 | Group by Schema | `explorer.groupBySchema` | — | — | — | Always; checked when `explorerGroupBySchema` | Object Explorer header › More actions › Group by Schema |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query; Search Objects result context menu › New Query |
+| New Multi-Server Query | `explorer.newMultiServerQuery` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › New Multi-Server Query |
+| New Cross-Engine SELECT… | `explorer.newCrossEngineQuery` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › New Cross-Engine SELECT… |
+| Refresh Selected | `explorer.refreshSelected` | — | — | — | `hasConnection` | Object Explorer context menu › Refresh Selected |
+| Clear Selection | `explorer.clearMultiSelect` | — | — | — | `hasConnection` | Object Explorer context menu › Clear Selection |
+| Disconnect Selected | `explorer.disconnectSelected` | — | — | — | `hasConnection && !documentBusy` | Object Explorer context menu › Disconnect Selected |
+| Select All SQL Servers | `explorer.selectAllSqlServers` | — | — | — | `hasConnection` | Object Explorer context menu › Select All SQL Servers |
+| Select All BigQuery Projects | `explorer.selectAllBigQueryProjects` | — | — | — | `hasConnection` | Object Explorer context menu › Select All BigQuery Projects |
 | Select Top 1000 Rows | `explorer.selectTopRows` | — | — | — | `backendReady && explorerActionSelectTop == 'enabled' && !documentBusy` | Object Explorer context menu › Select Top 1000 Rows; Search Objects result context menu › Select Top 1000 Rows |
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus && !searchHitsFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
@@ -338,7 +345,8 @@ keys it uses are listed below.
 | Script As… | `explorer.scriptAs` | — | — | — | `backendReady && explorerScriptTitle != ''` | — |
 | Modify | `explorer.modify` | — | — | — | `backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy` | Object Explorer context menu › Modify; Search Objects result context menu › Modify |
 | Cancel Scripting | `explorer.cancelScripting` | — | — | — | `scriptingRunning` | — |
-| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead`) | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Peek |
+| Peek | `explorer.peek` | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead && !explorerServerFocus`) | Alt+F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead && !explorerServerFocus`) | ⌥F12 (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`), Space (`explorerFocus && !textInputFocus && !explorerTypeAhead && !explorerServerFocus`) | `backendReady && explorerSelectionPeekable` | Object Explorer context menu › Peek |
+| Toggle Server Selection | `explorer.toggleMultiSelect` | Space (`explorerFocus && !textInputFocus && !explorerTypeAhead && explorerServerFocus`), Ctrl+Space (`explorerFocus && !textInputFocus`) | Space (`explorerFocus && !textInputFocus && !explorerTypeAhead && explorerServerFocus`), Ctrl+Space (`explorerFocus && !textInputFocus`) | Space (`explorerFocus && !textInputFocus && !explorerTypeAhead && explorerServerFocus`) | `explorerHasSelection` | — |
 | Open Peek as Tab | `explorer.openPeekTab` | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | Ctrl+Enter (`peekFocus && !outputGridFocus`), Ctrl+Enter (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | ⌘↩ (`peekFocus && !outputGridFocus`), ⌘↩ (`activePanel == 'explorer' && !inputFocus && !searchHitsFocus`) | `backendReady` | — |
 | View Dependencies | `explorer.viewDependencies` | — | — | — | `backendReady && explorerSelectionDependencies` | Object Explorer context menu › View Dependencies |
 | Refresh Peek | `peek.refresh` | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | F5 (`peekFocus \|\| peekTabFocus`) | `backendReady` | — |
@@ -813,12 +821,12 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `0_connect` | **C**onnect… | `connection.connect` | `explorerNode == 'server' \|\| explorerNode == 'background'` |
-| `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_connect` | Disc**o**nnect and Remove from Explorer | `connection.disconnectAndRemove` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
-| `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost` |
-| `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
+| `0_connect` | **C**onnect… | `connection.connect` | `(explorerNode == 'server' && !explorerMultiSelected) \|\| explorerNode == 'background'` |
+| `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected` |
+| `0_connect` | Disc**o**nnect and Remove from Explorer | `connection.disconnectAndRemove` | `explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected` |
+| `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost && !explorerMultiSelected` |
+| `0_connect` | Rem**o**ve from Explorer | `connection.removeFromExplorer` | `explorerServerLost && !explorerMultiSelected` |
+| `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `(explorerNode == 'folder' && (explorerFolder == 'tables' \|\| (explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance') && !explorerServerLost))) \|\| explorerNode == 'agent'` |
 | `0_new` | **N**ew Alert… | `agent.newAlert` | `((explorerNode == 'folder' && explorerFolder == 'agentAlerts') \|\| explorerNode == 'agentAlert') && !explorerServerLost` |
 | `0_new` | **N**ew Credential… | `agent.newCredential` | `((explorerNode == 'folder' && explorerFolder == 'credentials') \|\| explorerNode == 'credential') && !explorerServerLost && (explorerServerEngine == 'box' \|\| explorerServerEngine == 'managedInstance')` |
@@ -835,7 +843,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_monitor` | **J**ob Activity Monitor | `agent.jobActivity` | `(explorerNode == 'agent' \|\| explorerNode == 'agentJobActivity') && !explorerServerLost` |
-| `1_monitor` | **J**ob History | `bigquery.jobHistory` | `((explorerNode == 'server' && explorerProvider == 'bigquery') \|\| explorerNode == 'bqProject') && !explorerServerLost` |
+| `1_monitor` | **J**ob History | `bigquery.jobHistory` | `((explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerMultiSelected) \|\| explorerNode == 'bqProject') && !explorerServerLost` |
 | `1_monitor` | View **H**istory | `agent.viewHistory` | `(explorerNode == 'agent' \|\| (explorerNode == 'folder' && explorerFolder == 'agentJobs') \|\| explorerNode == 'agentJob') && !explorerServerLost` |
 | `1_monitor` | **M**anage Schedules | `agent.schedules` | `explorerNode == 'folder' && explorerFolder == 'agentJobs' && !explorerServerLost` |
 | `1_monitor` | View A**g**ent Log | `agent.viewAgentLog` | `((explorerNode == 'folder' && explorerFolder == 'agentErrorLogs') \|\| explorerNode == 'agentErrorLog') && !explorerServerLost` |
@@ -849,36 +857,43 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_query` | Previe**w** Rows | `explorer.previewRows` | `explorerNode == 'bqTable' && !explorerServerLost` |
-| `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
-| `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
-| `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
-| `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
-| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `((explorerNode == 'server' \|\| explorerNode == 'bqProject' \|\| explorerNode == 'bqDataset') && !explorerServerLost) \|\| explorerNode == 'database'` |
+| `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected) \|\| explorerNode == 'database'` |
+| `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background' && !explorerMultiSelected` |
+| `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected` |
+| `1_query` | Searc**h** Objects… | `explorer.searchObjects` | `(((explorerNode == 'server' && !explorerMultiSelected) \|\| explorerNode == 'bqProject' \|\| explorerNode == 'bqDataset') && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Pee**k** | `explorer.peek` | `explorerNodePeekable && !explorerServerLost` |
-| `1_query` | Star a **P**roject… | `bigquery.starProjectPrompt` | `explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost` |
+| `1_query` | Star a **P**roject… | `bigquery.starProjectPrompt` | `explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerServerLost && !explorerMultiSelected` |
 | `1_query` | **S**tar Project | `bigquery.starProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
 | `1_query` | **U**nstar Project | `bigquery.unstarProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'starred' && !explorerServerLost` |
 | `1_query` | Remove from **E**xplorer | `bigquery.removeSessionProject` | `explorerNode == 'bqProject' && explorerBigQueryProjectRole == 'session' && !explorerServerLost` |
-| `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background'` |
-| `2_job` | Stop **J**ob | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background'` |
-| `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
+| `1_query` | New **M**ulti-Server Query | `explorer.newMultiServerQuery` | `explorerNode == 'server' && !explorerServerLost && explorerMultiSelected` |
+| `1_query` | **N**ew Cross-Engine SELECT… | `explorer.newCrossEngineQuery` | `explorerNode == 'server' && !explorerServerLost` |
+| `2_job` | S**t**art Job at Step… | `explorer.startJob` | `explorerActionStartJob != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `2_job` | Stop **J**ob | `explorer.stopJob` | `explorerActionStopJob != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background' && !explorerMultiSelected` |
 | `2_script` | View **D**ependencies | `explorer.viewDependencies` | `explorerNodeDependencies && !explorerServerLost` |
-| `2_service` | **S**tart | `explorer.startAgent` | `explorerActionStartAgent != '' && explorerNode != 'background'` |
-| `2_service` | S**t**op | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background'` |
-| `2_service` | R**e**start | `explorer.restartAgent` | `explorerActionRestartAgent != '' && explorerNode != 'background'` |
+| `2_service` | **S**tart | `explorer.startAgent` | `explorerActionStartAgent != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `2_service` | S**t**op | `explorer.stopAgent` | `explorerActionStopAgent != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `2_service` | R**e**start | `explorer.restartAgent` | `explorerActionRestartAgent != '' && explorerNode != 'background' && !explorerMultiSelected` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `4_tasks` | **T**asks › | Submenu: Object Explorer context menu › Tasks | `explorerNode == 'database' && !explorerServerLost` |
-| `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) \|\| explorerFolderInsertable` |
-| `6_state` | Disa**b**le | `explorer.disable` | `explorerActionDisable != '' && explorerNode != 'background'` |
-| `6_state` | Ena**b**le | `explorer.enable` | `explorerActionEnable != '' && explorerNode != 'background'` |
-| `6_state` | **U**nlock… | `explorer.unlock` | `explorerActionUnlock != '' && explorerNode != 'background'` |
-| `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
-| `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
-| `7_order` | Move **U**p | `explorer.moveServerUp` | `explorerNode == 'server'` |
-| `7_order` | Move Do**w**n | `explorer.moveServerDown` | `explorerNode == 'server'` |
-| `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
-| `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background'` |
+| `5_copy` | Copy N**a**me | `explorer.copyName` | `((explorerNode != 'background' && explorerNode != 'folder' && !explorerNodeNameless && !explorerServerLost) \|\| explorerFolderInsertable) && !explorerMultiSelected` |
+| `6_state` | Disa**b**le | `explorer.disable` | `explorerActionDisable != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `6_state` | Ena**b**le | `explorer.enable` | `explorerActionEnable != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `6_state` | **U**nlock… | `explorer.unlock` | `explorerActionUnlock != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `7_multi` | **R**efresh Selected | `explorer.refreshSelected` | `explorerNode == 'server' && !explorerServerLost && explorerMultiSelected` |
+| `7_multi` | **C**lear Selection | `explorer.clearMultiSelect` | `explorerNode == 'server' && !explorerServerLost && explorerMultiSelected` |
+| `7_multidisconnect` | **D**isconnect Selected | `explorer.disconnectSelected` | `explorerNode == 'server' && !explorerServerLost && explorerMultiSelected` |
+| `7_order` | Move **U**p | `explorer.moveServerUp` | `explorerNode == 'server' && !explorerMultiSelected` |
+| `7_order` | Move Do**w**n | `explorer.moveServerDown` | `explorerNode == 'server' && !explorerMultiSelected` |
+| `7_select` | **S**elect All SQL Servers | `explorer.selectAllSqlServers` | `explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected && explorerProvider == 'sqlserver' && explorerSameEngineMultiple` |
+| `7_select` | **S**elect All BigQuery Projects | `explorer.selectAllBigQueryProjects` | `explorerNode == 'server' && !explorerServerLost && !explorerMultiSelected && explorerProvider == 'bigquery' && explorerSameEngineMultiple` |
+| `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost && !explorerMultiSelected` |
+| `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background' && !explorerMultiSelected` |
 | `9_properties` | **P**roperties | `ssis.folderProperties` | `explorerNode == 'ssisFolder' && ssisVerbFolderProperties != ''` |
 | `9_properties` | **P**roperties | `ssis.projectProperties` | `explorerNode == 'ssisProject' && ssisVerbProjectProperties != ''` |
 | `9_properties` | **P**roperties | `ssis.packageProperties` | `explorerNode == 'ssisPackage' && ssisVerbPackageProperties != ''` |
@@ -901,17 +916,17 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `0_detach` | **D**etach… | `explorer.detachDatabase` | `explorerActionDetach != '' && explorerNode != 'background'` |
-| `1_state` | **T**ake Offline | `explorer.takeOffline` | `explorerActionTakeOffline != '' && explorerNode != 'background'` |
-| `1_state` | Bring **O**nline | `explorer.bringOnline` | `explorerActionBringOnline != '' && explorerNode != 'background'` |
+| `0_detach` | **D**etach… | `explorer.detachDatabase` | `explorerActionDetach != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `1_state` | **T**ake Offline | `explorer.takeOffline` | `explorerActionTakeOffline != '' && explorerNode != 'background' && !explorerMultiSelected` |
+| `1_state` | Bring **O**nline | `explorer.bringOnline` | `explorerActionBringOnline != '' && explorerNode != 'background' && !explorerMultiSelected` |
 | `4_backup` | **R**estore › | Submenu: Object Explorer context menu › Tasks › Restore | Always |
 
 #### Object Explorer context menu › Tasks › Restore
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
-| `1_restore` | **D**atabase… | `explorer.tasks.restoreDatabase` | `explorerActionRestore != '' && explorerNode != 'folder' && explorerNode != 'background'` |
-| `1_restore` | **F**iles and Filegroups… | `explorer.tasks.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background'` |
+| `1_restore` | **D**atabase… | `explorer.tasks.restoreDatabase` | `explorerActionRestore != '' && explorerNode != 'folder' && explorerNode != 'background' && !explorerMultiSelected` |
+| `1_restore` | **F**iles and Filegroups… | `explorer.tasks.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background' && !explorerMultiSelected` |
 
 #### Object Explorer context menu › Script … as
 
@@ -1356,7 +1371,7 @@ Right-click a step in a job document's Steps › Flow view, which selects it, or
 | --- | --- | --- | --- |
 | step types | One item per step type the server offers (T-SQL, PowerShell, CmdExec, SSIS…) | `agentJob.addStepAfter` | Always |
 
-## Context keys (212)
+## Context keys (217)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1381,6 +1396,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `planOutlineFocus` | boolean | focus | Focus is in an execution plan's operator outline, whose Copy copies the selected operator. |
 | `explorerFocus` | boolean | focus | Focus is in Object Explorer's tree (a row's inline rename box included), not its search box, toolbar or Peek card; activePanel is then 'explorer'. |
 | `explorerTypeAhead` | boolean | focus | Object Explorer's tree is collecting a type-ahead name, so Space types a space rather than peeking. |
+| `explorerServerFocus` | boolean | focus | Focus is on a connected top-level server row in Object Explorer's tree. |
 | `optionsDialogFocus` | boolean | focus | Focus is in the Options dialog. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
@@ -1450,6 +1466,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
 | `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
+| `activeDocumentIsMultiServer` | boolean | state | The active document targets two or more servers (Same-Engine Multi-Server or Cross-Engine SELECT). |
+| `activeDocumentCrossFile` | boolean | state | The active document is a Cross-Engine SELECT tab in single-file view, where Transact-SQL and GoogleSQL share one editor. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `multipleEditorGroups` | boolean | state | The query editor shows two or more editor groups (split or floating). |
 | `activeDocumentFloating` | boolean | state | The active document's editor group floats over the editor area. |
@@ -1542,6 +1560,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `'agent'`, `'agentJobActivity'`, `'agentJob'`, `'agentAlert'`, `'agentOperator'`, `'agentProxySubsystem'`, `'agentProxy'`, `'agentErrorLog'`, `'bqProject'`, `'bqDataset'`, `'bqTable'`, `'bqView'`, `'bqMaterializedView'`, `'bqExternalTable'`, `'bqRoutine'`, `'bqModel'`, `'bqColumn'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
 | `explorerServerLost` | boolean | target | The menu is for a disconnected server, including a connection lost when the SQL backend restarted. |
+| `explorerMultiSelected` | boolean | target | The menu is for a connected server belonging to a multi-server selection of two or more servers. |
+| `explorerSameEngineMultiple` | boolean | target | Two or more connected servers of the target server's engine exist in Object Explorer. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'`, `'agentJobs'`, `'agentAlerts'`, `'agentOperators'`, `'agentProxies'`, `'agentUnassignedProxies'`, `'agentErrorLogs'`, `'bqTables'`, `'bqViews'`, `'bqMaterializedViews'`, `'bqExternalTables'`, `'bqRoutines'`, `'bqModels'`, `'bqColumns'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |

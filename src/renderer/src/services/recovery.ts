@@ -1,11 +1,11 @@
 import type { ApiResult, RecoveredDocument, RecoveryEntry, SqlFile, VariaApi } from '../../../shared/contracts'
-import { recoveryLimits } from '../../../shared/files/recovery'
+import { recoveryLimits, type MultiTargetRecoveryEntry } from '../../../shared/files/recovery'
 import { isKeptAgentKind, keptAgentText } from '../../../shared/agent/kept'
 import type { SettingsValues } from '../../../shared/settings/catalog'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
 import type { Disposable, ExternalStore } from '../core/types'
-import { isCustomKind } from '../documents'
+import { isCustomKind, type QueryDocument } from '../documents'
 import type { DocumentService } from './documents'
 import type { FileService } from './files'
 
@@ -36,8 +36,8 @@ export function savedAgo(savedAt: string, now: number = Date.now()): string {
   if (seconds > -86_400) return format.format(Math.round(seconds / 3600), 'hour')
   return format.format(Math.round(seconds / 86_400), 'day')
 }
-/** A query's record, and the model version, engine and displayed metadata it holds (none until a write succeeded). */
-interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string; name?: string; fileId?: string; eol?: 'lf' | 'crlf'; server?: string; database?: string; state?: string; targetId?: string }
+/** A query's record, and the combined edit revision, engine, displayed metadata, and multi-target signature it holds (none until a write succeeded). */
+interface Kept { readonly id: string; version?: number; provider?: string; jobKey?: string; name?: string; fileId?: string; eol?: 'lf' | 'crlf'; server?: string; database?: string; state?: string; targetId?: string; multiSignature?: string }
 const minuteMs = 60_000
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const failed = (error: unknown) => error instanceof Error ? error.message : 'The operation failed.'
@@ -94,6 +94,24 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   closeDialog(): void { if (!this.disposed && this.getSnapshot().open) this.publish({ ...this.getSnapshot(), open: false }) }
 
   copyId(tabId: string): string | undefined { return this.kept.get(tabId)?.id }
+  private multiTargetsOf(document: QueryDocument): MultiTargetRecoveryEntry[] | undefined {
+    if (!document.multiMode) return undefined
+    return (document.multiTargets ?? []).slice(0, recoveryLimits.multiTargets).map(target => {
+      const serverName = target.connectionId ? this.options.server?.(target.connectionId) ?? target.lastServer : target.lastServer
+      const trimmedServer = serverName ? serverName.slice(0, recoveryLimits.serverChars) : undefined
+      const dbLimit = target.provider === 'bigquery' ? recoveryLimits.datasetChars : recoveryLimits.databaseChars
+      return {
+        provider: target.provider,
+        database: target.database.slice(0, dbLimit),
+        enabled: target.enabled,
+        ...trimmedServer ? { lastServer: trimmedServer } : {}
+      }
+    })
+  }
+  private multiSignatureOf(document: QueryDocument): string | undefined {
+    if (!document.multiMode) return undefined
+    return JSON.stringify([document.multiMode, document.multiMode === 'cross' ? document.crossView ?? 'split' : undefined, this.multiTargetsOf(document)])
+  }
   /** Resumes a copy main verified against a pin that just reopened. Future edits replace it and closing removes it. */
   resume(tabId: string, id: string, matchedMetadata = false): void {
     const document = this.options.documents.get(tabId), model = this.options.documents.getModel(tabId)
@@ -101,12 +119,13 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     if (!matchedMetadata || isKeptAgentKind(document?.kind)) { this.kept.set(tabId, { id }); return }
     const provider = document && !document.kind ? document.provider : undefined
     const bigQuery = provider === 'bigquery'
-    const server = document?.connectionId ? this.options.server?.(document.connectionId)?.slice(0, recoveryLimits.serverChars) : undefined
+    const server = !document?.multiMode && document?.connectionId ? this.options.server?.(document.connectionId)?.slice(0, recoveryLimits.serverChars) : undefined
     const database = server && document?.database ? document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) : undefined
+    const multiSignature = document && !document.kind ? this.multiSignatureOf(document) : undefined
     this.kept.set(tabId, {
-      id, version: model?.getAlternativeVersionId(), provider, jobKey: bigQuery ? document?.jobKey : undefined,
+      id, version: this.options.documents.editRevision(tabId), provider, jobKey: !document?.multiMode && bigQuery ? document?.jobKey : undefined,
       name: document?.name.slice(0, recoveryLimits.nameChars), fileId: document?.file?.id, eol: model ? (model.getEOL() === '\r\n' ? 'crlf' : 'lf') : undefined,
-      server, database
+      server, database, multiSignature
     })
   }
 
@@ -129,22 +148,31 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     if (document?.dirty && isKeptAgentKind(document.kind)) return this.keepAgent(tabId)
     // A table designer, Database Properties, SSIS properties, an Activity Monitor or Operations has no model: AutoRecover keeps text only.
     if (!document?.dirty || !model || isCustomKind(document.kind)) return
-    // Moving a query to another engine, renaming it or switching server/database changes no text, but the copy must reflect the current metadata.
-    const version = model.getAlternativeVersionId(), current = this.kept.get(tabId), provider = !document.kind ? document.provider : undefined, bigQuery = provider === 'bigquery', jobKey = bigQuery ? document.jobKey : undefined
+    // Moving a query to another engine, renaming it, switching server/database, or changing multiTargets/crossView changes no text, but the copy must reflect it.
+    const version = documents.editRevision(tabId), current = this.kept.get(tabId)
+    const provider = !document.kind ? document.provider : undefined
+    const bigQuery = provider === 'bigquery'
+    const jobKey = !document.multiMode && bigQuery ? document.jobKey : undefined
     const name = document.name.slice(0, recoveryLimits.nameChars), fileId = document.file?.id, eol: 'lf' | 'crlf' = model.getEOL() === '\r\n' ? 'crlf' : 'lf'
-    const rawServer = document.connectionId ? this.options.server?.(document.connectionId) : undefined
+    const rawServer = !document.multiMode && document.connectionId ? this.options.server?.(document.connectionId) : undefined
     const server = rawServer ? rawServer.slice(0, recoveryLimits.serverChars) : undefined
     const database = server && document.database ? document.database.slice(0, bigQuery ? recoveryLimits.datasetChars : recoveryLimits.databaseChars) : undefined
+    const multiTargets = !document.kind ? this.multiTargetsOf(document) : undefined
+    const multiSignature = !document.kind ? this.multiSignatureOf(document) : undefined
     if (current?.version === version && current.provider === provider && current.jobKey === jobKey
-      && current.name === name && current.fileId === fileId && current.eol === eol && current.server === server && current.database === database) return
+      && current.name === name && current.fileId === fileId && current.eol === eol && current.server === server && current.database === database
+      && current.multiSignature === multiSignature) return
     // Kept before the write, so a save or close meanwhile deletes the copy after it is written.
     const kept: Kept = current ?? { id: this.options.newId?.() ?? crypto.randomUUID() }
     this.kept.set(tabId, kept)
+    const text = documents.getText(tabId)
     try {
       unwrap(await this.options.api.writeRecovery({
         id: kept.id, name, kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...fileId ? { fileId } : {},
         eol, ...server ? { server } : {}, ...database ? { database } : {},
-        ...bigQuery ? { provider: 'bigquery' as const, ...jobKey ? { jobKey } : {} } : {}, text: model.getValue()
+        ...bigQuery ? { provider: 'bigquery' as const, ...jobKey ? { jobKey } : {} } : {},
+        ...document.multiMode ? { multiMode: document.multiMode, multiTargets: multiTargets ?? [], ...document.multiMode === 'cross' ? { crossView: document.crossView ?? 'split' } : {} } : {},
+        text
       }))
       kept.version = version
       kept.provider = provider
@@ -154,6 +182,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
       kept.eol = eol
       kept.server = server
       kept.database = database
+      kept.multiSignature = multiSignature
     } catch (error) { this.warnOnce(`AutoRecover could not save ${document.name}: ${failed(error)}`) }
   }
   /** A SQL Server Agent document with unsaved changes (AG-6g): its kept state (no secrets) and connection target, when either changed. */
@@ -244,7 +273,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
             this.kept.set(reopened.id, { id })
             continue
           }
-          const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider, taken.jobKey)
+          const multi = taken.multiMode ? { multiMode: taken.multiMode, multiTargets: taken.multiTargets ?? [], ...taken.crossView ? { crossView: taken.crossView } : {} } : undefined
+          const document = this.options.documents.restore(taken.name, taken.text, taken.kind, taken.eol, taken.file, taken.provider, taken.jobKey, multi)
           this.resume(document.id, id, true)
           if (taken.jobs?.length) this.options.restoredJobs?.(document.id, taken.jobs)
         }

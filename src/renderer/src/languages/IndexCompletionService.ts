@@ -476,9 +476,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   availability(documentId: string): { label: string; detail: string } | undefined {
     const document = this.documents.get(documentId)
     if (!document || !isQueryDocument(document) || documentProvider(document) !== 'bigquery') return
-    if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
+    const model = this.documents.modelFor ? this.documents.modelFor(documentId, 'bigquery') : this.documents.getModel(documentId)
+    if ((model?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString('en-US')} characters.` }
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
+    const ctx = model ? this.documents.languageContext?.(model, id => this.connections.isLive(id)) : undefined
+    const connectionId = ctx ? ctx.connectionId : document.connectionId
+    const connection = connectionId ? this.connections.get(connectionId) : undefined
     if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection))
       return { label: 'IntelliSense disconnected', detail: 'Keywords and functions complete. Connect this query to BigQuery for projects, datasets, tables and columns from its Search Objects index.' }
     const snapshot = this.getSnapshot()
@@ -500,11 +503,14 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   async refreshCache(documentId = this.documents.getSnapshot().activeId, token?: Monaco.CancellationToken): Promise<boolean> {
     if (this.disposed || token?.isCancellationRequested) return false
     const document = documentId ? this.documents.get(documentId) : undefined
-    const model = document ? this.documents.getModel(document.id) : undefined
+    const model = document ? (this.documents.modelFor ? this.documents.modelFor(document.id, 'bigquery') : this.documents.getModel(document.id)) : undefined
     if (!document || !isQueryDocument(document) || !model) throw new Error('Open a SQL query to refresh IntelliSense.')
     if (model.getValueLength() > languageLimits.documentCharacters) throw new Error('This query is too large for SQL language support.')
-    if (documentProvider(document) !== 'bigquery') throw new Error('The query is unavailable for SQL language support.')
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
+    const ctx = this.documents.languageContext?.(model, id => this.connections.isLive(id))
+    const provider = ctx ? (ctx.suspended ? undefined : ctx.provider) : documentProvider(document)
+    if (provider !== 'bigquery') throw new Error('The query is unavailable for SQL language support.')
+    const connectionId = ctx ? ctx.connectionId : document.connectionId
+    const connection = connectionId ? this.connections.get(connectionId) : undefined
     if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) throw new Error('Connect this query to a live database before refreshing IntelliSense.')
     const key = cacheKey(connection)
     const existing = this.refreshOps.get(document.id)
@@ -521,7 +527,8 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
       if (existing) existing.cancel()
       this.clearConnectionCaches(key, true)
       this.failure(document.id, key, undefined)
-      const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
+      const rawDatabase = ctx ? ctx.database : document.database
+      const dataset = /^\w{1,1024}$/.test(rawDatabase ?? '') ? rawDatabase : undefined
       const scopes = extractBigQueryRefreshScopes(model.getValue(), connection.server, dataset)
       if (!this.options.refreshScopesOutcome && !this.options.refreshScopes) return true
       let cancelled = false
@@ -597,13 +604,13 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   /** What a model's requests use: its BigQuery tab, the tab's live connection (if any) and the names it resolves unqualified names to. */
   private target(model: Monaco.editor.ITextModel): Target | undefined {
     if (this.disposed || model.getLanguageId() !== googleSqlLanguageId || model.getValueLength() > languageLimits.documentCharacters) return
-    const document = this.documents.getSnapshot().documents.find(entry => this.documents.getModel(entry.id) === model)
-    if (!document || !isQueryDocument(document)) return
-    const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
-    if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return { documentId: document.id, dialect: googleSqlDialect({ project: '' }) }
+    const ctx = this.documents.languageContext(model, id => this.connections.isLive(id))
+    if (!ctx || ctx.suspended || ctx.provider !== 'bigquery') return
+    const connection = ctx.connectionId ? this.connections.get(ctx.connectionId) : undefined
+    if (!connection || !isLiveConnection(connection) || !isBigQueryConnection(connection)) return { documentId: ctx.documentId, dialect: googleSqlDialect({ project: '' }) }
     // The tab's default dataset, as Execute sends it (a dataset id: letters, digits and underscores).
-    const dataset = /^\w{1,1024}$/.test(document.database ?? '') ? document.database : undefined
-    return { documentId: document.id, connectionId: connection.id, key: cacheKey(connection), project: connection.server, dataset, dialect: googleSqlDialect({ project: connection.server, dataset }) }
+    const dataset = /^\w{1,1024}$/.test(ctx.database ?? '') ? ctx.database : undefined
+    return { documentId: ctx.documentId, connectionId: connection.id, key: cacheKey(connection), project: connection.server, dataset, dialect: googleSqlDialect({ project: connection.server, dataset }) }
   }
 
   /** Lazy schema preview drawer (`resolveCompletionItem`): reads local `LookupCache` / `language.lookup` with 0 BigQuery API calls. */
@@ -680,7 +687,7 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   /** Cached RAM `language.lookup` for a BigQuery tab (used by the status bar IntelliSense popover's source health list). */
   async lookupDocument(documentId: string, requests: readonly LanguageLookupPath[]): Promise<readonly LanguageLookupAnswer[] | undefined> {
     if (this.disposed || !requests.length) return []
-    const model = this.documents.getModel(documentId)
+    const model = this.documents.modelFor ? this.documents.modelFor(documentId, 'bigquery') : this.documents.getModel(documentId)
     if (!model) return undefined
     const target = this.target(model)
     if (!target?.connectionId || !target.key) return undefined
@@ -867,6 +874,12 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
   }
 
   private isCurrentTarget(documentId: string, key: string): boolean {
+    const model = this.documents.modelFor ? this.documents.modelFor(documentId, 'bigquery') : this.documents.getModel(documentId)
+    const ctx = model ? this.documents.languageContext?.(model, id => this.connections.isLive(id)) : undefined
+    if (ctx) {
+      const connection = !ctx.suspended && ctx.provider === 'bigquery' && ctx.connectionId ? this.connections.get(ctx.connectionId) : undefined
+      return !!connection && isLiveConnection(connection) && isBigQueryConnection(connection) && cacheKey(connection) === key
+    }
     const document = this.documents.get(documentId)
     const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
     return !!document && isQueryDocument(document) && documentProvider(document) === 'bigquery'
@@ -905,8 +918,10 @@ export class IndexCompletionService extends SnapshotStore<Snapshot> implements D
     }
     const snapshot = this.getSnapshot()
     const errors = new Map([...snapshot.errors].filter(([id]) => {
-      const document = this.documents.get(id)
-      const connection = document?.connectionId ? this.connections.get(document.connectionId) : undefined
+      const model = this.documents.modelFor ? this.documents.modelFor(id, 'bigquery') : this.documents.getModel(id)
+      const ctx = model ? this.documents.languageContext?.(model, connectionId => this.connections.isLive(connectionId)) : undefined
+      const connectionId = ctx ? ctx.connectionId : this.documents.get(id)?.connectionId
+      const connection = connectionId ? this.connections.get(connectionId) : undefined
       return !!connection && cacheKey(connection) === this.errorMeta.get(id)?.key
     }))
     for (const id of [...this.errorMeta.keys()]) if (!errors.has(id)) this.errorMeta.delete(id)

@@ -26,7 +26,7 @@ export interface DatabaseRenameHooks {
   renamed(connectionId: string, database: string, newName: string, connections?: readonly string[], identity?: DatabaseIdentity): void
 }
 export interface DatabaseRenameHookOptions {
-  readonly documents: Pick<DocumentService, 'getSnapshot'>
+  readonly documents: Pick<DocumentService, 'getSnapshot'> & Partial<Pick<DocumentService, 'updateMultiTarget'>>
   readonly queries: Pick<QueryService, 'getSnapshot' | 'transactionState'>
   readonly connections: ExternalStore<readonly LiveConnection[]> & Pick<ConnectionService, 'rehome'>
   readonly targets: Pick<TargetService, 'changeDatabase'>
@@ -38,28 +38,61 @@ const serverKey = (server: string) => server.trim().toLowerCase()
 export function databaseRenameHooks(options: DatabaseRenameHookOptions): DatabaseRenameHooks {
   /** The connections to the connection's server, lost ones included: a Reconnect moves their windows to a new connection. */
   const sameServer = (connectionId: string, named: readonly string[]): ReadonlySet<string> => {
-    const connections = options.connections.getSnapshot(), server = connections.find(connection => connection.id === connectionId)?.server
-    const spelled = server === undefined ? [connectionId] : connections.filter(connection => serverKey(connection.server) === serverKey(server)).map(connection => connection.id)
-    return new Set([...spelled, ...named])
+    const connections = options.connections.getSnapshot()
+    const origin = connections.find(connection => connection.id === connectionId)
+    const server = origin?.providerId === 'bigquery' ? undefined : origin?.server
+    const spelled = server === undefined
+      ? [connectionId]
+      : connections.filter(connection => connection.providerId !== 'bigquery' && serverKey(connection.server) === serverKey(server)).map(connection => connection.id)
+    const bigQueryIds = new Set(connections.filter(connection => connection.providerId === 'bigquery').map(connection => connection.id))
+    return new Set([...spelled, ...named.filter(id => !bigQueryIds.has(id))])
   }
   const queriesIn = (connectionId: string, database: string, named: readonly string[]) => {
     const ids = sameServer(connectionId, named)
-    return options.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId !== undefined && ids.has(document.connectionId) && document.database === database)
+    return options.documents.getSnapshot().documents.filter(document => {
+      if (!isQueryDocument(document)) return false
+      if (document.multiMode) {
+        return (document.multiTargets ?? []).some(target => target.provider === 'sqlserver' && target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database)
+      }
+      return document.connectionId !== undefined && ids.has(document.connectionId) && document.database === database
+    })
   }
   return {
     async tabs(connectionId, database, connections = []) {
-      const queries = options.queries.getSnapshot()
-      // A window with no session (never run, closed or lost) is no one's connection to close.
-      const tabs = queriesIn(connectionId, database, connections).filter(document => queries[document.id]?.session || queries[document.id]?.running)
-      const found = await Promise.all(tabs.slice(0, ownTabReads).map(async tab => {
+      const queries = options.queries.getSnapshot(), ids = sameServer(connectionId, connections)
+      const inDatabase = queriesIn(connectionId, database, connections)
+      const activeTabs = inDatabase.filter(document => {
+        const state = queries[document.id]
+        if (document.multiMode) {
+          const runningIds = state?.running?.connectionIds
+          return !!runningIds && (document.multiTargets ?? []).some(target =>
+            target.provider === 'sqlserver' && target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database && runningIds.includes(target.connectionId))
+        }
+        // A single-server window with no session (never run, closed or lost) is no one's connection to close.
+        return !!(state?.session || state?.running)
+      })
+      const found = await Promise.all(activeTabs.slice(0, ownTabReads).map(async tab => {
+        // Running multi-server tabs hold an active ephemeral session/transaction directly; do not call single-server transactionState().
+        if (tab.multiMode) return [tab.name]
         try { const state = await options.queries.transactionState(tab.id); return state.transactions > 0 || state.unchecked ? [tab.name] : [] } catch { return [tab.name] }
       }))
-      return { count: tabs.length, withTransactions: found.flat() }
+      return { count: activeTabs.length, withTransactions: found.flat() }
     },
     renamed(connectionId, database, newName, connections = [], identity) {
-      for (const document of queriesIn(connectionId, database, connections)) options.targets.changeDatabase(document.id, newName)
+      const ids = sameServer(connectionId, connections)
+      for (const document of queriesIn(connectionId, database, connections)) {
+        if (document.multiMode) {
+          options.documents.updateMultiTarget?.(
+            document.id,
+            target => target.provider === 'sqlserver' && target.connectionId !== undefined && ids.has(target.connectionId) && target.database === database,
+            { database: newName }
+          )
+        } else {
+          options.targets.changeDatabase(document.id, newName)
+        }
+      }
       // New Query on the server node opens in the connection's home, which must not name a database that is gone.
-      options.connections.rehome(sameServer(connectionId, connections), database, newName)
+      options.connections.rehome(ids, database, newName)
       options.properties.databaseRenamed(connectionId, database, newName, connections, identity)
     }
   }

@@ -19,7 +19,7 @@ import { turnableKinds } from '../results/ResultsService'
  * whose connection was lost with its backend generation, whether it is a folder with a filter, and whether it is a folder
  * with names to copy (a fully loaded Columns folder).
  */
-export interface ExplorerMenuNode extends ObjectMenuNode { readonly id: number; readonly filtered?: boolean; readonly insertable?: boolean }
+export interface ExplorerMenuNode extends ObjectMenuNode { readonly id: number; readonly filtered?: boolean; readonly insertable?: boolean; readonly multiSelected?: boolean; readonly sameEngineMultiple?: boolean }
 /** An object a menu is for, with or without a tree row: whether its server's connection was lost with its backend generation. */
 export interface ObjectMenuNode extends ExplorerTarget { readonly lost: boolean }
 /**
@@ -196,6 +196,8 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
   return {
     explorerNode: target?.kind === 'explorer' ? target.node?.kind ?? 'background' : '',
     explorerServerLost: target?.kind === 'explorer' && !!target.node?.lost,
+    explorerMultiSelected: target?.kind === 'explorer' && !!target.node?.multiSelected,
+    explorerSameEngineMultiple: target?.kind === 'explorer' && !!target.node?.sameEngineMultiple,
     explorerFolder: target?.kind === 'explorer' && target.node?.kind === 'folder' ? target.node.folder ?? '' : '',
     explorerFolderFilterable: target?.kind === 'explorer' && filterable(target.node),
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
@@ -304,6 +306,8 @@ export interface TargetHit {
   readonly target: MenuTarget
   readonly element: Element
   readonly focus?: HTMLElement
+  /** Focus callback for targets whose focus owner is not a plain HTMLElement (e.g., a Monaco editor pane). */
+  readonly onFocus?: () => void
   readonly mark?: Element
   /** What a keyboard-opened menu opens below, when not `element`: the results grid's active cell. */
   readonly anchor?: Element
@@ -316,8 +320,8 @@ interface TargetRegistration {
   readonly focus?: () => HTMLElement | undefined
 }
 export interface MenuTargetOptions {
-  /** The bound query editor's container and the query it shows, when there is one. */
-  readonly editor?: () => { readonly container: Element; readonly tabId: string } | undefined
+  /** The query editor containing `element` (or the bound editor), its container, query id, and optional focus callback. */
+  readonly editor?: (element?: Element | null) => { readonly container: Element; readonly tabId: string; readonly focus?: () => void } | undefined
   readonly commandEnabled?: CommandEnabled
 }
 
@@ -407,8 +411,8 @@ export class MenuTargetService {
         const registration = this.providers.get(node)
         if (registration) return this.hit(registration, node, element)
       }
-      const editor = this.options.editor?.()
-      if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container }
+      const editor = this.options.editor?.(element)
+      if (editor?.container.contains(element)) return element.closest(editorChrome) || !editor.tabId ? null : { target: { kind: 'editor', tabId: editor.tabId }, element: editor.container, ...editor.focus ? { onFocus: editor.focus } : {} }
       // Dockview's focusable tab element wraps the panel's own tab content (a workspace pane's, or a document's), which
       // registers the target.
       const tab = element.closest('.dv-tab')?.querySelector('[data-pane-tab], [data-tab-id]')

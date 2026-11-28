@@ -868,4 +868,24 @@ describe('BackendSupervisor live subscriptions', () => {
     last().exit(1)
     expect(await live).toMatchObject({ code: 'BACKEND_LOST' })
   })
+  it('refuses crossEngineReadOnly query.executeMulti when a SQL Server target specifies noDefaultDataset', async () => {
+    const { value, backends } = simulated()
+    const sqlConn = await value.request('connections.connect', options) as { id: string }
+    const bqConn = await value.request('connections.connect', { provider: 'bigquery', project: 'varia-alpha', authentication: 'gcloud', credential: { source: 'metadata' } } as never) as { id: string }
+    const before = backends[0].requests.length
+    const error = await failure(value.request('query.executeMulti', {
+      queryId: crypto.randomUUID(),
+      sessionId: crypto.randomUUID(),
+      mode: 'crossEngineReadOnly',
+      scripts: { sqlserver: 'SELECT 1;', bigquery: 'SELECT 1;' },
+      maxRows: 100,
+      timeoutSeconds: 30,
+      targets: [
+        { targetKey: 'sql-1', connectionId: sqlConn.id, label: 'SQL 1', noDefaultDataset: true },
+        { targetKey: 'bq-1', connectionId: bqConn.id, label: 'BQ 1', noDefaultDataset: true }
+      ]
+    }))
+    expect(error).toMatchObject({ code: 'UNSUPPORTED_PROVIDER' })
+    expect(backends[0].requests.length).toBe(before)
+  })
 })

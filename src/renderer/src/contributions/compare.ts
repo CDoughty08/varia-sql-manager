@@ -5,7 +5,7 @@ import { focusResultGrid } from '../grid/ResultGrid'
 import { stackReveals } from '../grid/result-picker'
 import { outputOf } from '../menus/targets'
 import { compareSources, fallbackText, type CompareChange } from '../results/CompareService'
-import { setKey, slotOf } from '../results/ResultsService'
+import { hasMultiSummary, setKey, slotOf, summaryEntryKey } from '../results/ResultsService'
 import { focusedOutput } from './output'
 
 /**
@@ -27,7 +27,10 @@ export function compareContribution({ commands, compare, results, documents, men
     if (focused?.view === 'grid' && focused.entry !== undefined && !focused.bare && (args?.tabId === undefined || focused.tabId === args.tabId)) return { tabId: focused.tabId, key: focused.entry }
     const tabId = args?.tabId ?? documents.getSnapshot().activeId
     const tab = tabId ? results.getSnapshot()[tabId] : undefined
-    return tabId && tab && !tab.bare && tab.focused !== undefined ? { tabId, key: tab.focused } : undefined
+    if (!tabId || !tab || tab.bare) return undefined
+    if (tab.focused !== undefined) return { tabId, key: tab.focused }
+    if (hasMultiSummary(tab)) return { tabId, key: summaryEntryKey }
+    return undefined
   }
   const previousOf = (args?: CommandArgs) => { const target = gridOf(args); return target && compare.canCompare(target.tabId, target.key) ? target : undefined }
   // The popover is drawn in the Results panel, so it is offered only while that panel shows: opened unseen, it would wait
@@ -77,13 +80,13 @@ export function compareContribution({ commands, compare, results, documents, men
       if (target && unitsOf(target) > 0) await compare.navigate(target.tabId, target.key, direction, { focus: true })
     }
   })
-  const command = (exact: boolean) => ({
+  const command = (options: { readonly exact?: boolean }) => ({
     when: (args?: CommandArgs) => !!previousOf(args),
-    run: async (args?: CommandArgs) => { const target = previousOf(args); if (target) await compare.compare(target.tabId, target.key, { exact }) }
+    run: async (args?: CommandArgs) => { const target = previousOf(args); if (target) await compare.compare(target.tabId, target.key, options) }
   })
   const registrations = [
-    commands.register('output.compareWithPrevious', command(false)),
-    commands.register('output.compareWithPreviousExact', command(true)),
+    commands.register('output.compareWithPrevious', command({})),
+    commands.register('output.compareWithPreviousExact', command({ exact: true })),
     commands.register('output.compare', {
       when: (args?: CommandArgs) => !!pickerOf(args),
       run: (args?: CommandArgs) => {

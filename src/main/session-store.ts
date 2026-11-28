@@ -7,7 +7,7 @@ import { sessionLimits, type SessionWrite } from '../shared/files/session'
 import { editorGroupsLayoutSchema, layoutViews, remapEditorGroups } from '../shared/editor-groups'
 import { connectionWorkspaceSchema } from '../shared/connection-targets'
 import { bigQueryProjectSchema } from '../shared/connections'
-import { providerIds } from '../shared/providers'
+import { providerIds, providerOf, type ProviderId } from '../shared/providers'
 import { jobKeySchema } from '../shared/bigquery/jobs'
 import { isKeptAgentKind, keptAgentKinds, keptAgentLimits, type KeptAgentKind } from '../shared/agent/kept'
 import { workspaceSealSchema, type WorkspaceSeal } from './connection-workspace-seal'
@@ -16,12 +16,36 @@ import { fileKinds, maxDocumentCharacters } from './sql-files'
 
 const fits = (value: { kind: DocumentKind | KeptAgentKind; text?: string }) => value.text === undefined || value.text.length <= (isKeptAgentKind(value.kind) ? keptAgentLimits.stateChars : fileKinds[value.kind].maxChars)
 /** A SQL Server Agent document (AG-6g) keeps its state as text and its target: never a file, a provider or a job key. */
-const agentShaped = (document: { kind: string; text?: string; fileId?: string; path?: string; fileSha256?: string; provider?: string; jobKey?: string }) => !isKeptAgentKind(document.kind)
-  || (document.text !== undefined && document.fileId === undefined && document.path === undefined && document.fileSha256 === undefined && document.provider === undefined && document.jobKey === undefined)
+const agentShaped = (document: { kind: string; text?: string; fileId?: string; path?: string; fileSha256?: string; provider?: string; jobKey?: string; multiMode?: string; multiTargets?: readonly unknown[]; crossView?: string }) => !isKeptAgentKind(document.kind)
+  || (document.text !== undefined && document.fileId === undefined && document.path === undefined && document.fileSha256 === undefined && document.provider === undefined && document.jobKey === undefined && document.multiMode === undefined && document.multiTargets === undefined && document.crossView === undefined)
 const name = z.string().min(1).max(sessionLimits.nameChars)
 const server = z.string().min(1).max(sessionLimits.serverChars)
 const database = z.string().max(sessionLimits.databaseChars)
 const dataset = z.string().max(sessionLimits.datasetChars)
+const multiTargetSchema = z.object({
+  targetId: z.uuid().optional(),
+  attachWanted: z.boolean().optional(),
+  provider: z.enum(providerIds),
+  database: dataset,
+  enabled: z.boolean(),
+  lastServer: server.optional()
+}).strict()
+  .refine(target => (target.targetId === undefined) === (target.attachWanted === undefined), 'A multi-server target pairs its target id and attachment preference.')
+  .refine(target => target.provider === 'bigquery' || target.database.length <= sessionLimits.databaseChars, 'A database name has at most 128 characters.')
+const multiFields = {
+  multiMode: z.enum(['same', 'cross']).optional(),
+  multiTargets: z.array(multiTargetSchema).max(sessionLimits.multiTargets).optional(),
+  crossView: z.enum(['split', 'file']).optional()
+}
+const multiShaped = (document: { kind: string; targetId?: string; attachWanted?: boolean; jobKey?: string; multiMode?: 'same' | 'cross'; multiTargets?: readonly { targetId?: string; provider: ProviderId }[]; crossView?: 'split' | 'file' }) => {
+  if (document.multiMode === undefined) return document.multiTargets === undefined && document.crossView === undefined
+  if (document.multiTargets === undefined || document.kind !== 'sql') return false
+  if (document.crossView !== undefined && document.multiMode !== 'cross') return false
+  if (document.targetId !== undefined || document.attachWanted !== undefined || document.jobKey !== undefined) return false
+  if (document.multiMode === 'same' && new Set(document.multiTargets.map(target => target.provider)).size > 1) return false
+  const definedIds = document.multiTargets.map(target => target.targetId).filter((id): id is string => id !== undefined)
+  return new Set(definedIds).size === definedIds.length
+}
 const legacyFields = { name, baseName: name.optional(), kind: z.enum(documentKinds), eol: z.enum(['crlf', 'lf']), dirty: z.boolean(), pinned: z.boolean().optional(), server: server.optional(), database: database.min(1).optional(), text: z.string().max(maxDocumentCharacters).optional() }
 const fields = { ...legacyFields, database: database.optional(), targetId: z.uuid().optional(), attachWanted: z.boolean().optional() }
 /** Version 3: the tab's provider, a BigQuery tab's dataset at BigQuery's length (SQL Server's 128 characters otherwise), and
@@ -31,18 +55,20 @@ const databaseFits = (document: { provider?: string; database?: string }) => doc
 const associated = (document: { kind: string; targetId?: string; attachWanted?: boolean; database?: string }) => document.targetId
   ? (document.kind === 'sql' || isKeptAgentKind(document.kind)) && document.attachWanted !== undefined && document.database !== undefined
   : document.attachWanted === undefined
-const targetsPresent = (session: { documents: readonly { targetId?: string }[]; workspace?: { targets: readonly { id: string }[] } }) => {
-  const ids = new Set(session.workspace?.targets.map(target => target.id))
-  return session.documents.every(document => !document.targetId || ids.has(document.targetId))
+const targetsPresent = (session: { documents: readonly { targetId?: string; multiTargets?: readonly { targetId?: string; provider: ProviderId }[] }[]; workspace?: { targets: readonly { id: string; options: { readonly provider?: ProviderId } }[] } }) => {
+  const providers = new Map((session.workspace?.targets ?? []).map(target => [target.id, providerOf(target.options)] as const))
+  return session.documents.every(document => (!document.targetId || providers.has(document.targetId))
+    && (document.multiTargets ?? []).every(target => !target.targetId || providers.get(target.targetId) === target.provider))
 }
 /** varia:session-write: the tabs in strip order. Only a clean tab with a file may leave its text out (it reopens from the file). */
 export const sessionWriteSchema = z.object({
-  documents: z.array(z.object({ ...providerFields, fileId: z.uuid().optional() }).strict()
+  documents: z.array(z.object({ ...providerFields, ...multiFields, fileId: z.uuid().optional() }).strict()
     .refine(associated, 'A query target requires its database and attachment preference.')
     .refine(databaseFits, 'A database name has at most 128 characters.')
     .refine(fits, 'A query is too large to keep for the next start.')
     .refine(document => document.text !== undefined || (!!document.fileId && !document.dirty), 'A query without a file must keep its text.')
-    .refine(agentShaped, 'A SQL Server Agent document keeps only its state and connection target.')).max(sessionLimits.documents),
+    .refine(agentShaped, 'A SQL Server Agent document keeps only its state and connection target.')
+    .refine(multiShaped, 'Multi-server query targets must match the tab mode.')).max(sessionLimits.documents),
   activeIndex: z.int().min(-1).max(sessionLimits.documents - 1),
   groups: editorGroupsLayoutSchema.optional(), workspace: connectionWorkspaceSchema.optional()
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length), 'An editor group names a query that is not kept.')
@@ -67,7 +93,7 @@ const v2RecordSchema = z.object({
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)
 /** Version 3 (0.10.0, `WorkbenchSession/`): version 2 with each tab's provider and the provider-tagged workspace. */
-const recordSchema = z.object({
+const v3RecordSchema = z.object({
   ...recordFields, version: z.literal(3), workspace: connectionWorkspaceSchema.optional(), seal: workspaceSealSchema.optional(),
   documents: z.array(z.object({
     ...providerFields, ...fileFields
@@ -75,10 +101,23 @@ const recordSchema = z.object({
     .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
     .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
 }).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)
-/** Version 1 has only server hints. Migration cannot infer an account or manufacture a target association. Versions 1
- *  and 2 (0.9.0's `Session/`) read as version 3 with every tab SQL Server's. */
-export const storedSessionSchema = z.union([recordSchema, v2RecordSchema.transform(record => ({ ...record, version: 3 as const })),
-  legacyRecordSchema.transform(record => ({ ...record, version: 3 as const }))])
+/** Version 4: version 3 with multi-server / cross-engine tab targets (`multiMode`, `multiTargets`, `crossView`). */
+const recordSchema = z.object({
+  ...recordFields, version: z.literal(4), workspace: connectionWorkspaceSchema.optional(), seal: workspaceSealSchema.optional(),
+  documents: z.array(z.object({
+    ...providerFields, ...multiFields, ...fileFields
+  }).strict().refine(fits).refine(associated).refine(databaseFits).refine(agentShaped).refine(multiShaped)
+    .refine(document => document.text !== undefined || (!!document.path && !document.dirty))
+    .refine(document => document.fileSha256 === undefined || (!!document.path && document.text !== undefined))).max(sessionLimits.documents),
+}).strict().refine(session => !session.groups || layoutViews(session.groups).every(view => view < session.documents.length)).refine(targetsPresent)
+/** Version 1 has only server hints. Migration cannot infer an account or manufacture a target association. Versions 1, 2
+ *  and 3 read as version 4 (version 1 and 2 with every tab SQL Server's). */
+export const storedSessionSchema = z.union([
+  recordSchema,
+  v3RecordSchema.transform(record => ({ ...record, version: 4 as const })),
+  v2RecordSchema.transform(record => ({ ...record, version: 4 as const })),
+  legacyRecordSchema.transform(record => ({ ...record, version: 4 as const }))
+])
 export type SessionRecord = z.infer<typeof recordSchema>
 export type SessionRecordDocument = SessionRecord['documents'][number]
 /** What `write` takes: the page's request with main's paths and disk baselines in place of file ids. */
@@ -150,7 +189,7 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
   const places = new Map(reopens.map(({ index }, place) => [index, place]))
   const groups = session.groups ? remapEditorGroups(session.groups, index => places.get(index)) : undefined
   const record: SessionRecord = {
-    version: 3, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
+    version: 4, savedAt: (options.now?.() ?? new Date()).toISOString(), activeIndex: reopens.findIndex(({ index }) => index === session.activeIndex),
     documents: reopens.map(({ document }) => ({
       name: document.name, ...document.baseName ? { baseName: document.baseName } : {}, kind: document.kind, eol: document.eol, dirty: document.dirty,
       ...document.pinned ? { pinned: true } : {},
@@ -160,6 +199,15 @@ export function encodeSession(session: SessionInput, options: SessionStoreOption
       ...document.server ? { server: document.server } : {}, ...document.database !== undefined ? { database: document.database } : {},
       ...document.targetId ? { targetId: document.targetId, attachWanted: document.attachWanted } : {},
       ...document.provider ? { provider: document.provider } : {}, ...document.jobKey ? { jobKey: document.jobKey } : {},
+      ...document.multiMode ? { multiMode: document.multiMode } : {},
+      ...document.multiTargets ? {
+        multiTargets: document.multiTargets.map(target => ({
+          ...target.targetId !== undefined ? { targetId: target.targetId, attachWanted: target.attachWanted } : {},
+          provider: target.provider, database: target.database, enabled: target.enabled,
+          ...target.lastServer ? { lastServer: target.lastServer } : {}
+        }))
+      } : {},
+      ...document.crossView ? { crossView: document.crossView } : {},
       ...document.text !== undefined ? { text: document.text } : {}
     })),
     ...groups ? { groups } : {}, ...session.workspace ? { workspace: session.workspace, ...session.seal ? { seal: session.seal } : {} } : {}

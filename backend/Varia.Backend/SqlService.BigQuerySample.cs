@@ -33,6 +33,8 @@ internal sealed partial class SqlService
             return new RemotePlan(set, window, BigQueryViewSql.Sample(window.Table, count, window.TotalRows, parameters), parameters, false, null, false) { Kind = kind, SampleRows = count };
         }
         if (rows is not null || method is not null) throw new RequestException("INVALID_PARAMS", "A rerun takes only its result.");
+        if (set.RolledBackPreview)
+            throw new RequestException("INVALID_PARAMS", "This result is a rolled-back preview from a transaction that did not commit, so it cannot run again in place.");
         // A view's, value list's or sample's own statement reads a result table that may be gone: only the query's result (or
         // the rerun that replaced it) runs again.
         if (set.Derived && !set.Reran)

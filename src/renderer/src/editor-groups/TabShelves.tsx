@@ -210,7 +210,7 @@ export class TabShelfLayout {
     this.list.style.setProperty('--tab-stack-scroll-top', `${this.scrollTop}px`)
     this.resetScroll()
     this.shelves = shelves.map(shelf => ({ ...shelf, scrollTop: this.scrollTop }))
-    const signature = JSON.stringify([width, this.viewportHeight, this.scrollTop, shelves.map(shelf => [shelf.pinned, shelf.top, shelf.height, shelf.rows, shelf.limit, shelf.hidden.map(tab => [tab.id, tab.name])])])
+    const signature = JSON.stringify([width, this.viewportHeight, this.scrollTop, shelves.map(shelf => [shelf.pinned, shelf.top, shelf.height, shelf.rows, shelf.limit, shelf.hidden.map(tab => [tab.id, tab.name, tab.multiMode ?? '', tab.multiMode === 'same' ? (tab.multiTargets ?? []).filter(target => target.enabled).length : 0, tab.file?.path ?? ''])])])
     if (signature !== this.signature) {
       this.signature = signature
       if (heightChanged) this.group.relayout()
@@ -336,12 +336,21 @@ function ShelfControls({ group, shelf, layout }: { readonly group: DockviewGroup
     {shelf.hidden.length > 0 && <button type="button" className="query-shelf-more" aria-label={label} title={`${label}\n${gestures.phrase('documentTabs.rows')} to change stack height`} popoverTarget={id}
       style={{ left: shelf.overflowLeft, top: shelf.overflowTop, width: shelf.cellWidth }} onPointerDown={event => event.stopPropagation()}>… {shelf.hidden.length} more</button>}
     <div className="query-shelf-overflow" id={id} popover="auto" ref={overflow} role="group" aria-label={`More ${name} tabs`}>
-      {shelf.hidden.map(tab => <button type="button" key={tab.id} title={tab.file?.path ?? tab.name} onClick={() => {
-        overflow.current?.hidePopover()
-        group.panels.find(panel => panel.id === tab.id)?.api.setActive()
-        layout.refresh()
-        group.model.tabsListElement.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tab.id)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus({ preventScroll: true })
-      }}>{tab.name}</button>)}
+      {shelf.hidden.map(tab => {
+        const enabledTargets = tab.multiMode === 'same' ? (tab.multiTargets ?? []).filter(target => target.enabled).length : 0
+        const multiHint = tab.multiMode === 'cross'
+          ? 'Cross-Engine SELECT'
+          : tab.multiMode === 'same'
+            ? `${enabledTargets} ${enabledTargets === 1 ? 'target' : 'targets'}`
+            : undefined
+        const overflowTitle = [tab.file?.path ?? tab.name, multiHint].filter(Boolean).join(' · ')
+        return <button type="button" key={tab.id} data-multi-server={tab.multiMode || undefined} title={overflowTitle} onClick={() => {
+          overflow.current?.hidePopover()
+          group.panels.find(panel => panel.id === tab.id)?.api.setActive()
+          layout.refresh()
+          group.model.tabsListElement.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(tab.id)}"]`)?.closest<HTMLElement>('.dv-tab')?.focus({ preventScroll: true })
+        }}>{tab.name}</button>
+      })}
     </div>
   </div>
 }

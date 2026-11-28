@@ -268,8 +268,8 @@ internal static partial class BigQueryErrors
                 && (position + 10 == text.Length || !char.IsLetterOrDigit(text[position + 10]) && text[position + 10] != '_')) return true;
             if (text[position] == '#' || text.AsSpan(position).StartsWith("--"))
             {
-                var end = text.IndexOf('\n', position);
-                position = end < 0 ? text.Length : end + 1;
+                var end = text.AsSpan(position).IndexOfAny('\r', '\n');
+                position = end < 0 ? text.Length : position + end + 1;
                 continue;
             }
             if (text.AsSpan(position).StartsWith("/*"))

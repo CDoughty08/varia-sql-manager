@@ -140,4 +140,75 @@ describe('bookmarks', () => {
     at('b', 1); service.toggle()
     expect([keys('a').hasBookmarks, keys('a').activeDocumentHasBookmarks, keys('b').activeDocumentHasBookmarks]).toEqual([true, false, true])
   })
+  it('sets activePane before activate and falls back to revealLine when the target pane editor is not yet mounted', () => {
+    const primaryA = new FakeModel('a-primary')
+    const primaryB = new FakeModel('b-primary')
+    const secondaryB = new FakeModel('b-secondary', 12)
+    const events = new EventBus()
+    let activeId = 'a'
+    let activePaneB: 'primary' | 'secondary' = 'primary'
+    let lineA = 1
+    let lineB = 1
+    const order: string[] = []
+    const reveals: { id: string; line: number; revision: number; dialect?: string }[] = []
+    let mountedSecondaryB = true
+
+    const editorA: BookmarkEditor = {
+      getModel: () => primaryA,
+      getPosition: () => ({ lineNumber: lineA, column: 1 }),
+      setPosition: pos => { lineA = pos.lineNumber },
+      revealLineInCenterIfOutsideViewport: () => {},
+      focus: () => {}
+    }
+    const editorBSecondary: BookmarkEditor = {
+      getModel: () => secondaryB,
+      getPosition: () => ({ lineNumber: lineB, column: 1 }),
+      setPosition: pos => { lineB = pos.lineNumber },
+      revealLineInCenterIfOutsideViewport: () => {},
+      focus: () => {}
+    }
+
+    const documents = {
+      getSnapshot: () => ({
+        documents: [{ id: 'a' }, { id: 'b', multiMode: 'cross' as const, crossView: 'split' as const, activePane: activePaneB }],
+        activeId
+      }),
+      getModel: (id: string) => id === 'a' ? primaryA : primaryB,
+      getSecondaryModel: (id: string) => id === 'b' ? secondaryB : undefined,
+      activeModel: (id: string) => id === 'a' ? primaryA : (activePaneB === 'secondary' ? secondaryB : primaryB),
+      editorOf: (id: string, pane?: 'primary' | 'secondary') => {
+        if (id === 'a') return editorA
+        if (id === 'b' && pane === 'secondary') return mountedSecondaryB ? editorBSecondary : undefined
+        return undefined
+      },
+      setActivePane: (id: string, pane: 'primary' | 'secondary') => {
+        order.push(`setActivePane:${id}:${pane}`)
+        if (id === 'b') activePaneB = pane
+      },
+      activate: (id: string) => {
+        order.push(`activate:${id}`)
+        activeId = id
+      },
+      revision: (id: string) => id === 'b' ? 42 : 1,
+      revealLine: (id: string, line: number, revision: number, dialect?: 'sqlserver' | 'bigquery') => {
+        reveals.push({ id, line, revision, dialect })
+        return true
+      },
+      get boundEditor() {
+        return activeId === 'a' ? editorA : (mountedSecondaryB && activePaneB === 'secondary' ? editorBSecondary : undefined)
+      }
+    }
+
+    const service = new BookmarkService(documents, events)
+    // Add a bookmark on line 9 of tab 'b' secondary pane, then switch back to tab 'a' and unmount tab 'b' secondary editor.
+    activeId = 'b'; activePaneB = 'secondary'; lineB = 9
+    service.toggle()
+    activeId = 'a'; activePaneB = 'primary'; mountedSecondaryB = false
+    order.length = 0
+
+    service.go(1, 'all')
+    expect(order).toEqual(['setActivePane:b:secondary', 'activate:b'])
+    expect(reveals).toEqual([{ id: 'b', line: 9, revision: 42, dialect: 'bigquery' }])
+    service.dispose()
+  })
 })

@@ -2,8 +2,9 @@ import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import { SqlLanguageService } from '../languages/SqlLanguageService'
 import { IndexCompletionService } from '../languages/IndexCompletionService'
 import { SqlDiagnosticsService } from '../languages/SqlDiagnosticsService'
-import { BigQueryCostService, costOptOut } from '../services/bigquery-cost'
+import { BigQueryCostService, costOptOut, type CostOptOut } from '../services/bigquery-cost'
 import { CostPromptService } from '../services/bigquery-cost-prompt'
+import { MultiExecutePromptService } from '../services/multi-execute'
 import { BigQueryStarredService, bindBigQueryExplorerSync } from '../services/bigquery-starred'
 import { languagesContribution } from '../contributions/languages'
 import { EditorPeekService } from '../languages/EditorPeekService'
@@ -187,6 +188,9 @@ export interface Workbench extends Disposable {
   /** BigQuery tabs' estimates, dry-run diagnostics and cost prompts (docs/bigquery.md, Cost). */
   readonly bigQueryCost: BigQueryCostService
   readonly costPrompts: CostPromptService
+  readonly costOptOut: CostOptOut
+  /** Same-engine multi-server Run Mode prompt queue (`MultiExecuteDialog`). */
+  readonly multiExecutePrompts: MultiExecutePromptService
   /** Per-principal BigQuery Starred Projects shown in Object Explorer. */
   readonly bigQueryStarred: BigQueryStarredService
   readonly queries: QueryService
@@ -386,13 +390,17 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const loadBigQueryStarred = (connectionId: string, principal: string) => {
     void bigQueryStarred.load(connectionId, principal).then(() => { if (!disposed) onBigQueryStarredLoaded?.() }, onUnexpectedError)
   }
-  const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred }), databaseList = new DatabaseListService(api, connections, events)
-  const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
+  const explorer = new ExplorerService({
+    api, connections, events, schedule: nextFrame, groupBySchema, targets: connectionTargets, windowsClient: platform === 'win32', bigQueryStarred,
+    onMultiSelectNotice: message => { notifications.notify({ severity: 'info', key: 'explorer.multiSelect.engineLock', message }) }
+  }), databaseList = new DatabaseListService(api, connections, events)
+  const backend = new BackendStateService(api, connections)
   const updates = new UpdateService(api)
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform), server: id => connections.get(id)?.server, target: id => targets.targetForConnection(id),
       provider: id => { const connection = connections.get(id); return connection ? connection.providerId ?? 'sqlserver' : undefined },
+      isLive: id => connections.isLive(id),
       setLanguage: (model, language) => switchModelLanguage(monaco, model, language),
       providerChanged: document => notifications.notify(providerSwitchToast(document)) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
@@ -419,7 +427,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const results = new ResultsService({ client: resultClient, api, events, documents, retainedPlans, frame: callback => { frame(callback) }, sortText: () => settings.get('queryResults.grid.sortText'), memory: () => resultMemory.getSnapshot(),
     remote: remoteViews,
     // Sorted grids follow Sort text by as it changes, from the toolbar, the palette or Options.
-    onSortTextChange: listener => settings.subscribe(listener) })
+    onSortTextChange: listener => settings.subscribe(listener),
+    layout: () => settings.get('queryResults.grid.layout'),
+    onLayoutChange: listener => settings.subscribe(listener) })
   const highlights = new HighlightsService(results)
   const sampleDialog = new SampleDialogService(results)
   // The window's places for derived results built in the backend, shared by Pivot builds and comparisons: four at once.
@@ -463,9 +473,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     bigQuery: id => { const connectionId = documents.get(id)?.connectionId; return !!connectionId && connections.get(connectionId)?.providerId === 'bigquery' }
   }
   const costPrompts = new CostPromptService()
+  const multiExecutePrompts = new MultiExecutePromptService()
   // The saved choice is read after the service exists, so it re-renders the chips once a choice is known.
   let costChoiceChanged = () => {}
-  const bigQueryCost = new BigQueryCostService({ api, documents, connections, settings, events, monaco, ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer), optOut: costOptOut(api, () => costChoiceChanged()) })
+  const optOut = costOptOut(api, () => costChoiceChanged())
+  const bigQueryCost = new BigQueryCostService({
+    api, documents, connections, settings, events, monaco,
+    ask: (request, signal, stillAsks, onAnswer) => costPrompts.ask(request, signal, stillAsks, onAnswer),
+    optOut,
+    connectionForResult: (tabId, resultId) => results.connectionForResult(tabId, resultId)
+  })
   costChoiceChanged = () => bigQueryCost.optOutChanged()
   queries.estimateOf = (id, sql) => bigQueryCost.estimateFor(id, sql)
   queries.setCostGate((tabId, sql, origin, signal, rerunOf) => bigQueryCost.beforeExecute(tabId, sql, origin, signal, rerunOf))
@@ -759,13 +776,25 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssis: operations.context,
     jobHistory: jobHistory.context,
     editorGroups,
-    editor: () => documents.boundEditor
+    editors: () => documents.activeEditors()
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
   const stopConnectionBindings = api.onConnectionBindingsChanged(update => { if (connections.bindingsChanged(update) && update.warning) commands.reportWarning(update.warning) })
-  const menuTargets = new MenuTargetService({ editor: () => {
-    const editor = documents.boundEditor, tabId = documents.getSnapshot().activeId
-    return editor && tabId ? { container: editor.getContainerDomNode(), tabId } : undefined
+  const menuTargets = new MenuTargetService({ editor: element => {
+    const hit = element ? documents.editorContaining(element) : undefined
+    const editor = hit?.editor ?? documents.boundEditor
+    const tabId = hit?.tabId ?? documents.getSnapshot().activeId
+    return editor && tabId ? {
+      container: editor.getContainerDomNode(),
+      tabId,
+      focus: () => {
+        if (hit) {
+          if (hit.tabId !== documents.getSnapshot().activeId) documents.activate(hit.tabId)
+          documents.setActivePane(hit.tabId, hit.pane)
+        }
+        editor.focus()
+      }
+    } : undefined
   } })
   // Menus label items with keys and the dispatcher routes keys to the menus; neither looks the other up before both exist.
   const menus = new MenuService({ platform, commands, context, keybindings: { lookup: id => keybindings.lookup(id) }, theme, recentFiles, dynamic: stepMenuProviders(jobDocuments), settings: () => settings.getSnapshot().values, focus, modalOpen,
@@ -774,8 +803,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     modalContains: element => openModal()?.contains(element) ?? false, style: api.menuStyle, api })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus,
     keyArgs: command => { const tabId = actsOnTab(command) ? editorGroups.focusedDocument() : undefined; return tabId ? { tabId } : undefined }, // Peek's editor waits for a chord's second key after Ctrl+K as a query's does (folding works there; the bridge's chords do not).
-    editorHasTextFocus: () => (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
-    editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target),
+    editorHasTextFocus: () => documents.activeEditors().some(editor => editor.hasTextFocus()) || (documents.boundEditor?.hasTextFocus() ?? false) || peekEditorHasTextFocus(windows.activeElement()),
+    editorContains: target => {
+      if (!(target instanceof Node)) return false
+      const element = target instanceof Element ? target : target.parentElement
+      return (!!element && !!documents.editorContaining(element))
+        || documents.activeEditors().some(editor => editor.getContainerDomNode().contains(target))
+        || !!documents.boundEditor?.getContainerDomNode().contains(target)
+    },
     keyDown: event => { peek.keyDown(event.key, event.repeat); profilePeek.keyDown(event.key, event.repeat); inspector.keyDown(event.key, event.repeat) },
     keyUp: event => { peek.keyUp(event.key); profilePeek.keyUp(event.key); inspector.keyUp(event.key) }, blur: () => { peek.blur(); profilePeek.blur(); inspector.blur() } })
   const shortcutsBinding = userShortcuts.bind({ keybindings, gestures: gesturesFor(platform) })
@@ -816,6 +851,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     indexCompletion,
     bigQueryCost,
     costPrompts,
+    costOptOut: optOut,
+    multiExecutePrompts,
     bigQueryStarred,
     queries,
     connections,
@@ -989,6 +1026,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       sqlDiagnostics.dispose()
       bigQueryCost.dispose()
       costPrompts.dispose()
+      multiExecutePrompts.dispose()
       sqlLanguage.dispose()
       indexCompletion.dispose()
       documents.dispose()

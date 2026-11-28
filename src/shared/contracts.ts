@@ -220,6 +220,44 @@ export interface QueryOptions {
   /** BigQuery: the tab's job key (docs/bigquery.md, Re-attaching to jobs), which main ties the request's job records to. */
   jobKey?: string
 }
+export const multiQueryModes = ['transaction', 'fireAndForget', 'crossEngineReadOnly'] as const
+export type MultiQueryMode = typeof multiQueryModes[number]
+export interface MultiQueryTarget {
+  targetKey: string
+  connectionId: string
+  label: string
+  environment?: string
+  database?: string
+  dataset?: string
+  noDefaultDataset?: true
+  maximumBytesBilled?: number
+}
+export interface MultiQueryScripts { sqlserver: string; bigquery: string }
+export interface MultiQueryStartLines { sqlserver?: number; bigquery?: number }
+export interface MultiQueryOptions {
+  queryId: string
+  sessionId: string
+  jobKey?: string
+  mode: MultiQueryMode
+  targets: MultiQueryTarget[]
+  sql?: string
+  startLine?: number
+  startColumn?: number
+  scripts?: MultiQueryScripts
+  startLines?: MultiQueryStartLines
+  sequential?: boolean
+  preflightDryRun?: boolean
+  autoCombine?: boolean
+  stopOnError?: boolean
+  timeoutSeconds: number
+  maxRows: number
+  /** Result sets kept across the run, 1..1000 (default 10); later ones are counted, not stored. */
+  maxResultSets?: number
+  discardResults?: boolean
+  prices?: boolean
+  residence?: ResidenceSetting
+  windowCacheMiB?: number
+}
 /** Tools › Options' result residence for BigQuery: decide by size, always in memory, or always windowed in BigQuery. */
 export type ResidenceSetting = 'automatic' | 'memory' | 'windowed'
 /** results.remoteQuery (docs/ipc.md): src/shared/bigquery/remote-view.ts. */
@@ -266,8 +304,8 @@ export interface ResultDescriptor {
   index: number
   batchNumber: number
   iteration: number
-  /** `diff`: a unified diff of two other results of the query (results.diff); `pivot`: a pivot of one (results.pivot). */
-  kind: 'rows' | 'executionPlan' | 'diff' | 'pivot'
+  /** `diff`: a unified diff of two other results of the query (results.diff); `pivot`: a pivot of one (results.pivot); `combined`: combined rows across targets (results.combine). */
+  kind: 'rows' | 'executionPlan' | 'diff' | 'pivot' | 'combined'
   columns: ResultColumn[]
   rowsRead: number
   rowsStored: number
@@ -290,6 +328,12 @@ export interface ResultDescriptor {
   /** A windowed result's projected size in memory (its measured row cost times its rows): Load into memory is offered
    *  only while it fits the result memory free at that point (docs/bigquery.md, Load into memory). */
   projectedBytes?: number
+  /** Multi-server: target key (absent for single-server and combined sets). */
+  targetKey?: string
+  /** Multi-server: 0-based statement slot across targets. */
+  statementSlot?: number
+  /** Multi-server: true when this target's transaction was rolled back after producing preview rows. */
+  rolledBackPreview?: boolean
 }
 /** Where a BigQuery result's rows live: `remote` is windowed in BigQuery. */
 export type ResultResidence = 'memory' | 'remote'
@@ -303,6 +347,8 @@ export interface MessageEntry {
   text: string; kind: 'info' | 'server' | 'print' | 'error'
   /** Absolute source line for a submitted SQL batch error. Procedure-relative and non-SQL errors have no query location. */
   line?: number
+  targetKey?: string
+  dialect?: ProviderId
 }
 /** `detached`: a BigQuery job left running (Leave it running), which carries on in BigQuery; `superseded`: a later query.attach
  *  took this attachment's job over. */
@@ -342,6 +388,43 @@ export interface QueryResult {
   /** BigQuery: the newest stale mark the connection's Search Objects index has not spent; Object Search asks one stale-only build
    *  per new mark (docs/object-search.md, BigQuery). */
   indexStale?: number
+}
+export const multiQueryTargetStatuses = ['committed', 'succeeded', 'rolledBack', 'commitInDoubt', 'failed', 'cancelled', 'timedOut', 'skipped'] as const
+export type MultiQueryTargetStatus = typeof multiQueryTargetStatuses[number]
+export const multiQueryTargetPhases = ['pending', 'preflight', 'running', 'atBarrier', 'committing', 'rollingBack', ...multiQueryTargetStatuses] as const
+export type MultiQueryTargetPhase = typeof multiQueryTargetPhases[number]
+export const queryMultiStatuses = ['completed', 'completedWithErrors', 'partialFailure', 'rolledBack', 'commitInDoubt', 'failed', 'cancelled', 'timedOut'] as const
+export type QueryMultiStatus = typeof queryMultiStatuses[number]
+export interface MultiTargetError { code: string; message: string; batchNumber?: number; iteration?: number; line?: number }
+export interface MultiTargetOutcome {
+  targetKey: string
+  provider: ProviderId
+  label: string
+  environment?: string
+  status: MultiQueryTargetStatus
+  batchesCompleted: number
+  batchesTotal: number
+  rowsAffected: number
+  elapsedMs: number
+  resultSetIds: number[]
+  spid?: number
+  login?: string
+  bytesProcessed?: number
+  job?: BigQueryJobSummary
+  error?: MultiTargetError
+}
+export interface QueryMultiResult {
+  status: QueryMultiStatus
+  mode: MultiQueryMode
+  targets: MultiTargetOutcome[]
+  resultSets: ResultDescriptor[]
+  discardedResultSets: number
+  messages: MessageEntry[]
+  messagesTruncated: boolean
+  elapsedMs: number
+  budget: { usedBytes: number; globalBytes: number; queryBytes: number; stoppedBytes?: number } & MemoryOrder
+  completedAt: string
+  combineWarnings?: string[]
 }
 /** A BigQuery query job: its id and the statistics BigQuery reported (each absent when it did not, as the emulator does not).
  *  Bytes are priced on demand by `src/shared/bigquery/cost.ts`. */
@@ -408,12 +491,27 @@ export type QueryEvent =
   | { type: 'resultSet.closed'; descriptor: ResultDescriptor }
   /** A BigQuery result switched between memory and windowed under a new revision (a misestimate, Load into memory). Essential. */
   | { type: 'resultSet.residence'; descriptor: ResultDescriptor }
+  /** Non-droppable metadata update for a stored result (e.g. marked as a rolled-back preview after Phase 2 rollback). */
+  | { type: 'resultSet.meta'; resultId: number; rolledBackPreview: boolean; generation: number }
+  | {
+      type: 'multiQuery.targetState'
+      targetKey: string
+      phase: MultiQueryTargetPhase
+      batchesCompleted: number
+      batchesTotal: number
+      rowsAffected: number
+      resultSetCount: number
+      elapsedMs: number
+      bytesProcessed?: number
+      errorCode?: string
+      errorMessage?: string
+    }
   | { type: 'progress'; completedBatches: number; totalBatches: number; batchNumber: number; iteration: number; results: ResultProgress[] }
   | { type: 'messages'; messages: MessageEntry[] }
   | QueryJobEvent
 /** A BigQuery request's top-level job as it starts (`running`) and finishes (`done`): its id, project and location, whether
  *  it is auxiliary, and the session's tracked transaction as the job started. Never the session id. Essential. */
-export interface QueryJobEvent { type: 'query.job'; jobId: string; project: string; location?: string; state: 'running' | 'done'; auxiliary: boolean; transaction: 'none' | 'open' | 'unknown' }
+export interface QueryJobEvent { type: 'query.job'; jobId: string; project: string; location?: string; state: 'running' | 'done'; auxiliary: boolean; transaction: 'none' | 'open' | 'unknown'; targetKey?: string }
 /** `viewId` reads through a view of the result (results.view); `firstRow` then counts view positions. `viewer` names the grid
  *  reading a windowed BigQuery result, whose read-ahead follows that grid's scrolling. */
 export interface ResultsReadParams { resultId: number; firstRow: number; maxRows: number; viewId?: number; viewer?: number }
@@ -543,6 +641,9 @@ export interface ResultsPivotParams { resultId: number; rows: number[]; column?:
  *  rows it read, how many row groups and column groups it has (every one shown: a pivot past `limits.pivot` is refused), and
  *  whether a truncated value's stored prefix was grouped or compared. */
 export interface ResultsPivotResult { descriptor: ResultDescriptor; rows: number; rowGroups: number; columnGroups: number; approximate: boolean }
+/** results.combine: combines 2 to 32 complete `rows` results of one multi-server query into a `combined` result. */
+export interface ResultsCombineParams { resultIds: number[]; statementName?: string }
+export interface ResultsCombineResult { descriptor: ResultDescriptor; warnings?: string[] }
 /** results.search: the cells whose grid text contains `text` (1 to `limits.search.maxText` characters), through `viewId`'s
  *  order when given (rows are then view positions). Up to `maxMatches` of them come back in whole rows: from `fromRow` on,
  *  or with `backward` the last ones before `fromRow`. Text columns compare by their collation; others ignore case. */
@@ -719,6 +820,7 @@ export interface RpcMethods {
   'databases.list': { params: { connectionId: string }; result: DatabaseInfo[] }
   'tables.columns': { params: { connectionId: string; database: string; schema: string; name: string }; result: TableColumns }
   'query.execute': { params: QueryOptions; result: QueryResult }
+  'query.executeMulti': { params: MultiQueryOptions; result: QueryMultiResult }
   /** `detach` (BigQuery): Leave it running, so the request answers `detached` and its job holds the tab's session. */
   'query.cancel': { params: { queryId: string; detach?: true }; result: { cancelled: boolean } }
   /** Re-attaches a tab to a BigQuery job by its reference; its EVENTs and summary are a query's (docs/ipc.md). */
@@ -805,6 +907,8 @@ export interface PortMethods {
   'results.profile': { params: ResultsProfileParams; result: ResultsProfileResult }
   /** A pivot of a result's rows or a view's, grouped by collation, stored as a new result. */
   'results.pivot': { params: ResultsPivotParams; result: ResultsPivotResult }
+  /** Combines 2 to 32 complete rows results of the same query into one stored combined result. */
+  'results.combine': { params: ResultsCombineParams; result: ResultsCombineResult }
   /** A column's distinct values and their counts over a result's rows or a view's, for the header funnel's checklist. */
   'results.distinct': { params: ResultsDistinctParams; result: ResultsDistinctResult }
   /** A window of a distinct snapshot's values, narrowed to a search's matches when one is given. */
@@ -1108,6 +1212,7 @@ export interface VariaApi {
   onSettingsChanged(callback: (state: SettingsState) => void): () => void
   shortcuts: ShortcutsApi
   execute(options: QueryOptions): Promise<ApiResult<QueryResult>>
+  executeMulti(options: MultiQueryOptions): Promise<ApiResult<QueryMultiResult>>
   /** `detach` (BigQuery): Leave it running instead of cancelling, so the job carries on and holds the tab's session. */
   cancel(queryId: string, options?: { detach?: true }): Promise<ApiResult<{ cancelled: boolean }>>
   /** query.attach: re-attaches a tab to a BigQuery job (docs/bigquery.md, Re-attaching to jobs); `cancel(queryId)` stops it. */

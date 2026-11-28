@@ -20,7 +20,7 @@ const cardWidth = 320, margin = 8
  * outside, the focus leaving and the window losing the focus close it too. Drawn in the window of its anchor (a popout's too).
  */
 export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }: {
-  tab: Pick<TabResults, 'groups' | 'comparisons' | 'sorts'>
+  tab: Pick<TabResults, 'groups' | 'comparisons' | 'sorts'> & Partial<Pick<TabResults, 'multi'>>
   /** What it is placed under: the overflow button, else the row of result tabs. */
   anchor: () => HTMLElement | null | undefined
   selected?: EntryKey
@@ -37,7 +37,7 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
     return value > 0 ? value : pickerRowHeight
   })
   const [query, setQuery] = useState('')
-  const rows = useMemo(() => pickerRows(tab), [tab.groups, tab.comparisons, tab.sorts])
+  const rows = useMemo(() => pickerRows(tab), [tab.groups, tab.comparisons, tab.sorts, tab.multi])
   const shown = useMemo(() => filterRows(rows, query), [rows, query])
   const at = (key: EntryKey | undefined) => Math.max(0, shown.findIndex(row => row.key === key))
   const [active, setActive] = useState(() => at(selected))
@@ -174,7 +174,7 @@ export default function ResultsPicker({ tab, anchor, selected, onPick, onClose }
               aria-setsize={shown.length} aria-posinset={index + 1}
               // The filter box keeps the focus, so the keys still work after a press.
               onPointerDown={event => event.preventDefault()} onClick={() => onPick(row.key)}>
-              {row.kind === 'plan' && <Icon name="execution-plan" />}{row.kind === 'comparison' && <Icon name="git-compare" />}
+              {row.kind === 'summary' && <Icon name="layers" />}{row.kind === 'plan' && <Icon name="execution-plan" />}{row.kind === 'comparison' && <Icon name="git-compare" />}
               <span className="rt-picker-name">{row.name}</span>{row.number && <small className="rt-picker-number">{row.number}</small>}{row.detail && <small>{row.detail}</small>}
             </div>
           })}

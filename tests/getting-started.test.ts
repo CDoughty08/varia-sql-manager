@@ -11,7 +11,7 @@ import { defaultSettings, settingKeys } from '../src/shared/settings/catalog'
 import { HelpService } from '../src/renderer/src/help/HelpService'
 import HelpDocument, { guideLoaders } from '../src/renderer/src/help/HelpDocument'
 import { GuideAction } from '../src/renderer/src/help/References'
-import { BigQueryResultsSample, bigQuerySampleResidence, bigQuerySampleResults } from '../src/renderer/src/help/Samples'
+import { BigQueryResultsSample, MultiServerSample, bigQuerySampleResidence, bigQuerySampleResults, multiServerSampleOutcome } from '../src/renderer/src/help/Samples'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { documentFixture } from './fixtures/documents'
@@ -48,6 +48,7 @@ describe('Getting Started registration and dependencies', () => {
     expect(matchingGuides('copy headers')).toEqual(['results'])
     expect(matchingGuides('  ENTRA ')).toEqual(['connect'])
     expect(matchingGuides('gcloud key file')).toEqual(['bigquery'])
+    expect(matchingGuides('cross-engine')).toEqual(['multi-server-query'])
     expect(matchingGuides('not-a-feature')).toEqual([])
     expect(matchingGuides('')).toEqual(guideIds)
     for (const value of ['constructor', '__proto__', '../connect', 'connect'.repeat(1000), null]) expect(isGuideId(value)).toBe(false)
@@ -76,6 +77,29 @@ describe('BigQuery results sample', () => {
   })
 })
 
+describe('Multi-server query sample', () => {
+  it('classifies every execution and read-only guard outcome branch cleanly', () => {
+    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: false, sql: 'SELECT 1;' }).outcome).toContain('Coordinated Transaction is available')
+    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: false, sql: 'DBCC CHECKDB;' }).outcome).toContain('non-transactional SQL Server statements')
+    expect(multiServerSampleOutcome({ provider: 'bigquery', crossEngine: false, sql: 'CREATE VIEW v AS SELECT 1;' }).outcome).toContain('permanent BigQuery DDL')
+    expect(multiServerSampleOutcome({ provider: 'bigquery', crossEngine: false, sql: 'CALL my_dataset.my_proc();' }).outcome).toContain('disabled for this BigQuery statement')
+    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'SELECT 1;' })).toEqual({ tags: [], outcome: 'Read-only check passed: both dialect panes run together.' })
+    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'DELETE FROM dbo.T;' }).outcome).toContain('1 violation on Line 1')
+    expect(multiServerSampleOutcome({ provider: 'sqlserver', crossEngine: true, sql: 'DELETE FROM dbo.T;\nUPDATE dbo.T SET a = 1;' }).outcome).toContain('2 violations, first on Line 1')
+  })
+  it('renders real statement classification without executing queries or connecting', () => {
+    const fixture = workbenchFixture()
+    try {
+      const html = renderToStaticMarkup(createElement(WorkbenchProvider, { workbench: fixture as unknown as Workbench, children: createElement(MultiServerSample) }))
+      expect(html).toContain('SQL Server DML + SELECT')
+      expect(html).toContain('BigQuery permanent DDL')
+      expect(html).toContain('Cross-Engine blocked write')
+      expect(html).toContain('Coordinated Transaction is available')
+      expect(fixture.api.execute).not.toHaveBeenCalled()
+    } finally { fixture.dispose() }
+  })
+})
+
 describe('contextual references', () => {
   it.each<Platform>(['win32', 'linux', 'darwin'])('uses effective rules in lesson focus on %s', platform => {
     const rules = defaultRules(platform)
@@ -87,6 +111,17 @@ describe('contextual references', () => {
     // Alt+F5 moves between differences only in a comparison's grid.
     expect(lessonShortcut('output.compareNextDifference', 'comparisonGrid', platform, rules)).toBe(platform === 'darwin' ? '⌥F5' : 'Alt+F5')
     expect(lessonShortcut('output.compareNextDifference', 'resultsGrid', platform, rules)).toBeUndefined()
+    expect(lessonShortcut('explorer.toggleMultiSelect', 'explorerServer', platform, rules)).toBe('Space')
+    expect(lessonShortcut('explorer.toggleMultiSelect', 'queryEditor', platform, rules)).toBeUndefined()
+    // In explorerServer, explorerServerFocus prevents explorer.peek's Space binding from matching, leaving Alt+F12.
+    expect(lessonShortcut('explorer.peek', 'explorerServer', platform, rules)).toBe(platform === 'darwin' ? '⌥F12' : 'Alt+F12')
+    const remappedExplorer = [...rules.filter(rule => rule.command !== 'explorer.toggleMultiSelect'), resolveKeybinding('explorer.toggleMultiSelect', { key: 'shift+space', when: 'explorerFocus && explorerHasSelection && explorerServerFocus' }, platform)!]
+    expect(lessonShortcut('explorer.toggleMultiSelect', 'explorerServer', platform, remappedExplorer)).toBe(platform === 'darwin' ? '⇧Space' : 'Shift+Space')
+    // A narrower explorerServer rule shadows a global Space rule.
+    const globalSpace = resolveKeybinding('file.new', { key: 'space' }, platform)!
+    const scopedSpace = resolveKeybinding('explorer.toggleMultiSelect', { key: 'space', when: 'explorerFocus && explorerServerFocus' }, platform)!
+    expect(lessonShortcut('file.new', 'workbench', platform, [globalSpace, scopedSpace])).toBe('Space')
+    expect(lessonShortcut('file.new', 'explorerServer', platform, [globalSpace, scopedSpace])).toBeUndefined()
     expect(lessonShortcut('query.execute', 'queryEditor', platform, rules.filter(rule => rule.command !== 'query.execute'))).toBeUndefined()
     const remapped = [...rules.filter(rule => rule.command !== 'query.execute'), resolveKeybinding('query.execute', { key: 'mod+shift+enter', when: 'editorFocus || queryBarFocus' }, platform)!]
     expect(lessonShortcut('query.execute', 'queryEditor', platform, remapped)).toBe(platform === 'darwin' ? '⇧⌘↩' : 'Ctrl+Shift+Enter')
@@ -110,6 +145,7 @@ describe('contextual references', () => {
   it('derives command paths, dynamic titles and setting values from the real catalogs', () => {
     expect(lessonCommand('query.execute', 'win32', defaultSettings)).toEqual({ title: 'Execute', path: 'Query › Execute' })
     expect(lessonCommand('output.copy', 'win32', defaultSettings).path).toBe('Results context menu › Copy')
+    expect(lessonCommand('explorer.newMultiServerQuery', 'win32', defaultSettings).path).toBe('Object Explorer context menu › New Multi-Server Query')
     expect(settingValueLabel('queryResults.grid.copyColumnHeaders', { ...defaultSettings, 'queryResults.grid.copyColumnHeaders': true })).toBe('On')
   })
 })

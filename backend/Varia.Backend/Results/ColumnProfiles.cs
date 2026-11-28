@@ -291,7 +291,7 @@ internal static class ColumnProfiler
             }
         }
 
-        public bool NeedsBins => basis != Basis.None && values > 0;
+        public bool NeedsBins => basis != Basis.None && values > 0 && Range() is var (from, to) && double.IsFinite(from) && double.IsFinite(to);
 
         public void Add(PageView view, PageLengths lengths, int row)
         {
@@ -366,10 +366,11 @@ internal static class ColumnProfiler
             {
                 Basis.Chars => Size(lengths, row, cell, view.IsTruncated(column, row)).Chars,
                 Basis.Bytes => Size(lengths, row, cell, view.IsTruncated(column, row)).Bytes,
-                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? (double.IsFinite(exact) ? exact : null) : Measure(cell)
+                _ => kind == ViewSorter.Kind.Approximate && lengths.TryExact(row, column, out var exact) ? (double.IsFinite(exact) ? (double?)exact : null) : Measure(cell)
             };
-            if (measure is not { } value) return -1;
+            if (measure is not { } value || !double.IsFinite(value)) return -1;
             var (from, to) = Range();
+            if (!double.IsFinite(from) || !double.IsFinite(to)) return -1;
             if (to <= from || value <= from) return 0;
             if (value >= to) return Bins - 1;
             var span = to - from;
@@ -434,7 +435,9 @@ internal static class ColumnProfiler
             {
                 case ViewSorter.Kind.Exact: return Canonical(meta.SortKind == ColumnTypes.Boolean ? ColumnTypes.BooleanNumber(cell) : cell);
                 case ViewSorter.Kind.Approximate:
-                    return Ordered(double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) ? parsed : double.NaN);
+                    return double.TryParse(cell, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+                        ? Ordered(parsed)
+                        : Tagged(1, cell);
                 case ViewSorter.Kind.Ticks:
                 {
                     if (ViewSorter.UtcTicks(cell) is { } instant) return Eight((ulong)instant ^ 0x8000_0000_0000_0000UL);
@@ -468,6 +471,12 @@ internal static class ColumnProfiler
                     return key.AsSpan(0, written);
                 }
                 default:
+                    if (wire == WireKind.Text && ViewSorter.IsInstant(meta))
+                    {
+                        if (ViewSorter.TryInstant(cell, out var ticks, out _, out var dated, out var zoned) && !zoned && dated != timeOnly)
+                            return TaggedEight(0, (ulong)ticks ^ 0x8000_0000_0000_0000UL);
+                        return Tagged(1, cell);
+                    }
                     if (legacyBinary)
                     {
                         var trimmed = ViewSorter.TrimEnd(cell);
@@ -488,18 +497,35 @@ internal static class ColumnProfiler
         private int Compare(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b) =>
             kind == ViewSorter.Kind.Exact ? ViewSorter.CompareNumericText(a, b) : Math.Sign(a.SequenceCompareTo(b));
 
-        /// <summary>A float's key: its bits, the two zeros as one, in an order bytes compare in.</summary>
+        /// <summary>A float's key: tag 0 + its bits, the two zeros as one and every NaN as 0, in an order bytes compare in.</summary>
         private ReadOnlySpan<byte> Ordered(double number)
         {
+            if (double.IsNaN(number)) return TaggedEight(0, 0UL);
             if (number == 0) number = 0;
             var bits = BitConverter.DoubleToInt64Bits(number);
-            return Eight(bits >= 0 ? (ulong)bits ^ 0x8000_0000_0000_0000UL : ~(ulong)bits);
+            return TaggedEight(0, bits >= 0 ? (ulong)bits ^ 0x8000_0000_0000_0000UL : ~(ulong)bits);
         }
 
         private ReadOnlySpan<byte> Eight(ulong value)
         {
             BinaryPrimitives.WriteUInt64BigEndian(key, value);
             return key.AsSpan(0, 8);
+        }
+
+        private ReadOnlySpan<byte> TaggedEight(byte tag, ulong value)
+        {
+            Grow(9);
+            key[0] = tag;
+            BinaryPrimitives.WriteUInt64BigEndian(key.AsSpan(1), value);
+            return key.AsSpan(0, 9);
+        }
+
+        private ReadOnlySpan<byte> Tagged(byte tag, ReadOnlySpan<byte> bytes)
+        {
+            Grow(bytes.Length + 1);
+            key[0] = tag;
+            bytes.CopyTo(key.AsSpan(1));
+            return key.AsSpan(0, bytes.Length + 1);
         }
 
         private void Grow(int size)

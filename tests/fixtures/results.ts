@@ -33,6 +33,8 @@ export function fakeResultClient() {
   const listeners = new Map<string, Set<(event: QueryEvent) => void>>()
   const generationListeners = new Set<(generation: number) => void>()
   const handles = new Map<string, FakeHandle>()
+  const handleListeners = new Map<FakeHandle, Set<() => void>>()
+  const notifyHandle = (handle: FakeHandle) => { for (const listener of [...handleListeners.get(handle) ?? []]) listener() }
   let snapshots = 0
   const keyOf = (value: { generation: number; resultId: number }) => `${value.generation}:${value.resultId}`
   const settle = (handle: FakeHandle, value: ResultDescriptor, final: boolean) => {
@@ -50,7 +52,13 @@ export function fakeResultClient() {
       const handle: FakeHandle = {
         key: { generation: value.generation, resultId: value.resultId }, columns: value.columns,
         snapshot: { rowsRead: 0, rowsStored: 0, rowsAvailable: 0, bytesStored: 0, truncatedCells: 0, state: 'open', incomplete: false },
-        getSnapshot: () => handle.snapshot, subscribe: () => () => {},
+        getSnapshot: () => handle.snapshot,
+        subscribe: listener => {
+          const set = handleListeners.get(handle) ?? new Set()
+          set.add(listener)
+          handleListeners.set(handle, set)
+          return () => { set.delete(listener) }
+        },
         getWindow: async first => ({ first, count: 0, colStart: 0, colEnd: value.columns.length, text: [], flags: new Uint8Array(0) }),
         peekWindow: () => undefined, prefetch: () => {}, measure: async () => ({ rows: 0, widths: new Uint16Array(value.columns.length) }),
         getCell: vi.fn<ResultHandle['getCell']>(async () => ({ text: '', isNull: true, truncated: false, error: false, formatted: false })),
@@ -122,7 +130,7 @@ export function fakeResultClient() {
     },
     /** Every result's handle becomes lost, as when the backend restarts, and a new generation is announced. */
     lose: () => {
-      for (const handle of handles.values()) handle.snapshot = { ...handle.snapshot, state: 'lost' }
+      for (const handle of handles.values()) { handle.snapshot = { ...handle.snapshot, state: 'lost' }; notifyHandle(handle) }
       for (const listener of [...generationListeners]) listener(2)
     },
     handle: (resultId: number, generation = 1) => handles.get(`${generation}:${resultId}`),

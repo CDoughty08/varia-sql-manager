@@ -8,6 +8,7 @@ import { bigQueryPreviewTargetSchema, bigQueryPropertiesRequestSchema, bigQueryP
 import { jobKeySchema, queryAttachParamsSchema } from '../shared/bigquery/jobs'
 import { jobHistoryCancelResultSchema, jobHistoryDetailsSchema, jobHistoryGetParamsSchema, jobHistoryJobParamsSchema } from '../shared/bigquery/history'
 import { bigQueryAccountSchema, bigQueryConnectionProjectsParamsSchema, bigQueryDatasetSchema, bigQueryCredentialParamsSchema, bigQueryProjectListSchema, bigQueryProjectsParamsSchema, connectionOptionsSchema, providerConnectionOptionsSchema } from '../shared/connections'
+import { environmentSchema } from '../shared/environments'
 import { providerIds } from '../shared/providers'
 import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
@@ -34,6 +35,62 @@ const connectionId = z.uuid()
 const database = name
 // A BigQuery dataset id (src/shared/connections.ts); SQL Server refuses one (methods.ts, queryOptionsAllow).
 const dataset = bigQueryDatasetSchema
+const lineNumber = z.number().int().min(1).max(1_000_000)
+const hiddenMultiControl = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+const multiQueryTargetSchema = z.object({
+  targetKey: z.string().min(1).max(64).refine(value => value.trim().length > 0 && !hiddenMultiControl.test(value)),
+  connectionId,
+  label: z.string().min(1).max(128).refine(value => value.trim().length > 0 && !hiddenMultiControl.test(value)),
+  environment: environmentSchema.optional(),
+  database: database.optional(),
+  dataset: dataset.optional(),
+  noDefaultDataset: z.literal(true).optional(),
+  maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional()
+}).strict()
+  .refine(target => target.database === undefined || (target.dataset === undefined && target.noDefaultDataset === undefined && target.maximumBytesBilled === undefined), 'A target cannot mix SQL Server and BigQuery options.')
+  .refine(target => !(target.dataset !== undefined && target.noDefaultDataset), 'A target cannot name both a dataset and no default dataset.')
+
+const multiQueryScriptsSchema = z.object({
+  sqlserver: z.string().min(1).max(maxScriptCharacters, tooLargeScript).refine(value => value.trim().length > 0),
+  bigquery: z.string().min(1).max(maxScriptCharacters, tooLargeScript).refine(value => value.trim().length > 0)
+}).strict().refine(scripts => Buffer.byteLength(scripts.sqlserver, 'utf8') + Buffer.byteLength(scripts.bigquery, 'utf8') <= 3_000_000, tooLargeScript)
+
+const multiQueryStartLinesSchema = z.object({
+  sqlserver: lineNumber.optional(),
+  bigquery: lineNumber.optional()
+}).strict()
+
+const queryExecuteMultiSchema = z.object({
+  queryId: z.uuid(),
+  sessionId: z.uuid(),
+  jobKey: jobKeySchema.optional(),
+  mode: z.enum(['transaction', 'fireAndForget', 'crossEngineReadOnly']),
+  targets: z.array(multiQueryTargetSchema).min(1).max(32)
+    .refine(targets => new Set(targets.map(target => target.connectionId)).size === targets.length, 'Targets must use distinct connections.')
+    .refine(targets => new Set(targets.map(target => target.targetKey)).size === targets.length, 'Target keys must be distinct.'),
+  sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript).refine(value => value.trim().length > 0).optional(),
+  startLine: lineNumber.optional(),
+  startColumn: lineNumber.optional(),
+  scripts: multiQueryScriptsSchema.optional(),
+  startLines: multiQueryStartLinesSchema.optional(),
+  sequential: z.boolean().optional(),
+  preflightDryRun: z.boolean().optional(),
+  autoCombine: z.boolean().optional(),
+  stopOnError: z.boolean().optional(),
+  timeoutSeconds: z.number().int().min(0).max(86400),
+  maxRows: z.number().int().min(0).max(limits.maxRows),
+  maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
+  discardResults: z.boolean().optional(),
+  prices: z.boolean().optional(),
+  residence: z.enum(['automatic', 'memory', 'windowed']).optional(),
+  windowCacheMiB: z.number().int().min(16).max(4096).optional()
+}).strict()
+  .refine(params => params.mode === 'crossEngineReadOnly'
+    ? params.scripts !== undefined && params.sql === undefined && params.startLine === undefined && params.startColumn === undefined
+    : params.sql !== undefined && params.scripts === undefined && params.startLines === undefined, 'Execution payload must match the multi-server mode.')
+  .refine(params => params.sequential === undefined || params.mode === 'fireAndForget', 'Sequential execution applies only to Fire and Forget.')
+  .refine(params => params.stopOnError === undefined || params.mode === 'fireAndForget', 'Stop on error applies only to Fire and Forget.')
+
 export const requestSchemas = {
   'language.status': z.object({}).strict(),
   'language.complete': languageRequestSchema,
@@ -70,6 +127,7 @@ export const requestSchemas = {
     maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional(),
     residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional(), jobKey: jobKeySchema.optional()
   }).strict().refine(params => !(params.dataset !== undefined && params.noDefaultDataset), 'A query cannot name both a dataset and no default dataset.'),
+  'query.executeMulti': queryExecuteMultiSchema,
   'query.cancel': z.object({ queryId: z.uuid(), detach: z.literal(true).optional() }).strict(),
   // A BigQuery job by its reference (docs/bigquery.md, Re-attaching to jobs); C# checks the bounds again.
   'query.attach': queryAttachParamsSchema.refine(params => params.maxRows <= limits.maxRows && params.maxResultSets >= limits.maxResultSets.min && params.maxResultSets <= limits.maxResultSets.max, 'Row limits are out of range.'),

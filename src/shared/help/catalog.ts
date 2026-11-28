@@ -2,7 +2,7 @@ import type { CommandId } from '../commands/catalog'
 import type { GestureId } from '../commands/gestures'
 import type { SettingKey } from '../settings/catalog'
 
-export type LessonContext = 'workbench' | 'queryEditor' | 'resultsGrid' | 'comparisonGrid'
+export type LessonContext = 'workbench' | 'explorerServer' | 'queryEditor' | 'resultsGrid' | 'comparisonGrid'
 export interface GuideMetadata {
   readonly title: string
   readonly summary: string
@@ -38,7 +38,7 @@ export const guideCatalog = {
     title: 'Run your first query', summary: 'Create a query, choose its database and understand what Execute runs.',
     keywords: ['SQL', 'selection', 'execute', 'editor', 'font', 'zoom', 'messages', 'cancel', 'name', '#Name'],
     sections: [{ id: 'new', title: 'Open a query' }, { id: 'execute', title: 'Choose what runs' }, { id: 'read', title: 'Read the outcome' }],
-    related: ['connect', 'results'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: ['editor.wheelZoom'],
+    related: ['connect', 'results', 'multi-server-query'], commands: [{ id: 'file.new', context: 'workbench' }, { id: 'query.execute', context: 'queryEditor' }], settings: [], gestures: ['editor.wheelZoom'],
     sourceAreas: ['src/renderer/src/contributions/query.ts', 'src/renderer/src/services/queries.ts', 'src/renderer/src/services/documents.ts', 'src/renderer/src/services/targets.ts', 'src/renderer/src/services/session.ts', 'src/renderer/src/editor/create-editor.ts']
   },
   results: {
@@ -57,6 +57,37 @@ export const guideCatalog = {
     commands: [{ id: 'agent.jobActivity', context: 'workbench' }, { id: 'agent.viewHistory', context: 'workbench' }, { id: 'agent.newJob', context: 'workbench' }, { id: 'agentJob.save', context: 'workbench' }, { id: 'agent.createJobLike', context: 'workbench' }, { id: 'agent.schedules', context: 'workbench' }, { id: 'agent.newAlert', context: 'workbench' }, { id: 'agent.newOperator', context: 'workbench' }, { id: 'agent.newProxy', context: 'workbench' }, { id: 'explorer.startAgent', context: 'workbench' }, { id: 'agent.overview', context: 'workbench' }],
     settings: [], gestures: [],
     sourceAreas: ['src/shared/agent/', 'src/shared/actions/agent-job.ts', 'src/renderer/src/agent/', 'src/renderer/src/contributions/agent.ts', 'src/shared/explorer/catalog.ts', 'backend/Varia.Backend/Agent/', 'docs/sql-server-agent.md']
+  },
+  'multi-server-query': {
+    title: 'Run queries across multiple servers',
+    summary: 'Select several SQL Servers or BigQuery projects, pick a run mode, or compare both engines side by side.',
+    keywords: ['multi-server', 'multiple servers', 'cross-engine', 'transaction', 'fire and forget', 'combined', 'summary', 'read-only', 'dialect', 'BigQuery', 'SQL Server'],
+    sections: [
+      { id: 'select', title: 'Select servers in Object Explorer' },
+      { id: 'modes', title: 'Choose a run mode' },
+      { id: 'cross-engine', title: 'Query SQL Server and BigQuery together' },
+      { id: 'results', title: 'Read Summary, Combined and Messages' }
+    ],
+    related: ['run-query', 'bigquery', 'results'],
+    commands: [
+      { id: 'explorer.toggleMultiSelect', context: 'explorerServer' },
+      { id: 'explorer.newMultiServerQuery', context: 'workbench' },
+      { id: 'explorer.newCrossEngineQuery', context: 'workbench' },
+      { id: 'query.execute', context: 'queryEditor' },
+      { id: 'query.cancel', context: 'queryEditor' },
+      { id: 'output.compare', context: 'resultsGrid' }
+    ],
+    settings: ['queryExecution.bigQuery.costThreshold', 'queryResults.grid.layout'],
+    gestures: ['explorer.addToSelection'],
+    sourceAreas: [
+      'src/shared/multi-query.ts',
+      'src/renderer/src/MultiTargetPopover.tsx',
+      'src/renderer/src/CrossEngineEditor.tsx',
+      'src/renderer/src/dialogs/MultiExecuteDialog.tsx',
+      'src/renderer/src/results/MultiRunSummary.tsx',
+      'backend/Varia.Backend/MultiQuery/',
+      'docs/multi-server-query.md'
+    ]
   }
 } as const satisfies Record<string, GuideMetadata>
 export type GuideId = keyof typeof guideCatalog

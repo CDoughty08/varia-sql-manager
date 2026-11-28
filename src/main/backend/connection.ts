@@ -123,7 +123,7 @@ function clip(line: string): string {
 }
 
 /** Requests that run a query (and are never re-sent): a lost backend reports them with the query sentence and counts them. */
-const runsQuery = (method: string): boolean => method === 'query.execute' || method === 'results.remoteQuery' || method === 'query.attach'
+const runsQuery = (method: string): boolean => method === 'query.execute' || method === 'query.executeMulti' || method === 'results.remoteQuery' || method === 'query.attach'
 /** What a lost backend tells a request: a load only read, so it gets its own sentence rather than the script's. */
 const lostSentence = (method: string): string => method === 'results.remoteQuery' ? sentences.lostLoad : runsQuery(method) ? sentences.lostQuery : sentences.lost
 

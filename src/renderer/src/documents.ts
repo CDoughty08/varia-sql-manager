@@ -3,6 +3,16 @@ import type { IconId } from '../../shared/icons'
 import type { ProviderContext, ProviderId } from '../../shared/providers'
 import { ssisDocumentKinds, ssisDocumentSpecs, type SsisDocumentKind } from '../../shared/ssis/catalog.ts'
 
+export interface MultiDocumentTarget {
+  readonly targetId?: string
+  readonly connectionId?: string
+  readonly database: string
+  readonly enabled: boolean
+  readonly provider: ProviderId
+  readonly attachWanted?: boolean
+  readonly lastServer?: string
+}
+
 export interface QueryDocument {
   readonly id: string
   readonly name: string
@@ -36,6 +46,14 @@ export interface QueryDocument {
   /** A BigQuery query's job key (docs/bigquery.md, Re-attaching to jobs): main records its jobs under it, and hot exit and
    *  AutoRecover keep it, so a restored tab re-attaches to them. Given at its first BigQuery execution. */
   readonly jobKey?: string
+  /** Absent for single-server queries; 'same' for Same-Engine Multi-Server, 'cross' for Cross-Engine SELECT. */
+  readonly multiMode?: 'same' | 'cross'
+  /** Participating servers and databases/datasets for a multi-server or cross-engine query tab. */
+  readonly multiTargets?: readonly MultiDocumentTarget[]
+  /** Cross-Engine view mode: dual-dialect split editor ('split', default) or canonical single-file editor ('file'). */
+  readonly crossView?: 'split' | 'file'
+  /** Cross-Engine Split focused pane: 'primary' (Transact-SQL) or 'secondary' (GoogleSQL). */
+  readonly activePane?: 'primary' | 'secondary'
 }
 /** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
  *  Database Properties, New Database, an SSIS Catalog object's properties, an Activity Monitor, Integration Services Operations or Restore Database, which live only in the renderer. */
@@ -51,6 +69,10 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
+/** A query tab targeting multiple servers (Same-Engine Multi-Server or Cross-Engine SELECT). */
+export const isMultiServerDocument = (document: Pick<QueryDocument, 'kind' | 'multiMode'> | undefined): boolean => isQueryDocument(document) && document?.multiMode !== undefined
+/** A Cross-Engine SELECT query tab (SQL Server + BigQuery). */
+export const isCrossEngineDocument = (document: Pick<QueryDocument, 'kind' | 'multiMode'> | undefined): boolean => isQueryDocument(document) && document?.multiMode === 'cross'
 const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'tableProperties', 'newDatabase', ...ssisDocumentKinds, 'activityMonitor', 'ssisOperations', 'restoreDatabase', 'objectSearch', 'peek', 'releaseNotes', 'help', 'agentJobActivity', 'agentLogViewer', 'bigQueryProperties', 'bigQueryJobs', 'agentJob', 'agentAlert', 'agentOperator', 'agentOperators', 'agentSchedules', 'agentProxy', 'credential', 'agentOverview'])
 /** A kind whose provider owns its content (DocumentService.registerProvider): no text, no model, nothing AutoRecover keeps. */
 export const isCustomKind = (kind: WorkbenchDocumentKind | undefined): kind is CustomDocumentKind => !!kind && customKinds.has(kind)
@@ -96,13 +118,17 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
 /** Each engine's query language in Monaco: Transact-SQL is Monaco's `sql`, GoogleSQL Varia's own (languages/googlesql.ts). */
 export const queryLanguages: Readonly<Record<ProviderId, string>> = { sqlserver: 'sql', bigquery: 'googlesql' }
 const googleSqlInfo: KindInfo = { ...kindInfo.sql, language: queryLanguages.bigquery, label: 'GoogleSQL' }
-/** The active document's engine: a query's (SQL Server unless it says otherwise), BigQuery for Job History, SQL Server for every
+/** The active document's engine: a query's (SQL Server unless it says otherwise; Cross-Engine Split follows activePane), BigQuery for Job History, SQL Server for every
  *  other tab, '' with none open. */
-export const documentProvider = (document: Pick<QueryDocument, 'kind' | 'provider'> | undefined): ProviderContext =>
-  !document ? '' : isQueryDocument(document) ? document.provider ?? 'sqlserver' : document.kind === 'bigQueryJobs' ? 'bigquery' : 'sqlserver'
+export const documentProvider = (document: Pick<QueryDocument, 'kind' | 'provider' | 'multiMode' | 'crossView' | 'activePane'> | undefined): ProviderContext =>
+  !document ? '' : isQueryDocument(document)
+    ? document.multiMode === 'cross' && document.crossView !== 'file'
+      ? document.activePane === 'secondary' ? 'bigquery' : 'sqlserver'
+      : document.provider ?? 'sqlserver'
+    : document.kind === 'bigQueryJobs' ? 'bigquery' : 'sqlserver'
 /** `kindInfo` for a document: a BigQuery query is GoogleSQL, in its language, where every other query is Transact-SQL. */
-export function documentInfo(document: Pick<QueryDocument, 'kind' | 'provider'>): KindInfo {
-  return isQueryDocument(document) && document.provider === 'bigquery' ? googleSqlInfo : kindInfo[documentKind(document)]
+export function documentInfo(document: Pick<QueryDocument, 'kind' | 'provider' | 'multiMode' | 'crossView' | 'activePane'>): KindInfo {
+  return isQueryDocument(document) && documentProvider(document) === 'bigquery' ? googleSqlInfo : kindInfo[documentKind(document)]
 }
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {

@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import ServerDropLayer, { bindServerDrop } from './ServerDropLayer'
 import { DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewGroupPanel, type DockviewReadyEvent, type FloatingGroupDragContext, type IDockviewHeaderActionsProps, type IDockviewPanel, type IDockviewPanelHeaderProps, type IDockviewPanelProps, type IWatermarkPanelProps, type SerializedDockview } from 'dockview-react'
 import { captureEditorGroups, editorGroupLimits, restoreEditorGroups, type EditorGroupsLayout, type EditorTabRows } from '../../../shared/editor-groups'
-import { environmentTag } from '../../../shared/environments'
+import { environmentPreset, environmentTag } from '../../../shared/environments'
+import { connectionPresets } from '../../../shared/theme/connection-colors'
 import { queryConnectionPresentation } from '../query-connection'
 import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { ThemeType } from '../../../shared/theme/types'
@@ -50,6 +51,8 @@ import BigQueryPropertiesTab from '../explorer/BigQueryPropertiesTab'
 import JobHistory from '../bigquery/JobHistory'
 import PlanDocument from '../plans/PlanDocument'
 import QueryBar from '../QueryBar'
+import CrossEngineEditor from '../CrossEngineEditor'
+import { multiTargetTriggerSummary, resolveMultiTargets } from '../MultiTargetPopover'
 
 /**
  * The query editor panel's editor groups (docs/editor-groups.md): a Dockview of its own inside the workbench's editor
@@ -60,14 +63,19 @@ import QueryBar from '../QueryBar'
 
 /** One editor group's Monaco editor and the element it lives in, which moves into the text document the group shows. */
 interface GroupEditor { readonly element: HTMLDivElement; readonly editor: QueryEditorInstance; shows: string; dispose(): void }
-interface Area {
+export interface Area {
   /** Shows document `id` in group `group`'s editor, in `slot`. */
   mount(group: string, slot: HTMLElement, id: string): void
   /** `slot` no longer shows group `group`'s editor (its document is hidden, or moved). */
   unmount(group: string, slot: HTMLElement): void
+  /** Rebinds the status bar's caret tracker after a secondary editor binds, unbinds, or takes focus. */
+  syncStatus(): void
 }
-const AreaContext = createContext<Area | null>(null)
+export const AreaContext = createContext<Area | null>(null)
 const RestoredContext = createContext(false)
+
+const redPresetColor = connectionPresets.find(preset => preset.name === 'red')!.stored
+const purplePresetColor = connectionPresets.find(preset => preset.name === 'purple')!.stored
 
 const panelOptions = (id: string, title: string) => ({ id, contentComponent: 'document', tabComponent: 'document', title, renderer: 'onlyWhenVisible' as const })
 const addOptions = (id: string, title: string) => ({ id, component: 'document', tabComponent: 'document', title, renderer: 'onlyWhenVisible' as const })
@@ -106,6 +114,8 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
   const area = useContext(AreaContext)!
   const { documents, shellOptions } = useWorkbench()
   const kind = useServiceSelector(documents, snapshot => documentKind(snapshot.documents.find(document => document.id === api.id)))
+  const multiMode = useServiceSelector(documents, snapshot => snapshot.documents.find(document => document.id === api.id)?.multiMode)
+  const crossView = useServiceSelector(documents, snapshot => snapshot.documents.find(document => document.id === api.id)?.crossView)
   const classicToolbar = useServiceSelector(shellOptions, snapshot => snapshot.classicToolbar)
   // Dockview keeps a panel's React tree while its tab is hidden; only the documents a group shows render, as the single
   // editor's workbench rendered only the active one.
@@ -133,10 +143,17 @@ function DocumentPanel({ api }: IDockviewPanelProps) {
     if (!visible || custom || !element) return
     area.mount(group, element, api.id)
     return () => area.unmount(group, element)
-  }, [area, api.id, group, visible, custom])
+  }, [area, api.id, group, visible, custom, multiMode, crossView])
   // A text document keeps its (empty) slot while hidden, so the editor can move in the moment its tab is chosen.
   if (!custom) {
     const plan = kind === 'sqlplan', sql = kind === 'sql'
+    if (sql && multiMode === 'cross') {
+      const activatePanel = () => { if (!api.isActive) api.setActive() }
+      return <div className="document-view">
+        {visible && !classicToolbar && <QueryBar tabId={api.id} onActivate={activatePanel} />}
+        <CrossEngineEditor tabId={api.id} visible={visible} primarySlotRef={slot} onActivate={activatePanel} />
+      </div>
+    }
     const editor = <div className="editor-container" ref={slot} hidden={plan && !planSource} data-document-id={api.id} />
     if (plan) return <div className="document-view">
       {visible && <PlanDocument documentId={api.id} source={planSource} onSource={setPlanSource} />}
@@ -192,6 +209,10 @@ export function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const connection = connections.find(value => value.id === tab?.connectionId)
   const presentation = queryConnectionPresentation(tab ?? {}, connection, rememberedTargets.find(target => target.id === tab?.targetId))
   const environment = presentation.environment
+  const isMulti = !!tab?.multiMode
+  const isCross = tab?.multiMode === 'cross'
+  const multiSummary = isMulti && tab ? multiTargetTriggerSummary(tab, connections, rememberedTargets) : undefined
+  const multiResolved = isMulti && tab ? resolveMultiTargets(tab, connections, rememberedTargets).filter(item => item.target.enabled) : []
   const element = useRef<HTMLDivElement | null>(null)
   // Selected in its group: the group shows it.
   const [selected, setSelected] = useState(api.isVisible)
@@ -201,10 +222,17 @@ export function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   // Dockview's tab element is the tab (role, name, selection, roving focus): F2 renames while it has focus, and screen
   // readers hear its environment.
   // A query's live SQL session shows after its name, and screen readers hear it with the tab's environment and pin.
-  const spid = tab && isQueryDocument(tab) && !presentation.disconnected ? liveQuerySession(query, connection)?.spid : undefined
+  const spid = tab && isQueryDocument(tab) && !isMulti && !presentation.disconnected ? liveQuerySession(query, connection)?.spid : undefined
   const session = spid === undefined ? 'No live SQL session' : `SQL session ID ${spid}`
-  const description = [presentation.disconnected && presentation.server && presentation.label, environmentTag(environment)?.description, tab?.pinned && 'Pinned', tab?.file?.readOnly && 'Read-only', running && 'Executing', spid !== undefined && session].filter(Boolean).join('. ') || undefined
-  const tooltip = tab ? [tabTooltip(tab), presentation.disconnected && presentation.server && presentation.label, environmentTag(environment)?.description, running && 'Executing'].filter(Boolean).join('\n') : ''
+  const multiNames = multiResolved.map(item => item.name).join(', ')
+  const description = isMulti && multiSummary
+    ? [multiSummary.label, isCross && 'Cross-Engine read-only', tab?.pinned && 'Pinned', tab?.file?.readOnly && 'Read-only', running && 'Executing'].filter(Boolean).join('. ') || undefined
+    : [presentation.disconnected && presentation.server && presentation.label, environmentTag(environment)?.description, tab?.pinned && 'Pinned', tab?.file?.readOnly && 'Read-only', running && 'Executing', spid !== undefined && session].filter(Boolean).join('. ') || undefined
+  const tooltip = tab
+    ? isMulti && multiSummary
+      ? [tabTooltip(tab), multiSummary.label, multiNames, isCross && 'Cross-Engine SELECT (read-only)', running && 'Executing'].filter(Boolean).join('\n')
+      : [tabTooltip(tab), presentation.disconnected && presentation.server && presentation.label, environmentTag(environment)?.description, running && 'Executing'].filter(Boolean).join('\n')
+    : ''
   useEffect(() => {
     const update = () => {
       const host = element.current?.closest<HTMLElement>('.dv-tab')
@@ -253,18 +281,46 @@ export function DocumentTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   }, [])
   if (!tab) return null
   const kind = documentInfo(tab), pin = `${tab.pinned ? 'Unpin' : 'Pin'} ${tab.name}`
-  const rememberedServer = isQueryDocument(tab) && presentation.disconnected ? presentation.server : undefined
-  const sid = isQueryDocument(tab) && (spid !== undefined || !!rememberedServer) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : `SID ${spid}`}</span>
-  const metadata = sid || environmentTag(environment)
-  return <div className={selected ? 'query-tab active' : 'query-tab'} ref={ref} data-tab-id={id} data-dirty={tab.dirty || undefined} data-pinned={tab.pinned || undefined} data-query={isQueryDocument(tab) || undefined} style={{ borderTopColor: workbench.theme.accent(presentation.color), ...accentVariable(workbench.theme.accent(presentation.color)) }}
+  const prodTarget = isMulti ? multiResolved.find(item => environmentPreset(item.environment) === 'Production') : undefined
+  const multiAccentColor = isMulti ? (prodTarget ? (prodTarget.color ?? redPresetColor) : isCross ? purplePresetColor : multiResolved.find(item => item.color)?.color) : undefined
+  const tabAccent = workbench.theme.accent(isMulti ? multiAccentColor : presentation.color)
+  const tabSwatches = isMulti && multiSummary
+    ? multiSummary.colors.map(color => workbench.theme.accent(color)).filter((color): color is string => !!color).slice(0, 4)
+    : []
+  const tabIcon = isMulti ? (isCross ? 'split-horizontal' : tab.provider === 'bigquery' ? 'bigquery' : 'server') : kind.icon
+  const tabIconLabel = isMulti ? (isCross ? 'Cross-Engine SELECT' : tab.provider === 'bigquery' ? 'Multi-Project BigQuery' : 'Multi-Server SQL') : kind.label
+  const rememberedServer = !isMulti && isQueryDocument(tab) && presentation.disconnected ? presentation.server : undefined
+  const sid = !isMulti && isQueryDocument(tab) && (spid !== undefined || !!rememberedServer) && <span className="tab-sid" title={session} aria-hidden="true">{rememberedServer ? 'Disconnected' : `SID ${spid}`}</span>
+  const metadata = isMulti ? true : !!(sid || environmentTag(environment))
+  return <div
+    className={selected ? 'query-tab active' : 'query-tab'}
+    ref={ref}
+    data-tab-id={id}
+    data-dirty={tab.dirty || undefined}
+    data-pinned={tab.pinned || undefined}
+    data-query={isQueryDocument(tab) || undefined}
+    data-multi-server={isMulti || undefined}
+    data-cross-engine={isCross || undefined}
+    data-tab-accent={tabAccent ? '' : undefined}
+    style={accentVariable(tabAccent)}
     onDoubleClick={event => { if (workbench.gestures.matches('documentTabs.rename', event) && !(event.target as Element).closest('.tab-close, .tab-pin')) workbench.tabRename.start(id) }}>
     <div className={renaming ? 'tab-select tab-renaming' : 'tab-select'}>
-      <Icon name={kind.icon} className="tab-icon" label={kind.label} />
+      <Icon name={tabIcon} className="tab-icon" label={tabIconLabel} />
       <div className="tab-content">
         <div className="tab-title">{renaming ? <TabRenameBox tabId={id} name={tab.name} service={workbench.tabRename} /> : <>
           <span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{running && <Icon name="loading" spin className="tab-running" label="Executing" />}
         </>}</div>
-        {metadata && <div className="tab-metadata"><EnvironmentTag environment={environment} place="tab" />{rememberedServer && <span className="tab-remembered-server" aria-hidden="true">{rememberedServer}</span>}{sid}</div>}
+        {metadata && <div className="tab-metadata">
+          {isMulti && multiSummary ? <>
+            {tabSwatches.length > 0 && <span className="tab-swatch-stack" aria-hidden="true">
+              {tabSwatches.map((bg, index) => <span key={index} className="tab-swatch" style={{ background: bg }} />)}
+            </span>}
+            {multiSummary.prodCount > 0 && <EnvironmentTag environment="Production" place="tab" about={`${multiSummary.prodCount} Production`} />}
+            <span className="tab-multi-summary" aria-hidden="true">{isCross ? `${multiSummary.sqlCount} SQL + ${multiSummary.bqCount} BQ` : multiSummary.shortLabel}</span>
+          </> : <>
+            <EnvironmentTag environment={environment} place="tab" />{rememberedServer && <span className="tab-remembered-server" aria-hidden="true">{rememberedServer}</span>}{sid}
+          </>}
+        </div>}
       </div>
       {tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}
     </div>
@@ -569,6 +625,7 @@ class EditorAreaController implements Area, EditorGroupHost {
     this.status?.binding.dispose()
     this.status = editor ? { editor, binding: this.workbench.editorStatus.bindEditor(editor) } : undefined
   }
+  syncStatus(): void { this.followStatus() }
 
   mount(group: string, slot: HTMLElement, id: string): void {
     if (this.disposed) return
@@ -583,7 +640,10 @@ class EditorAreaController implements Area, EditorGroupHost {
       // and came back before then raised no new focus, leaving the plan active under the caret. Every focusin counts too.
       const activate = () => {
         const shows = this.editors.get(group)?.shows
-        if (shows && this.workbench.documents.getSnapshot().activeId !== shows) this.api?.getPanel(shows)?.api.setActive()
+        if (!shows) return
+        this.workbench.documents.setActivePane(shows, 'primary')
+        if (this.workbench.documents.getSnapshot().activeId !== shows) this.api?.getPanel(shows)?.api.setActive()
+        this.followStatus()
       }
       const focus = created.instance.onDidFocusEditorWidget(activate)
       element.addEventListener('focusin', activate)

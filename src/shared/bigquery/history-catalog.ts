@@ -129,7 +129,7 @@ export function jobHistoryCommandEntries(): { readonly [K in JobHistoryCommandId
     'bigquery.jobHistory': {
       title: jobHistoryTitle, category: 'BigQuery', icon: 'history', keywords: ['bigquery', 'jobs', 'history', 'running', 'cost', 'cancel', 'personal', 'project', 'live'],
       precondition: 'backendReady && hasConnection', unavailableHint: 'Connect to BigQuery first.', providers: bigquery, methods: ['live.subscribe'], providerContext: 'own',
-      menus: [{ menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "((explorerNode == 'server' && explorerProvider == 'bigquery') || explorerNode == 'bqProject') && !explorerServerLost" }]
+      menus: [{ menu: 'explorer.context', group: '1_monitor', order: 1, mnemonic: 'j', when: "((explorerNode == 'server' && explorerProvider == 'bigquery' && !explorerMultiSelected) || explorerNode == 'bqProject') && !explorerServerLost" }]
     },
     'bigquery.openJobResults': row('Open Results', 'output', ['results', 'open', 'attach'], '1_open', 1, 'o', 'jobHistoryCanOpenResults', ['query.attach']),
     'bigquery.reattachJob': row('Re-attach', 'plug', ['reattach', 'attach', 'follow', 'running'], '1_open', 2, 'a', 'jobHistoryCanReattach', ['query.attach']),

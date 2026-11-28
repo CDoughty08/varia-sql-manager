@@ -1,32 +1,223 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { flushSync } from 'react-dom'
+import { gibibytes } from '../../shared/bigquery/dry-run'
+import { focusToReturn, returnFocusTo } from './core/focus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import SubDialog from './dialogs/SubDialog'
+import EnvironmentTag from './EnvironmentTag'
 import type { CostPromptRequest } from './services/bigquery-cost'
-import { costPromptText } from './services/bigquery-cost-prompt'
+import { costPromptText, multiCostPromptText, promptTurnLockFor, type MultiProjectCostPromptRequest } from './services/bigquery-cost-prompt'
+
+const noopSubscribe = () => () => {}
+const noopSnapshot = () => undefined
+
+type ActiveCostPrompt =
+  | { readonly kind: 'single'; readonly id: number; readonly request: CostPromptRequest }
+  | { readonly kind: 'multi'; readonly id: number; readonly request: MultiProjectCostPromptRequest }
+
+function focusCandidate(): HTMLElement | null {
+  const candidate = focusToReturn()
+  return candidate && candidate !== candidate.ownerDocument.body && !candidate.closest('[aria-modal="true"]') ? candidate : null
+}
 
 /**
  * Execute's cost prompt for a BigQuery query (docs/bigquery.md, Cost): above the threshold, or when the estimate may be
- * low. It opens with focus on Cancel and is announced as an alert dialog; Cost settings… opens Tools › Options there.
+ * low. Supports both single-project prompts and aggregated multi-project Cross-Engine prompts so multiple projects never
+ * stack N sequential modals. Opens with focus on Cancel and is announced as an alert dialog; Cost settings… opens Tools › Options there.
  */
 export default function BigQueryCostPrompt() {
   const { costPrompts } = useWorkbench()
-  const { pending } = useServiceSnapshot(costPrompts)
-  return pending ? <Prompt key={pending.id} id={pending.id} request={pending.request} /> : null
+  const { pending, pendingMulti } = useServiceSnapshot(costPrompts)
+  const turnLock = promptTurnLockFor(costPrompts)
+  const turnOwner = useServiceSnapshot(turnLock)
+  const active: ActiveCostPrompt | undefined = pending
+    ? { kind: 'single', id: pending.id, request: pending.request }
+    : pendingMulti
+      ? { kind: 'multi', id: pendingMulti.id, request: pendingMulti.request }
+      : undefined
+  const hasPending = !!active
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+  const needsRevalidate = !wasOpen.current && hasPending && turnOwner === 'cost' && !costPrompts.headStillValid()
+  const isOpen = hasPending && turnOwner === 'cost' && !needsRevalidate
+  if (isOpen && !wasOpen.current) {
+    // Ignore elements inside a closing modal (e.g. MultiExecuteDialog unmounting in the same render);
+    // ActivePrompt re-captures focus via onBeforeInitialFocus once the closing modal's cleanup restores it.
+    returnFocus.current = focusCandidate()
+  }
+  wasOpen.current = isOpen
+
+  useLayoutEffect(() => {
+    if (needsRevalidate) costPrompts.revalidate()
+  }, [costPrompts, needsRevalidate, active?.id])
+
+  useEffect(() => {
+    if (!isOpen) return
+    return () => {
+      const target = returnFocus.current
+      returnFocus.current = null
+      returnFocusTo(target)
+    }
+  }, [isOpen])
+
+  // Declared after returnFocus cleanup so focus returns to the underlying surface before handing the turn to a waiting peer.
+  useEffect(() => {
+    if (hasPending) {
+      turnLock.claim('cost')
+      return () => { turnLock.release('cost') }
+    }
+    turnLock.release('cost')
+    return undefined
+  }, [turnLock, hasPending])
+
+  if (!isOpen || !active) return null
+  return (
+    <ActivePrompt
+      active={active}
+      onBeforeInitialFocus={() => {
+        if (!returnFocus.current?.isConnected) {
+          const candidate = focusCandidate()
+          if (candidate) returnFocus.current = candidate
+        }
+      }}
+    />
+  )
 }
 
-function Prompt({ id, request }: { id: number; request: CostPromptRequest }) {
-  const { costPrompts, commands } = useWorkbench()
-  const [dontAsk, setDontAsk] = useState(false)
+/** Keeps one SubDialog mounted across back-to-back queued prompts so focus never drops to document.body between items. */
+function ActivePrompt({ active, onBeforeInitialFocus }: { readonly active: ActiveCostPrompt; readonly onBeforeInitialFocus: () => void }) {
+  const workbench = useWorkbench()
+  const { costPrompts, commands, dialogWindows } = workbench
+  const settingsSnap = useSyncExternalStore(
+    workbench.settings?.subscribe ?? noopSubscribe,
+    workbench.settings ? () => workbench.settings.getSnapshot() : noopSnapshot,
+    workbench.settings ? () => workbench.settings.getSnapshot() : noopSnapshot
+  )
+  const connectionsSnap = useSyncExternalStore(
+    workbench.connections?.subscribe ?? noopSubscribe,
+    workbench.connections ? () => workbench.connections.getSnapshot() : noopSnapshot,
+    workbench.connections ? () => workbench.connections.getSnapshot() : noopSnapshot
+  )
+  const costSnap = useSyncExternalStore(
+    workbench.bigQueryCost?.subscribe ?? noopSubscribe,
+    workbench.bigQueryCost ? () => workbench.bigQueryCost.getSnapshot() : noopSnapshot,
+    workbench.bigQueryCost ? () => workbench.bigQueryCost.getSnapshot() : noopSnapshot
+  )
+  const [dontAskFor, setDontAskFor] = useState<{ readonly id: number; readonly checked: boolean }>({ id: active.id, checked: false })
+  const dontAsk = dontAskFor.id === active.id && dontAskFor.checked
   const describedBy = useId()
-  const text = costPromptText(request)
-  const settings = () => { costPrompts.answer(id, { run: false }); void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, 'toolbar') }
-  return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt"
-    onOk={() => costPrompts.answer(id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(id, { run: false })}
+  const bodyRef = useRef<HTMLDivElement>(null)
+
+  const liveActive = useMemo<ActiveCostPrompt>(() => {
+    if (!settingsSnap) return active
+    const livePrices = settingsSnap.values['queryExecution.bigQuery.showCost'] !== 'bytes'
+    const defaultCap = gibibytes(settingsSnap.values['queryExecution.bigQuery.maximumBytesBilled'])
+    const globalThresholdGiB = settingsSnap.values['queryExecution.bigQuery.costThreshold']
+    const resolveTarget = (
+      connectionId: string | undefined,
+      prompt: CostPromptRequest['prompt'],
+      fallbackThreshold: number,
+      fallbackOwn: true | undefined
+    ) => {
+      const connection = connectionId ? workbench.connections?.get(connectionId) : undefined
+      const ownCap = connection?.options.provider === 'bigquery' ? connection.options.maximumBytesBilled : undefined
+      const cap = connectionId ? (ownCap ?? defaultCap) : defaultCap
+      const ownThresholdGiB = connection && workbench.costOptOut ? workbench.costOptOut.threshold(connection) : undefined
+      const liveThreshold = connection ? (gibibytes(ownThresholdGiB ?? globalThresholdGiB) ?? 0) : (fallbackOwn ? fallbackThreshold : (gibibytes(globalThresholdGiB) ?? fallbackThreshold))
+      const liveOwn = connection ? (ownThresholdGiB !== undefined ? true as const : undefined) : fallbackOwn
+      // Never produce mathematically false "X > Y" copy if Options raised threshold above prompt.bytes while already open.
+      const keepOriginalThreshold = prompt.kind === 'threshold' && liveThreshold >= prompt.bytes
+      const thresholdBytes = keepOriginalThreshold ? fallbackThreshold : liveThreshold
+      const ownThreshold = keepOriginalThreshold ? fallbackOwn : liveOwn
+      return { cap, thresholdBytes, ownThreshold }
+    }
+    if (active.kind === 'single') {
+      const resolved = resolveTarget(active.request.connectionId, active.request.prompt, active.request.thresholdBytes, active.request.ownThreshold)
+      const { cap: _oldCap, ownThreshold: _oldOwn, ...rest } = active.request
+      return {
+        kind: 'single',
+        id: active.id,
+        request: {
+          ...rest,
+          prices: livePrices,
+          thresholdBytes: resolved.thresholdBytes,
+          ...resolved.ownThreshold ? { ownThreshold: true as const } : {},
+          ...resolved.cap !== undefined ? { cap: resolved.cap } : {}
+        }
+      }
+    }
+    return {
+      kind: 'multi',
+      id: active.id,
+      request: {
+        ...active.request,
+        prices: livePrices,
+        projects: active.request.projects.map(project => {
+          const resolved = resolveTarget(project.connectionId, project.prompt, project.thresholdBytes, project.ownThreshold)
+          const { cap: _oldCap, ownThreshold: _oldOwn, ...rest } = project
+          return {
+            ...rest,
+            thresholdBytes: resolved.thresholdBytes,
+            ...resolved.ownThreshold ? { ownThreshold: true as const } : {},
+            ...resolved.cap !== undefined ? { cap: resolved.cap } : {}
+          }
+        })
+      }
+    }
+  }, [active, settingsSnap, connectionsSnap, costSnap, workbench.connections, workbench.costOptOut])
+
+  // Move focus back to Cancel whenever a queued prompt advances to a new id.
+  useEffect(() => {
+    const form = bodyRef.current?.closest('form')
+    const buttons = form ? [...form.querySelectorAll<HTMLButtonElement>('.dialog-footer button[type="button"]')] : []
+    buttons.at(-1)?.focus()
+  }, [active.id])
+
+  const settings = () => {
+    const doc = bodyRef.current?.ownerDocument ?? document
+    flushSync(() => { costPrompts.answer(active.id, { run: false }) })
+    const source = dialogWindows || doc.querySelector('[aria-modal="true"]') ? 'api' : 'toolbar'
+    void commands.execute('preferences.options', { setting: 'queryExecution.bigQuery.costPrompt' }, source)
+  }
+
+  if (liveActive.kind === 'single') {
+    const text = costPromptText(liveActive.request)
+    return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt"
+      manageReturnFocus={false} onBeforeInitialFocus={onBeforeInitialFocus}
+      onOk={() => costPrompts.answer(active.id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(active.id, { run: false })}
+      status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
+      <div id={describedBy} ref={bodyRef}>
+        <p className="bigquery-cost-sentence">{text.sentence}</p>
+        <p className="field-note">{text.note}</p>
+      </div>
+      <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAskFor({ id: active.id, checked: event.target.checked })} /> {text.optOut}</label>
+    </SubDialog>
+  }
+
+  const text = multiCostPromptText(liveActive.request)
+  return <SubDialog title={text.title} okLabel="Run" alert describedBy={describedBy} className="bigquery-cost-prompt bigquery-cost-prompt-multi"
+    manageReturnFocus={false} onBeforeInitialFocus={onBeforeInitialFocus}
+    onOk={() => costPrompts.answer(active.id, { run: true, dontAskAgain: dontAsk })} onCancel={() => costPrompts.answer(active.id, { run: false })}
     status={<button type="button" className="link-button" onClick={settings}>Cost settings…</button>}>
-    <div id={describedBy}>
+    <div id={describedBy} ref={bodyRef}>
       <p className="bigquery-cost-sentence">{text.sentence}</p>
+      <ul className="bigquery-cost-project-list" aria-label="BigQuery project cost breakdown">
+        {text.rows.map(row => <li key={row.connectionId} className="bigquery-cost-project-row">
+          <div className="bigquery-cost-project-head">
+            <span className="bigquery-cost-project-name">
+              <strong>{row.label}</strong>
+              {row.dataset && <span className="bigquery-cost-project-dataset"> ({row.dataset})</span>}
+              {row.environment && <EnvironmentTag environment={row.environment} place="list" about={row.label} />}
+            </span>
+            <span className="bigquery-cost-project-figure">{row.figure}</span>
+          </div>
+          <div className="bigquery-cost-project-detail field-note">{row.detail}</div>
+          {row.capText && <div className={row.exceedsCap ? 'bigquery-cost-project-cap is-exceeded' : 'bigquery-cost-project-cap field-note'}>{row.capText}</div>}
+        </li>)}
+      </ul>
+      <p className="bigquery-cost-total">{text.totalText}</p>
       <p className="field-note">{text.note}</p>
     </div>
-    <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAsk(event.target.checked)} /> {text.optOut}</label>
+    <label className="checkbox-label"><input type="checkbox" checked={dontAsk} onChange={event => setDontAskFor({ id: active.id, checked: event.target.checked })} /> {text.optOut}</label>
   </SubDialog>
 }

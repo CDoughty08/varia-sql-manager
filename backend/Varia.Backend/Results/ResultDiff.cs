@@ -903,7 +903,8 @@ internal static class ResultDiffer
             var y = 0d;
             var leftExact = leftHasher.ReadsExact(lc) && leftView.TryExact(lc, l, out x);
             var rightExact = rightHasher.ReadsExact(rc) && rightView.TryExact(rc, r, out y);
-            if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r)) && leftExact == rightExact && (!leftExact || x == y)) continue;
+            if (leftView.Span(lc, l).SequenceEqual(rightView.Span(rc, r)) && leftExact == rightExact
+                && (!leftExact || CellHasher.CanonicalFloatBits(x) == CellHasher.CanonicalFloatBits(y))) continue;
             // Values of other types that differ only in form (2.0 and 2.00) are the same value; text equal by its collation
             // is a soft difference, or a change when compared exactly. Values compare, not their hashes, which can collide.
             var equal = leftHasher.Same(leftView, lc, l, rightHasher, rightView, rc, r, out var text);

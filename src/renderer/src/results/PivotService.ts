@@ -75,12 +75,12 @@ export interface PivotFollowHost {
 /** A build in flight: its run, the Table it reads, its group, the Pivot it replaces (none for a group's first), whether it
  *  still waits for a place, and whether the user cancelled it. */
 interface Build {
-  readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly ordinal: number; readonly replaces?: EntryKey
+  readonly abort: AbortController; readonly queryId: string; readonly source: EntryKey; readonly sourceSet: string; readonly ordinal: number; readonly replaces?: EntryKey
   /** Update started it (the Pivot's own recipe, not the builder's draft): what it says goes to the toolbar too, since the
    *  builder may be closed or on another group. */
   readonly update: boolean
-  /** It rebuilds by itself, for the Table's filters of this identity (`filtersIdentity`): a newer change gives it up. */
-  readonly auto?: string
+  /** It rebuilds by itself, for the Table's stored set and filters: a newer change gives it up. */
+  readonly auto?: { readonly sourceSet: string; readonly filters: string }
   queued: 'place' | 'busy' | undefined; cancelled: boolean
   /** When it last took its place: the build's time is measured from there to its answer, leaving out its waits. */
   startedAt?: number
@@ -96,14 +96,14 @@ const cancelledText = (group: Pick<ResultGroup, 'table' | 'pivot'>) => `Building
 /** "Pivot of Result 2", "Pivot of Open orders": how the builder names a group's Pivot. */
 const groupPivotName = (group: Pick<ResultGroup, 'table' | 'pivot'>) => group.pivot ? entryName(group.pivot.entry) : pivotName(entryName(group.table.entry))
 
-/** A set a pivot can read: a query's rows that have all loaded, in memory. Never a pivot, a comparison, a plan set or a
- *  result windowed in BigQuery (the backend would refuse it, REMOTE_RESULT). */
+/** A set a pivot can read: a query's rows (or a combined multi-server set) that have all loaded, in memory. Never a pivot,
+ *  a comparison, a plan set or a result windowed in BigQuery (the backend would refuse it, REMOTE_RESULT). */
 export const pivotable = (entry: ResultSetEntry | undefined): boolean =>
-  entry !== undefined && entry.descriptor.kind === 'rows' && entry.handle.getSnapshot().state === 'complete' && entry.handle.getSnapshot().residence !== 'remote'
+  entry !== undefined && (entry.descriptor.kind === 'rows' || entry.descriptor.kind === 'combined') && entry.handle.getSnapshot().state === 'complete' && entry.handle.getSnapshot().residence !== 'remote'
 /** The builder's note on a result windowed in BigQuery. */
 export const windowedPivotText = 'This result is windowed in BigQuery: its rows are not in memory, so it cannot be pivoted yet.'
-/** A group a builder can belong to: one whose Table holds a query's rows (not a SQL-returned plan set). */
-const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && group.table.entry.descriptor.kind === 'rows'
+/** A group a builder can belong to: one whose Table holds a query's rows or a combined multi-server set (not a SQL-returned plan set). */
+const buildable = (group: ResultGroup | undefined): group is ResultGroup => !!group && !group.planSet && (group.table.entry.descriptor.kind === 'rows' || group.table.entry.descriptor.kind === 'combined')
 /** A tab's results are gone, with nothing to show the builder beside: Close Results, or a finished run with no result left
  *  (none returned, or the last one closed). The Compare popover closes by the same rule. A running run is not gone: a re-run
  *  releases the old results before its first set arrives. */
@@ -159,10 +159,11 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
   private readonly follow: PivotFollowHost | undefined
   private readonly now: () => number
   private readonly defer: (callback: () => void) => void
-  /** The Table's filters each group was last built over (`filtersIdentity`), by tab and ordinal, with the run: a Pivot
-   *  does not rebuild by itself over the filters it was last built over (only the last set is kept), so a build that
-   *  failed, was refused or cancelled is not asked again until the filters change or the user asks (Update). */
-  private readonly tried = new Map<string, Map<number, { readonly queryId: string; readonly filters: string }>>()
+  /** The Table's stored set (`setKey`) and filters (`filtersIdentity`) each group was last built over, by tab and ordinal,
+   *  with the run: a Pivot does not rebuild by itself over the same set and filters it was last built over (only the last
+   *  pair is kept), so a build that failed, was refused or cancelled is not asked again until the source set or filters
+   *  change or the user asks (Update). */
+  private readonly tried = new Map<string, Map<number, { readonly queryId: string; readonly sourceSet: string; readonly filters: string }>>()
   private following = false
   private disposed = false
 
@@ -199,7 +200,12 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       let drafts = this.drafts.get(tabId)
       if (!drafts) this.drafts.set(tabId, drafts = new Map())
       const columns = group.table.entry.descriptor.columns
-      drafts.set(group.ordinal, { draft: fitColumns({ rows: [...recipe.rows], ...recipe.column === undefined ? {} : { column: recipe.column }, values: recipe.values.map(value => ({ ...value })) } as PivotDraft, columns), columns })
+      const raw = { rows: [...recipe.rows], ...recipe.column === undefined ? {} : { column: recipe.column }, values: recipe.values.map(value => ({ ...value })) } as PivotDraft
+      const sourceSet = group.pivot?.sources[0]?.set
+      const fromColumns = sourceSet !== undefined && sourceSet !== setKey(group.table.entry.descriptor)
+        ? group.pivot?.pivot?.sourceColumns?.map(name => ({ name } as ResultColumn))
+        : undefined
+      drafts.set(group.ordinal, { draft: fitColumns(fromColumns ? remapDraft(raw, fromColumns, columns) : raw, columns), columns })
     }
     this.runs.set(tabId, tab.queryId)
     this.focus.set(tabId, tab.focused)
@@ -264,7 +270,64 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     const tab = this.results.getSnapshot()[tabId], group = pivotGroup(tab, key)
     const recipe = group?.pivot?.pivot?.recipe
     if (!tab || !group || !recipe || this.building(tabId, group.ordinal) || !this.canPivot(tabId, group.table.key)) return
-    return this.start(tabId, tab, group, recipeSpec(recipe), true)
+    const resolved = this.resolveRecipe(group)
+    if ('error' in resolved) {
+      this.fail(tabId, group.ordinal, resolved.error, false)
+      this.results.notify(tabId, resolved.error)
+      this.refresh(tabId)
+      return
+    }
+    return this.start(tabId, tab, group, resolved.spec, true)
+  }
+
+  /** Resolves a Pivot's stored recipe against its Table's current schema: remaps column indices by name when the Table's
+   *  stored set changed in place (e.g. a rebuilt Combined view whose columns shifted), refusing cleanly if a referenced
+   *  column no longer exists. */
+  private resolveRecipe(group: ResultGroup): { readonly spec: PivotSpec } | { readonly error: string } {
+    const pivot = group.pivot?.pivot, recipe = pivot?.recipe
+    if (!recipe) return { error: `Cannot update ${groupPivotName(group)}: its recipe is unavailable.` }
+    const sourceSet = group.pivot?.sources[0]?.set
+    const currentSet = setKey(group.table.entry.descriptor)
+    if (sourceSet === undefined || sourceSet === currentSet) return { spec: recipeSpec(recipe) }
+    const columns = group.table.entry.descriptor.columns
+    const draft = {
+      rows: [...recipe.rows],
+      ...recipe.column === undefined ? {} : { column: recipe.column },
+      values: recipe.values.map(value => ({ ...value }))
+    } as PivotDraft
+    const fromColumns = pivot.sourceColumns?.map(name => ({ name } as ResultColumn))
+    const remapped = fromColumns ? remapDraft(draft, fromColumns, columns) : draft
+    const fitted = fitColumns(remapped, columns)
+    const missing: string[] = []
+    const addMissing = (index: number) => {
+      const label = pivot.sourceColumns?.[index] || `column ${index + 1}`
+      if (!missing.includes(label)) missing.push(label)
+    }
+    const incompatible: string[] = []
+    const addIncompatible = (index: number, mappedColumn: number) => {
+      const label = columns[mappedColumn]?.name || pivot.sourceColumns?.[index] || `column ${index + 1}`
+      if (!incompatible.includes(label)) incompatible.push(label)
+    }
+    const seenRows = new Set<number>()
+    remapped.rows.forEach((mapped, at) => {
+      if (mapped < 0 || !fitted.rows.includes(mapped) || seenRows.has(mapped)) addMissing(recipe.rows[at])
+      else seenRows.add(mapped)
+    })
+    if (recipe.column !== undefined && (remapped.column === undefined || remapped.column < 0 || fitted.column === undefined)) addMissing(recipe.column)
+    remapped.values.forEach((mapped, at) => {
+      const orig = recipe.values[at]?.column
+      if (orig !== undefined && (mapped.column === undefined || mapped.column < 0 || fitted.values[at]?.column !== mapped.column)) addMissing(orig)
+      else if (orig !== undefined && mapped.column !== undefined && fitted.values[at]?.aggregate !== mapped.aggregate) addIncompatible(orig, mapped.column)
+    })
+    if (missing.length > 0) {
+      const names = missing.join(', ')
+      return { error: `Cannot update ${groupPivotName(group)}: ${missing.length === 1 ? `column ${names} is` : `columns ${names} are`} no longer in ${entryName(group.table.entry)}. Edit the pivot to choose new columns.` }
+    }
+    if (incompatible.length > 0) {
+      const names = incompatible.join(', ')
+      return { error: `Cannot update ${groupPivotName(group)}: ${incompatible.length === 1 ? `column ${names} is` : `columns ${names} are`} no longer numeric in ${entryName(group.table.entry)}. Edit the pivot to choose new aggregates.` }
+    }
+    return { spec: draftSpec(fitted) }
   }
 
   /** Whether a group's Pivot is being built, or waits to be, for the tab's current run. */
@@ -299,15 +362,16 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // The rows as the grid shows them now: canPivot refused while a sort or filter was being built.
     const shown = this.results.sortOf(tabId, entry.key)?.view
     const hold = shown ? this.results.holdView(tabId, entry.key, shown) : undefined
-    // These filters have now been built over, whatever the build's end: the Pivot does not rebuild by itself for them again.
+    // This stored set and its filters have now been built over, whatever the build's end: the Pivot does not rebuild by itself for them again.
     let tried = this.tried.get(tabId)
     if (!tried) this.tried.set(tabId, tried = new Map())
+    const sourceSet = setKey(entry.descriptor)
     const reads = filtersIdentity(shown?.filters ?? [])
-    tried.set(group.ordinal, { queryId: tab.queryId, filters: reads })
+    tried.set(group.ordinal, { queryId: tab.queryId, sourceSet, filters: reads })
     const item: Build = {
-      // An automatic build is named by the filters of the view it reads (the results' own state, which may be a frame
-      // ahead of the snapshot that started it), so it is superseded only by filters it does not read.
-      abort, queryId: tab.queryId, source: entry.key, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, ...auto ? { auto: reads } : {},
+      // An automatic build is named by the source set and filters of the view it reads (the results' own state, which may be a frame
+      // ahead of the snapshot that started it), so it is superseded only by a source replacement or filters it does not read.
+      abort, queryId: tab.queryId, source: entry.key, sourceSet, ordinal: group.ordinal, ...replaces === undefined ? {} : { replaces }, update, ...auto ? { auto: { sourceSet, filters: reads } } : {},
       queued: undefined, cancelled: false
     }
     builds.set(group.ordinal, item)
@@ -332,13 +396,13 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
       // released rather than cancel the copy, and its filters are built again once the copy ends.
       if (auto && replaces !== undefined && this.results.copyingEntry(tabId) === replaces) {
         this.results.discard(result.descriptor)
-        const last = this.tried.get(tabId)
-        if (last?.get(item.ordinal)?.filters === reads) last.delete(item.ordinal)
+        const last = this.tried.get(tabId), prev = last?.get(item.ordinal)
+        if (prev?.sourceSet === sourceSet && prev.filters === reads) last!.delete(item.ordinal)
         return
       }
       const sourceLabel = distinctName(entry, this.results.getSnapshot()[tabId]?.sets ?? []), snapshot = entry.handle.getSnapshot()
       const provenance: PivotProvenance = {
-        recipe: spec, filters, inputRows: result.rows, truncated: snapshot.truncated !== undefined, incomplete: snapshot.incomplete, approximate: result.approximate, buildMs,
+        recipe: spec, sourceColumns: entry.descriptor.columns.map(column => column.name), filters, inputRows: result.rows, truncated: snapshot.truncated !== undefined, incomplete: snapshot.incomplete, approximate: result.approximate, buildMs,
         ...auto ? { followed: true as const } : {}
       }
       // Only the run that holds the Table takes the pivot; otherwise (a re-run, a closed tab) it is released, and the
@@ -432,7 +496,10 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // published run) count as tried, so the cancel is not undone at once by an automatic build over filters changed while
     // it ran (Update still asks for one).
     const tab = this.results.getSnapshot()[tabId]
-    if (tab?.queryId === build.queryId) this.tried.get(tabId)?.set(build.ordinal, { queryId: build.queryId, filters: filtersIdentity(this.results.sortOf(tabId, build.source)?.view?.filters ?? []) })
+    const sourceEntry = tab?.groups.find(item => item.table.key === build.source)?.table.entry
+    if (tab?.queryId === build.queryId && sourceEntry) {
+      this.tried.get(tabId)?.set(build.ordinal, { queryId: build.queryId, sourceSet: setKey(sourceEntry.descriptor), filters: filtersIdentity(this.results.sortOf(tabId, build.source)?.view?.filters ?? []) })
+    }
     build.abort.abort()
   }
 
@@ -523,9 +590,9 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     for (const [tabId, builds] of this.running) {
       const run = snapshot[tabId]
       for (const build of builds.values()) {
-        // The Pivot a build would replace was closed: it would come back as a slot the user closed, so it is given up.
+        // The Pivot a build would replace was closed, or its Table was replaced in place: give it up.
         const group = run?.queryId === build.queryId ? run.groups.find(item => item.table.key === build.source) : undefined
-        if (!group || (build.replaces !== undefined && group.pivot?.key !== build.replaces)) build.abort.abort()
+        if (!group || setKey(group.table.entry.descriptor) !== build.sourceSet || (build.replaces !== undefined && group.pivot?.key !== build.replaces)) build.abort.abort()
       }
     }
     const current = this.getSnapshot()
@@ -606,6 +673,7 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // looks again, so nothing is decided over filters about to change.
     const published = tab.sorts.get(group.table.key)?.view
     if (published !== this.results.sortOf(tabId, group.table.key)?.view) return
+    const sourceSet = setKey(group.table.entry.descriptor)
     const filters = filtersIdentity(shownFilters(tab, group.table.key))
     // Hidden while it builds (Messages picked, another view selected, its item collapsed), it is given up too: only a shown
     // Pivot rebuilds by itself, and it rebuilds when shown again.
@@ -613,18 +681,26 @@ export class PivotService extends SnapshotStore<PivotSnapshot> implements Dispos
     // Pivot waits until it ends, whose publish looks again. The service's own state is read: a copy started this frame is
     // not yet in the published job list.
     const copying = this.results.copyingEntry(tabId) === group.pivot!.key
-    const superseded = live?.auto !== undefined && (live.auto !== filters || copying || !pivotShown(tab, group, layout, collapsed, showing))
+    const superseded = live?.auto !== undefined && (live.auto.sourceSet !== sourceSet || live.auto.filters !== filters || copying || !pivotShown(tab, group, layout, collapsed, showing))
     if (superseded) {
-      // Given up by this service, not ended: its filters were never built over, so they may be tried again (the change
-      // undone, then made again).
-      const tried = this.tried.get(tabId)
-      if (tried?.get(group.ordinal)?.filters === live!.auto) tried!.delete(group.ordinal)
+      // Given up by this service, not ended: its source set and filters were never built over, so they may be tried again.
+      const tried = this.tried.get(tabId), prev = tried?.get(group.ordinal)
+      if (prev?.sourceSet === live!.auto!.sourceSet && prev.filters === live!.auto!.filters) tried!.delete(group.ordinal)
       live!.abort.abort()
     }
     if ((live && !superseded) || copying || !pivotOutOfDate(tab, group)) return
     const tried = this.tried.get(tabId)?.get(group.ordinal)
-    if (tried?.queryId === tab.queryId && tried.filters === filters) return
+    if (tried?.queryId === tab.queryId && tried.sourceSet === sourceSet && tried.filters === filters) return
     if (!pivotShown(tab, group, layout, collapsed, showing) || !followsByItself(group) || !this.canPivot(tabId, group.table.key)) return
-    void this.start(tabId, tab, group, recipeSpec(recipe), true, true)
+    const resolved = this.resolveRecipe(group)
+    if ('error' in resolved) {
+      let map = this.tried.get(tabId)
+      if (!map) this.tried.set(tabId, map = new Map())
+      map.set(group.ordinal, { queryId: tab.queryId, sourceSet, filters })
+      if (!this.errors.get(tabId)?.get(group.ordinal)?.draft) this.fail(tabId, group.ordinal, resolved.error, false)
+      this.refresh(tabId)
+      return
+    }
+    void this.start(tabId, tab, group, resolved.spec, true, true)
   }
 }

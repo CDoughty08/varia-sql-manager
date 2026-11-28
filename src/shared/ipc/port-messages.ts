@@ -2,10 +2,12 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import { clientStatisticsSchema } from '../client-statistics'
-import type { BackendStatus, IndexMemoryDetail, IndexStoreStatus, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import type { BackendStatus, IndexMemoryDetail, IndexStoreStatus, MemoryOrder, QueryEvent, ResultMemoryDetail, ResultsCloseResult, ResultsCombineResult, ResultsDiffResult, ResultsDiffSeekResult, ResultsDistinctCloseResult, ResultsDistinctReadResult, ResultsDistinctResult, ResultsDistinctTickResult, ResultsFindRowsResult, ResultsIdentifyResult, ResultsPivotResult, ResultsProfileResult, ResultsReadResult, ResultsRowBytesResult, ResultsRowIdsResult, ResultsSearchResult, ResultsViewCloseResult, ResultsViewResult } from '../contracts'
+import { multiQueryModes, multiQueryTargetPhases, multiQueryTargetStatuses, queryMultiStatuses } from '../contracts'
 import { maxQueryPlanDocuments } from '../plans'
+import { providerIds } from '../providers'
 import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
-import { backendDescriptorSchema, truncationSchema } from './descriptors'
+import { backendDescriptorSchema, refusedResultNameChars, resultNameChars, truncationSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
 
 export { backendDescriptorSchema }
@@ -100,6 +102,12 @@ export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscrib
     t: z.literal('pivot'), rid: u31, generation, resultId: u32, rows: z.array(column).max(limits.pivot.maxRowFields).refine(columns => new Set(columns).size === columns.length, 'Columns must be distinct.'),
     column: column.optional(), values: z.array(pivotValueSchema).min(1).max(limits.pivot.maxValues), viewId: u32.optional()
   }).strict().refine(request => request.column === undefined || !request.rows.includes(request.column), 'The column group is not a row column.'),
+  // Combines 2 to 32 complete rows results of the same query into one combined result (`kind: 'combined'`).
+  z.object({
+    t: z.literal('combine'), rid: u31, generation,
+    resultIds: z.array(u32).min(2).max(32).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.'),
+    statementName: z.string().min(1).max(resultNameChars).refine(value => !refusedResultNameChars.test(value) && value.trim() === value).optional()
+  }).strict(),
   // Distinct snapshots (results.distinct and its windows, ticks and close): a column's values and counts over a result's rows
   // or a view's, kept in the backend for the funnel's checklist; `cancel` stops building one, or a read.
   z.object({ t: z.literal('distinct'), rid: u31, generation, resultId: u32, column, viewId: u32.optional(), keptViewId: u32.optional() }).strict(),
@@ -197,6 +205,11 @@ export const pivotResultSchema = z.object({
   descriptor: backendDescriptorSchema.extend({ kind: z.literal('pivot') }), rows: count, rowGroups: z.number().int().min(0).max(limits.pivot.maxRowGroups),
   columnGroups: z.number().int().min(0).max(limits.pivot.maxColumnGroups), approximate: z.boolean()
 }).strict().refine(result => result.descriptor.rowsStored === result.rowGroups, 'A pivot stores a row per row group.')
+/** A results.combine answer as the backend sends it (its descriptor without the generation, which main adds). */
+export const combineResultSchema = z.object({
+  descriptor: backendDescriptorSchema.extend({ kind: z.literal('combined') }),
+  warnings: z.array(z.string().max(1024)).max(64).optional()
+}).strict()
 /** A results.distinct answer as the backend sends it: its ticks within its values. */
 export const distinctResultSchema = z.object({
   snapshotId: u32, rows: count, complete: z.boolean(), nulls: count, distinct: count, approximate: z.boolean(), checked: count, nullsChecked: z.boolean()
@@ -209,17 +222,38 @@ export const distinctReadResultSchema = z.object({
 }).strict().refine(result => result.offset + result.values.length <= Math.max(result.total, result.offset), 'The window lies in the values.')
 export const distinctTickResultSchema = z.object({ checked: count, nullsChecked: z.boolean() }).strict()
 export const distinctCloseResultSchema = z.object({ closed: z.number().int().min(0).max(limits.distinct.maxClose) }).strict()
-export type PortEndResult = ResultsPivotResult | ResultsDistinctResult | ResultsDistinctReadResult | ResultsDistinctTickResult | ResultsDistinctCloseResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult | ResultsDiffSeekResult
+export type PortEndResult = ResultsPivotResult | ResultsCombineResult | ResultsDistinctResult | ResultsDistinctReadResult | ResultsDistinctTickResult | ResultsDistinctCloseResult | ResultsDiffResult | ResultsReadResult | ResultsCloseResult | ResultsRowBytesResult | ResultsViewResult | ResultsViewCloseResult | ResultsIdentifyResult | ResultsRowIdsResult | ResultsFindRowsResult | ResultsSearchResult | ResultsProfileResult | LiveEnd | LiveUpdateResult | ResultsDiffSeekResult
 
-const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']), line: z.number().int().min(1).max(2_147_483_647).optional() }).strict()
+const message = z.object({
+  text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']),
+  line: z.number().int().min(1).max(2_147_483_647).optional(),
+  targetKey: z.string().min(1).max(64).optional(),
+  dialect: z.enum(providerIds).optional()
+}).strict()
 const session = { spid: z.number().int().min(0).max(32767), login: z.string().max(128).optional() }
-/** EVENT bodies for a query.execute or results.remoteQuery request. */
+/** EVENT bodies for a query.execute, query.executeMulti or results.remoteQuery request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('session.opened'), ...session }).strict(),
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),
   z.object({ type: z.literal('resultSet.closed'), descriptor: backendDescriptorSchema }).strict(),
   // A BigQuery result switched between memory and windowed (essential): its new descriptor and revision.
   z.object({ type: z.literal('resultSet.residence'), descriptor: backendDescriptorSchema.required({ residence: true, revision: true }) }).strict(),
+  // Non-droppable metadata update for a stored result (backend omits generation; main stamps it).
+  z.object({ type: z.literal('resultSet.meta'), resultId: u32, rolledBackPreview: z.boolean() }).strict(),
+  // Per-target execution phase/progress for a query.executeMulti request.
+  z.object({
+    type: z.literal('multiQuery.targetState'),
+    targetKey: z.string().min(1).max(64),
+    phase: z.enum(multiQueryTargetPhases),
+    batchesCompleted: count,
+    batchesTotal: count,
+    rowsAffected: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER),
+    resultSetCount: count.max(limits.maxResultSets.max),
+    elapsedMs: count,
+    bytesProcessed: count.optional(),
+    errorCode: z.string().min(1).max(64).optional(),
+    errorMessage: z.string().max(2000).optional()
+  }).strict(),
   z.object({
     type: z.literal('progress'), completedBatches: count, totalBatches: count, batchNumber: count, iteration: count,
     results: z.array(z.object({ resultId: u32, rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncated: truncationSchema.optional() }).strict()).max(64)
@@ -228,7 +262,8 @@ export const queryEventSchema = z.discriminatedUnion('type', [
   // A BigQuery request's top-level job (QueryJobEvent): the job reference's bounds are the connection model's.
   z.object({
     type: z.literal('query.job'), jobId: z.string().min(1).max(1024), project: z.string().min(1).max(128), location: z.string().min(1).max(64).optional(),
-    state: z.enum(['running', 'done']), auxiliary: z.boolean(), transaction: z.enum(['none', 'open', 'unknown'])
+    state: z.enum(['running', 'done']), auxiliary: z.boolean(), transaction: z.enum(['none', 'open', 'unknown']),
+    targetKey: z.string().min(1).max(64).optional()
   }).strict()
 ])
 /** query.session.close's answer (SessionCloseResult in C#): a BigQuery close's note carries BigQuery's message (cut at 2,000
@@ -240,6 +275,11 @@ export const sessionCloseResultSchema = z.object({
     message: z.string().max(2001).optional(), jobId: z.string().min(1).max(1024).optional()
   }).strict().optional()
 }).strict()
+const bigQueryJobSummarySchema = z.object({
+  project: z.string().min(1).max(1024), jobId: z.string().min(1).max(1024), location: z.string().min(1).max(64).optional(), statementType: z.string().min(1).max(64).optional(),
+  bytesProcessed: count.optional(), bytesBilled: count.optional(), cacheHit: z.boolean().optional(), slotMs: count.optional()
+}).strict()
+
 /** The query.execute summary: the stored messages, the errors kept past their cap, and up to 8 notes about truncation. */
 export const queryResultSchema = z.object({
   clientStatistics: clientStatisticsSchema.optional(),
@@ -250,15 +290,52 @@ export const queryResultSchema = z.object({
   error: z.object({ code: z.string().max(64), message: z.string().max(limits.messages.errorCharacters + 1), batchNumber: count, iteration: count }).strict().optional(),
   completedBatches: count, totalBatches: count, database: z.string().max(1024), messagesTruncated: z.boolean(),
   // A BigQuery query's job (BigQueryJobSummary in C#).
-  job: z.object({
-    project: z.string().min(1).max(1024), jobId: z.string().min(1).max(1024), location: z.string().min(1).max(64).optional(), statementType: z.string().min(1).max(64).optional(),
-    bytesProcessed: count.optional(), bytesBilled: count.optional(), cacheHit: z.boolean().optional(), slotMs: count.optional()
-  }).strict().optional(),
+  job: bigQueryJobSummarySchema.optional(),
   // BigQuery: the newest stale mark the connection's Search Objects index has not spent (docs/object-search.md, BigQuery).
   indexStale: count.min(1).optional(),
   budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count, stoppedBytes: count.min(1).optional() }).strict(), completedAt: z.string().max(40),
   // The session's @@SPID (a smallint) and SUSER_SNAME(), read when it opened.
   ...session, spid: session.spid.optional()
+}).strict()
+
+const multiTargetErrorSchema = z.object({
+  code: z.string().min(1).max(64),
+  message: z.string().max(limits.messages.errorCharacters + 1),
+  batchNumber: count.optional(),
+  iteration: count.optional(),
+  line: z.number().int().min(1).max(2_147_483_647).optional()
+}).strict()
+
+const multiTargetOutcomeSchema = z.object({
+  targetKey: z.string().min(1).max(64),
+  provider: z.enum(providerIds),
+  label: z.string().min(1).max(128),
+  environment: z.string().min(1).max(32).optional(),
+  status: z.enum(multiQueryTargetStatuses),
+  batchesCompleted: count,
+  batchesTotal: count,
+  rowsAffected: z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER),
+  elapsedMs: count,
+  resultSetIds: z.array(u32).max(limits.maxResultSets.max),
+  ...session, spid: session.spid.optional(),
+  bytesProcessed: count.optional(),
+  job: bigQueryJobSummarySchema.optional(),
+  error: multiTargetErrorSchema.optional()
+}).strict()
+
+/** The query.executeMulti summary (without generation on resultSets and budget, which main adds). */
+export const queryMultiResultSchema = z.object({
+  status: z.enum(queryMultiStatuses),
+  mode: z.enum(multiQueryModes),
+  targets: z.array(multiTargetOutcomeSchema).min(1).max(32),
+  resultSets: z.array(backendDescriptorSchema).max(limits.maxResultSets.max),
+  discardedResultSets: count,
+  messages: z.array(message).max(limits.messages.count + limits.messages.lateErrors + 8),
+  messagesTruncated: z.boolean(),
+  elapsedMs: count,
+  budget: z.object({ usedBytes: count, globalBytes: count, queryBytes: count, seq: count, stoppedBytes: count.min(1).optional() }).strict(),
+  completedAt: z.string().max(40),
+  combineWarnings: z.array(z.string().min(1).max(512)).max(64).optional()
 }).strict()
 /** EVENT bodies for a results.copy or results.export request; droppable, the latest wins. */
 export const jobProgressSchema = z.object({ type: z.literal('job.progress'), rowsDone: count, rowsTotal: count, bytes: count }).strict()

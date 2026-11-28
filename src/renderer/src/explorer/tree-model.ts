@@ -498,7 +498,7 @@ export class TypeAheadBuffer {
   private text = ''
   private last = -Infinity
   constructor(private readonly now: () => number = () => performance.now(), private readonly resetMs: number = explorerLimits.typeAheadMs, private readonly max: number = explorerLimits.typeAheadMax) {}
-  get value(): string { return this.text }
+  get value(): string { return this.now() - this.last > this.resetMs ? '' : this.text }
   /** The search text after `event`, or undefined when the key is not type-ahead input. */
   accept(event: { readonly key: string; readonly ctrlKey?: boolean; readonly altKey?: boolean; readonly metaKey?: boolean; readonly isComposing?: boolean }): string | undefined {
     if (event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return undefined

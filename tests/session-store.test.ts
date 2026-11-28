@@ -168,7 +168,7 @@ describe('the hot exit session store', () => {
     await new SessionStore(folder).write(session, 1)
     for (let start = 0; start < 3; start++) {
       const store = new SessionStore(folder), restored = await store.take(true)
-      expect(restored).toMatchObject({ version: 3, ...session })
+      expect(restored).toMatchObject({ version: 4, ...session })
       expect(restored?.workspace?.targets.map(target => target.id)).toEqual([first.id, second.id])
       expect(JSON.stringify(restored)).not.toMatch(/connectionId|sessionId|lifecycle|password|accessToken/)
       await store.write(restored!, start + 2)
@@ -186,7 +186,7 @@ describe('the hot exit session store', () => {
     const legacy = { version: 1, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0, documents: [tabs.documents[0]] }
     await writeFile(join(folder, 'session.json'), JSON.stringify(legacy))
     const restored = await new SessionStore(folder).take(true)
-    expect(restored).toEqual({ ...legacy, version: 3 })
+    expect(restored).toEqual({ ...legacy, version: 4 })
     expect(restored?.documents[0]).not.toHaveProperty('targetId')
     expect(restored?.documents[0]).not.toHaveProperty('attachWanted')
     expect(restored).not.toHaveProperty('workspace')
@@ -240,7 +240,7 @@ describe('the hot exit session store', () => {
     expect(store.keptBy(4)).toBe(false)
     expect(await files()).toEqual(['session.json'])
     const stored = JSON.parse(await readFile(join(folder, 'session.json'), 'utf8'))
-    expect(stored).toEqual({ version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 1, documents: tabs.documents })
+    expect(stored).toEqual({ version: 4, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 1, documents: tabs.documents })
     if (posix) {
       expect((await stat(folder)).mode & 0o777).toBe(0o700)
       expect((await stat(join(folder, 'session.json'))).mode & 0o777).toBe(0o600)
@@ -477,6 +477,50 @@ describe('the hot exit session store', () => {
     }))
     expect(await new SessionStore(freshFolder).take(true)).toBeUndefined()
     expect((await readdir(freshFolder)).some(name => name.startsWith('session.json.invalid-'))).toBe(true)
+  })
+
+  it('round-trips version 4 multiTargets (up to 32, paired or hint-only) and rejects invalid multi-server shapes', async () => {
+    const targets = workspace(), [first] = targets.targets
+    const multiDoc = {
+      ...tabs.documents[0],
+      multiMode: 'cross' as const,
+      crossView: 'split' as const,
+      multiTargets: [
+        { targetId: first.id, attachWanted: true, provider: 'sqlserver' as const, database: 'Sales', enabled: true, lastServer: 'sql01' },
+        { provider: 'bigquery' as const, database: 'd'.repeat(1024), enabled: false }
+      ]
+    }
+    const maxTargets = Array.from({ length: 32 }, (_, i) => ({ provider: 'sqlserver' as const, database: `db${i}`, enabled: true }))
+    const session: SessionInput = {
+      activeIndex: 0,
+      workspace: targets,
+      documents: [multiDoc, { ...tabs.documents[0], multiMode: 'same', multiTargets: maxTargets }]
+    }
+    const store = new SessionStore(folder)
+    await store.write(session, 1)
+    const restored = await store.take(true)
+    expect(restored).toMatchObject({ version: 4, ...session })
+    expect(sessionWriteSchema.safeParse(session).success).toBe(true)
+    for (const invalid of [
+      { ...session, documents: [{ ...multiDoc, multiTargets: [...maxTargets, { provider: 'sqlserver', database: 'db32', enabled: true }] }] },
+      { ...session, documents: [{ ...multiDoc, targetId: first.id, attachWanted: true }] },
+      { ...session, documents: [{ ...multiDoc, jobKey: randomUUID() }] },
+      { ...session, documents: [{ ...multiDoc, multiMode: 'same' as const, crossView: 'split' as const }] },
+      { ...session, documents: [{ ...multiDoc, multiTargets: [{ ...multiDoc.multiTargets[0], connectionId: randomUUID() }] }] },
+      { ...session, documents: [{ ...multiDoc, multiTargets: [{ ...multiDoc.multiTargets[0], jobKey: randomUUID() }] }] },
+      { ...session, documents: [{ ...multiDoc, multiTargets: [multiDoc.multiTargets[0], { ...multiDoc.multiTargets[0], database: 'Other' }] }] },
+      { ...session, documents: [{ ...multiDoc, multiTargets: [{ targetId: first.id, provider: 'sqlserver', database: 'Sales', enabled: true }] }] },
+      { ...session, documents: [{ ...multiDoc, multiTargets: [{ targetId: randomUUID(), attachWanted: true, provider: 'sqlserver', database: 'Sales', enabled: true }] }] },
+      { ...session, documents: [{ ...multiDoc, multiTargets: [{ provider: 'sqlserver', database: 'd'.repeat(129), enabled: true }] }] },
+      { ...session, documents: [{ name: 'Agent', kind: 'agentJob', eol: 'lf', dirty: true, text: '{}', multiMode: 'same', multiTargets: [multiDoc.multiTargets[1]] }] }
+    ]) expect(sessionWriteSchema.safeParse(invalid).success).toBe(false)
+    // Version 3 files cannot carry multiTargets.
+    const v3Folder = join(directory, 'SessionV3Multi')
+    await mkdir(v3Folder, { recursive: true })
+    await writeFile(join(v3Folder, 'session.json'), JSON.stringify({
+      version: 3, savedAt: '2026-11-04T09:00:00.000Z', activeIndex: 0, documents: [multiDoc], workspace: targets
+    }))
+    expect(await new SessionStore(v3Folder).take(true)).toBeUndefined()
   })
 })
 

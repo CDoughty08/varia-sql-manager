@@ -5,7 +5,7 @@ import type { CommandArgs, Disposable } from '../core/types'
 import type { Workbench } from '../core/workbench'
 import { resolveBlocks } from '../grid/selection'
 import { outputOf, type LiveOutput, type MenuTargetService, type OutputTarget } from '../menus/targets'
-import { entryOf, type SelectionFilter } from '../results/ResultsService'
+import { entryOf, hasMultiSummary, isSummaryActive, summaryEntryKey, type SelectionFilter } from '../results/ResultsService'
 import { requestFrame, windows } from '../core/windows'
 import { jumpResult, pickerRequests, stackReveals, stepResult, stepView } from '../grid/result-picker'
 import { focusHeld } from '../core/modal'
@@ -147,8 +147,9 @@ export function outputContribution({ commands, results, queries, menuTargets, do
     const tabId = target?.tabId ?? focused?.tabId ?? args?.tabId ?? documents.getSnapshot().activeId
     const tab = tabId ? results.getSnapshot()[tabId] : undefined
     // Never the run's first result for want of one: closing has no undo, so it takes a grid the user has used.
+    // The virtual Summary view is not a closable result entry.
     const key = target?.entry ?? tab?.focused
-    return tabId && tab && key !== undefined && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
+    return tabId && tab && key !== undefined && key !== summaryEntryKey && !tab.bare && tab.status !== 'running' && tab.status !== 'closed' ? { tabId, key } : undefined
   }
   /** The query whose results Next Result, Go to Result N, the view commands and Go to Result… act on: the focused output's,
    *  else the active query's, while it has a result to show; `tabs`, only while results show as tabs. A bare grid focused
@@ -157,7 +158,8 @@ export function outputContribution({ commands, results, queries, menuTargets, do
   const resultsRun = (args?: CommandArgs, onlyTabs = false) => {
     const target = targetOf(args), tabId = target && !target.bare ? target.tabId : documents.getSnapshot().activeId
     const tab = tabId ? results.getSnapshot()[tabId] : undefined
-    return tabId && tab && !tab.bare && tab.status !== 'closed' && tab.sets.length > 0 && hasResultSets(tabId) && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
+    const runnable = hasMultiSummary(tab) ? !!results.context.getSnapshot()[tabId] : !!tab && tab.sets.length > 0 && hasResultSets(tabId)
+    return tabId && tab && !tab.bare && tab.status !== 'closed' && runnable && (!onlyTabs || tabs()) ? { tabId, tab } : undefined
   }
   const tabsRun = (args?: CommandArgs) => resultsRun(args, true)
   /** Shows the Results view and its panel without moving the focus: in a popout, its tab; with every output panel closed
@@ -185,16 +187,19 @@ export function outputContribution({ commands, results, queries, menuTargets, do
   })
   /** F3 in a grid moves its active cell to the match as well; from the search box or the editor it only scrolls. */
   const fromGrid = (args?: CommandArgs) => targetOf(args)?.view === 'grid'
+  /** Find in Results is disabled while a multi-server run's Summary view is active in Tabs layout (no grid is shown). */
+  const canSearchTab = (tabId: string | undefined) => !!hasResultSets(tabId) && !(tabs() && isSummaryActive(results.getSnapshot()[tabId!]))
+  const saveEntry = (tabId: string | undefined) => !tabId ? undefined : results.focusedEntry(tabId) ?? (!tabs() ? results.getSnapshot()[tabId]?.sets[0] : undefined)
   const registrations = [
     commands.register('output.find', {
-      unavailable: args => liveOf(args) ? undefined : noResults,
+      unavailable: args => liveOf(args) ? undefined : hasResultSets(searchTab(args)) ? 'Select a result grid first.' : noResults,
       // A query's result sets (no hasResultSets precondition: a live view's grid finds through its owner's filter box).
-      when: args => { const live = liveOf(args); return live ? live.canFind() : hasResultSets(searchTab(args)) },
+      when: args => { const live = liveOf(args); return live ? live.canFind() : canSearchTab(searchTab(args)) },
       run: args => {
         const live = liveOf(args)
         if (live) { live.find(); return }
         const tabId = searchTab(args)
-        if (!tabId || !results.getSnapshot()[tabId]?.sets.length) return
+        if (!tabId || !canSearchTab(tabId) || !results.getSnapshot()[tabId]?.sets.length) return
         // The box is in the Results view's toolbar.
         results.setView(tabId, 'results')
         resultsSearch.focus(tabId)
@@ -276,17 +281,28 @@ export function outputContribution({ commands, results, queries, menuTargets, do
       }
     }),
     commands.register('output.saveResultsAs', {
-      unavailable: args => liveOf(args) ? undefined : noResults,
+      unavailable: args => {
+        if (liveOf(args)) return undefined
+        const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
+        return hasResultSets(tabId) ? 'Select a result grid first.' : noResults
+      },
       // A query's result sets, or a live view's grid with rows (which has no query, so no hasResultSets precondition).
-      when: args => { const live = liveOf(args); return live ? live.hasRows() && (live.canSave?.() ?? true) : hasResultSets(targetOf(args)?.tabId ?? documents.getSnapshot().activeId) },
+      // Non-live, non-grid invocations require a focused saveable entry (or first set in Stacked) so Summary never exposes Save Results As as a no-op.
+      when: args => {
+        const live = liveOf(args)
+        if (live) return live.hasRows() && (live.canSave?.() ?? true)
+        const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
+        if (!hasResultSets(tabId)) return false
+        return target?.view === 'grid' ? target.entry !== undefined : saveEntry(tabId) !== undefined
+      },
       run: async args => {
         const live = liveOf(args)
         if (live) { if (live.hasRows() && (live.canSave?.() ?? true)) live.save(); return }
         const target = targetOf(args), tabId = target?.tabId ?? documents.getSnapshot().activeId
         const tab = results.getSnapshot()[tabId]
         if (!tab?.sets.length) return
-        // The grid the menu or the caption's button names, else the one that last had the focus.
-        const key = target?.view === 'grid' ? target.entry : results.focusedEntry(tabId)?.key
+        // The grid the menu or the caption's button names, else the one that last had the focus (or the first set in Stacked).
+        const key = target?.view === 'grid' ? target.entry : saveEntry(tabId)?.key
         if (key === undefined) return
         const name = documents.getSnapshot().documents.find(document => document.id === tabId)?.name ?? ''
         const failure = await results.saveAs(tabId, key, baseName(name))
@@ -377,10 +393,10 @@ export function outputContribution({ commands, results, queries, menuTargets, do
     commands.register('output.toggleColumnProfile', { run: () => settings.toggle('queryResults.grid.columnProfile') }),
     commands.register('output.toggleProfileSelectedColumns', { run: () => settings.toggle('queryResults.grid.columnProfileSelectedOnly') }),
     commands.register('output.toggleResultsTabs', { run: toggleLayout }),
-    commands.register('output.nextResult', selectResult(tab => stepResult(tab, 1))),
-    commands.register('output.previousResult', selectResult(tab => stepResult(tab, -1))),
-    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`output.goToResult${place}`, selectResult(tab => jumpResult(tab, place)))),
-    commands.register('output.goToLastResult', selectResult(tab => jumpResult(tab, 'last'))),
+    commands.register('output.nextResult', selectResult(tab => stepResult(tab, 1, tabs() || tab.sets.length === 0))),
+    commands.register('output.previousResult', selectResult(tab => stepResult(tab, -1, tabs() || tab.sets.length === 0))),
+    ...([1, 2, 3, 4, 5, 6, 7, 8] as const).map(place => commands.register(`output.goToResult${place}`, selectResult(tab => jumpResult(tab, place, tabs() || tab.sets.length === 0)))),
+    commands.register('output.goToLastResult', selectResult(tab => jumpResult(tab, 'last', tabs() || tab.sets.length === 0))),
     commands.register('output.nextResultView', selectResult(tab => stepView(tab, 1), true)),
     commands.register('output.previousResultView', selectResult(tab => stepView(tab, -1), true)),
     commands.register('output.goToResult', {

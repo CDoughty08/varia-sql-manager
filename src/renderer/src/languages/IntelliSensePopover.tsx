@@ -226,7 +226,10 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
     ;(target ?? triggerRef.current)?.focus({ preventScroll: true })
   }, [triggerRef])
 
-  const connection = active.connectionId ? liveConnections.find(entry => entry.id === active.connectionId) : undefined
+  const model = documents.modelFor ? documents.modelFor(active.id, isBigQuery ? 'bigquery' : 'sqlserver') : documents.getModel(active.id)
+  const langContext = model ? documents.languageContext?.(model, id => liveConnections.some(entry => entry.id === id && isLiveConnection(entry))) : undefined
+  const connectionId = langContext ? (langContext.suspended ? undefined : langContext.connectionId) : active.connectionId
+  const connection = connectionId ? liveConnections.find(entry => entry.id === connectionId) : undefined
   const connected = !!connection && isLiveConnection(connection)
   const indexEntry = connection ? searchSnap.indexes[connection.id] : undefined
   const principal = connection?.authentication?.principal.provider === 'bigquery' ? connection.authentication.principal.principal : connection?.principalId
@@ -235,12 +238,13 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
     return starredSnap.byPrincipal[principal] ?? []
   }, [isBigQuery, principal, starredSnap])
 
-  const defaultDataset = /^\w{1,1024}$/.test(active.database ?? '') ? active.database : undefined
+  const rawDatabase = langContext ? langContext.database : active.database
+  const defaultDataset = /^\w{1,1024}$/.test(rawDatabase ?? '') ? rawDatabase : undefined
   const querySources = useMemo(() => {
     if (!open || !isBigQuery || !connection || !isBigQueryConnection(connection)) return []
-    const text = documents.getModel(active.id)?.getValue() ?? ''
+    const text = model?.getValue() ?? ''
     return extractBigQueryQuerySources(text, connection.server, defaultDataset)
-  }, [open, isBigQuery, connection, documents, active.id, defaultDataset])
+  }, [open, isBigQuery, connection, model, defaultDataset])
 
   useEffect(() => {
     if (!open || !isBigQuery || !connected || !querySources.length || typeof indexCompletion.lookupDocument !== 'function') {
@@ -308,8 +312,11 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
           : (language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected' || issuesPaused || (isBigQuery && waves?.state === 'none') || (!isBigQuery && !sqlIndexReady)) ? 'neutral'
             : 'success'
 
-  const headerStatusText = !connected
-    ? 'Disconnected'
+  const suspended = !!langContext?.suspended
+  const headerStatusText = suspended
+    ? 'Paused'
+    : !connected
+      ? 'Disconnected'
     : isBigQuery && waves
       ? waves.state === 'building'
         ? `Indexing · ${waves.done.toLocaleString('en-US')}/${waves.total.toLocaleString('en-US')}`
@@ -376,21 +383,23 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
       : language?.label === 'IntelliSense off' || language?.label === 'IntelliSense paused' ? 'neutral'
         : language?.label === 'IntelliSense refreshing' || language?.label === 'IntelliSense loading' || language?.label === 'IntelliSense starting' || sqlIndexBuilding ? 'running'
           : sqlIndexReady ? 'success' : 'neutral'
-  const sqlProviderText = !connected ? 'ScriptDom (offline)'
-    : language?.label && language.label !== 'IntelliSense' ? language.label
-      : sqlIndexBuilding ? 'ScriptDom · Indexing'
-        : sqlIndexReady ? 'ScriptDom + Index'
-          : 'ScriptDom (no index)'
+  const sqlProviderText = suspended ? 'Paused (File view)'
+    : !connected ? 'ScriptDom (offline)'
+      : language?.label && language.label !== 'IntelliSense' ? language.label
+        : sqlIndexBuilding ? 'ScriptDom · Indexing'
+          : sqlIndexReady ? 'ScriptDom + Index'
+            : 'ScriptDom (no index)'
 
-  const sqlDiagTone: StatusTone = issuesPaused ? 'neutral'
+  const sqlDiagTone: StatusTone = suspended || issuesPaused ? 'neutral'
     : issues?.label === 'SQL analysis unavailable' || issues?.label === 'SQL analysis incomplete' ? 'warning'
       : issues?.label === 'Checking SQL' || (connected && sqlIndexBuilding) ? 'running'
         : connected && sqlIndexReady ? 'success' : 'neutral'
-  const sqlDiagText = issuesPaused ? 'Paused'
-    : issues?.label === 'SQL analysis unavailable' ? 'Unavailable'
-      : !connected ? 'ScriptDom (syntax)'
-        : sqlIndexReady ? 'ScriptDom + Index'
-          : 'ScriptDom (syntax)'
+  const sqlDiagText = suspended ? 'Paused (File view)'
+    : issuesPaused ? 'Paused'
+      : issues?.label === 'SQL analysis unavailable' ? 'Unavailable'
+        : !connected ? 'ScriptDom (syntax)'
+          : sqlIndexReady ? 'ScriptDom + Index'
+            : 'ScriptDom (syntax)'
 
   const waveBadge = (count: number, full: number, namesOnly: number, kind: 'starred' | 'discovered'): { readonly tone: StatusTone; readonly label: string } => {
     if (!waves || waves.state === 'none') return { tone: 'neutral', label: count === 0 && kind === 'starred' ? 'None' : 'Not built' }
@@ -522,7 +531,8 @@ export default function IntelliSensePopover({ open, autoFocus = false, popoverId
                     </button>
                   )}
                   <span className="intellisense-popover-meta">
-                    {!connected ? 'Not connected'
+                    {suspended ? 'Paused (File view)'
+                      : !connected ? 'Not connected'
                       : sqlIndexBuilding ? `${(indexEntry?.done ?? 0).toLocaleString('en-US')} / ${(indexEntry?.total ?? 0).toLocaleString('en-US')} building`
                         : sqlStatus && sqlStatus.state === 'ready'
                           ? `${sqlStatus.indexed.toLocaleString('en-US')} / ${sqlStatus.databases.toLocaleString('en-US')} ready${sqlStatus.skipped.length ? ` · ${sqlStatus.skipped.length} skipped` : ''}`

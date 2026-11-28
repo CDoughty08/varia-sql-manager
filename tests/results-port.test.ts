@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ResultsPortHost, toExactArrayBuffer, type FrameLike, type LiveStreamHandle, type OperationProgressSink, type PortMainLike, type ReadStream, type ResultsBackend } from '../src/main/backend/results-port'
 import { BackendError } from '../src/main/backend/errors'
 import type { StreamSink } from '../src/main/backend/connection'
-import type { QueryEvent, ResultDescriptor, ResultsDiffParams, ResultsDiffResult, ResultsDiffSeekParams, ResultsDiffSeekResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
+import type { QueryEvent, QueryMultiResult, ResultDescriptor, ResultsCombineParams, ResultsCombineResult, ResultsDiffParams, ResultsDiffResult, ResultsDiffSeekParams, ResultsDiffSeekResult, ResultsDistinctParams, ResultsDistinctReadParams, ResultsDistinctReadResult, ResultsDistinctResult, ResultsFindRowsParams, ResultsIdentifyParams, ResultsIdentifyResult, ResultsPivotParams, ResultsPivotResult, ResultsProfileParams, ResultsProfileResult, ResultsReadParams, ResultsRowBytesParams, ResultsRowIdsParams, ResultsSearchParams, ResultsSearchResult, ResultsViewCloseParams, ResultsViewParams, ResultsViewResult } from '../src/shared/contracts'
 import { cancelReasons, type CancelReason } from '../src/shared/ipc/wire/protocol'
 import { buildPortRequestSchema, type PortMessage, type portRequestSchema } from '../src/shared/ipc/port-messages'
 import { buildLiveSchemas } from '../src/shared/live/schema'
@@ -36,6 +36,7 @@ interface FakeView { generation: number; params: ResultsViewParams; cancels: Can
 interface FakeIdentify { generation: number; params: ResultsIdentifyParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDiff { generation: number; params: ResultsDiffParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakePivot { generation: number; params: ResultsPivotParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
+interface FakeCombine { generation: number; params: ResultsCombineParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeSearch { generation: number; params: ResultsSearchParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeProfile { generation: number; params: ResultsProfileParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
 interface FakeDistinct { generation: number; params: ResultsDistinctParams; cancels: CancelReason[]; resolve(value: unknown): void; reject(error: unknown): void }
@@ -50,6 +51,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
   const identifies: FakeIdentify[] = []
   const diffs: FakeDiff[] = []
   const pivots: FakePivot[] = []
+  const combines: FakeCombine[] = []
   const searches: FakeSearch[] = []
   const profiles: FakeProfile[] = []
   const distincts: FakeDistinct[] = []
@@ -86,6 +88,13 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
       const pivot: FakePivot = { generation, params, cancels: [], resolve, reject }
       pivots.push(pivot)
       return { done, cancel: reason => pivot.cancels.push(reason) }
+    },
+    combine: (generation, params) => {
+      let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+      const done = new Promise<ResultsCombineResult>((onResolve, onReject) => { resolve = onResolve as (value: unknown) => void; reject = onReject })
+      const combine: FakeCombine = { generation, params, cancels: [], resolve, reject }
+      combines.push(combine)
+      return { done, cancel: reason => combine.cancels.push(reason) }
     },
     rowIds: vi.fn(async (_generation: number, params: ResultsRowIdsParams) => ({ firstRow: params.firstRow, ids: [7, 9], rows: 2 })),
     findRows: vi.fn(async (_generation: number, params: ResultsFindRowsParams) => ({ positions: [0, 5], marks: [0, params.ids.length - 1], truncated: false, rows: 6 })),
@@ -149,7 +158,7 @@ function fixture(o: { now?: () => number; testSources?: boolean; schema?: typeof
     port().send({ t: 'live', rid, generation, params })
     return params
   }
-  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, searches, profiles, distincts, distinctReads, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
+  return { host, backend, reads, lives, updates, views, identifies, diffs, pivots, combines, searches, profiles, distincts, distinctReads, ports, port, frame, read, live, setReady: (generation: number | undefined) => { ready = generation } }
 }
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const descriptor = (resultId: number, generation = 1): Pick<ResultDescriptor, 'generation' | 'resultId'> => ({ generation, resultId })
@@ -1357,5 +1366,72 @@ describe('ResultsPortHost live subscriptions', () => {
     lives[1].onLive(tick(2, table(11, 2)), 400)
     expect(port().posted.some(message => message.t === 'live')).toBe(false)
     expect(host.owns(1, 11)).toBe(false)
+  })
+
+  it('combines 2..32 owned results, validates answers, forwards multi-query events, and cleans up orphans', async () => {
+    const refused: { method: string; issues: readonly string[] }[] = []
+    const { host, backend, combines, port, frame } = fixture({ onRefused: (method, issues) => refused.push({ method, issues }) })
+    host.own([descriptor(10), descriptor(11), descriptor(12)])
+    // Valid combine with 2 distinct owned ids and statementName.
+    port().send({ t: 'combine', rid: 1, generation: 1, resultIds: [10, 11], statementName: 'Combined Orders' })
+    expect(combines).toHaveLength(1)
+    expect(combines[0].params).toEqual({ resultIds: [10, 11], statementName: 'Combined Orders' })
+    const { generation: _gen, ...combinedBackend } = fullDescriptor(99, { kind: 'combined', statementSlot: 0 })
+    combines[0].resolve({ descriptor: combinedBackend })
+    await settle()
+    expect(host.owns(1, 99)).toBe(true)
+    expect(port().ends()).toContainEqual({ t: 'end', rid: 1, ok: true, result: { descriptor: { ...combinedBackend, generation: 1 } } })
+    // Rejects unowned / wrong generation with RESULT_UNAVAILABLE.
+    port().send({ t: 'combine', rid: 2, generation: 1, resultIds: [10, 999] })
+    port().send({ t: 'combine', rid: 3, generation: 2, resultIds: [10, 11] })
+    // Rejects <2, >32, duplicate ids, and invalid statementName with INVALID_REQUEST.
+    port().send({ t: 'combine', rid: 4, generation: 1, resultIds: [10] })
+    port().send({ t: 'combine', rid: 5, generation: 1, resultIds: Array.from({ length: 33 }, (_, i) => i + 1) })
+    port().send({ t: 'combine', rid: 6, generation: 1, resultIds: [10, 10] })
+    port().send({ t: 'combine', rid: 7, generation: 1, resultIds: [10, 11], statementName: ' bad\nname ' })
+    expect(port().ends().filter(end => !end.ok).map(end => [end.rid, !end.ok && end.code])).toEqual([
+      [2, 'RESULT_UNAVAILABLE'],
+      [3, 'RESULT_UNAVAILABLE'],
+      [4, 'INVALID_REQUEST'],
+      [5, 'INVALID_REQUEST'],
+      [6, 'INVALID_REQUEST'],
+      [7, 'INVALID_REQUEST']
+    ])
+    // Invalid backend descriptor triggers onRefused('results.combine', ...), closes orphan result, and ends with BACKEND_ERROR.
+    port().send({ t: 'combine', rid: 8, generation: 1, resultIds: [10, 12] })
+    const { generation: _g2, ...wrongKind } = fullDescriptor(100, { kind: 'rows' })
+    combines[1].resolve({ descriptor: wrongKind })
+    await settle()
+    expect(refused).toHaveLength(1)
+    expect(refused[0].method).toBe('results.combine')
+    expect(backend.close).toHaveBeenCalledWith(1, [100])
+    expect(port().ends()).toContainEqual({ t: 'end', rid: 8, ok: false, code: 'BACKEND_ERROR', message: 'The results could not be combined.' })
+    // Cancel forwards to backend; hang-up orphan closes stored result.
+    port().send({ t: 'combine', rid: 9, generation: 1, resultIds: [10, 11] })
+    port().send({ t: 'cancel', rid: 9 })
+    expect(combines[2].cancels).toEqual([cancelReasons.user])
+    port().hangUp()
+    const { generation: _g3, ...orphanCombined } = fullDescriptor(101, { kind: 'combined' })
+    combines[2].resolve({ descriptor: orphanCombined })
+    await settle()
+    expect(backend.close).toHaveBeenCalledWith(1, [101])
+    // Reopen port and verify queryEvent (resultSet.meta + multiQuery.targetState) and querySummary(QueryMultiResult).
+    host.open(frame)
+    const metaEvent: QueryEvent = { type: 'resultSet.meta', resultId: 10, rolledBackPreview: true, generation: 1 }
+    const targetEvent: QueryEvent = { type: 'multiQuery.targetState', targetKey: 't1', phase: 'committed', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 2, resultSetCount: 1, elapsedMs: 5 }
+    host.queryEvent('q-multi', metaEvent)
+    host.queryEvent('q-multi', targetEvent)
+    expect(port().posted).toContainEqual({ t: 'query', queryId: 'q-multi', event: metaEvent })
+    expect(port().posted).toContainEqual({ t: 'query', queryId: 'q-multi', event: targetEvent })
+    const multiSummary: QueryMultiResult = {
+      status: 'completed', mode: 'transaction',
+      targets: [{ targetKey: 't1', provider: 'sqlserver', label: 'Primary', status: 'committed', batchesCompleted: 1, batchesTotal: 1, rowsAffected: 2, elapsedMs: 5, resultSetIds: [201] }],
+      resultSets: [fullDescriptor(201, { targetKey: 't1', statementSlot: 0 })],
+      discardedResultSets: 0, messages: [], messagesTruncated: false, elapsedMs: 5,
+      budget: { usedBytes: 128, globalBytes: 256 * MiB, queryBytes: 128 * MiB, generation: 1, seq: 2 },
+      completedAt: '2026-10-08T21:48:01.1234567+00:00'
+    }
+    host.querySummary(multiSummary)
+    expect(host.owns(1, 201)).toBe(true)
   })
 })

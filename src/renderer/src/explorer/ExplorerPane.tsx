@@ -141,13 +141,20 @@ function ExplorerFooter({ servers, live }: { readonly servers: number; readonly 
  * inline search row with Filter Settings and Group by Schema (falling back cleanly when disconnected/empty), over the
  * tree of connected servers or a prompt to connect. Filter shows a filled funnel while the selected folder has a filter.
  */
-export default function ExplorerPane({ error, activeConnectionId, activeQueryId }: { readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string }) {
+export default function ExplorerPane({ error, activeConnectionId, activeQueryId, onNewMultiServerQuery }: {
+  readonly error?: string; readonly activeConnectionId?: string; readonly activeQueryId?: string; readonly onNewMultiServerQuery?: () => void
+}) {
   const { explorer, connections, commands } = useWorkbench()
-  const { selected } = useServiceSnapshot(explorer)
+  const { selected, multiSelected, multiSelectProvider: multiProvider } = useServiceSnapshot(explorer)
   const { explorerSelectionFiltered: filtered, explorerGroupBySchema: grouped } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections).filter(connection => connection.inExplorer !== false)
   const connect = useCommandEnabled('connection.connect')
+  const canNewMultiQuery = useCommandEnabled('explorer.newMultiServerQuery')
   const selectedServer = explorer.menuNode(selected)?.connectionId
+  const inMultiBar = multiSelected.length >= 2
+  const multiSelectionLabel = multiProvider === 'bigquery'
+    ? `${multiSelected.length} BigQuery Projects selected`
+    : `${multiSelected.length} SQL Servers selected`
   // The empty area below the servers: Connect… and Refresh. Rows register their own menus.
   const background = useMenuTarget<HTMLDivElement>(() => ({ kind: 'explorer' }))
   const live = servers.filter(isLiveConnection).length
@@ -179,9 +186,33 @@ export default function ExplorerPane({ error, activeConnectionId, activeQueryId 
   useLayoutEffect(() => {
     if (!searchable && !empty && focusLost(paneDocument())) focusTree(header.current)
   }, [searchable, empty])
+  const wasMultiBar = useRef(inMultiBar)
+  useLayoutEffect(() => {
+    if (wasMultiBar.current && !inMultiBar && !empty && focusLost(paneDocument())) focusTree(header.current)
+    wasMultiBar.current = inMultiBar
+  }, [inMultiBar, empty])
   return <>
     <div className="explorer-header pane-header" ref={header}><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={headerTools} /><ExplorerMenuButton /></div>
     {searchable ? <ExplorerSearch connectionId={selectedServer} inlineTools={inlineToolbar} /> : <div className="explorer-tools-bar">{inlineToolbar}</div>}
+    {inMultiBar && <div className="oe-multi-bar" role="region" aria-label="Multi-server selection"
+      onKeyDown={event => {
+        if (event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+          event.preventDefault()
+          explorer.clearMultiSelect()
+          focusTree(header.current)
+        }
+      }}>
+      <span className="oe-multi-bar-label" title={multiSelectionLabel}>{multiSelectionLabel}</span>
+      <button type="button" className="primary oe-multi-bar-action"
+        disabled={!onNewMultiServerQuery && !canNewMultiQuery}
+        onClick={() => { if (onNewMultiServerQuery) onNewMultiServerQuery(); else void commands.execute('explorer.newMultiServerQuery', undefined, 'toolbar') }}>
+        New Query
+      </button>
+      <button type="button" className="icon-button oe-multi-bar-clear" aria-label="Clear selection" title="Clear selection (Escape)"
+        onClick={() => { explorer.clearMultiSelect(); focusTree(header.current) }}>
+        <Icon name="close" />
+      </button>
+    </div>}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => focusTree(header.current)}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} activeQueryId={activeQueryId} /><PeekCard /></ExplorerErrorBoundary>
