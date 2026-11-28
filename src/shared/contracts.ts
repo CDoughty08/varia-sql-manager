@@ -20,7 +20,7 @@ import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
 import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectIndexStatusParams, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
-import type { LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
+import type { LanguageHydrateRequest, LanguageHydrateResult, LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
 import type { DependenciesParams, DependenciesResult } from './explorer/dependencies.ts'
@@ -776,6 +776,7 @@ export interface RpcMethods {
   'agent.errorLogs': { params: AgentErrorLogsRequest; result: AgentErrorLogsResult }
   'language.parse': { params: LanguageParseRequest; result: LanguageParseResult }
   'language.lookup': { params: LanguageLookupRequest; result: LanguageLookupResult }
+  'language.hydrate': { params: LanguageHydrateRequest; result: LanguageHydrateResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -1087,6 +1088,8 @@ export interface VariaApi {
   languageParse(params: LanguageParseRequest): Promise<ApiResult<LanguageParseResult>>
   /** The Search Objects index by path, for the editor's completion and hover (BigQuery connections; src/shared/language-lookup.ts). */
   languageLookup(params: LanguageLookupRequest): Promise<ApiResult<LanguageLookupResult>>
+  /** Free on-demand REST tables.get / routines.get schema hydration for referenced BigQuery objects (src/shared/language-lookup.ts). */
+  languageHydrate(params: LanguageHydrateRequest): Promise<ApiResult<LanguageHydrateResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>

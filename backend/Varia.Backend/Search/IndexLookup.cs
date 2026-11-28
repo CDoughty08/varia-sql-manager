@@ -66,6 +66,10 @@ internal sealed record LookupForeignKey(LookupObject Entry, LookupObject Table, 
 /// <summary>An answer with the state of the database it came from, so a caller tells "none" from "not known yet".</summary>
 internal sealed record LookupAnswer<T>(LookupDatabase Database, T Value);
 
+/// <summary>A SQL Server object's in-memory summary for the editor's lazy details drawer: columns, parameters, keys, indexes, and foreign keys.</summary>
+internal sealed record LookupObjectSummary(LookupDatabase Database, LookupObject Object, IReadOnlyList<LookupColumn> Columns, IReadOnlyList<LookupColumn> Parameters,
+    IReadOnlyList<LookupIndex> Indexes, IReadOnlyList<LookupForeignKey> ForeignKeys, IReadOnlyList<LookupForeignKey> ReferencedBy);
+
 /// <summary>
 /// One table's lookup arrays, 4 bytes per entry and per foreign key: its entries without a parent sorted by name (case ignored),
 /// its children sorted by parent, and its foreign keys sorted by the table they reference. Each range is found by binary search
@@ -236,6 +240,71 @@ internal sealed class IndexLookup
         resource = index.Resource;
         this.building = building;
         (buildStarted, listed, skipped) = (builds.Started, builds.Listed, builds.Skips);
+    }
+
+    /// <summary>Whether the connection's index is building, ready (at least one database held), or none.</summary>
+    public string IndexState => building ? "building" : held.Count > 0 ? "ready" : "none";
+
+    /// <summary>The databases the index knows of (held, listed, or skipped), sorted by name.</summary>
+    public IReadOnlyList<string> Databases() =>
+        [.. held.Keys.Concat(listed).Concat(skipped.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.OrdinalIgnoreCase).ThenBy(name => name, StringComparer.Ordinal)];
+
+    /// <summary>The schemas holding top-level objects in <paramref name="database"/>, sorted by name.</summary>
+    public IReadOnlyList<string> Schemas(string database)
+    {
+        var known = Database(database);
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Collect(ObjectTable table)
+        {
+            for (var at = 0; at < table.Count; at++)
+                if (table.Parent(at) < 0 && table.Schema(at) is { Length: > 0 } schema) set.Add(schema);
+        }
+        if (known.Held is { } read) Collect(read.Table);
+        if (resource is not null && known.State != LookupState.Absent) Collect(resource.Table);
+        return [.. set.Order(StringComparer.OrdinalIgnoreCase).ThenBy(name => name, StringComparer.Ordinal)];
+    }
+
+    /// <summary>Top-level objects in <paramref name="schema"/> of <paramref name="database"/>, in name order.</summary>
+    public IEnumerable<LookupObject> ObjectsInSchema(string database, string schema)
+    {
+        var known = Database(database);
+        var dotted = known.CaseSensitive != true && known.Held?.DottedI == true;
+        Func<string, string, bool> same = known.CaseSensitive == true ? string.Equals
+            : dotted ? TurkishCase.Same : (left, right) => string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+        var found = new List<LookupObject>();
+        void Collect(ObjectTable table, DatabaseIndex? source)
+        {
+            for (var at = 0; at < table.Count; at++)
+                if (table.Parent(at) < 0 && table.Schema(at) is { } s && same(s, schema))
+                    found.Add(new(known.Database, table, at, source));
+        }
+        if (known.Held is { } read) Collect(read.Table, read);
+        if (resource is not null && known.State != LookupState.Absent) Collect(resource.Table, null);
+        return found.OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase).ThenBy(entry => entry.Name, StringComparer.Ordinal);
+    }
+
+    /// <summary>Thin object-summary lookup for completion-item resolution: finds the best matching object in RAM and collects its columns,
+    /// parameters, keys/indexes, and incoming/outgoing foreign keys without touching SQL Server or STS.</summary>
+    public LookupObjectSummary? ObjectSummary(string database, string? schema, string name, IReadOnlySet<string>? kinds = null)
+    {
+        var answer = Objects(database, schema, name, kinds);
+        if (answer.Value.Count == 0) return null;
+        var chosen = PickSummaryObject(answer.Value, schema);
+        return new(answer.Database, chosen, Columns(chosen), Parameters(chosen), Indexes(chosen), ForeignKeys(chosen), ReferencedBy(chosen));
+    }
+
+    private static LookupObject PickSummaryObject(IReadOnlyList<LookupObject> matches, string? requestedSchema)
+    {
+        if (matches.Count == 1) return matches[0];
+        static int KindRank(string kind) => kind switch
+        {
+            "table" => 0, "view" => 1, "procedure" => 2, "function" => 3, "tableType" => 4, "synonym" => 5, "sequence" => 6, _ => 7
+        };
+        return matches
+            .OrderBy(item => requestedSchema is null && string.Equals(item.Schema, "dbo", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(item => KindRank(item.Kind))
+            .ThenBy(item => item.Schema ?? "", StringComparer.OrdinalIgnoreCase)
+            .First();
     }
 
     /// <summary>The database's name as the index knows it: as given, else the one name that differs from it only in case.</summary>

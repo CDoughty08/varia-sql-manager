@@ -1,9 +1,12 @@
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { documentEncodingLabel, lineEndingLabel } from '../../shared/files/encoding'
 import type { IconId } from '../../shared/icons'
+import { modalOpen } from './core/modal'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import Icon from './Icon'
 import { isQueryDocument } from './documents'
 import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
+import IntelliSensePopover from './languages/IntelliSensePopover'
 import { withKey } from './query-context'
 
 export interface SqlStatusItem { readonly label: string; readonly detail: string }
@@ -24,7 +27,7 @@ export function sqlStatusChip(language: SqlStatusItem | undefined, issues: SqlSt
   const detailParts: string[] = []
   if (language) detailParts.push(language.detail ? `${language.label}: ${language.detail}` : language.label)
   if (issues) detailParts.push(issues.detail ? `${issues.label}: ${issues.detail}` : issues.label)
-  detailParts.push('Click to open SQL IntelliSense and analysis settings.')
+  detailParts.push('Click to inspect IntelliSense status and actions.')
   const detail = detailParts.join('\n')
 
   let label: string, icon: IconId, tone: SqlStatusChip['tone']
@@ -47,16 +50,16 @@ export function sqlStatusChip(language: SqlStatusItem | undefined, issues: SqlSt
   } else {
     label = language!.label; icon = 'code'; tone = 'normal'
   }
-  return { label, icon, tone, detail, ariaLabel: `SQL status: ${label}. Open SQL IntelliSense and analysis settings.` }
+  return { label, icon, tone, detail, ariaLabel: `SQL status: ${label}. Open IntelliSense status popover.` }
 }
 
 /**
  * The IDE status bar's editor segments, as Visual Studio shows them: Ln, Col and Ch of the caret, INS or OVR, the line
- * ending, the file's encoding (what a new query will be saved in), the condensed SQL language/analysis status chip, and
- * Read-only. Shown while a document is open.
+ * ending, the file's encoding (what a new query will be saved in), the condensed SQL language/analysis status chip
+ * (which opens the unified IntelliSense status popover), and Read-only. Shown while a document is open.
  */
 export default function EditorStatus() {
-  const { editorStatus, inputMode, documents, settings, commands, sqlLanguage, sqlDiagnostics, bigQueryCost, indexCompletion } = useWorkbench()
+  const { editorStatus, inputMode, documents, settings, commands, sqlLanguage, sqlDiagnostics, bigQueryCost, indexCompletion, menus } = useWorkbench()
   useServiceSnapshot(sqlLanguage)
   useServiceSnapshot(sqlDiagnostics)
   useServiceSnapshot(bigQueryCost)
@@ -67,7 +70,22 @@ export default function EditorStatus() {
   const { mode } = useServiceSnapshot(inputMode)
   const { documents: list, activeId } = useServiceSnapshot(documents)
   const values = useServiceSnapshot(settings).values
+  const [popoverOpen, setPopoverOpen] = useState(false)
+  const [popoverAutoFocus, setPopoverAutoFocus] = useState(false)
+  const sqlTriggerRef = useRef<HTMLButtonElement>(null)
+  const popoverId = useId()
   const active = list.find(document => document.id === activeId)
+
+  const closePopover = useCallback((restoreFocus = false) => {
+    setPopoverOpen(false)
+    setPopoverAutoFocus(false)
+    if (restoreFocus) sqlTriggerRef.current?.focus({ preventScroll: true })
+  }, [])
+
+  useEffect(() => {
+    if (!active || !isQueryDocument(active)) setPopoverOpen(false)
+  }, [active])
+
   if (!active || !caret) return <span className="editor-status" />
   const file = active.file
   const encoding = documentEncodingLabel(file, values['environment.documents.saveWithSpecificEncoding'] ? values['environment.documents.saveEncoding'] : undefined)
@@ -78,7 +96,8 @@ export default function EditorStatus() {
   const bigQueryIssues = isQueryDocument(active) ? bigQueryCost.status(active.id) : undefined
   const issues = isQueryDocument(active) ? bigQueryIssues ?? sqlDiagnostics.status(active.id) : undefined
   const sqlChip = sqlStatusChip(language, issues)
-  const sqlSetting = bigQueryLanguage || bigQueryIssues ? 'textEditor.googleSql.dryRunDiagnostics' : 'textEditor.sql.errorChecking'
+  const isBigQuery = !!(bigQueryLanguage || bigQueryIssues)
+  const sqlSetting = isBigQuery ? 'textEditor.googleSql.dryRunDiagnostics' : 'textEditor.sql.errorChecking'
   return <span className="editor-status">
     <span className="editor-status-group editor-status-caret">
       <button type="button" className="editor-status-position editor-status-action" disabled={!canGoToLine} title={withKey('Go to line', goToLineKey)} aria-label={`Line ${caret.line}, column ${caret.column}, character ${caret.character}`}
@@ -91,11 +110,23 @@ export default function EditorStatus() {
       <span className="editor-status-encoding" title="Encoding">{encoding}</span>
       {file?.readOnly && <span className="editor-status-readonly" title="The file is read-only: Save asks before overwriting it."><Icon name="lock" />Read-only</span>}
     </span>
-    {sqlChip && <span className="editor-status-group editor-status-sql-group">
-      <button type="button" className="editor-status-sql editor-status-action" data-tone={sqlChip.tone} aria-label={sqlChip.ariaLabel} title={sqlChip.detail}
-        onClick={() => void commands.execute('preferences.options', { setting: sqlSetting }, 'toolbar')}>
+    {sqlChip && isQueryDocument(active) && <span className="editor-status-group editor-status-sql-group">
+      <button ref={sqlTriggerRef} type="button" className="editor-status-sql editor-status-action" data-tone={sqlChip.tone}
+        aria-label={sqlChip.ariaLabel} aria-expanded={popoverOpen} aria-haspopup="dialog" aria-controls={popoverId} title={sqlChip.detail}
+        onClick={event => {
+          if (!modalOpen() && !menus?.ownsKeyboard()) {
+            const keyboard = event.detail === 0
+            setPopoverOpen(current => {
+              const next = !current
+              setPopoverAutoFocus(next && keyboard)
+              return next
+            })
+          }
+        }}>
         <Icon name={sqlChip.icon} /><span>{sqlChip.label}</span>
       </button>
+      {popoverOpen && <IntelliSensePopover open={popoverOpen} autoFocus={popoverAutoFocus} popoverId={popoverId} triggerRef={sqlTriggerRef} active={active} isBigQuery={isBigQuery}
+        language={language} issues={issues} sqlSetting={sqlSetting} onClose={closePopover} />}
       {language && <span className="visually-hidden" role="status" aria-live="polite" aria-label="SQL IntelliSense" title={language.detail}>{language.label}</span>}
       {issues && <span className="visually-hidden" role="status" aria-live="polite" aria-label="SQL query issues" title={issues.detail}>{issues.label}</span>}
     </span>}

@@ -9,6 +9,18 @@ internal static class EditorLookupLimits
     public const int Requests = 16, Segments = 3, SegmentChars = 1024, PrefixChars = 4608, Items = 2000, DefaultItems = 500, TotalItems = 4000, TotalBytes = 12582912;
 }
 
+/// <summary>Cross-project fuzzy jump bounds (jumpLookupLimits in src/shared/language-lookup.ts).</summary>
+internal static class JumpLookupLimits
+{
+    public const int MinPrefixChars = 2, MaxPrefixChars = 128, Items = 50, MaxScanObjects = 100_000;
+}
+
+/// <summary>language.hydrate bounds (languageHydrateLimits in src/shared/language-lookup.ts).</summary>
+internal static class LanguageHydrateLimits
+{
+    public const int Targets = 8, MaxNegativeEntries = 256, MaxPerMinute = 30, MaxConcurrent = 4;
+}
+
 internal static class EditorLookup
 {
     private static RequestException Invalid(string what) => new("INVALID_PARAMS", "Invalid language lookup: " + what);
@@ -31,7 +43,11 @@ internal static class EditorLookup
         + (item.Rows is null ? 0 : 14)
         + (item.Bytes is null ? 0 : 15)
         + (item.Partitioning is null ? 0 : 13 + StrBytes(item.Partitioning))
-        + (item.Clustering is null ? 0 : 11 + StrBytes(item.Clustering));
+        + (item.Clustering is null ? 0 : 11 + StrBytes(item.Clustering))
+        + (item.Recent is null ? 0 : 8)
+        + (item.Indexing is null ? 0 : 10)
+        + (item.Project is null ? 0 : 8 + StrBytes(item.Project))
+        + (item.Dataset is null ? 0 : 8 + StrBytes(item.Dataset));
 
     private static int ObjectBytes(LanguageLookupObject? shown) => shown is null ? 0 :
         10 + 5 + StrBytes(shown.Name) + 5 + StrBytes(shown.Kind)
@@ -61,6 +77,19 @@ internal static class EditorLookup
         foreach (var request in args.Requests)
         {
             if (request is null) throw Invalid("requests.");
+            if (request.Mode is not (null or "children" or "jump")) throw Invalid("mode.");
+            if (request.Mode == "jump")
+            {
+                if (request.Path is not { Count: 0 }) throw Invalid("jump needs an empty path.");
+                if (request.Exact == true) throw Invalid("jump does not support exact.");
+                var trimmed = request.Prefix?.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.Length < JumpLookupLimits.MinPrefixChars || request.Prefix!.Length > JumpLookupLimits.MaxPrefixChars)
+                    throw Invalid("jump prefix.");
+                if (request.Limit is < 1 or > JumpLookupLimits.Items) throw Invalid("jump limit.");
+                if (request.Dataset is not null && (request.Dataset.Length is 0 or > EditorLookupLimits.SegmentChars)) throw Invalid("dataset.");
+                continue;
+            }
+            if (request.Dataset is not null) throw Invalid("dataset.");
             if (request.Path is not { Count: <= EditorLookupLimits.Segments } || request.Path.Any(segment => segment is not { Length: > 0 and <= EditorLookupLimits.SegmentChars })) throw Invalid("path.");
             if (request.Prefix is { Length: > EditorLookupLimits.PrefixChars }) throw Invalid("prefix.");
             if (request.Exact == true && string.IsNullOrEmpty(request.Prefix)) throw Invalid("exact needs a prefix.");
@@ -86,6 +115,228 @@ internal static class EditorLookup
             answers.Add(One(lookup, args.Requests[i], ref left, ref bytesLeft, reserveForLater));
         }
         return new(lookup.Index, answers);
+    }
+
+    /// <summary>Answers every request from one snapshot of a SQL Server connection's Search Objects index (in-process RAM read).</summary>
+    public static LanguageLookupResult Answer(IndexLookup? lookup, LanguageLookupArgs args)
+    {
+        Validate(args);
+        if (lookup is null)
+            return new("none", [.. args.Requests.Select(request => new LanguageLookupAnswer("absent", [.. request.Path], [], false))]);
+        var left = EditorLookupLimits.TotalItems;
+        var bytesLeft = EditorLookupLimits.TotalBytes - 64;
+        var reserveForLater = 0;
+        for (var i = 1; i < args.Requests.Count; i++) reserveForLater += ReserveBytes(args.Requests[i]);
+        var answers = new List<LanguageLookupAnswer>(args.Requests.Count);
+        for (var i = 0; i < args.Requests.Count; i++)
+        {
+            if (i > 0) reserveForLater -= ReserveBytes(args.Requests[i]);
+            answers.Add(OneSql(lookup, args.Requests[i], ref left, ref bytesLeft, reserveForLater));
+        }
+        return new(lookup.IndexState, answers);
+    }
+
+    private const int SqlSummaryDetailChars = 512;
+    private static string ClipDetail(string text) => text.Length <= SqlSummaryDetailChars ? text : text[..(SqlSummaryDetailChars - 1)] + "…";
+
+    private static LanguageLookupAnswer OneSql(IndexLookup lookup, LanguageLookupPath request, ref int left, ref int bytesLeft, int reserveForLater)
+    {
+        var path = request.Path;
+        var prefix = request.Prefix ?? "";
+        var exact = request.Exact == true;
+        var limit = Math.Min(request.Limit ?? EditorLookupLimits.DefaultItems, left);
+        bool Keeps(string name) => exact ? string.Equals(name, prefix, StringComparison.OrdinalIgnoreCase) : name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+        (List<LanguageLookupItem> Items, bool Truncated) Take(IEnumerable<LanguageLookupItem> items, ref int remaining, ref int remainingBytes, int overheadBytes)
+        {
+            var available = Math.Max(0, remainingBytes - reserveForLater - overheadBytes);
+            var spentOnItems = 0;
+            var list = new List<LanguageLookupItem>();
+            var truncated = false;
+            foreach (var item in items)
+            {
+                if (list.Count >= limit) { truncated = true; break; }
+                var itemBytes = ItemBytes(item);
+                if (itemBytes > available) { truncated = true; break; }
+                available -= itemBytes;
+                spentOnItems += itemBytes;
+                list.Add(item);
+            }
+            remainingBytes = Math.Max(0, remainingBytes - overheadBytes - spentOnItems);
+            remaining -= list.Count;
+            return (list, truncated);
+        }
+        switch (path.Count)
+        {
+            case 0:
+            {
+                var names = lookup.Databases().Where(Keeps);
+                var (items, truncated) = Take(names.Select(name =>
+                {
+                    var db = lookup.Database(name);
+                    return new LanguageLookupItem(name, "database", Partial: db.State == LookupState.Partial ? true : null);
+                }), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
+                return new(lookup.IndexState == "building" ? "building" : "ready", [], items, truncated);
+            }
+            case 1:
+            {
+                var db = lookup.Database(path[0]);
+                var resolvedPath = new List<string> { db.Database };
+                if (db.State is LookupState.Absent or LookupState.Skipped)
+                {
+                    bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes(resolvedPath, db.Skip?.Code));
+                    return new(State(db.State), resolvedPath, [], false, Skip: db.Skip?.Code);
+                }
+                var schemas = lookup.Schemas(db.Database).Where(Keeps);
+                var (items, truncated) = Take(schemas.Select(schema => new LanguageLookupItem(schema, "schema")), ref left, ref bytesLeft, AnswerOverheadBytes(resolvedPath, db.Skip?.Code));
+                return new(State(db.State), resolvedPath, items, truncated, Skip: db.Skip?.Code);
+            }
+            case 2:
+            {
+                var db = lookup.Database(path[0]);
+                var resolvedPath = new List<string> { db.Database, path[1] };
+                if (db.State is LookupState.Absent or LookupState.Skipped)
+                {
+                    bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes(resolvedPath, db.Skip?.Code));
+                    return new(State(db.State), resolvedPath, [], false, Skip: db.Skip?.Code);
+                }
+                var objects = lookup.ObjectsInSchema(db.Database, path[1]).Where(entry => Keeps(entry.Name));
+                var (items, truncated) = Take(objects.Select(entry => new LanguageLookupItem(entry.Name, entry.Kind, entry.Subtype,
+                    Partial: db.Gaps.HasFlag(LookupGaps.ChildrenLeftOut) ? true : null)), ref left, ref bytesLeft, AnswerOverheadBytes(resolvedPath, db.Skip?.Code));
+                return new(State(db.State), resolvedPath, items, truncated, Skip: db.Skip?.Code);
+            }
+            default:
+            {
+                var db = lookup.Database(path[0]);
+                var summary = path[1] == "*"
+                    ? lookup.ObjectSummary(path[0], "*", path[2]) ?? lookup.ObjectSummary(path[0], null, path[2])
+                    : lookup.ObjectSummary(path[0], path[1], path[2]);
+                if (summary is null)
+                {
+                    var earlyPath = new List<string> { db.Database, path[1] };
+                    bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes(earlyPath, db.Skip?.Code));
+                    return new(State(db.State), earlyPath, [], false, Skip: db.Skip?.Code);
+                }
+                var entry = summary.Object;
+                var resolvedSchema = entry.Schema is { Length: > 0 } s ? s : path[1];
+                var resolvedPath = new List<string> { summary.Database.Database, resolvedSchema, entry.Name };
+                var detailed = !summary.Database.Gaps.HasFlag(LookupGaps.ChildrenLeftOut);
+                var signature = SqlSignature(summary);
+                var shown = new LanguageLookupObject(entry.Name, entry.Kind, entry.Subtype, detailed,
+                    Signature: signature is null ? null : ClipDetail(signature), Modified: entry.Table.Modified(entry.At));
+                var baseOverhead = AnswerOverheadBytes(resolvedPath, summary.Database.Skip?.Code);
+                var availableForObject = Math.Max(0, bytesLeft - reserveForLater - baseOverhead);
+                if (ObjectBytes(shown) > availableForObject)
+                {
+                    bytesLeft = Math.Max(0, bytesLeft - baseOverhead);
+                    return new(State(summary.Database.State), resolvedPath, [], true, null, summary.Database.Skip?.Code);
+                }
+                var (items, truncated) = Take(SqlSummaryItems(summary).Where(item => string.IsNullOrEmpty(prefix) || Keeps(item.Name)),
+                    ref left, ref bytesLeft, baseOverhead + ObjectBytes(shown));
+                return new(State(summary.Database.State), resolvedPath, items, truncated, shown, summary.Database.Skip?.Code);
+            }
+        }
+    }
+
+    private static string? SqlSignature(LookupObjectSummary summary)
+    {
+        if (summary.Object.Kind is not ("procedure" or "function")) return null;
+        var parts = summary.Parameters.Take(24).Select(parameter =>
+        {
+            var type = parameter.Type?.TypeText;
+            var flags = parameter.Type?.Flags ?? TypedFlags.None;
+            var suffix = (flags & TypedFlags.Output) != 0 ? " OUTPUT" : (flags & TypedFlags.ReadOnly) != 0 ? " READONLY" : "";
+            return type is null ? parameter.Name : $"{parameter.Name} {type}{suffix}";
+        }).ToList();
+        var more = summary.Parameters.Count > 24 ? ", …" : "";
+        var ret = summary.Object.Type?.TypeText is { Length: > 0 } returnType ? $" RETURNS {returnType}" : "";
+        return parts.Count == 0 && ret.Length == 0 ? null : $"({string.Join(", ", parts)}{more}){ret}";
+    }
+
+    private static IEnumerable<LanguageLookupItem> SqlSummaryItems(LookupObjectSummary summary)
+    {
+        var comparer = summary.Database.CaseSensitive == true ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
+        var pkColumnIds = new HashSet<short>();
+        var ukColumnIds = new HashSet<short>();
+        var pkColumns = new HashSet<string>(comparer);
+        var ukColumns = new HashSet<string>(comparer);
+        var fkColumns = new HashSet<string>(comparer);
+        foreach (var index in summary.Indexes)
+        {
+            if (index.Kind == "key" && index.Subtype == "primary")
+            {
+                foreach (var keyCol in index.Columns)
+                {
+                    if (keyCol.Included) continue;
+                    if (keyCol.ColumnId > 0) pkColumnIds.Add(keyCol.ColumnId);
+                    else if (keyCol.Name is { Length: > 0 }) pkColumns.Add(keyCol.Name);
+                }
+            }
+            else if (index.Kind == "key" && index.Subtype == "unique")
+            {
+                foreach (var keyCol in index.Columns)
+                {
+                    if (keyCol.Included) continue;
+                    if (keyCol.ColumnId > 0) ukColumnIds.Add(keyCol.ColumnId);
+                    else if (keyCol.Name is { Length: > 0 }) ukColumns.Add(keyCol.Name);
+                }
+            }
+        }
+        foreach (var fk in summary.ForeignKeys)
+            foreach (var (column, _) in fk.Pairs) if (column is { Length: > 0 }) fkColumns.Add(column);
+
+        foreach (var column in summary.Columns)
+        {
+            var markers = new List<string>();
+            if ((column.Ordinal > 0 && pkColumnIds.Contains(column.Ordinal)) || pkColumns.Contains(column.Name)) markers.Add("PK");
+            if ((column.Ordinal > 0 && ukColumnIds.Contains(column.Ordinal)) || ukColumns.Contains(column.Name)) markers.Add("UK");
+            if (fkColumns.Contains(column.Name)) markers.Add("FK");
+            var flags = column.Type?.Flags ?? TypedFlags.None;
+            if ((flags & TypedFlags.Identity) != 0) markers.Add("IDENTITY");
+            if ((flags & TypedFlags.Computed) != 0) markers.Add("COMPUTED");
+            if ((flags & TypedFlags.Default) != 0) markers.Add("DEFAULT");
+            yield return new LanguageLookupItem(
+                column.Name, "column", column.Entry.Subtype,
+                Type: column.Type?.TypeText,
+                Nullable: column.Type is { } type ? (type.Flags & TypedFlags.Nullable) != 0 : null,
+                Detail: markers.Count > 0 ? ClipDetail(string.Join(" · ", markers)) : null);
+        }
+        foreach (var parameter in summary.Parameters)
+        {
+            var markers = new List<string>();
+            var flags = parameter.Type?.Flags ?? TypedFlags.None;
+            if ((flags & TypedFlags.Output) != 0) markers.Add("OUTPUT");
+            if ((flags & TypedFlags.ReadOnly) != 0) markers.Add("READONLY");
+            if ((flags & TypedFlags.Default) != 0) markers.Add("DEFAULT");
+            yield return new LanguageLookupItem(
+                parameter.Name, "parameter", parameter.Entry.Subtype,
+                Type: parameter.Type?.TypeText,
+                Nullable: parameter.Type is { } type ? (type.Flags & TypedFlags.Nullable) != 0 : null,
+                Detail: markers.Count > 0 ? ClipDetail(string.Join(" · ", markers)) : null);
+        }
+        foreach (var index in summary.Indexes)
+        {
+            var keys = index.Columns.Where(c => !c.Included && c.Name is { Length: > 0 }).Select(c => c.Descending ? c.Name + " DESC" : c.Name!).ToList();
+            var included = index.Columns.Where(c => c.Included && c.Name is { Length: > 0 }).Select(c => c.Name!).ToList();
+            var text = keys.Count > 0 ? "(" + string.Join(", ", keys) + ")" : "";
+            if (included.Count > 0) text += (text.Length > 0 ? " " : "") + "INCLUDE (" + string.Join(", ", included) + ")";
+            yield return new LanguageLookupItem(index.Entry.Name, index.Kind, index.Subtype, Detail: text.Length > 0 ? ClipDetail(text) : null);
+        }
+        foreach (var fk in summary.ForeignKeys)
+        {
+            var cols = fk.Pairs.Select(p => p.Column).Where(n => n is { Length: > 0 }).ToList();
+            var refs = fk.Pairs.Select(p => p.ReferencedColumn).Where(n => n is { Length: > 0 }).ToList();
+            var target = fk.Referenced is { } r ? (r.Schema is { Length: > 0 } s ? $"{s}.{r.Name}" : r.Name) : "?";
+            var detail = $"({string.Join(", ", cols)}) → {target}" + (refs.Count > 0 ? $"({string.Join(", ", refs)})" : "");
+            yield return new LanguageLookupItem(fk.Entry.Name, "foreignKey", "outgoing", Detail: ClipDetail(detail));
+        }
+        foreach (var fk in summary.ReferencedBy)
+        {
+            var cols = fk.Pairs.Select(p => p.Column).Where(n => n is { Length: > 0 }).ToList();
+            var refs = fk.Pairs.Select(p => p.ReferencedColumn).Where(n => n is { Length: > 0 }).ToList();
+            var source = fk.Table.Schema is { Length: > 0 } s ? $"{s}.{fk.Table.Name}" : fk.Table.Name;
+            var detail = $"{source}({string.Join(", ", cols)}) → ({string.Join(", ", refs)})";
+            yield return new LanguageLookupItem(fk.Entry.Name, "foreignKey", "incoming", Detail: ClipDetail(detail));
+        }
     }
 
     private static string State(LookupState state) => state switch
@@ -125,6 +376,31 @@ internal static class EditorLookup
             remaining -= list.Count;
             return (list, truncated);
         }
+        if (request.Mode == "jump")
+        {
+            var jumpLimit = Math.Min(request.Limit ?? JumpLookupLimits.Items, left);
+            if (jumpLimit <= 0)
+            {
+                bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes([], null));
+                return new(lookup.Index == "none" ? "absent" : "ready", [], [], lookup.HasAnyHeldObject());
+            }
+            var details = request.Details == true;
+            var hits = lookup.JumpObjects(prefix.Trim(), request.Dataset, jumpLimit, out var jumpTruncated);
+            var (items, truncated) = Take(hits.Select(hit =>
+            {
+                var entry = hit.Entry;
+                var facts = BigQueryLookup.Facts(entry);
+                var ds = lookup.Dataset(hit.Project, hit.Dataset);
+                return new LanguageLookupItem(entry.Name, entry.Kind, entry.Subtype, Detail: facts?.Signature,
+                    Description: details ? facts?.Description : null, Shards: BigQueryLookup.Shards(entry),
+                    Tier: hit.Tier, NamesOnly: hit.NamesOnly ? true : null,
+                    Partial: !IsDetailed(lookup, ds, entry, facts) || facts?.ColumnsCut == true ? true : null,
+                    Rows: SafeCount(facts?.Rows), Bytes: SafeCount(facts?.Bytes),
+                    Partitioning: facts?.Partitioning, Clustering: facts?.Clustering,
+                    Recent: hit.Recent ? true : null, Project: hit.Project, Dataset: hit.Dataset);
+            }), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
+            return new(lookup.Index == "none" ? "absent" : "ready", [], items, truncated || jumpTruncated);
+        }
         switch (path.Count)
         {
             case 0:
@@ -132,7 +408,8 @@ internal static class EditorLookup
                 var names = exact ? Resolved(lookup.Projects, prefix) : lookup.Projects.Where(Keeps);
                 var (items, truncated) = Take(names.Select(name => new LanguageLookupItem(name, "bqProject", Detail: lookup.NamesOnly(name) ? "names" : null,
                     Tier: lookup.ProjectTier(name), NamesOnly: lookup.NamesOnly(name) ? true : null,
-                    Partial: lookup.ProjectState(name) == LookupState.Partial ? true : null)), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
+                    Partial: lookup.ProjectState(name) == LookupState.Partial ? true : null,
+                    Recent: lookup.IsRecent(name) ? true : null, Indexing: lookup.Wave3Pending(name) ? true : null)), ref left, ref bytesLeft, AnswerOverheadBytes([], null));
                 return new("ready", [], items, truncated);
             }
             case 1:
@@ -177,7 +454,9 @@ internal static class EditorLookup
                 {
                     var earlyPath = lookup.Project(path[0]) is null ? [.. path] : new List<string> { dataset.Project, dataset.Dataset };
                     bytesLeft = Math.Max(0, bytesLeft - AnswerOverheadBytes(earlyPath, dataset.Skip?.Code));
-                    return new(State(dataset.State), earlyPath, [], false, Skip: dataset.Skip?.Code);
+                    // A dataset populated only by individual JIT-hydrated objects has no full listing, so any other object is absent.
+                    var missingState = lookup.IsHydratedOnly(dataset.Project, dataset.Dataset) ? LookupState.Absent : dataset.State;
+                    return new(State(missingState), earlyPath, [], false, Skip: dataset.Skip?.Code);
                 }
                 var facts = BigQueryLookup.Facts(entry);
                 var detailed = IsDetailed(lookup, dataset, entry, facts);

@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { BigQueryIndexScope, ObjectIndexProgress, ObjectIndexResult, ObjectIndexStatus } from '../src/shared/explorer/search'
-import type { LanguageLookupAnswer, LanguageLookupPath, LanguageLookupResult } from '../src/shared/language-lookup'
+import { languageHydrateLimits, type LanguageHydrateRequest, type LanguageHydrateResult, type LanguageLookupAnswer, type LanguageLookupPath, type LanguageLookupResult } from '../src/shared/language-lookup'
 import type { SettingKey, SettingValue } from '../src/shared/settings/catalog'
 import { googleSqlLanguageId } from '../src/renderer/src/languages/googlesql'
-import { extractBigQueryRefreshScopes, IndexCompletionService } from '../src/renderer/src/languages/IndexCompletionService'
+import { extractBigQueryRefreshScopes, formatBigQueryProjectDetail, hydrateTableCommandId, IndexCompletionService, starProjectCommandId } from '../src/renderer/src/languages/IndexCompletionService'
 import { ObjectSearchService } from '../src/renderer/src/search/ObjectSearchService'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred, documentFixture } from './fixtures/documents'
@@ -59,8 +59,12 @@ function makeStatus(overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStat
 
 function createFixture(options: {
   lookup?: (requests: LanguageLookupPath[]) => Promise<ApiResult<LanguageLookupResult>>
+  hydrate?: (params: LanguageHydrateRequest) => Promise<ApiResult<LanguageHydrateResult>>
   refreshScopes?: (connectionId: string, scopes: readonly BigQueryIndexScope[]) => Promise<boolean>
   withSearch?: boolean
+  jitHydrateEnabled?: () => boolean
+  starProject?: (connectionId: string, project: string) => Promise<boolean>
+  reportError?: (message: string) => void
 } = {}) {
   const connections = new ConnectionService()
   connections.add(
@@ -69,7 +73,21 @@ function createFixture(options: {
   )
   const { documents, events, model } = documentFixture({ provider: id => connections.get(id)?.providerId })
   let completionProvider: Monaco.languages.CompletionItemProvider | undefined
+  let hoverProvider: Monaco.languages.HoverProvider | undefined
+  const registeredCommands = new Map<string, (...args: unknown[]) => void>()
+  const triggerCalls: string[] = []
   const monaco = {
+    editor: {
+      registerCommand: (id: string, handler: (...args: unknown[]) => void) => {
+        registeredCommands.set(id, handler)
+        return { dispose: () => { registeredCommands.delete(id) } }
+      },
+      getEditors: () => [{
+        hasWidgetFocus: () => true,
+        hasTextFocus: () => true,
+        trigger: (_source: string, handlerId: string) => { triggerCalls.push(handlerId) }
+      }]
+    },
     languages: {
       CompletionItemKind: {
         Keyword: 14, Function: 1, Module: 8, Class: 6, Interface: 7, Method: 2, Value: 12, Field: 4, Property: 9, Variable: 5, Reference: 17
@@ -79,7 +97,10 @@ function createFixture(options: {
         completionProvider = provider
         return { dispose: () => {} }
       },
-      registerHoverProvider: () => ({ dispose: () => {} })
+      registerHoverProvider: (_id: string, provider: Monaco.languages.HoverProvider) => {
+        hoverProvider = provider
+        return { dispose: () => {} }
+      }
     }
   }
 
@@ -127,6 +148,7 @@ function createFixture(options: {
   })
 
   const languageLookup = vi.fn(async (params: { connectionId: string; requests: LanguageLookupPath[] }) => (options.lookup ?? defaultLookup)(params.requests))
+  const languageHydrate = options.hydrate ? vi.fn(options.hydrate) : undefined
   const ensureIndex = vi.fn()
   const progressListeners = new Set<(progress: ObjectIndexProgress) => void>()
   const explorerIndex = vi.fn<VariaApi['explorerIndex']>(async () => ({ ok: true, value: { elapsedMs: 1, status: makeStatus() } }))
@@ -164,7 +186,7 @@ function createFixture(options: {
 
   const service = new IndexCompletionService(
     monaco as never,
-    { languageLookup },
+    { languageLookup, ...languageHydrate ? { languageHydrate } : {} },
     documents,
     connections,
     {
@@ -177,19 +199,31 @@ function createFixture(options: {
               refreshScopesOutcome: (id, scopes) => objectSearch.refreshBigQueryScopesOutcome(id, scopes)
             }
           : {}),
-      ...(objectSearch ? { indexState: objectSearch } : {})
+      ...(objectSearch ? { indexState: objectSearch } : {}),
+      ...(options.jitHydrateEnabled ? { jitHydrateEnabled: options.jitHydrateEnabled } : {}),
+      ...(options.starProject ? { starProject: options.starProject } : {}),
+      ...(options.reportError ? { reportError: options.reportError } : {})
     }
   )
   cleanups.push(() => service.dispose())
 
-  async function completeAt(docId: string, sourceWithCaret: string) {
+  async function completeAt(docId: string, sourceWithCaret: string, cancelToken?: Monaco.CancellationToken) {
     const caret = sourceWithCaret.indexOf('|')
     const text = sourceWithCaret.slice(0, caret) + sourceWithCaret.slice(caret + 1)
     const m = model(docId)
     m.edit(text)
     const pos = m.getPositionAt(caret) as Monaco.Position
-    const result = await completionProvider!.provideCompletionItems(m.asModel(), pos, { triggerKind: 0 }, token())
+    const result = await completionProvider!.provideCompletionItems(m.asModel(), pos, { triggerKind: 0 }, cancelToken ?? token())
     return result as Monaco.languages.CompletionList
+  }
+
+  async function hoverAt(docId: string, sourceWithCaret: string) {
+    const caret = sourceWithCaret.indexOf('|')
+    const text = sourceWithCaret.slice(0, caret) + sourceWithCaret.slice(caret + 1)
+    const m = model(docId)
+    m.edit(text)
+    const pos = m.getPositionAt(caret) as Monaco.Position
+    return hoverProvider!.provideHover(m.asModel(), pos, token())
   }
 
   return {
@@ -199,11 +233,15 @@ function createFixture(options: {
     events,
     model,
     languageLookup,
+    languageHydrate,
     ensureIndex,
     objectSearch,
     explorerIndex,
     emitProgress: (progress: ObjectIndexProgress) => { for (const l of progressListeners) l(progress) },
     completeAt,
+    hoverAt,
+    registeredCommands,
+    triggerCalls,
     completionProvider: () => completionProvider!
   }
 }
@@ -702,6 +740,520 @@ describe('IndexCompletionService', () => {
     expect(f.service.availability(tabLookup.id)?.label).toBe('IntelliSense')
   })
 
+  it('formats PR #738 project tiers and preserves Billing -> Starred -> Recent -> Discovered ordering in Monaco', async () => {
+    expect(formatBigQueryProjectDetail({ name: 'p', kind: 'bqProject', tier: 'billing' })).toBe('Billing')
+    expect(formatBigQueryProjectDetail({ name: 'p', kind: 'bqProject', tier: 'starred' })).toBe('★ Starred')
+    expect(formatBigQueryProjectDetail({ name: 'p', kind: 'bqProject', tier: 'discovered', recent: true })).toBe('Recent')
+    expect(formatBigQueryProjectDetail({ name: 'p', kind: 'bqProject', tier: 'discovered' })).toBe('Discovered')
+    expect(formatBigQueryProjectDetail({ name: 'p', kind: 'bqProject', tier: 'discovered', namesOnly: true })).toBe('Discovered · Names only · memory cap')
+    expect(formatBigQueryProjectDetail({ name: 'p', kind: 'bqProject', tier: 'discovered', indexing: true })).toBe('Discovered · Wave 3 indexing…')
+
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.path.length === 0) {
+              return {
+                state: 'ready',
+                path: [],
+                truncated: false,
+                items: [
+                  { name: 'varia-alpha', kind: 'bqProject', tier: 'billing' },
+                  { name: 'zzz-starred-dw', kind: 'bqProject', tier: 'starred' },
+                  { name: 'mmm-recent-proj', kind: 'bqProject', tier: 'discovered', recent: true },
+                  { name: 'aaa-discovered-cap', kind: 'bqProject', tier: 'discovered', namesOnly: true, detail: 'names' },
+                  { name: 'aab-discovered-wave3', kind: 'bqProject', tier: 'discovered', indexing: true }
+                ]
+              }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('tiers.sql', '', '', bqConnId)
+    const list = await f.completeAt(tab.id, 'SELECT * FROM |')
+    const projectItems = list.suggestions
+      .filter(s => ['varia-alpha', 'zzz-starred-dw', 'mmm-recent-proj', 'aaa-discovered-cap', 'aab-discovered-wave3'].includes(labelText(s.label)))
+      .sort((a, b) => (a.sortText ?? '').localeCompare(b.sortText ?? ''))
+    expect(projectItems.map(item => labelText(item.label))).toEqual([
+      'varia-alpha', 'zzz-starred-dw', 'mmm-recent-proj', 'aaa-discovered-cap', 'aab-discovered-wave3'
+    ])
+    expect(projectItems.map(item => (item.label as Monaco.languages.CompletionItemLabel).description)).toEqual([
+      'Billing', '★ Starred', 'Recent', 'Discovered · Names only · memory cap', 'Discovered · Wave 3 indexing…'
+    ])
+  })
+
+  it('batches cross-project fuzzy table jump on FROM <2+ chars>, formats compact vs backticked paths, and caches growing prefixes', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.mode === 'jump') {
+              return {
+                state: 'ready',
+                path: [],
+                truncated: false,
+                items: [
+                  { name: 'daily_revenue', kind: 'bqTable', tier: 'billing', project: 'varia-alpha', dataset: 'finance' },
+                  { name: 'daily_revenue_v2', kind: 'bqTable', tier: 'starred', project: 'dw-shared', dataset: 'gold' },
+                  { name: 'daily_rev_raw', kind: 'bqTable', tier: 'discovered', namesOnly: true, project: 'org-raw-09', dataset: 'landing' }
+                ]
+              }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    // Tab with <no default dataset> (empty database string).
+    const tab = f.documents.create('jump.sql', '', '', bqConnId)
+    const first = await f.completeAt(tab.id, 'SELECT * FROM daily_rev|')
+    // Batched into the exact same single languageLookup IPC call!
+    expect(f.languageLookup).toHaveBeenCalledTimes(1)
+    expect(f.languageLookup.mock.calls[0][0].requests.some(r => r.mode === 'jump' && r.prefix === 'daily_rev')).toBe(true)
+
+    const order = monacoOrder(first.suggestions, 'daily_rev')
+    expect(order.slice(0, 3)).toEqual(['daily_revenue', 'daily_revenue_v2', 'daily_rev_raw'])
+    const billingHit = first.suggestions.find(s => labelText(s.label) === 'daily_revenue')!
+    const starredHit = first.suggestions.find(s => labelText(s.label) === 'daily_revenue_v2')!
+    const discHit = first.suggestions.find(s => labelText(s.label) === 'daily_rev_raw')!
+    expect(billingHit.insertText).toBe('finance.daily_revenue')
+    expect((billingHit.label as Monaco.languages.CompletionItemLabel).description).toBe('finance · Table')
+    expect(starredHit.insertText).toBe('`dw-shared.gold.daily_revenue_v2`')
+    expect((starredHit.label as Monaco.languages.CompletionItemLabel).description).toBe('dw-shared.gold · ★ Starred · Table')
+    expect(discHit.insertText).toBe('`org-raw-09.landing.daily_rev_raw`')
+    expect((discHit.label as Monaco.languages.CompletionItemLabel).description).toBe('org-raw-09.landing · Names only · Table')
+
+    // Growing prefix `daily_revenue` hits jump cache in RAM with 0 extra IPC calls!
+    const second = await f.completeAt(tab.id, 'SELECT * FROM daily_revenue|')
+    expect(f.languageLookup).toHaveBeenCalledTimes(1)
+    expect(second.suggestions.map(s => labelText(s.label))).toContain('daily_revenue')
+    expect(second.suggestions.map(s => labelText(s.label))).toContain('daily_revenue_v2')
+    expect(second.suggestions.map(s => labelText(s.label))).not.toContain('daily_rev_raw')
+  })
+
+  it('auto-hydrates namesOnly / Wave-3-pending tables on SELECT p.| when enabled and completes columns immediately', async () => {
+    let hydrated = false
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.path.join('.') === 'discovered-proj.web.sessions') {
+              return hydrated
+                ? {
+                    state: 'partial',
+                    path: ['discovered-proj', 'web', 'sessions'],
+                    truncated: false,
+                    object: { name: 'sessions', kind: 'bqTable', detailed: true },
+                    items: [
+                      { name: 'session_id', kind: 'bqColumn', type: 'STRING', nullable: false },
+                      { name: 'started_at', kind: 'bqColumn', type: 'TIMESTAMP', nullable: true }
+                    ]
+                  }
+                : {
+                    state: 'partial',
+                    path: ['discovered-proj', 'web', 'sessions'],
+                    truncated: false,
+                    object: { name: 'sessions', kind: 'bqTable', detailed: false },
+                    items: []
+                  }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      }),
+      hydrate: async params => {
+        hydrated = true
+        return {
+          ok: true,
+          value: { outcomes: params.targets.map(t => ({ project: t.project, dataset: t.dataset, name: t.name, status: 'hydrated' as const })) }
+        }
+      },
+      jitHydrateEnabled: () => true
+    })
+
+    const tab = f.documents.create('jit.sql', '', 'sales', bqConnId)
+    const list = await f.completeAt(tab.id, 'SELECT p.| FROM `discovered-proj.web.sessions` p')
+    expect(f.languageHydrate).toHaveBeenCalledTimes(1)
+    expect(f.languageHydrate).toHaveBeenCalledWith({
+      connectionId: bqConnId,
+      targets: [{ project: 'discovered-proj', dataset: 'web', name: 'sessions', allowExternal: false }]
+    })
+    expect(list.suggestions.map(s => labelText(s.label))).toEqual(['session_id', 'started_at'])
+  })
+
+  it('shows actionable Fetch schema (free) and ★ Star project prompts in completion and hover for unstarred external projects', async () => {
+    let externalHydrated = false
+    const starProject = vi.fn(async () => true)
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.path.join('.') === 'bigquery-public-data.samples.shakespeare') {
+              return externalHydrated
+                ? {
+                    state: 'partial',
+                    path: ['bigquery-public-data', 'samples', 'shakespeare'],
+                    truncated: false,
+                    object: { name: 'shakespeare', kind: 'bqTable', detailed: true },
+                    items: [{ name: 'word', kind: 'bqColumn', type: 'STRING', nullable: false }]
+                  }
+                : { state: 'absent', path: ['bigquery-public-data', 'samples', 'shakespeare'], truncated: false, items: [] }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      }),
+      hydrate: async params => {
+        externalHydrated = true
+        return {
+          ok: true,
+          value: { outcomes: params.targets.map(t => ({ project: t.project, dataset: t.dataset, name: t.name, status: 'hydrated' as const })) }
+        }
+      },
+      jitHydrateEnabled: () => true,
+      starProject
+    })
+
+    const tab = f.documents.create('public.sql', '', 'sales', bqConnId)
+    // Auto-hydration MUST NOT fire automatically for unstarred external projects.
+    const list = await f.completeAt(tab.id, 'SELECT s.| FROM `bigquery-public-data.samples.shakespeare` s')
+    expect(f.languageHydrate).not.toHaveBeenCalled()
+    expect(list.suggestions.map(s => labelText(s.label))).toEqual(['Fetch schema (free)', '★ Star bigquery-public-data'])
+    expect(list.suggestions[0].command?.id).toBe(hydrateTableCommandId)
+    expect(list.suggestions[1].command?.id).toBe(starProjectCommandId)
+
+    // Hover on unstarred external table separates untrusted metadata from strictly allowlisted action links.
+    const hover = await f.hoverAt(tab.id, 'SELECT * FROM `bigquery-public-data.samples.shake|speare` s')
+    expect(hover).toBeTruthy()
+    expect(hover!.contents).toHaveLength(2)
+    expect(hover!.contents[0]).toMatchObject({ isTrusted: false, supportHtml: false })
+    expect(hover!.contents[1]).toMatchObject({ isTrusted: { enabledCommands: [hydrateTableCommandId, starProjectCommandId] }, supportHtml: false })
+    expect((hover!.contents[1] as { value: string }).value).toContain('Fetch schema (free)')
+    expect((hover!.contents[1] as { value: string }).value).toContain('★ Star bigquery-public-data')
+
+    // One-click Fetch schema (free) command hydrates with allowExternal: true and re-triggers suggest.
+    const hydrateCmd = f.registeredCommands.get(hydrateTableCommandId)!
+    hydrateCmd(undefined, bqConnId, 'bigquery-public-data', 'samples', 'shakespeare')
+    await vi.waitFor(() => expect(f.languageHydrate).toHaveBeenCalledTimes(1))
+    expect(f.languageHydrate).toHaveBeenCalledWith({
+      connectionId: bqConnId,
+      targets: [{ project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', allowExternal: true }]
+    })
+    await vi.waitFor(() => expect(f.triggerCalls).toContain('editor.action.triggerSuggest'))
+    const afterHydrate = await f.completeAt(tab.id, 'SELECT s.| FROM `bigquery-public-data.samples.shakespeare` s')
+    expect(afterHydrate.suggestions.map(s => labelText(s.label))).toEqual(['word'])
+
+    // One-click ★ Star command invokes starProject wired to BigQueryStarredService.
+    const starCmd = f.registeredCommands.get(starProjectCommandId)!
+    starCmd(undefined, bqConnId, 'bigquery-public-data')
+    await vi.waitFor(() => expect(starProject).toHaveBeenCalledWith(bqConnId, 'bigquery-public-data'))
+  })
+
+  it('respects jitHydrateEnabled: false by offering manual Fetch schema (free) without auto-hydrating', async () => {
+    const hydrate = vi.fn(async () => ({ ok: true as const, value: { outcomes: [] } }))
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer =>
+            req.path.join('.') === 'discovered-proj.web.sessions'
+              ? { state: 'partial', path: ['discovered-proj', 'web', 'sessions'], truncated: false, object: { name: 'sessions', kind: 'bqTable', detailed: false }, items: [] }
+              : { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          )
+        }
+      }),
+      hydrate,
+      jitHydrateEnabled: () => false
+    })
+    const tab = f.documents.create('manual.sql', '', 'sales', bqConnId)
+    const list = await f.completeAt(tab.id, 'SELECT p.| FROM `discovered-proj.web.sessions` p')
+    expect(hydrate).not.toHaveBeenCalled()
+    expect(list.suggestions.map(s => labelText(s.label))).toEqual(['Fetch schema (free)', '★ Star discovered-proj'])
+  })
+
+  it('preserves typed text on action items and never hijacks expression keywords when joining an external table (#1)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.path.join('.') === 'varia-alpha.sales.orders') {
+              return {
+                state: 'ready',
+                path: [...req.path],
+                truncated: false,
+                object: { name: 'orders', kind: 'bqTable', detailed: true },
+                items: [{ name: 'amount', kind: 'bqColumn', type: 'NUMERIC' }]
+              }
+            }
+            if (req.path.join('.') === 'bigquery-public-data.samples.shakespeare') {
+              return { state: 'absent', path: [...req.path], truncated: false, items: [] }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('expr.sql', '', 'sales', bqConnId)
+
+    // 1. Typing `SELECT s.wo|` keeps Fetch schema visible on empty member site AND preserves `wo` in insertText.
+    const memberTyped = await f.completeAt(tab.id, 'SELECT s.wo| FROM `bigquery-public-data.samples.shakespeare` s')
+    expect(memberTyped.suggestions.map(s => labelText(s.label))).toEqual(['Fetch schema (free)', '★ Star bigquery-public-data'])
+    expect(memberTyped.suggestions[0].insertText).toBe('wo')
+    expect(memberTyped.suggestions[1].insertText).toBe('wo')
+
+    // 2. Typing `SELECT MAX|` in an expression site with a joined external table MUST NOT emit Fetch schema or hijack MAX.
+    const exprTyped = await f.completeAt(tab.id, 'SELECT MAX| FROM `varia-alpha.sales.orders` o JOIN `bigquery-public-data.samples.shakespeare` s ON 1=1')
+    expect(exprTyped.suggestions.map(s => labelText(s.label))).not.toContain('Fetch schema (free)')
+    expect(exprTyped.suggestions.map(s => labelText(s.label))).not.toContain('★ Star bigquery-public-data')
+    expect(monacoOrder(exprTyped.suggestions, 'MAX')[0]).toBe('MAX')
+
+    // 3. Empty-prefix `SELECT |` sorts action items AFTER real columns/keywords with literal filterText.
+    const exprEmpty = await f.completeAt(tab.id, 'SELECT | FROM `varia-alpha.sales.orders` o JOIN `bigquery-public-data.samples.shakespeare` s ON 1=1')
+    const fetchItem = exprEmpty.suggestions.find(s => labelText(s.label) === 'Fetch schema (free)')!
+    const colItem = exprEmpty.suggestions.find(s => labelText(s.label) === 'amount' || labelText(s.label) === 'o.amount')!
+    const kwItem = exprEmpty.suggestions.find(s => labelText(s.label) === 'MAX')!
+    expect(fetchItem).toBeTruthy()
+    expect(colItem).toBeTruthy()
+    expect(kwItem).toBeTruthy()
+    expect(fetchItem.filterText).toBe('Fetch schema (free)')
+    expect((fetchItem.sortText ?? '').localeCompare(colItem.sortText ?? '')).toBeGreaterThan(0)
+    expect((fetchItem.sortText ?? '').localeCompare(kwItem.sortText ?? '')).toBeGreaterThan(0)
+  })
+
+  it('invalidates LookupCache and coalesces in-flight auto-hydration even when rapid typing cancels the first completion (#2)', async () => {
+    let hydrated = false
+    const gate = deferred<ApiResult<LanguageHydrateResult>>()
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.path.join('.') === 'discovered-proj.web.sessions') {
+              return hydrated
+                ? {
+                    state: 'partial',
+                    path: ['discovered-proj', 'web', 'sessions'],
+                    truncated: false,
+                    object: { name: 'sessions', kind: 'bqTable', detailed: true },
+                    items: [{ name: 'amount', kind: 'bqColumn', type: 'NUMERIC' }, { name: 'account_id', kind: 'bqColumn', type: 'STRING' }]
+                  }
+                : { state: 'partial', path: ['discovered-proj', 'web', 'sessions'], truncated: false, object: { name: 'sessions', kind: 'bqTable', detailed: false }, items: [] }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      }),
+      hydrate: async () => gate.promise,
+      jitHydrateEnabled: () => true
+    })
+    const tab = f.documents.create('rapid.sql', '', 'sales', bqConnId)
+
+    // Completion #1 starts auto-hydration, then gets cancelled by rapid typing.
+    const cts1 = cancellationSource()
+    const first = f.completeAt(tab.id, 'SELECT p.| FROM `discovered-proj.web.sessions` p', cts1.token)
+    await vi.waitFor(() => expect(f.languageHydrate).toHaveBeenCalledTimes(1))
+    cts1.cancel()
+
+    // Completion #2 fires while hydrate #1 is still in flight — coalesces onto the same in-flight hydrate (no 2nd hydrate IPC!).
+    const second = f.completeAt(tab.id, 'SELECT p.a| FROM `discovered-proj.web.sessions` p')
+    hydrated = true
+    gate.resolve({ ok: true, value: { outcomes: [{ project: 'discovered-proj', dataset: 'web', name: 'sessions', status: 'hydrated' }] } })
+
+    expect((await first).suggestions).toEqual([])
+    const secondRes = await second
+    expect(f.languageHydrate).toHaveBeenCalledTimes(1)
+    expect(secondRes.suggestions.map(s => labelText(s.label))).toEqual(['amount', 'account_id'])
+  })
+
+  it('trims backticked cross-project jump prefixes and skips whitespace-only short prefixes (#3)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer => {
+            if (req.mode === 'jump') {
+              return {
+                state: 'ready',
+                path: [],
+                truncated: false,
+                items: [{ name: 'daily_revenue', kind: 'bqTable', tier: 'billing', project: 'varia-alpha', dataset: 'finance' }]
+              }
+            }
+            return { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('trim.sql', '', '', bqConnId)
+
+    // Auto-closed backticked ` a|` has trimmed length 1 (< minPrefixChars 2): must NOT send a jump request.
+    await f.completeAt(tab.id, 'SELECT * FROM ` a|`')
+    expect(f.languageLookup.mock.calls.flatMap(call => call[0].requests).some(r => r.mode === 'jump')).toBe(false)
+
+    // Auto-closed backticked ` daily_rev |` trims to `daily_rev` before sending jump request.
+    const res = await f.completeAt(tab.id, 'SELECT * FROM ` daily_rev |`')
+    const jumpReq = f.languageLookup.mock.calls.flatMap(call => call[0].requests).find(r => r.mode === 'jump')
+    expect(jumpReq?.prefix).toBe('daily_rev')
+    expect(res.suggestions.map(s => labelText(s.label))).toContain('daily_revenue')
+  })
+
+  it('awaits a consumed batchedJump slot across overlapping completions instead of dropping jump hits (#7)', async () => {
+    const firstLookupGate = deferred<ApiResult<LanguageLookupResult>>()
+    const secondLookupGate = deferred<ApiResult<LanguageLookupResult>>()
+    let callNum = 0
+    const f = createFixture({
+      lookup: async requests => {
+        callNum++
+        if (callNum === 1) {
+          const res = await firstLookupGate.promise
+          return res
+        }
+        return {
+          ok: true,
+          value: {
+            index: 'ready',
+            answers: requests.map((req): LanguageLookupAnswer => req.mode === 'jump'
+              ? { state: 'ready', path: [], truncated: false, items: [{ name: 'daily_orders', kind: 'bqTable', tier: 'starred', project: 'dw-shared', dataset: 'gold' }] }
+              : { state: 'ready', path: [...req.path], truncated: false, items: [] })
+          }
+        }
+      }
+    })
+    const tab = f.documents.create('race.sql', '', '', bqConnId)
+    const p1 = f.completeAt(tab.id, 'SELECT * FROM da|')
+    await vi.waitFor(() => expect(f.languageLookup).toHaveBeenCalledTimes(1))
+    // Second completion runs while first is still in flight; its jump slot gets resolved cleanly via the deferred promise.
+    const p2 = f.completeAt(tab.id, 'SELECT * FROM dai|')
+    firstLookupGate.resolve({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: f.languageLookup.mock.calls[0][0].requests.map((req): LanguageLookupAnswer => req.mode === 'jump'
+          ? { state: 'ready', path: [], truncated: false, items: [{ name: 'daily_orders', kind: 'bqTable', tier: 'starred', project: 'dw-shared', dataset: 'gold' }] }
+          : { state: 'ready', path: [...req.path], truncated: false, items: [] })
+      }
+    })
+    secondLookupGate.resolve({ ok: true, value: { index: 'ready', answers: [] } })
+    await p1
+    const r2 = await p2
+    expect(r2.suggestions.map(s => labelText(s.label))).toContain('daily_orders')
+  })
+
+  it('keeps external Fetch schema / ★ Star prompts across repeated keystrokes and hover after hydrate returns external (#8)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer =>
+            req.path.join('.') === 'bigquery-public-data.samples.second_table'
+              ? { state: 'partial', path: [...req.path], truncated: false, items: [] }
+              : { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          )
+        }
+      }),
+      hydrate: async params => ({
+        ok: true,
+        value: { outcomes: params.targets.map(t => ({ project: t.project, dataset: t.dataset, name: t.name, status: 'external' as const })) }
+      }),
+      jitHydrateEnabled: () => true
+    })
+    const tab = f.documents.create('ext2.sql', '', 'sales', bqConnId)
+
+    const first = await f.completeAt(tab.id, 'SELECT s.| FROM `bigquery-public-data.samples.second_table` s')
+    expect(f.languageHydrate).toHaveBeenCalledTimes(1)
+    expect(first.suggestions.map(s => labelText(s.label))).toEqual(['Fetch schema (free)', '★ Star bigquery-public-data'])
+
+    // Second keystroke must NOT re-call languageHydrate and MUST still show Fetch schema / ★ Star.
+    const second = await f.completeAt(tab.id, 'SELECT s.w| FROM `bigquery-public-data.samples.second_table` s')
+    expect(f.languageHydrate).toHaveBeenCalledTimes(1)
+    expect(second.suggestions.map(s => labelText(s.label))).toEqual(['Fetch schema (free)', '★ Star bigquery-public-data'])
+
+    // Hover also recognises the cached external status and shows the actionable card.
+    const hover = await f.hoverAt(tab.id, 'SELECT * FROM `bigquery-public-data.samples.sec|ond_table` s')
+    expect(hover).toBeTruthy()
+    expect((hover!.contents[1] as { value: string }).value).toContain('Fetch schema (free)')
+  })
+
+  it('bounds hydrateAttempted per connection to maxNegativeEntries so long sessions never leak memory (#9)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((req): LanguageLookupAnswer =>
+            req.path.length === 3
+              ? { state: 'partial', path: [...req.path], truncated: false, object: { name: req.path[2], kind: 'bqTable', detailed: false }, items: [] }
+              : { state: 'ready', path: [...req.path], truncated: false, items: [] }
+          )
+        }
+      }),
+      hydrate: async params => ({
+        ok: true,
+        value: { outcomes: params.targets.map(t => ({ project: t.project, dataset: t.dataset, name: t.name, status: 'notFound' as const, code: 'NOT_FOUND' })) }
+      }),
+      jitHydrateEnabled: () => true
+    })
+    const tab = f.documents.create('cap.sql', '', 'sales', bqConnId)
+    const cap = languageHydrateLimits.maxNegativeEntries
+
+    await f.completeAt(tab.id, 'SELECT t.| FROM `discovered-proj.ds.tbl_0` t')
+    // Repeated lookup of tbl_0 is suppressed while within cap.
+    await f.completeAt(tab.id, 'SELECT t.| FROM `discovered-proj.ds.tbl_0` t')
+    expect(f.languageHydrate).toHaveBeenCalledTimes(1)
+
+    // Filling maxNegativeEntries other tables evicts tbl_0 from the bounded set.
+    for (let i = 1; i <= cap; i++) {
+      await f.completeAt(tab.id, `SELECT t.| FROM \`discovered-proj.ds.tbl_${i}\` t`)
+    }
+    expect(f.languageHydrate).toHaveBeenCalledTimes(1 + cap)
+
+    // tbl_0 was evicted, so asking again attempts hydration once more.
+    await f.completeAt(tab.id, 'SELECT t.| FROM `discovered-proj.ds.tbl_0` t')
+    expect(f.languageHydrate).toHaveBeenCalledTimes(2 + cap)
+  })
+
+  it('reports user-visible errors via reportError when one-click hydrateExternal fails (#11)', async () => {
+    const reportError = vi.fn()
+    const responses: Array<ApiResult<LanguageHydrateResult>> = [
+      { ok: true, value: { outcomes: [{ project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', status: 'forbidden', code: 'PERMISSION_DENIED' }] } },
+      { ok: true, value: { outcomes: [{ project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', status: 'notFound', code: 'NOT_FOUND' }] } },
+      { ok: true, value: { outcomes: [{ project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', status: 'budget', code: 'TOO_LARGE' }] } },
+      { ok: true, value: { outcomes: [{ project: 'bigquery-public-data', dataset: 'samples', name: 'shakespeare', status: 'throttled', code: 'RATE_LIMIT' }] } },
+      { ok: false, code: 'TIMEOUT', error: 'Hydration request timed out.' }
+    ]
+    let idx = 0
+    const f = createFixture({
+      hydrate: async () => responses[idx++],
+      reportError
+    })
+
+    for (let i = 0; i < responses.length; i++) {
+      expect(await f.service.hydrateExternal(bqConnId, 'bigquery-public-data', 'samples', 'shakespeare')).toBe(false)
+    }
+    expect(reportError).toHaveBeenCalledTimes(5)
+    expect(reportError.mock.calls[0][0]).toContain('Permission denied')
+    expect(reportError.mock.calls[1][0]).toContain('was not found')
+    expect(reportError.mock.calls[2][0]).toContain('RAM cap')
+    expect(reportError.mock.calls[3][0]).toContain('rate-limited')
+    expect(reportError.mock.calls[4][0]).toBe('Hydration request timed out.')
+  })
+
   it('wires snippets, parameter hints, @ trigger, ARRAY<STRUCT> additionalTextEdits and wildcard ordering in Monaco', async () => {
     const f = createFixture({
       lookup: async requests => ({
@@ -785,5 +1337,123 @@ describe('IndexCompletionService', () => {
     expect(monacoOrder(shards.suggestions, 'ev').slice(0, 2)).toEqual(['events_*', 'events_20261124'])
     const quotedWildcard = (await f.completeAt(tab.id, 'SELECT * FROM `varia-alpha.sales.ev|`')).suggestions.find(s => labelText(s.label) === 'events_*')!
     expect(quotedWildcard.insertText).toBe('events_*`')
+  })
+
+  it('lazy-resolves BigQuery schema preview drawer on resolveCompletionItem from local LookupCache (0 BQ API calls)', async () => {
+    const f = createFixture({
+      lookup: async requests => ({
+        ok: true,
+        value: {
+          index: 'ready',
+          answers: requests.map((request): LanguageLookupAnswer => {
+            const key = request.path.join('.')
+            if (key === '') {
+              return { state: 'ready', path: [], truncated: false, items: [{ name: 'varia-alpha', kind: 'bqProject', tier: 'billing' }] }
+            }
+            if (key === 'varia-alpha') {
+              return { state: 'ready', path: ['varia-alpha'], truncated: false, items: [{ name: 'sales', kind: 'bqDataset', detail: 'US' }] }
+            }
+            if (key === 'varia-alpha.sales') {
+              return {
+                state: 'ready', path: ['varia-alpha', 'sales'], truncated: false,
+                items: [{ name: 'orders', kind: 'bqTable' }, { name: 'daily', kind: 'bqView' }]
+              }
+            }
+            if (key === 'varia-alpha.sales.orders') {
+              return {
+                state: 'ready', path: ['varia-alpha', 'sales', 'orders'], truncated: false,
+                object: {
+                  name: 'orders', kind: 'bqTable', detailed: true, rows: 4200, bytes: 2048,
+                  partitioning: 'DAY on placed', clustering: 'customer', description: 'Orders ledger.'
+                },
+                items: [
+                  { name: 'id', kind: 'bqColumn', type: 'INT64', nullable: false },
+                  { name: 'address', kind: 'bqColumn', type: 'STRUCT', subtype: 'struct', nullable: true },
+                  { name: 'address.city', kind: 'bqColumn', type: 'STRING', nullable: true },
+                  { name: 'address.state', kind: 'bqColumn', type: 'STRING', nullable: true }
+                ]
+              }
+            }
+            return { state: 'absent', path: [...request.path], truncated: false, items: [] }
+          })
+        }
+      })
+    })
+    const tab = f.documents.create('q1.sql', '', 'sales', bqConnId)
+    const list = await f.completeAt(tab.id, 'SELECT * FROM |')
+    const orders = list.suggestions.find(s => labelText(s.label) === 'orders')!
+    const salesDs = list.suggestions.find(s => labelText(s.label) === 'sales')!
+    const project = list.suggestions.find(s => labelText(s.label) === 'varia-alpha')!
+    const provider = f.completionProvider()
+
+    const resolvedTable = (await provider.resolveCompletionItem!(orders, token()))!
+    expect(resolvedTable.documentation).toMatchObject({ isTrusted: false, supportHtml: false })
+    const tableMd = (resolvedTable.documentation as Monaco.IMarkdownString).value
+    expect(tableMd).toContain('**orders** · Table · Billing')
+    expect(tableMd).toContain('4,200 rows · 2.0 KiB · Partitioned by DAY on placed · Clustered by customer')
+    expect(tableMd).toContain('Orders ledger\\.')
+    expect(tableMd).toContain('| address | STRUCT · 2 fields: city, state |')
+
+    const resolvedDs = (await provider.resolveCompletionItem!(salesDs, token()))!
+    const dsMd = (resolvedDs.documentation as Monaco.IMarkdownString).value
+    expect(dsMd).toContain('**sales** · Dataset · US · Billing')
+    expect(dsMd).toContain('1 table · 1 view')
+
+    const resolvedProj = (await provider.resolveCompletionItem!(project, token()))!
+    const projMd = (resolvedProj.documentation as Monaco.IMarkdownString).value
+    expect(projMd).toContain('**varia\\-alpha** · Billing project')
+    expect(projMd).toContain('1 dataset')
+
+    // Cancelled token returns the original item untouched.
+    const cancel = cancellationSource()
+    cancel.cancel()
+    expect(await provider.resolveCompletionItem!(orders, cancel.token)).toBe(orders)
+
+    // lookupDocument exposes cached RAM lookups for the IntelliSense popover's source health list.
+    const answers = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])
+    expect(answers?.[0]?.object?.name).toBe('orders')
+  })
+
+  it('bounds over-length segments, keeps passive lookup failures from poisoning tab status, and appends CTE truncation footer', async () => {
+    let failNext = false
+    const f = createFixture({
+      lookup: async requests => {
+        if (failNext) return { ok: false, code: 'BACKEND_ERROR', error: 'Transient lookup failure.' }
+        return {
+          ok: true,
+          value: {
+            index: 'ready',
+            answers: requests.map(request => ({ state: 'absent', path: [...request.path], items: [], truncated: false }))
+          }
+        }
+      }
+    })
+    const tab = f.documents.create('q-bounds.sql', '', 'sales', bqConnId)
+
+    // Over-length backticked table alias (>1024 chars) never sends invalid path segments to language.lookup.
+    const longTable = 't'.repeat(1030)
+    const aliasList = await f.completeAt(tab.id, `SELECT | FROM \`varia-alpha.sales.${longTable}\` a`)
+    const aliasItem = aliasList.suggestions.find(s => labelText(s.label) === 'a')!
+    const callsBeforeAlias = f.languageLookup.mock.calls.length
+    expect(await f.completionProvider().resolveCompletionItem!(aliasItem, token())).toBe(aliasItem)
+    expect(f.languageLookup).toHaveBeenCalledTimes(callsBeforeAlias)
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+
+    // lookupDocument filters out >1024-char segments via boundedLookup and passive errors never poison tab errors.
+    const bounded = await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', longTable], limit: 1 }])
+    expect(bounded?.[0]?.state).toBe('absent')
+    expect(f.languageLookup).toHaveBeenCalledTimes(callsBeforeAlias)
+
+    failNext = true
+    expect(await f.service.lookupDocument(tab.id, [{ path: ['varia-alpha', 'sales', 'orders'], limit: 1 }])).toBeUndefined()
+    expect(f.service.availability(tab.id)?.label).toBe('IntelliSense')
+    failNext = false
+
+    // CTE drawer with >40 columns appends the "and N more columns" footer.
+    const cols = Array.from({ length: 45 }, (_, i) => `${i + 1} AS c${i + 1}`).join(', ')
+    const cteList = await f.completeAt(tab.id, `WITH wide AS (SELECT ${cols}) SELECT * FROM |`)
+    const wideItem = cteList.suggestions.find(s => labelText(s.label) === 'wide')!
+    const resolvedCte = (await f.completionProvider().resolveCompletionItem!(wideItem, token()))!
+    expect((resolvedCte.documentation as Monaco.IMarkdownString).value).toContain('and 5 more columns')
   })
 })

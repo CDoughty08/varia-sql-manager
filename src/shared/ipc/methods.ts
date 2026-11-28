@@ -205,8 +205,10 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'agent.counterValues': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'agent.errorLogs': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'language.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
-  // In-memory reads of the index: completion asks as the user types, so a lookup never waits long.
-  'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, providers: ['bigquery'] },
+  // In-memory reads of the Search Objects index (both BigQuery and SQL Server): completion, hover and lazy preview drawers never wait long.
+  'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, ...both },
+  // Free on-demand REST tables.get / routines.get hydration into the in-memory index, rate-limited per principal.
+  'language.hydrate': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000, providers: ['bigquery'] },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // The saved index's folder, key and limit, from main as each backend becomes ready: it checks them and queues a sweep.

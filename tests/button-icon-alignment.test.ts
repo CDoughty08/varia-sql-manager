@@ -242,7 +242,7 @@ describe('capture-agent-polish CLI validation', () => {
     return { status: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
   }
 
-  it('prints usage cleanly on --help and validates missing/empty args and unimplemented lanes before mkdir', () => {
+  it('prints usage cleanly on --help and validates missing/empty args and unknown lanes before mkdir', () => {
     const help = runCli(['--help'])
     expect(help.status).toBe(0)
     expect(help.stderr).toContain('Usage: node scripts/capture-agent-polish.mjs')
@@ -267,9 +267,9 @@ describe('capture-agent-polish CLI validation', () => {
     const uncreated = join(tmpdir(), `varia-ap6-does-not-write-${Date.now()}`)
     expect(existsSync(uncreated)).toBe(false)
     try {
-      const unimplemented = runCli(['--lane', 'ap-6', '--out', uncreated])
-      expect(unimplemented.status).toBe(1)
-      expect(unimplemented.stderr).toContain('Lane ap-6 capture will be implemented in AP-6.')
+      const unknownLane = runCli(['--lane', 'ap-99', '--out', uncreated])
+      expect(unknownLane.status).toBe(1)
+      expect(unknownLane.stderr).toContain('Unknown lane: ap-99.')
       expect(existsSync(uncreated)).toBe(false)
     } finally {
       rmSync(uncreated, { recursive: true, force: true })
