@@ -23,11 +23,8 @@ internal sealed partial class SqlToolsLanguageService
     private sealed record DiagnosticOwner(string Uri, string DocumentId, string ContextKey, ILspClient Client);
     private sealed record DiagnosticPending(ILspClient Client, LanguageRequest Request, TaskCompletionSource<LanguageDiagnosticResult> Answer);
 
-    public async Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token)
-    {
-        var result = await RequestAsync("varia/diagnostics", new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), token);
-        return result.Deserialize<LanguageDiagnosticResult>() ?? throw new IOException("Invalid language diagnostics response.");
-    }
+    public Task<LanguageDiagnosticResult> DiagnosticsAsync(LanguageRefreshRequest request, CancellationToken token) =>
+        DiagnosticsRequestAsync(new(request.DocumentId, request.Version, request.Text, request.Context, new(0, 0)), token);
 
     private async Task<LanguageDiagnosticResult> DiagnosticsRemoteAsync(LanguageRequest request, string? settings, CancellationToken token)
     {

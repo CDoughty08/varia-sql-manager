@@ -1501,4 +1501,24 @@ describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => 
     await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
     expect(f.api.languageLookup).toHaveBeenCalledTimes(callsAfterCache + 1)
   })
+
+  it('registers @ trigger character and ranks !-prefixed FK JOIN ON suggestions ahead of individual columns', async () => {
+    const f = await fixture()
+    expect(f.completion.triggerCharacters).toEqual(['.', '@'])
+    const tab = f.documents.create('fk.sql', 'SELECT * FROM dbo.Orders o JOIN dbo.Customers c ON ', 'SalesDB')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: 'o.[CustomerId]', kind: 5, filterText: 'CustomerId', sortText: '010000:CustomerId' },
+          { label: 'o.[CustomerId] = c.[Id]', kind: 10, detail: 'FK · fk_orders_customers', sortText: '!00:o.[CustomerId] = c.[Id]', filterText: 'o.[CustomerId] = c.[Id]' }
+        ]
+      }
+    })
+    const list = await f.complete(tab.id, { lineNumber: 1, column: 52 } as Monaco.Position)
+    const sorted = [...list.suggestions].sort((a, b) => (a.sortText! < b.sortText! ? -1 : a.sortText! > b.sortText! ? 1 : 0))
+    expect(labelText(sorted[0].label)).toBe('o.[CustomerId] = c.[Id]')
+    expect(labelText(sorted[1].label)).toBe('o.[CustomerId]')
+  })
 })

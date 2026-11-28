@@ -92,6 +92,10 @@ export class SqlDiagnosticsService extends SnapshotStore<Snapshot> implements Di
     if (this.language.getSnapshot().activities.get(entry.id) === 'refreshing') return 'SQL analysis will resume after the IntelliSense cache refresh.'
     if (this.language.isForegroundBusy(entry.id)) return 'SQL analysis will resume after IntelliSense finishes.'
     const connection = document.connectionId ? this.connections.get(document.connectionId) : undefined
+    if (connection && connection.providerId !== 'bigquery'
+      && ((connection.options.provider !== 'bigquery' && connection.options.authentication.startsWith('entra')) || connection.principalId?.startsWith('entra:'))) {
+      return 'SQL error checking is not available for Microsoft Entra ID connections yet. Completion and hover are active via ScriptDom + Index.'
+    }
     const provider = this.language.getSnapshot().status?.providers.find(value => value.id === (connection?.providerId ?? 'sqlserver'))
     if (provider && (!provider.configured || !provider.diagnostics)) return provider.reason ?? 'This language provider does not support SQL analysis.'
     return

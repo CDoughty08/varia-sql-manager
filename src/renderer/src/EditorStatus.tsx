@@ -41,6 +41,8 @@ export function sqlStatusChip(language: SqlStatusItem | undefined, issues: SqlSt
   else if (language?.label === 'IntelliSense starting') { label = 'SQL: Starting'; icon = 'sync'; tone = 'normal' }
   else if (language?.label === 'IntelliSense unavailable' || issues?.label === 'SQL analysis unavailable' || issues?.label === 'Dry run unavailable') {
     label = 'SQL: Unavailable'; icon = 'warning'; tone = 'warning'
+  } else if (issues?.label === 'SQL analysis paused' && language?.label === 'IntelliSense' && issues.detail.includes('Microsoft Entra ID')) {
+    label = 'IntelliSense'; icon = 'code'; tone = 'normal'
   } else if (issues?.label === 'SQL analysis paused' || language?.label === 'IntelliSense paused' || language?.label === 'IntelliSense disconnected') {
     label = 'SQL: Paused'; icon = 'code'; tone = 'muted'
   } else if (language?.label === 'IntelliSense off') {

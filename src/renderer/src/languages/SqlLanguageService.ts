@@ -116,7 +116,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     super({ checking: false, documentErrors: new Map(), activities: new Map() })
     if (indexState) this.bindIndexState(indexState)
     this.bindings.push(monaco.languages.registerCompletionItemProvider('sql', {
-      triggerCharacters: ['.'],
+      triggerCharacters: ['.', '@'],
       provideCompletionItems: async (model, position, context, token) => {
         const capture = this.capture(model, position)
         // Peek's definition is read-only: nothing to complete.
@@ -424,7 +424,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     if ((this.documents.getModel(documentId)?.getValueLength() ?? 0) > languageLimits.documentCharacters)
       return { label: 'IntelliSense paused', detail: `Language support is available for queries up to ${languageLimits.documentCharacters.toLocaleString()} characters.` }
     if (connection && !isLiveConnection(connection)) return { label: 'IntelliSense disconnected', detail: 'Reconnect this query to restore schema suggestions.' }
-    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
+    return { label: 'IntelliSense', detail: document?.connectionId ? 'SQL completion and hover use ScriptDom + Search Objects index for this query’s connection and database. Ctrl+Space opens suggestions.' : 'SQL completion and hover are available via ScriptDom. Connect this query for schema suggestions. Ctrl+Space opens suggestions.' }
   }
   /** The connection and database a served model's requests use: its query document's, or its Peek model's. */
   private source(documentId: string): { connectionId?: string; database?: string } | undefined {
@@ -1008,7 +1008,7 @@ function completionSuggestions(
       label: description ? { label: item.label, description } : { label: item.label },
       kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
       detail: item.detail, documentation: item.documentation,
-      // Exact matches first, then columns ahead of general SQL names of equal match quality, then the provider's order.
+      // Exact matches first, then columns & FK join suggestions ahead of general SQL names of equal match quality, then the provider's order.
       sortText: `${exact ? '0' : '1'}${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,
       filterText,
       insertText: edit?.newText ?? item.insertText ?? item.label,

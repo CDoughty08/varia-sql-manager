@@ -28,6 +28,7 @@ afterEach(() => {
 
 interface PopoverHarnessOptions {
   readonly isBigQuery: boolean
+  readonly entra?: boolean
   readonly sqlText?: string
   readonly indexEntry?: IndexEntry
   readonly starred?: readonly string[]
@@ -56,10 +57,11 @@ function mountEditorStatus(options: PopoverHarnessOptions) {
         id: connId,
         providerId: 'sqlserver',
         generation: 1,
-        server: 'sql01',
+        server: options.entra ? 'contoso.database.windows.net' : 'sql01',
         database: 'SalesDB',
         serverVersion: '16.0',
-        options: { provider: 'sqlserver', server: 'sql01', database: 'SalesDB', authentication: 'windows', trustServerCertificate: false }
+        ...options.entra ? { principalId: 'entra:00000000-0000-4000-8000-000000000001:11111111-1111-4111-8111-111111111111' } : {},
+        options: { provider: 'sqlserver', server: options.entra ? 'contoso.database.windows.net' : 'sql01', database: 'SalesDB', authentication: options.entra ? 'entraInteractive' : 'windows', trustServerCertificate: false }
       } as unknown as LiveConnection
 
   const searchStore = new SnapshotStore<ObjectSearchSnapshot>({
@@ -157,13 +159,17 @@ describe('IntelliSensePopover accessibility, badges, Star action, and memory bar
     expect(document.activeElement).toBe(h.trigger)
   })
 
-  it('shows accurate SQL Server status badges when index is unbuilt, building, ready, or analysis is paused', async () => {
+  it('shows accurate SQL Server status badges when index is unbuilt, building, ready, paused, or Microsoft Entra ID', async () => {
     const unbuilt = mountEditorStatus({ isBigQuery: false, indexEntry: undefined })
     await act(async () => { unbuilt.trigger.click() })
     const unbuiltBadge = document.body.querySelector('.intellisense-popover-header .intellisense-popover-pill')!
-    expect(unbuiltBadge.textContent).toBe('STS Ready')
+    expect(unbuiltBadge.textContent).toBe('ScriptDom · No index')
     expect(document.body.querySelectorAll('.intellisense-popover [role="listbox"], .intellisense-popover [role="option"]')).toHaveLength(0)
     expect(document.body.querySelectorAll('.intellisense-popover [role="listitem"]')).toHaveLength(3)
+    const buildBtn = document.body.querySelector<HTMLButtonElement>('.intellisense-popover-inline-action')!
+    expect(buildBtn.textContent).toContain('Build index')
+    act(() => { buildBtn.click() })
+    expect(unbuilt.ensureIndex).toHaveBeenCalledWith('sql-1')
     act(() => { unbuilt.trigger.click() })
 
     const paused = mountEditorStatus({
@@ -176,8 +182,26 @@ describe('IntelliSensePopover accessibility, badges, Star action, and memory bar
     })
     await act(async () => { paused.trigger.click() })
     const pausedBadge = document.body.querySelector('.intellisense-popover-header .intellisense-popover-pill')!
-    expect(pausedBadge.textContent).toBe('STS + Index · Analysis paused')
+    expect(pausedBadge.textContent).toBe('ScriptDom + Index · Analysis paused')
     expect(pausedBadge.getAttribute('data-tone')).toBe('neutral')
+    act(() => { paused.trigger.click() })
+
+    const entra = mountEditorStatus({
+      isBigQuery: false,
+      entra: true,
+      issues: { label: 'SQL analysis paused', detail: 'SQL error checking is not available for Microsoft Entra ID connections yet. Completion and hover are active via ScriptDom + Index.' },
+      indexEntry: {
+        connectionId: 'sql-1', done: 2, total: 2, objects: 180,
+        status: { state: 'ready', databases: 2, indexed: 2, objects: 180, modules: 0, cut: 0, skipped: [], definitions: true }
+      }
+    })
+    expect(entra.trigger.textContent).toContain('IntelliSense')
+    await act(async () => { entra.trigger.click() })
+    const entraBadge = document.body.querySelector('.intellisense-popover-header .intellisense-popover-pill')!
+    expect(entraBadge.textContent).toBe('ScriptDom + Index')
+    expect(entraBadge.getAttribute('data-tone')).toBe('success')
+    const entraPills = [...document.body.querySelectorAll('.intellisense-popover-rows .intellisense-popover-pill')].map(el => el.textContent)
+    expect(entraPills).toEqual(['ScriptDom + Index', 'Unavailable on Entra ID'])
   })
 
   it('shows Not built / Pending / Indexing for BigQuery Wave 3a/3b before the index is ready and guards NaN memory usage', async () => {

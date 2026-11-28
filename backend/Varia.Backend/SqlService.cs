@@ -254,7 +254,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
-        language = new LanguageServiceBroker([new SqlToolsLanguageService(LanguageConnectionString)]);
+        search = new ObjectSearchService(this);
+        this.bigQuery.ObjectDetails = search;
+        language = new LanguageServiceBroker([new SqlToolsLanguageService(
+            LanguageConnectionString,
+            indexLookup: search.Lookup,
+            activeDatabase: LanguageActiveDatabase,
+            refreshIndex: RefreshLanguageIndexAsync)]);
         Open = async (connection, token) =>
         {
             CommandTracker.ThrowIfRejected(connection);
@@ -285,8 +291,6 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         };
         explorer = new ExplorerService(this);
         definitions = new DefinitionService(this);
-        search = new ObjectSearchService(this);
-        this.bigQuery.ObjectDetails = search;
         scripting = new ScriptingService(this);
         actions = new ActionService(this, catalog: actionsCatalog);
         ssis = new SsisService(this);
