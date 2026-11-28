@@ -123,6 +123,8 @@ Last Query, or results while focus is in the results pane):
   the grid then keeps an empty group saying the open queries float, with Dock query, until another grid group shows a
   document or no document is left. At the 16-group cap there is no room for that group, so a floating group docks
   instead, with a warning. Hot exit keeps such a layout as an empty grid plus its floating groups.
+- A floating group moves by its title bar. A Shift-press inside a floated document (a query's text, a document's grid or
+  plan) is that document's own, as when docked, so Shift+click extends a selection there instead of moving the float.
 - Documents do not pop out into OS windows: Monaco binds its DOM, focus, IME, clipboard and workers to the window that
   created it (docs/popout-windows.md, *Limits*). The tab menu has no Move to New Window, and dragging a tab out of the
   window floats it instead.
